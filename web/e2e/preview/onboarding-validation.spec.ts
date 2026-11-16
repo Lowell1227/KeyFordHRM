@@ -9,14 +9,17 @@ test('step validation is scoped and optional identity fields stay optional', () 
   });
 });
 
-test('employment step blocks missing company mapping and required fields', () => {
+test('employment step accepts a directory company without legacy code and still requires company information', () => {
   const missing = validateOnboardingStep({}, 1);
-  expect(Object.keys(missing)).toEqual(['employee.companyText', 'employee.deptId', 'employee.entryDate', 'employee.effectiveFrom', 'employee.employmentType', 'employee.employeeStatus']);
-  const filled = { company: 'fuede', deptId: 'department', entryDate: '2026-11-13', effectiveFrom: '2026-11-13',
+  expect(Object.keys(missing)).toEqual(['employee.companyText', 'employee.deptId', 'employee.positionId', 'employee.entryDate', 'employee.effectiveFrom', 'employee.employmentType', 'employee.employeeStatus']);
+  const filled = { company: 'fuede', deptId: 'department', positionId: 'position', entryDate: '2026-11-13', effectiveFrom: '2026-11-13',
     employmentType: 'full_time', employeeStatus: 'probation', employee: { contractSubjectId: 'subject', companyText: '虚构主体' } };
   expect(validateOnboardingStep(filled, 1)).toEqual({});
-  expect(validateOnboardingStep({ ...filled, company: null }, 1)['employee.companyText']).toContain('映射');
+  expect(validateOnboardingStep({ ...filled, company: null }, 1)).toEqual({});
+  expect(validateOnboardingStep({ ...filled, company: undefined }, 1)).toEqual({});
+  expect(validateOnboardingStep({ ...filled, company: null, employee: { companyText: '历史公司原文' } }, 1)).toEqual({});
   expect(validateOnboardingStep({ ...filled, entryDate: '2026-02-31' }, 1)['employee.entryDate']).toBe('请填写有效日期');
+  expect(validateOnboardingStep({ ...filled, positionId: null, employee: { position: '手填岗位' } }, 1)['employee.positionId']).toBeTruthy();
 });
 
 test('archive step validates supplied fields without making them required', () => {

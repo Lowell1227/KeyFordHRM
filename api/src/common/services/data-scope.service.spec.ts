@@ -28,6 +28,7 @@ describe('DataScopeService', () => {
         {
           provide: PrismaService,
           useValue: {
+            employmentRecord: { findMany: jest.fn().mockResolvedValue([]) },
             department: {
               findMany: jest.fn().mockResolvedValue([]),
             },
@@ -49,19 +50,51 @@ describe('DataScopeService', () => {
   });
 
   describe('getConfirmationEmployeeFilter', () => {
-    it('keeps full HR scope but limits an authorized ordinary HR to the roster company', async () => {
+    const ordinaryHr = () => makeUser({ sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'] });
+
+    it('keeps HR administrator scope without querying company records', async () => {
       expect(await service.getConfirmationEmployeeFilter(makeUser({ sysRole: SysRole.hr }))).toEqual({});
-      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dept: { company: 'fuede' } } as never);
-      const filter = await service.getConfirmationEmployeeFilter(makeUser({
-        sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'],
-      }));
-      expect(filter).toEqual({ dept: { is: { company: 'fuede' } } });
+      expect(prisma.employmentRecord.findMany).not.toHaveBeenCalled();
     });
 
-    it('does not grant company access without a roster department', async () => {
-      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dept: null } as never);
-      expect(await service.getConfirmationEmployeeFilter(makeUser({ sysRole: SysRole.hr_user })))
-        .toEqual({ id: { in: [] } });
+    it('uses current company directory identity independently of old codes and departments', async () => {
+      jest.spyOn(prisma.employmentRecord, 'findMany').mockResolvedValue([
+        { userId: 'user-1', contractSubjectId: 'company-a', company: 'fuede' },
+        { userId: 'same-directory', contractSubjectId: 'company-a', company: 'fansibao' },
+        { userId: 'same-old-code', contractSubjectId: 'company-b', company: 'fuede' },
+        { userId: 'no-directory', contractSubjectId: null, company: 'fuede' },
+      ] as never);
+      expect(await service.getConfirmationEmployeeFilter(ordinaryHr()))
+        .toEqual({ id: { in: ['user-1', 'same-directory'] } });
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('does not match an older overlapping company when the current selected record belongs elsewhere', async () => {
+      jest.spyOn(prisma.employmentRecord, 'findMany').mockResolvedValue([
+        { userId: 'user-1', contractSubjectId: 'company-a' },
+        { userId: 'moved-employee', contractSubjectId: 'company-b' },
+        { userId: 'moved-employee', contractSubjectId: 'company-a' },
+        { userId: 'same-company', contractSubjectId: 'company-a' },
+      ] as never);
+      expect(await service.getConfirmationEmployeeFilter(ordinaryHr()))
+        .toEqual({ id: { in: ['user-1', 'same-company'] } });
+    });
+
+    it.each([{ records: [] }, { records: [
+      { userId: 'user-1', contractSubjectId: null, company: 'fuede' },
+      { userId: 'user-1', contractSubjectId: 'old-company', company: 'fuede' },
+      { userId: 'employee', contractSubjectId: 'old-company', company: 'fuede' },
+    ] }])('fails closed without a current HR company directory ID', async ({ records }) => {
+      jest.spyOn(prisma.employmentRecord, 'findMany').mockResolvedValue(records as never);
+      expect(await service.getConfirmationEmployeeFilter(ordinaryHr())).toEqual({ id: { in: [] } });
+    });
+
+    it.each([
+      { sysRole: SysRole.hr_user }, { sysRole: SysRole.system_admin },
+      { sysRole: SysRole.employee, canViewAll: true, hrCapabilities: ['confirmation_manage'] },
+    ])('does not add company authority without the existing confirmation capability boundary: %j', async role => {
+      expect(await service.getConfirmationEmployeeFilter(makeUser(role))).toEqual({ id: { in: [] } });
+      expect(prisma.employmentRecord.findMany).not.toHaveBeenCalled();
     });
   });
 

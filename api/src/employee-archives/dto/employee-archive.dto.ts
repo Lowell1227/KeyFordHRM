@@ -35,8 +35,11 @@ export class EmployeeCreateDetailsDto {
   @IsOptional() @IsString() @MaxLength(150) companyText?: string | null;
   @IsOptional() @IsString() @MaxLength(100) position?: string | null;
   @IsOptional() @IsString() @MaxLength(30) jobGrade?: string | null;
+  @IsOptional() @IsUUID('4') jobGradeId?: string | null;
   @IsOptional() @IsString() @MaxLength(100) jobFamily?: string | null;
+  @IsOptional() @IsUUID('4') jobFamilyId?: string | null;
   @IsOptional() @IsString() @MaxLength(100) workLocation?: string | null;
+  @IsOptional() @IsUUID('4') workLocationId?: string | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(12) probationMonths?: number | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) plannedRegularDate?: string | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) actualRegularDate?: string | null;
@@ -49,21 +52,26 @@ export class EmployeeCreateProfileDto {
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) birthDate?: string | null;
   @IsOptional() @IsString() @MaxLength(50) ethnicity?: string | null;
   @IsOptional() @IsString() @MaxLength(50) education?: string | null;
+  @IsOptional() @IsUUID('4') educationId?: string | null;
   @IsOptional() @IsString() @MaxLength(100) professionalTitle?: string | null;
   @IsOptional() @IsString() @MaxLength(200) school?: string | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) graduationDate?: string | null;
   @IsOptional() @IsString() @MaxLength(100) major?: string | null;
   @IsOptional() @IsString() @MaxLength(30) maritalStatus?: string | null;
+  @IsOptional() @IsUUID('4') maritalStatusId?: string | null;
   @IsOptional() @IsString() @MaxLength(30) childrenStatus?: string | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(20) childrenCount?: number | null;
   @IsOptional() @IsString() @MaxLength(50) politicalStatus?: string | null;
+  @IsOptional() @IsUUID('4') politicalStatusId?: string | null;
   @IsOptional() @IsString() @MaxLength(100) nativePlace?: string | null;
   @IsOptional() @IsString() @MaxLength(50) householdType?: string | null;
+  @IsOptional() @IsUUID('4') householdTypeId?: string | null;
   @IsOptional() @IsString() @MaxLength(500) idAddress?: string | null;
   @IsOptional() @IsString() @MaxLength(30) idNumber?: string | null;
   @IsOptional() @IsString() @MaxLength(500) currentAddress?: string | null;
   @IsOptional() @IsString() @MaxLength(100) emergencyContactName?: string | null;
   @IsOptional() @IsString() @MaxLength(50) emergencyContactRelation?: string | null;
+  @IsOptional() @IsUUID('4') emergencyContactRelationId?: string | null;
   @IsOptional() @IsString() @MaxLength(30) emergencyContactPhone?: string | null;
   @IsOptional() @IsString() @MaxLength(50) socialSecurityStatus?: string | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) socialSecurityStartDate?: string | null;
@@ -150,9 +158,9 @@ export class CreateEmployeeDto {
   @IsBoolean()
   phoneDuplicateAcknowledged?: boolean = false;
 
-  @ValidateIf(input => input.company != null || !input.employee?.contractSubjectId)
+  @IsOptional()
   @IsEnum(CompanyCode)
-  company!: CompanyCode;
+  company?: CompanyCode | null;
 
   @BlankToNull()
   @IsUUID('4')
@@ -338,9 +346,9 @@ export class CreateEmploymentRecordDto {
   @IsDate()
   effectiveTo?: Date | null;
 
-  @ValidateIf(input => input.company != null || !input.contractSubjectId)
+  @IsOptional()
   @IsEnum(CompanyCode)
-  company!: CompanyCode;
+  company?: CompanyCode | null;
 
   @IsOptional()
   @BlankToNull()
@@ -359,10 +367,12 @@ export class CreateEmploymentRecordDto {
   @IsOptional()
   @IsString()
   jobGrade?: string | null;
+  @IsOptional() @IsUUID('4') jobGradeId?: string | null;
 
   @IsOptional()
   @IsString()
   jobFamily?: string | null;
+  @IsOptional() @IsUUID('4') jobFamilyId?: string | null;
 
   @IsOptional()
   @BlankToNull()
@@ -372,6 +382,7 @@ export class CreateEmploymentRecordDto {
   @IsOptional()
   @IsString()
   workLocation?: string | null;
+  @IsOptional() @IsUUID('4') workLocationId?: string | null;
 
   @IsEnum(EmploymentType)
   employmentType!: EmploymentType;

@@ -3,14 +3,15 @@ import { ConflictException } from '@nestjs/common';
 import { EmployeeArchivesService } from './employee-archives.service';
 
 describe('EmployeeArchivesService', () => {
-  it('D01 compares resumed same-ID family overrides with the applied directory value', async () => {
+  it('D01 retains the approved same-ID family snapshot after a directory change', async () => {
     const service = new EmployeeArchivesService({} as any);
     const position = { id: 'position', name: 'Catalog', jobFamily: null };
     const tx = { position: { findUnique: jest.fn(async () => position) } };
     const result = await (service as any).appliedEmployeeReviewData(tx,
       { positionId: 'position', position: 'Catalog', jobFamily: 'Override' },
       { positionId: 'position', position: 'Catalog', jobFamily: 'Historical' }, {});
-    expect(result.jobFamily).toBeNull();
+    expect(result.jobFamily).toBe('Override');
+    expect(tx.position.findUnique).not.toHaveBeenCalled();
   });
   it('F09 snapshots the actual base and rejection reason for each submitted revision', () => {
     const service = new EmployeeArchivesService({} as any);
@@ -177,6 +178,8 @@ describe('EmployeeArchivesService', () => {
     const employmentCreate = jest.fn();
     const userUpdate = jest.fn();
     const prisma = {
+      position: { findUnique: jest.fn().mockResolvedValue({ id: '40000000-0000-4000-8000-000000000001', name: '董事长', jobFamily: '管理', isActive: true }) },
+      personnelReferenceData: { findMany: jest.fn(async () => [{ id: '60000000-0000-4000-8000-000000000003', kind: 'work_location', name: '杭州', isActive: true }]) },
       user: { findUnique: jest.fn().mockResolvedValue(user) },
       employmentRecord: { findMany: jest.fn().mockResolvedValue([]), create: employmentCreate },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: reviewCreate },
@@ -189,8 +192,8 @@ describe('EmployeeArchivesService', () => {
 
     const result = await service.createEmploymentRecord(user.id, {
       effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), effectiveTo: null, company: CompanyCode.fuede,
-      deptId: '30000000-0000-4000-8000-000000000001', position: '董事长', jobGrade: null,
-      jobFamily: '管理', directManagerId: null, workLocation: '杭州',
+      deptId: '30000000-0000-4000-8000-000000000001', positionId: '40000000-0000-4000-8000-000000000001', position: '董事长', jobGrade: null,
+      jobFamily: '管理', directManagerId: null, workLocationId: '60000000-0000-4000-8000-000000000003', workLocation: '杭州',
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active,
       entryDate: new Date('2001-01-01T00:00:00.000Z'), plannedRegularDate: null, actualRegularDate: null,
       leaveDate: null, probationMonths: null, changeType: 'hire', reason: '花名册初始化',
@@ -850,11 +853,11 @@ describe('EmployeeArchivesService', () => {
     const service = new EmployeeArchivesService(prisma as any, undefined, numberService as any);
 
     await expect(service.createEmployee({
+      positionId: '40000000-0000-4000-8000-000000000001',
       name: '新员工',
       phone: '13800000901',
       company: CompanyCode.fuede,
       deptId: '30000000-0000-4000-8000-000000000001',
-      positionId: '40000000-0000-4000-8000-000000000001',
       entryDate: new Date('2026-09-10T00:00:00.000Z'),
       effectiveFrom: new Date('2026-09-10T00:00:00.000Z'),
       employmentType: EmploymentType.full_time,
@@ -894,9 +897,8 @@ describe('EmployeeArchivesService', () => {
     const tx = {
       $executeRaw: jest.fn(),
       personnelReferenceData: { findMany: jest.fn(async ({ where }) => [
-        { kind: 'job_grade', name: 'P3', isActive: true }, { kind: 'education', name: '本科', isActive: true },
-      ].filter(option => option.isActive === where.isActive
-        && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
+        { id: '60000000-0000-4000-8000-000000000001', kind: 'job_grade', name: 'P3', isActive: true }, { id: '60000000-0000-4000-8000-000000000003', kind: 'work_location', name: '杭州', isActive: true }, { id: '60000000-0000-4000-8000-000000000002', kind: 'education', name: '本科', isActive: true },
+      ].filter(option => where.id.in.includes(option.id))) },
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
       position: { findUnique: jest.fn().mockResolvedValue({ id: 'position-1', name: 'HRBP', jobFamily: '人力资源', isActive: true }) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: requestCreate, update: requestUpdate },
@@ -909,17 +911,17 @@ describe('EmployeeArchivesService', () => {
     } as any, config as any, numberService as any);
 
     await service.createEmployee({
+      positionId: '40000000-0000-4000-8000-000000000001',
       name: '完整员工',
       phone: '13800000903',
       company: CompanyCode.fuede,
       deptId: '30000000-0000-4000-8000-000000000001',
-      positionId: '40000000-0000-4000-8000-000000000001',
       entryDate: new Date('2026-09-18T00:00:00.000Z'),
       effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
       employmentType: EmploymentType.full_time,
       employeeStatus: UserStatus.probation,
-      employee: { jobGrade: 'P3', workLocation: '杭州', probationMonths: 3 },
-      profile: { education: '本科', bankAccount: '6222000000000000' },
+      employee: { jobGradeId: '60000000-0000-4000-8000-000000000001', jobGrade: 'P3', workLocationId: '60000000-0000-4000-8000-000000000003', workLocation: '杭州', probationMonths: 3 },
+      profile: { educationId: '60000000-0000-4000-8000-000000000002', education: '本科', bankAccount: '6222000000000000' },
       contracts: [{
         contractType: 'contract',
         name: '劳动合同',
@@ -966,7 +968,7 @@ describe('EmployeeArchivesService', () => {
       department: {
         findUnique: jest.fn().mockResolvedValue({ id: '30000000-0000-4000-8000-000000000001', isActive: true }),
       },
-      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      position: { findUnique: jest.fn().mockResolvedValue({ id: '40000000-0000-4000-8000-000000000001', name: 'Test position', jobFamily: null, isActive: true }) },
       employeeDataChangeRequest: {
         create, update,
       },
@@ -978,6 +980,7 @@ describe('EmployeeArchivesService', () => {
     } as any, undefined, numberService as any);
 
     await expect(service.createEmployee({
+      positionId: '40000000-0000-4000-8000-000000000001',
       name: '新员工',
       company: CompanyCode.fuede,
       deptId: '30000000-0000-4000-8000-000000000001',
@@ -1012,7 +1015,6 @@ describe('EmployeeArchivesService', () => {
       name: '草稿员工',
       company: CompanyCode.fuede,
       deptId: '30000000-0000-4000-8000-000000000001',
-      positionId: '40000000-0000-4000-8000-000000000001',
       entryDate: new Date('2026-09-18T00:00:00.000Z'),
       effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
       employmentType: EmploymentType.full_time,
@@ -1104,7 +1106,7 @@ describe('EmployeeArchivesService', () => {
       draftId: 'draft-create-1',
       expectedVersion: 3,
       name: '草稿员工',
-      profile: { education: '本科', idNumber: '', bankAccount: '' },
+      profile: { educationId: '60000000-0000-4000-8000-000000000002', education: '本科', idNumber: '', bankAccount: '' },
       draftStep: 3,
       completedSteps: [0, 1, 2],
       saveMode: 'auto',
@@ -1160,10 +1162,9 @@ describe('EmployeeArchivesService', () => {
     const tx = {
       $executeRaw: jest.fn(),
       personnelReferenceData: { findMany: jest.fn(async ({ where }) =>
-        [{ kind: 'education', name: '本科', isActive: true }].filter(option => option.isActive === where.isActive
-          && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
+        [{ id: '60000000-0000-4000-8000-000000000002', kind: 'education', name: '本科', isActive: true }].filter(option => where.id.in.includes(option.id))) },
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
-      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      position: { findUnique: jest.fn().mockResolvedValue({ id: '40000000-0000-4000-8000-000000000001', name: 'Test position', jobFamily: null, isActive: true }) },
       employeeDataChangeRequest: { findFirst, update },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -1173,6 +1174,7 @@ describe('EmployeeArchivesService', () => {
     } as any, undefined, numberService as any);
 
     await service.createEmployee({
+      positionId: '40000000-0000-4000-8000-000000000001',
       draftId: 'draft-create-1',
       expectedVersion: 4,
       name: '草稿员工',
@@ -1182,7 +1184,7 @@ describe('EmployeeArchivesService', () => {
       effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
       employmentType: EmploymentType.full_time,
       employeeStatus: UserStatus.probation,
-      profile: { education: '本科', idNumber: '', bankAccount: '' },
+      profile: { educationId: '60000000-0000-4000-8000-000000000002', education: '本科', idNumber: '', bankAccount: '' },
       contracts: [],
       employee: {},
       performance: {},
@@ -1227,7 +1229,7 @@ describe('EmployeeArchivesService', () => {
     const tx = {
       $executeRaw: jest.fn(),
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
-      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      position: { findUnique: jest.fn().mockResolvedValue({ id: '40000000-0000-4000-8000-000000000001', name: 'Test position', jobFamily: null, isActive: true }) },
       employeeDataChangeRequest: { findFirst, update },
       auditLog: { create: jest.fn() },
     };
@@ -1239,6 +1241,7 @@ describe('EmployeeArchivesService', () => {
     } as any, undefined, { reserveNext: jest.fn() } as any, identityMatcher as any);
 
     await expect(service.createEmployee({
+      positionId: '40000000-0000-4000-8000-000000000001',
       draftId: 'draft-create-1',
       expectedVersion: 2,
       name: '草稿员工',
@@ -1267,7 +1270,7 @@ describe('EmployeeArchivesService', () => {
     const tx = {
       $executeRaw: jest.fn(),
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
-      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      position: { findUnique: jest.fn().mockResolvedValue({ id: '40000000-0000-4000-8000-000000000001', name: 'Test position', jobFamily: null, isActive: true }) },
       employeeDataChangeRequest: { findFirst, create: jest.fn(), update: jest.fn() },
       auditLog: { create: jest.fn() },
     };
@@ -1283,6 +1286,7 @@ describe('EmployeeArchivesService', () => {
     });
 
     await expect(service.createEmployee({
+      positionId: '40000000-0000-4000-8000-000000000001',
       name: '重复待审员工', idNumber: '330100199001011234', company: CompanyCode.fuede,
       deptId: 'dept-1', entryDate: new Date('2026-09-18T00:00:00.000Z'),
       effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
@@ -1324,11 +1328,10 @@ describe('EmployeeArchivesService', () => {
     const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'request-allowlist', ...data }));
     const tx = {
       personnelReferenceData: { findMany: jest.fn(async ({ where }) => [
-        { kind: 'job_grade', name: 'P2', isActive: true }, { kind: 'education', name: '本科', isActive: true },
-      ].filter(option => option.isActive === where.isActive
-        && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
+        { id: '60000000-0000-4000-8000-000000000001', kind: 'job_grade', name: 'P2', isActive: true }, { id: '60000000-0000-4000-8000-000000000002', kind: 'education', name: '本科', isActive: true },
+      ].filter(option => where.id.in.includes(option.id))) },
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
-      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      position: { findUnique: jest.fn().mockResolvedValue({ id: '40000000-0000-4000-8000-000000000001', name: 'Test position', jobFamily: null, isActive: true }) },
       employeeDataChangeRequest: { create, update },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -1337,11 +1340,12 @@ describe('EmployeeArchivesService', () => {
     } as any, undefined, { reserveNext: jest.fn().mockResolvedValue('904') } as any);
 
     await service.createEmployee({
+      positionId: '40000000-0000-4000-8000-000000000001',
       name: '白名单员工', company: CompanyCode.fuede, deptId: 'dept-1',
       entryDate: new Date('2026-09-18T00:00:00.000Z'), effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.probation,
-      employee: { jobGrade: 'P2', organizationEnsurePaths: [['不应创建的部门']], sysRole: 'admin' },
-      profile: { education: '本科', unexpectedSecret: 'drop-me' },
+      employee: { jobGradeId: '60000000-0000-4000-8000-000000000001', jobGrade: 'P2', organizationEnsurePaths: [['不应创建的部门']], sysRole: 'admin' },
+      profile: { educationId: '60000000-0000-4000-8000-000000000002', education: '本科', unexpectedSecret: 'drop-me' },
       contracts: [{ contractType: 'contract', name: '劳动合同', organizationPath: ['drop-me'] }],
       performance: { managerId: null, canApproveAnything: true },
     } as any, hrOperator);

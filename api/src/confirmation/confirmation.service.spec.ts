@@ -6,6 +6,7 @@ describe('employee confirmation draft', () => {
   const managerId = '22222222-2222-4222-8222-222222222222';
   const employee = {
     id: employeeId,
+    employeeNo: 'SYNTHETIC-101',
     name: '试用期员工',
     status: UserStatus.probation,
     directManagerId: managerId,
@@ -22,6 +23,7 @@ describe('employee confirmation draft', () => {
   const prisma = {
     user: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
     department: { findMany: jest.fn() },
+    employmentRecord: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
     confirmationApplication: { findFirst: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
     auditLog: { create: jest.fn(), findMany: jest.fn() },
     confirmationMeetingAttachment: { findUnique: jest.fn(), create: jest.fn(), count: jest.fn() },
@@ -39,6 +41,14 @@ describe('employee confirmation draft', () => {
         : { id: where.id, status: UserStatus.active, deletedAt: null });
     prisma.user.findMany.mockResolvedValue([]);
     prisma.user.count.mockResolvedValue(1);
+    const employment = { id: 'synthetic-employment', userId: employeeId, employeeNo: employee.employeeNo,
+      deptId: 'dept-1', directManagerId: managerId, employeeStatus: UserStatus.probation,
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), effectiveTo: null,
+      entryDate: new Date('2026-01-01T00:00:00.000Z'), sourceRequestId: null };
+    prisma.employmentRecord.findMany.mockResolvedValue([employment]);
+    prisma.employmentRecord.findUnique.mockResolvedValue(employment);
+    prisma.employmentRecord.update.mockImplementation(async ({ data }) => ({ ...employment, ...data }));
+    prisma.employmentRecord.create.mockImplementation(async ({ data }) => ({ id: 'synthetic-regular-employment', ...data }));
     prisma.confirmationApplication.findFirst.mockResolvedValue(null);
     const draft = {
       id: '33333333-3333-4333-8333-333333333333',
@@ -46,6 +56,7 @@ describe('employee confirmation draft', () => {
       submissionVersion: 0,
       status: ConfirmationStatus.draft,
       employeeId,
+      employmentRecordId: 'synthetic-employment',
       managerId,
       hrId: null,
       companyApproverId: null,
@@ -107,13 +118,15 @@ describe('employee confirmation draft', () => {
 
   it('lets only the employee revise the summary and ignores approval or pay fields', async () => {
     await service.update('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 0,
       summary: '更新工作小结',
       salary: 999999,
       hrId: '44444444-4444-4444-8444-444444444444',
     } as never, viewer);
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: '33333333-3333-4333-8333-333333333333', employeeId, status: ConfirmationStatus.draft },
+      where: { id: '33333333-3333-4333-8333-333333333333', employeeId, status: ConfirmationStatus.draft,
+        submissionVersion: 0, employmentRecordId: 'synthetic-employment' },
       data: { summary: '更新工作小结' },
     }));
   });
@@ -121,6 +134,7 @@ describe('employee confirmation draft', () => {
   it('does not overwrite a submitted application from a stale draft page', async () => {
     prisma.confirmationApplication.updateMany.mockResolvedValue({ count: 0 });
     await expect(service.update('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 0,
       summary: '页面上的旧草稿',
     }, viewer)).rejects.toThrow('申请状态已变化');
   });
@@ -129,7 +143,7 @@ describe('employee confirmation draft', () => {
     prisma.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === employeeId ? { ...employee, deptId: 'dept-1' }
         : { id: where.id, status: UserStatus.active, deletedAt: null });
-    await service.submit('33333333-3333-4333-8333-333333333333', viewer);
+    await service.submit('33333333-3333-4333-8333-333333333333', viewer, { submissionVersion: 0 });
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: ConfirmationStatus.submitted, managerId,
         hrId: null, companyApproverId: '55555555-5555-4555-8555-555555555555' }),
@@ -146,7 +160,7 @@ describe('employee confirmation draft', () => {
         leader: { name: '部门负责人', directManagerId: divisionApproverId, directManager: { name: '分管总' } }, approver: null },
     ]);
 
-    await service.submit('33333333-3333-4333-8333-333333333333', viewer);
+    await service.submit('33333333-3333-4333-8333-333333333333', viewer, { submissionVersion: 0 });
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ companyApproverId: divisionApproverId }),
@@ -156,7 +170,7 @@ describe('employee confirmation draft', () => {
   it('keeps the draft when the organization has no effective company approver', async () => {
     prisma.department.findMany.mockResolvedValue([{ id: 'dept-1', name: '人事组', parentId: null,
       leaderId: null, approverId: null, leader: null, approver: null }]);
-    await expect(service.submit('33333333-3333-4333-8333-333333333333', viewer))
+    await expect(service.submit('33333333-3333-4333-8333-333333333333', viewer, { submissionVersion: 0 }))
       .rejects.toThrow('尚无有效的分管领导');
     expect(prisma.confirmationApplication.updateMany).not.toHaveBeenCalled();
   });
@@ -173,7 +187,9 @@ describe('employee confirmation draft', () => {
     prisma.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === employeeId ? { ...employee, deptId: 'dept-1', directManagerId: currentManagerId }
         : { id: where.id, status: UserStatus.active, deletedAt: null });
-    await service.submit('33333333-3333-4333-8333-333333333333', viewer);
+    const [employment] = await prisma.employmentRecord.findMany();
+    prisma.employmentRecord.findMany.mockResolvedValue([{ ...employment, directManagerId: currentManagerId }]);
+    await service.submit('33333333-3333-4333-8333-333333333333', viewer, { submissionVersion: 1 });
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ managerId,
         hrId: '44444444-4444-4444-8444-444444444444',
@@ -191,7 +207,7 @@ describe('employee confirmation draft', () => {
       companyApproverId: '55555555-5555-4555-8555-555555555555',
       summary: '补充后的工作小结', returnReason: '请补充项目结果',
     });
-    await service.submit('33333333-3333-4333-8333-333333333333', viewer);
+    await service.submit('33333333-3333-4333-8333-333333333333', viewer, { submissionVersion: 1 });
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ submissionVersion: 1, summary: '补充后的工作小结',
         managerId, hrId: '44444444-4444-4444-8444-444444444444' }),
@@ -208,7 +224,7 @@ describe('employee confirmation draft', () => {
 
   it('records a negative manager recommendation and still forwards it for HR review', async () => {
     prisma.confirmationApplication.findUnique.mockResolvedValue({
-      workflowVersion: 2,
+      workflowVersion: 2, submissionVersion: 1, employmentRecordId: null,
       status: ConfirmationStatus.submitted,
       managerId,
       hrId: '44444444-4444-4444-8444-444444444444',
@@ -216,12 +232,14 @@ describe('employee confirmation draft', () => {
     });
     const manager = { ...viewer, id: managerId, name: '花名册直属主管' };
     await service.approve('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       comment: '工作需要改进，暂不建议转正',
       recommendation: false,
     } as never, manager);
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.submitted, managerId },
+      where: { id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.submitted, managerId,
+        submissionVersion: 1, employmentRecordId: null },
       data: expect.objectContaining({
         status: ConfirmationStatus.manager_approved,
         managerRecommendation: false,
@@ -233,10 +251,11 @@ describe('employee confirmation draft', () => {
 
   it('does not record a stale manager evaluation after another action changes the application', async () => {
     prisma.confirmationApplication.findUnique.mockResolvedValue({
-      workflowVersion: 2, status: ConfirmationStatus.submitted, managerId,
+      workflowVersion: 2, submissionVersion: 1, employmentRecordId: null, status: ConfirmationStatus.submitted, managerId,
     });
     prisma.confirmationApplication.updateMany.mockResolvedValue({ count: 0 });
     await expect(service.approve('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       recommendation: true, comment: '工作表现良好',
     } as never, { ...viewer, id: managerId })).rejects.toThrow('申请状态已变化');
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
@@ -291,17 +310,17 @@ describe('employee confirmation draft', () => {
     await expect(service.findOne('33333333-3333-4333-8333-333333333333', hrAdmin))
       .resolves.toMatchObject({ employeeId, canApprove: false, canViewInternalMeeting: true });
     await expect(service.approve('33333333-3333-4333-8333-333333333333', {
-      voteResult: 'pass', voteComment: '评议通过', proposedRegularDate: new Date('2026-10-01T00:00:00.000Z'),
+      submissionVersion: 1, voteResult: 'pass', voteComment: '评议通过', proposedRegularDate: new Date('2026-10-01T00:00:00.000Z'),
     } as never, hrAdmin)).rejects.toThrow('仅本公司有转正办理权限的 HR');
   });
 
   it('does not let the company approver use HR authority on the same application', async () => {
     const approverId = '55555555-5555-4555-8555-555555555555';
     prisma.confirmationApplication.findUnique.mockResolvedValue({
-      workflowVersion: 2, status: ConfirmationStatus.manager_approved, employeeId, managerId,
+      workflowVersion: 2, submissionVersion: 1, status: ConfirmationStatus.manager_approved, employeeId, managerId,
       companyApproverId: approverId,
     });
-    await expect(service.approve('33333333-3333-4333-8333-333333333333', {} as never,
+    await expect(service.approve('33333333-3333-4333-8333-333333333333', { submissionVersion: 1 } as never,
       { ...viewer, id: approverId, sysRole: SysRole.hr })).rejects.toThrow('仅本公司有转正办理权限的 HR');
     expect(prisma.confirmationApplication.updateMany).not.toHaveBeenCalled();
   });
@@ -448,6 +467,7 @@ describe('employee confirmation draft', () => {
     const hrId = '44444444-4444-4444-8444-444444444444';
     prisma.confirmationApplication.findUnique.mockResolvedValue({
       id: applicationId, employeeId, workflowVersion: 2, hrId: null, status: ConfirmationStatus.manager_approved,
+      submissionVersion: 1, employmentRecordId: null,
     });
     const file = { originalname: '评议依据.pdf' } as Express.Multer.File;
     await expect(service.addMeetingAttachment(applicationId, file, viewer)).rejects.toThrow('仅本公司有转正办理权限的 HR');
@@ -463,7 +483,7 @@ describe('employee confirmation draft', () => {
       size: 123, mimeType: 'application/pdf', uploadedById: hrId, createdAt: new Date(),
     });
     const result = await service.addMeetingAttachment(applicationId, file, { ...viewer, id: hrId,
-      sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'] });
+      sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'] }, { submissionVersion: 1 });
     expect(storage.uploadFile).toHaveBeenCalledWith(file, 'confirmation-internal');
     expect(result).not.toHaveProperty('objectKey');
     expect(prisma.auditLog.create).toHaveBeenCalled();
@@ -476,7 +496,7 @@ describe('employee confirmation draft', () => {
     });
     await expect(service.addMeetingAttachment('33333333-3333-4333-8333-333333333333',
       { originalname: '事后材料.pdf' } as Express.Multer.File, { ...viewer, id: hrId,
-        sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'] }))
+        sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'] }, { submissionVersion: 1 }))
       .rejects.toThrow('当前环节不能上传');
     expect(storage.uploadFile).not.toHaveBeenCalled();
   });
@@ -499,13 +519,14 @@ describe('employee confirmation draft', () => {
   it('lets scoped HR record an attachment-backed conclusion and saves the actual actor', async () => {
     const hrId = '44444444-4444-4444-8444-444444444444';
     prisma.confirmationApplication.findUnique.mockResolvedValue({
-      id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2,
+      id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2, submissionVersion: 1, employmentRecordId: null,
       status: ConfirmationStatus.manager_approved, employeeId,
       managerId, hrId: null, companyApproverId: '55555555-5555-4555-8555-555555555555',
     });
     prisma.confirmationMeetingAttachment.count.mockResolvedValue(1);
 
     await service.approve('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       voteResult: 'extend',
       proposedRegularDate: new Date('2026-10-01T00:00:00.000Z'),
       comment: '已线下评议，建议延长试用',
@@ -513,7 +534,8 @@ describe('employee confirmation draft', () => {
       hrCapabilities: ['confirmation_manage'] });
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.manager_approved },
+      where: { id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.manager_approved,
+        submissionVersion: 1, employmentRecordId: null },
       data: expect.objectContaining({
         status: ConfirmationStatus.hr_approved,
         hrId,
@@ -540,6 +562,7 @@ describe('employee confirmation draft', () => {
     });
 
     const managerResult = await service.approve('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       recommendation: true, comment: '建议转正',
     } as never, dualRoleHandler);
 
@@ -554,10 +577,14 @@ describe('employee confirmation draft', () => {
       where: expect.objectContaining({
         sysRole: SysRole.hr_user,
         hrCapabilities: { has: 'confirmation_manage' },
-        dept: { is: { company: 'fuede' } },
       }),
     }));
     expect(prisma.user.findMany.mock.calls.at(-1)?.[0]?.where).not.toHaveProperty('OR');
+    expect(prisma.user.findMany.mock.calls.at(-1)?.[0]?.where).not.toHaveProperty('dept');
+    expect(prisma.employmentRecord.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: { in: [employeeId] } }),
+      select: { userId: true, contractSubjectId: true },
+    }));
 
     prisma.confirmationApplication.findUnique.mockResolvedValueOnce({
       id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2, submissionVersion: 1,
@@ -565,6 +592,7 @@ describe('employee confirmation draft', () => {
       companyApproverId: '55555555-5555-4555-8555-555555555555',
     });
     const hrResult = await service.approve('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       voteResult: 'pass', voteComment: '评议通过', proposedRegularDate: new Date('2026-10-01T00:00:00.000Z'),
     } as never, dualRoleHandler);
 
@@ -636,15 +664,17 @@ describe('employee confirmation draft', () => {
     prisma.confirmationApplication.findUnique.mockResolvedValue({
       id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2,
       status: ConfirmationStatus.approved, hrId, voteResult: 'pass', meetingDate: null,
+      submissionVersion: 1, employmentRecordId: null,
     });
     const date = new Date('2026-09-12T00:00:00.000Z');
     await expect(service.backfillMeetingDate('33333333-3333-4333-8333-333333333333', { meetingDate: date }, viewer))
       .rejects.toThrow('仅记录评议结论的 HR');
 
-    await service.backfillMeetingDate('33333333-3333-4333-8333-333333333333', { meetingDate: date }, { ...viewer, id: hrId, sysRole: SysRole.hr });
+    await service.backfillMeetingDate('33333333-3333-4333-8333-333333333333', { meetingDate: date, submissionVersion: 1 }, { ...viewer, id: hrId, sysRole: SysRole.hr });
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith({
       where: {
         id: '33333333-3333-4333-8333-333333333333', hrId,
+        submissionVersion: 1, employmentRecordId: null,
         status: { in: [ConfirmationStatus.hr_approved, ConfirmationStatus.approved, ConfirmationStatus.rejected] },
         voteResult: { not: null },
       }, data: { meetingDate: date },
@@ -659,9 +689,11 @@ describe('employee confirmation draft', () => {
     const hrId = '44444444-4444-4444-8444-444444444444';
     prisma.confirmationApplication.findUnique.mockResolvedValue({
       workflowVersion: 2, status: ConfirmationStatus.hr_approved, hrId, voteResult: 'pass', meetingDate: null,
+      submissionVersion: 1, employmentRecordId: null,
     });
     prisma.confirmationApplication.updateMany.mockResolvedValue({ count: 0 });
     await expect(service.backfillMeetingDate('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       meetingDate: new Date('2026-09-14T00:00:00.000Z'),
     }, { ...viewer, id: hrId, sysRole: SysRole.hr })).rejects.toThrow('申请状态已变化');
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
@@ -671,12 +703,14 @@ describe('employee confirmation draft', () => {
     const approverId = '55555555-5555-4555-8555-555555555555';
     const proposedDate = new Date('2026-10-01T00:00:00.000Z');
     prisma.confirmationApplication.findUnique.mockResolvedValue({
-      id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2,
+      id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2, submissionVersion: 1,
       status: ConfirmationStatus.hr_approved, employeeId, managerId,
+      employmentRecordId: 'synthetic-employment',
       hrId: '44444444-4444-4444-8444-444444444444', companyApproverId: approverId,
       proposedRegularDate: proposedDate,
     });
     await service.approve('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       confirmedRegularDate: proposedDate,
       comment: '同意转正',
     } as never, { ...viewer, id: approverId });
@@ -698,7 +732,7 @@ describe('employee confirmation draft', () => {
       status: ConfirmationStatus.hr_approved, submissionVersion: 1, employeeId,
       hrId: '44444444-4444-4444-8444-444444444444', companyApproverId: approverId,
     });
-    await service.reject('33333333-3333-4333-8333-333333333333', {}, { ...viewer, id: approverId });
+    await service.reject('33333333-3333-4333-8333-333333333333', { submissionVersion: 1 }, { ...viewer, id: approverId });
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: ConfirmationStatus.rejected, rejectReason: null }),
@@ -736,6 +770,7 @@ describe('employee confirmation draft', () => {
       meetingDate: null, proposedRegularDate: new Date('2026-10-01T00:00:00.000Z'),
     });
     await service.returnForSupplement('33333333-3333-4333-8333-333333333333', {
+      submissionVersion: 1,
       reason: '请补充项目结果',
     }, { ...viewer, id: approverId });
 

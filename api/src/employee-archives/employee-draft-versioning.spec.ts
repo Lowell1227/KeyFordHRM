@@ -166,8 +166,8 @@ describe('employee draft optimistic concurrency', () => {
       user: { name: 'Approved name', phone: '123', position: 'Analyst' }, employment: { jobGrade: 'P1', jobFamily: 'HR', workLocation: 'HQ', companyText: 'Company' } },
     { name: 'blank strings stored as null', raw: { name: 'Approved name', phone: ' ', position: ' ', jobGrade: ' ', jobFamily: ' ', workLocation: ' ', companyText: ' ' },
       user: { phone: null, position: null }, employment: { jobGrade: null, jobFamily: null, workLocation: null, companyText: null } },
-    { name: 'enum defaults', raw: { name: 'Approved name', company: 'unknown', employmentType: 'unknown', employeeStatus: 'unknown' },
-      user: { employmentType: 'full_time', status: 'active' }, employment: { company: 'fuede' } },
+    { name: 'non-company enum defaults retain null company', raw: { name: 'Approved name', company: null, employmentType: 'unknown', employeeStatus: 'unknown' },
+      user: { employmentType: 'full_time', status: 'active' }, employment: { company: null } },
   ])('resumes an approved profile after application normalizes $name', async ({ raw, user, employment }) => {
     const f = partialApproval('profile');
     Object.assign(f.user, user);
@@ -199,13 +199,13 @@ describe('employee draft optimistic concurrency', () => {
     expect(f.draft.proposedValue.employee).toEqual(employee);
   });
 
-  it.each([false, true])('checks the applied directory position rather than the supplied display labels (external change=%s)', async changed => {
+  it.each([false, true])('checks the applied employment snapshot without reinterpreting the directory (external change=%s)', async changed => {
     const f = partialApproval('profile');
     const employee = { name: 'Approved name', positionId: 'position-1', position: 'Supplied label', jobFamily: 'Supplied family' };
     f.user.positionId = 'position-1';
     f.user.position = changed ? 'External position' : 'Directory position';
-    f.user.employmentHistory = [{ jobFamily: 'Directory family' }];
-    f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Directory position', jobFamily: 'Directory family' })) };
+    f.user.employmentHistory = [{ sourceRequestId: 'draft', positionId: 'position-1', position: 'Directory position', jobFamily: 'Directory family' }];
+    f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Renamed directory position', jobFamily: 'Renamed directory family' })) };
     f.draft.proposedValue.employee = employee;
     f.input.employee = employee;
     if (changed) {
@@ -215,6 +215,7 @@ describe('employee draft optimistic concurrency', () => {
       expect((await f.service.saveArchiveDraft('employee', f.input, operator))?.performanceReviewStatus).toBe('pending');
       expect(f.draft.proposedValue.employee).toEqual(employee);
     }
+    expect(f.tx.position.findUnique).not.toHaveBeenCalled();
   });
 
   it('keeps existing employment facts when approval only changed the employee projection', async () => {
@@ -226,7 +227,7 @@ describe('employee draft optimistic concurrency', () => {
     const approvedEmployee = { ...originalEmployee, name: 'Approved name ' };
     f.draft.proposedValue.employee = approvedEmployee;
     f.input.employee = { ...approvedEmployee };
-    Object.assign(f.user, { name: 'Approved name', position: 'Directory position' });
+    Object.assign(f.user, { name: 'Approved name' });
     f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Directory position', jobFamily: 'New directory family' })) };
     const result = await f.service.saveArchiveDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
@@ -273,7 +274,7 @@ describe('employee draft optimistic concurrency', () => {
     expect(f.tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
   });
 
-  it.each(['profile', 'performance'] as const)('resolves an approved %s manager supplied by name using the original lookup rule', async approvedScope => {
+  it.each(['profile', 'performance'] as const)('does not guess the identity of an old approved %s manager from a name while resuming', async approvedScope => {
     const f = partialApproval(approvedScope);
     f.tx.user.findMany = jest.fn(async () => [{ id: 'resolved-manager' }]);
     if (approvedScope === 'profile') {
@@ -285,9 +286,9 @@ describe('employee draft optimistic concurrency', () => {
       f.draft.proposedValue.performance = { managerId: null, managerName: ' Manager ' };
       f.input.performance = { ...f.draft.proposedValue.performance };
     }
-    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
-    if (!result) throw new Error('expected review request');
-    expect(result!.requestVersion).toBe(1);
+    await expect(f.service.saveArchiveDraft('employee', f.input, operator)).rejects.toBeInstanceOf(ConflictException);
+    expect(f.tx.user.findMany).not.toHaveBeenCalled();
+    expect(f.tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
     expect(f.draft.proposedValue[approvedScope]).toMatchObject(approvedScope === 'profile' ? {} : { managerId: null, managerName: ' Manager ' });
   });
 

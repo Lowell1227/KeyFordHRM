@@ -451,15 +451,13 @@ describe('EmployeeDataReviewsService', () => {
           name: '新员工',
           phone: '13800000000',
           company: 'fuede',
-          deptId: null,
-          position: '项目专员',
+          deptId: 'dept-1',
+          positionId: 'p1', position: '项目专员',
           entryDate: '2026-08-01T00:00:00.000Z',
           effectiveFrom: '2026-08-01T00:00:00.000Z',
           employmentType: 'full_time',
           employeeStatus: 'active',
-          managerName: '主管一',
-          organizationPath: ['项目中心'],
-          organizationLeaderPaths: [['项目中心']],
+          managerId: 'manager-1', managerName: '主管一',
           organizationNodes: [{
             fullPath: '项目中心', company: 'fuede', sortOrder: 4,
           }],
@@ -476,7 +474,7 @@ describe('EmployeeDataReviewsService', () => {
           }],
           attachments: [],
         }],
-        performance: { managerName: '主管一' },
+        performance: { managerId: 'manager-1', managerName: '主管一' },
       },
     };
     const requestUpdate = jest.fn(async ({ data }: any) => {
@@ -486,6 +484,7 @@ describe('EmployeeDataReviewsService', () => {
     const userCreate = jest.fn().mockResolvedValue({ id: 'employee-new' });
     const userUpdate = jest.fn().mockResolvedValue({ id: 'employee-new' });
     const tx = {
+      position: { findUnique: jest.fn(async () => ({ id: 'p1', name: '项目专员', jobFamily: null, isActive: true })) },
       employeeDataChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -570,14 +569,8 @@ describe('EmployeeDataReviewsService', () => {
       }),
     });
     expect(tx.department.update).not.toHaveBeenCalled();
-    expect(tx.departmentChangeRequest.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        departmentId: 'dept-1',
-        action: 'update_leader',
-        status: 'pending',
-        proposedValue: { leaderId: 'employee-new' },
-      }),
-    });
+    expect(tx.departmentChangeRequest.create).not.toHaveBeenCalled();
+    expect(tx.user.findMany).not.toHaveBeenCalled();
   });
 
   it('修改绩效直属上级在事务内应用关系并记录生效，不伪造人工审核', async () => {
@@ -857,7 +850,7 @@ describe('EmployeeDataReviewsService', () => {
     });
   });
 
-  it('批量审核先建立全部新员工档案，再解析同批次绩效上级', async () => {
+  it('旧导入批次不会按同批次新建员工姓名猜测主管身份', async () => {
     const requests = new Map<string, any>([
       ['review-employee', {
         id: 'review-employee', userId: null, employeeNo: '002', employeeName: '新员工',
@@ -865,7 +858,7 @@ describe('EmployeeDataReviewsService', () => {
         validationErrors: [],
         proposedValue: {
           employee: {
-            employeeNo: '002', name: '新员工', company: 'fuede', deptId: 'dept-1', position: '专员',
+            employeeNo: '002', name: '新员工', company: 'fuede', deptId: 'dept-1', positionId: 'p1', position: '专员',
             entryDate: '2026-08-01T00:00:00.000Z', employmentType: 'full_time', employeeStatus: 'active',
             managerName: '新主管',
           },
@@ -878,7 +871,7 @@ describe('EmployeeDataReviewsService', () => {
         validationErrors: [],
         proposedValue: {
           employee: {
-            employeeNo: '001', name: '新主管', company: 'fuede', deptId: 'dept-1', position: '经理',
+            employeeNo: '001', name: '新主管', company: 'fuede', deptId: 'dept-1', positionId: 'p2', position: '经理',
             entryDate: '2026-08-01T00:00:00.000Z', employmentType: 'full_time', employeeStatus: 'active',
           },
           profile: {}, contracts: [], performance: {},
@@ -900,6 +893,7 @@ describe('EmployeeDataReviewsService', () => {
       return { ...request };
     });
     const tx = {
+      position: { findUnique: jest.fn(async ({ where }) => ({ id: where.id, name: where.id === 'p1' ? '专员' : '经理', jobFamily: null, isActive: true })) },
       employeeDataChangeRequest: {
         findUnique: jest.fn(async ({ where }: any) => requests.get(where.id) ?? null),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -934,12 +928,10 @@ describe('EmployeeDataReviewsService', () => {
       scopes: ['profile', 'performance'],
     }, operator);
 
-    expect(result.failed).toEqual([]);
-    expect(result.succeeded).toEqual([
-      { requestId: 'review-employee', scopes: ['profile', 'performance'] },
-      { requestId: 'review-manager', scopes: ['profile'] },
-    ]);
-    expect(users.get('employee-new')).toEqual(expect.objectContaining({ directManagerId: 'manager-new' }));
+    expect(result.failed).toEqual([{ requestId: 'review-employee', reason: expect.stringContaining('明确选择') }]);
+    expect(result.succeeded).toEqual([{ requestId: 'review-manager', scopes: ['profile'] }]);
+    expect(users.has('employee-new')).toBe(false);
+    expect(tx.user.findMany).not.toHaveBeenCalled();
   });
 
   it('审核通过离职变更时停用员工和钉钉登录，但不删除员工档案', async () => {
@@ -950,7 +942,7 @@ describe('EmployeeDataReviewsService', () => {
       proposedValue: {
         employee: {
           employeeNo: '009', name: '离职员工', phone: null, company: 'fuede', deptId: 'dept-1',
-          position: '专员', entryDate: '2024-01-01T00:00:00.000Z', leaveDate: '2026-08-24T00:00:00.000Z',
+          positionId: 'p1', position: '专员', entryDate: '2024-01-01T00:00:00.000Z', leaveDate: '2026-08-24T00:00:00.000Z',
           employmentType: 'full_time', employeeStatus: 'resigned', managerId: null,
         },
         profile: {}, contracts: [], performance: {},
@@ -960,6 +952,7 @@ describe('EmployeeDataReviewsService', () => {
     const userDelete = jest.fn();
     const bindingUpdate = jest.fn().mockResolvedValue({ count: 1 });
     const tx = {
+      position: { findUnique: jest.fn(async () => ({ id: 'p1', name: '专员', jobFamily: null, isActive: true })) },
       employeeDataChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -1008,7 +1001,7 @@ describe('EmployeeDataReviewsService', () => {
       proposedValue: {
         employee: {
           employeeNo: '009', name: '离职员工', phone: null, company: 'fuede', deptId: 'dept-1',
-          position: '专员', entryDate: '2024-01-01T00:00:00.000Z', leaveDate: '2026-09-16T00:00:00.000Z',
+          positionId: 'p1', position: '专员', entryDate: '2024-01-01T00:00:00.000Z', leaveDate: '2026-09-16T00:00:00.000Z',
           effectiveFrom: '2026-09-16T00:00:00.000Z', effectiveTo: null, changeType: 'resignation',
           employmentType: 'full_time', employeeStatus: 'resigned', managerId: null,
         },
@@ -1018,6 +1011,7 @@ describe('EmployeeDataReviewsService', () => {
     const employmentUpdate = jest.fn();
     const employmentCreate = jest.fn();
     const tx = {
+      position: { findUnique: jest.fn(async () => ({ id: 'p1', name: '专员', jobFamily: null, isActive: true })) },
       employeeDataChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -1140,7 +1134,7 @@ describe('EmployeeDataReviewsService', () => {
       proposedValue: {
         employee: {
           employeeNo: '001', name: '员工一', phone: null, company: 'fuede', deptId: 'dept-1',
-          position: '新岗位', entryDate: '2024-01-01T00:00:00.000Z', employmentType: 'full_time',
+          positionId: 'p1', position: '新岗位', entryDate: '2024-01-01T00:00:00.000Z', employmentType: 'full_time',
           employeeStatus: 'active', managerId: null,
         },
         profile: {},
@@ -1155,6 +1149,7 @@ describe('EmployeeDataReviewsService', () => {
     const employmentUpdate = jest.fn();
     const employmentCreate = jest.fn();
     const tx = {
+      position: { findUnique: jest.fn(async () => ({ id: 'p1', name: '新岗位', jobFamily: null, isActive: true })) },
       employeeDataChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -1183,7 +1178,7 @@ describe('EmployeeDataReviewsService', () => {
     expect(result.failed).toEqual([]);
     expect(employmentUpdate).toHaveBeenCalledWith({
       where: { id: 'employment-today' },
-      data: expect.objectContaining({ effectiveFrom: today, position: '新岗位', effectiveTo: null }),
+      data: expect.objectContaining({ effectiveFrom: today, positionId: 'p1', position: '新岗位', effectiveTo: null }),
     });
     expect(employmentCreate).not.toHaveBeenCalled();
     expect(tx.employeeContract.update).toHaveBeenCalledWith({
@@ -1519,44 +1514,15 @@ describe('EmployeeDataReviewsService', () => {
     expect((service as any).sameContractSet(base, [{ ...base[0], id: 'contract-2' }])).toBe(false);
   });
 
-  it('员工档案审核只解析已生效部门，不直接改写或新建组织架构', async () => {
-    const update = jest.fn();
-    const create = jest.fn();
+  it.each([{ path: ['项目中心'] }, { path: ['项目中心', '新部门'] }])('旧申请的组织路径必须由维护者明确选部门，不能自动匹配或创建：$path', async ({ path }) => {
+    const tx = { department: { findMany: jest.fn(), update: jest.fn(), create: jest.fn() } };
     const service = new EmployeeDataReviewsService({} as any);
-    const existingTx = {
-      department: {
-        findMany: jest.fn().mockResolvedValue([
-          { id: 'dept-1', name: '项目中心', leaderId: null, fullPath: '项目中心' },
-        ]),
-        update,
-        create,
-      },
-    };
-
-    await expect((service as any).ensureReviewedDepartmentPath(
-      existingTx,
-      ['项目中心'],
-      'fuede',
-      [{ fullPath: '项目中心', company: 'beijing_fuede', sortOrder: 99 }],
-    )).resolves.toEqual({ id: 'dept-1', name: '项目中心', fullPath: '项目中心', leaderId: null });
-    expect(update).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-
-    const missingTx = {
-      department: {
-        findMany: jest.fn().mockResolvedValue([]),
-        update,
-        create,
-      },
-    };
-    await expect((service as any).ensureReviewedDepartmentPath(
-      missingTx,
-      ['项目中心', '新部门'],
-      'fuede',
-      [],
-    )).rejects.toMatchObject({
-      response: expect.objectContaining({ message: '部门“项目中心”尚未通过部门架构审核' }),
-    });
-    expect(create).not.toHaveBeenCalled();
+    await expect((service as any).applyProfile(tx, {
+      id: 'old-import', userId: 'existing', sourceType: 'employee_roster_import', baseValue: {},
+      proposedValue: { employee: { employeeNo: '001', name: 'Synthetic', company: 'fuede', organizationPath: path } },
+    }, operator)).rejects.toMatchObject({ response: { data: { fieldErrors: { 'employee.deptId': expect.stringContaining('明确选择') } } } });
+    expect(tx.department.findMany).not.toHaveBeenCalled();
+    expect(tx.department.update).not.toHaveBeenCalled();
+    expect(tx.department.create).not.toHaveBeenCalled();
   });
 });

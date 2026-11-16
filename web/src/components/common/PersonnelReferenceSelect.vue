@@ -8,23 +8,30 @@ import { personnelReferenceKinds } from '@/utils/personnel-reference-kinds';
 
 const props = defineProps<{
   modelValue?: string | null;
+  referenceId?: string | null;
   kind: PersonnelReferenceKind;
   label?: string;
   disabled?: boolean;
   placeholder?: string;
 }>();
-const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
+const emit = defineEmits<{ 'update:modelValue': [value: string]; 'update:referenceId': [value: string | null] }>();
 const auth = useAuthStore();
 const definition = computed(() => personnelReferenceKinds[props.kind]);
 const label = computed(() => props.label || definition.value.label);
+const nameLabel = computed(() => label.value.endsWith('名称') ? label.value : `${label.value}名称`);
 const canRead = computed(() => canReadPersonnelReferenceData(auth.user, props.kind));
 const canWrite = computed(() => !props.disabled && canWritePersonnelReferenceData(auth.user));
 const manageHref = computed(() => `/basic-data?tab=${definition.value.tab}`);
 const rows = ref<PersonnelReferenceData[]>([]);
 const loading = ref(false);
 const loadError = ref('');
-const options = computed(() => rows.value.filter(row => row.isActive || row.name === props.modelValue));
-const current = computed(() => rows.value.find(row => row.name === props.modelValue));
+const legacyValue = '__unlinked_historical_value__';
+const current = computed(() => rows.value.find(row => definition.value.allowCustom ? row.name === props.modelValue : row.id === props.referenceId));
+const options = computed(() => rows.value.filter(row => row.isActive || row.id === current.value?.id));
+const selectedValue = computed(() => definition.value.allowCustom ? props.modelValue || undefined
+  : props.referenceId || (props.modelValue ? legacyValue : undefined));
+const optionLabel = (row: PersonnelReferenceData) => !definition.value.allowCustom && row.id === props.referenceId
+  ? props.modelValue || row.name : row.name;
 const dialogOpen = ref(false);
 const name = ref('');
 const saveError = ref('');
@@ -53,8 +60,19 @@ async function load(): Promise<PersonnelReferenceData[] | null> {
 
 function select(value: string | undefined | null) {
   if (props.disabled) return;
-  if (value && !definition.value.allowCustom && !rows.value.some(row => row.isActive && row.name === value)) return;
-  emit('update:modelValue', value || '');
+  if (!value) {
+    emit('update:referenceId', null);
+    emit('update:modelValue', '');
+    return;
+  }
+  if (definition.value.allowCustom) {
+    emit('update:modelValue', value);
+    return;
+  }
+  const row = rows.value.find(item => item.isActive && item.id === value);
+  if (!row) return;
+  emit('update:referenceId', row.id);
+  emit('update:modelValue', row.name);
 }
 
 function openCreate() {
@@ -70,6 +88,7 @@ function useExisting(existing: PersonnelReferenceData): boolean {
     saveError.value = `同名${label.value}已停用，请在管理页启用后再选用。`;
     return false;
   }
+  if (!definition.value.allowCustom) emit('update:referenceId', existing.id);
   emit('update:modelValue', existing.name);
   dialogOpen.value = false;
   return true;
@@ -84,7 +103,9 @@ async function save() {
   const kind = props.kind;
   const context = contextVersion;
   const currentValue = props.modelValue;
-  const isCurrent = () => context === contextVersion && kind === props.kind && currentValue === props.modelValue && canWrite.value;
+  const currentId = props.referenceId;
+  const isCurrent = () => context === contextVersion && kind === props.kind && currentValue === props.modelValue
+    && currentId === props.referenceId && canWrite.value;
   try {
     if ((loadError.value || loading.value) && !await load()) {
       if (isCurrent()) saveError.value = '暂时无法核对已有名称，请稍后重试；输入已保留。';
@@ -96,6 +117,7 @@ async function save() {
     const created = await personnelReferenceDataApi.create(kind, { name: value });
     if (!isCurrent()) return;
     rows.value = [...rows.value.filter(row => row.id !== created.id), created];
+    if (!definition.value.allowCustom) emit('update:referenceId', created.id);
     emit('update:modelValue', created.name);
     dialogOpen.value = false;
   } catch (error) {
@@ -135,15 +157,15 @@ onBeforeUnmount(() => {
 <template>
   <div class="personnel-reference-select">
     <el-select
-      ref="selectRef" :model-value="modelValue || undefined" :disabled="disabled" :loading="loading"
+      ref="selectRef" :model-value="selectedValue" :disabled="disabled" :loading="loading"
       :placeholder="placeholder || (definition.allowCustom ? `选择或填写${label}` : `选择${label}`)" :aria-label="label" filterable clearable :allow-create="definition.allowCustom" :default-first-option="definition.allowCustom" popper-class="personnel-reference-options"
       :no-data-text="`暂无启用${label}`" @update:model-value="select" @visible-change="visible => visible && load()"
     >
-      <el-option v-if="modelValue && !current" :value="modelValue" :label="modelValue" :title="modelValue" :disabled="!definition.allowCustom">
-        <span>{{ modelValue }}{{ definition.allowCustom ? '' : '（原值，未维护）' }}</span>
+      <el-option v-if="(modelValue || referenceId) && !current" :value="definition.allowCustom ? modelValue || '' : referenceId || legacyValue" :label="modelValue || '原选项已不可用'" :title="modelValue || ''" :disabled="!definition.allowCustom">
+        <span>{{ modelValue || '原选项已不可用' }}{{ definition.allowCustom ? '' : '（原值，未维护）' }}</span>
       </el-option>
-      <el-option v-for="row in options" :key="row.id" :value="row.name" :label="row.name" :title="row.name" :disabled="!row.isActive">
-        <span>{{ row.name }}{{ row.isActive ? '' : '（已停用）' }}</span>
+      <el-option v-for="row in options" :key="row.id" :value="definition.allowCustom ? row.name : row.id" :label="optionLabel(row)" :title="row.name" :disabled="!row.isActive">
+        <span>{{ optionLabel(row) }}{{ row.isActive ? '' : '（已停用）' }}</span>
       </el-option>
       <template v-if="canWrite" #footer>
         <div class="personnel-reference-select__footer">
@@ -164,8 +186,8 @@ onBeforeUnmount(() => {
       @opened="inputRef?.focus()"
     >
       <el-form label-position="top" @submit.prevent="save">
-        <el-form-item :label="`${label}名称`" :error="saveError">
-          <el-input ref="inputRef" v-model="name" :aria-label="`${label}名称`" :maxlength="definition.maxLength" show-word-limit :disabled="saving" @input="saveError = ''" />
+        <el-form-item :label="nameLabel" :error="saveError">
+          <el-input ref="inputRef" v-model="name" :aria-label="nameLabel" :maxlength="definition.maxLength" show-word-limit :disabled="saving" @input="saveError = ''" />
         </el-form-item>
       </el-form>
       <template #footer>

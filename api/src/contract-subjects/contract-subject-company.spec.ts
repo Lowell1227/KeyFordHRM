@@ -5,11 +5,12 @@ const client = (internalCompany: string | null = 'fansibao') => ({ contractSubje
   findUnique: jest.fn().mockResolvedValue({ id: subjectId, name: 'Synthetic subject', isActive: true, internalCompany }),
 } });
 
-describe('employee company mapping boundaries', () => {
-  it.each([undefined, 'fuede'])('derives new selections from the directory, ignoring caller company %s', async company => {
+describe('employee company directory boundaries', () => {
+  it.each([undefined, 'fuede'])('freezes new directory selections without assigning a legacy code %s', async company => {
     const value: any = { contractSubjectId: subjectId, company, companyText: 'Forged' };
     await normalizeContractSubject(client() as any, value, {}, 'companyText');
-    expect(value).toMatchObject({ company: 'fansibao', companyText: 'Synthetic subject' });
+    expect(value).toMatchObject({ company: null, companyText: 'Synthetic subject' });
+    await expect(validateContractSubject(client(null) as any, value, {}, 'companyText')).resolves.toBeUndefined();
   });
 
   it('never infers a company from the subject name and permits an incomplete draft', async () => {
@@ -31,5 +32,23 @@ describe('employee company mapping boundaries', () => {
     const value = { company: 'beijing_fuede', ...extra };
     await normalizeContractSubject({} as any, value, {}, 'companyText');
     expect(value.company).toBe('beijing_fuede');
+  });
+
+  it('preserves missing historical company data during unrelated changes', async () => {
+    const value: any = { position: 'New position' };
+    await normalizeContractSubject({} as any, value, { company: null, companyText: null, contractSubjectId: null }, 'companyText');
+    await expect(validateContractSubject({} as any, value, {}, 'companyText')).resolves.toBeUndefined();
+    expect(value.company).toBeNull();
+  });
+
+  it('rejects invalid legacy codes even without a subject', async () => {
+    await expect(validateContractSubject({} as any, { company: 'guessed' }, {}, 'companyText')).rejects.toThrow();
+  });
+
+  it.each([undefined, null])('retains an unlinked historical company snapshot when no directory selection changes: %s', async id => {
+    const value: any = { contractSubjectId: id };
+    await normalizeContractSubject({} as any, value,
+      { contractSubjectId: null, company: null, companyText: 'Historical company' }, 'companyText');
+    expect(value).toMatchObject({ company: null, companyText: 'Historical company' });
   });
 });

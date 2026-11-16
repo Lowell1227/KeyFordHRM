@@ -1,3 +1,5 @@
+const referenceId = '00000000-0000-4000-8000-000000000001';
+const positionId = '00000000-0000-4000-8000-000000000002';
 import { BadRequestException } from '@nestjs/common';
 import { EmployeeArchivesService } from './employee-archives.service';
 import { approvedEmploymentSourceWhere } from './employment-timeline';
@@ -5,6 +7,8 @@ import { approvedEmploymentSourceWhere } from './employment-timeline';
 const operator = { id: 'hr', sysRole: 'hr' } as any;
 const controlled = [
   ['employee', 'jobGrade', 'job_grade'],
+  ['employee', 'jobFamily', 'job_family'],
+  ['employee', 'workLocation', 'work_location'],
   ['profile', 'education', 'education'],
   ['profile', 'maritalStatus', 'marital_status'],
   ['profile', 'politicalStatus', 'political_status'],
@@ -18,13 +22,13 @@ function fixture(base: { employee?: Record<string, unknown>; profile?: Record<st
     employeeProfile: { ...(base.profile ?? {}) }, employeeContracts: [],
     employmentHistory: [{ id: 'employment', company: 'fuede', effectiveFrom: new Date('2024-01-01'),
       effectiveTo: null as Date | null, ...(base.employee ?? {}) }] };
-  const options: { kind: string; name: string; isActive: boolean }[] = [];
+  const options: { id?: string; kind: string; name: string; isActive: boolean }[] = [];
   const prisma = {
     $transaction: jest.fn(async callback => callback(prisma)),
     user: { findUnique: jest.fn().mockResolvedValue(current), update: jest.fn(async ({ data }) => Object.assign(current, data)), findMany: jest.fn().mockResolvedValue([]) },
     employeeProfile: { upsert: jest.fn(async ({ create, update }) => Object.assign(current.employeeProfile, update ?? create)) },
-    personnelReferenceData: { findMany: jest.fn(async ({ where }) => options.filter(option => option.isActive === where.isActive
-      && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
+    personnelReferenceData: { findMany: jest.fn(async ({ where }) => options.filter(option => where.id.in.includes(option.id))) },
+    position: { findUnique: jest.fn(async () => ({ id: positionId, name: 'Selected position', jobFamily: null, isActive: true })) },
     department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept', isActive: true }) },
     employmentRecord: { findMany: jest.fn().mockResolvedValue([]) },
     auditLog: { create: jest.fn() },
@@ -38,6 +42,17 @@ function fixture(base: { employee?: Record<string, unknown>; profile?: Record<st
 }
 
 describe('personnel directory validation at formal submission boundaries', () => {
+  it.each([['jobGrade', 'job_grade'], ['workLocation', 'work_location']])
+  ('updates the name together with an ID-only %s selection or clear', async (field, kind) => {
+    for (const selectedId of [positionId, null]) {
+      const { service, options, baseVersion } = fixture({ employee: { [field]: 'Old snapshot', [field + 'Id']: referenceId } });
+      options.push({ id: positionId, kind, name: 'New directory name', isActive: true });
+      const result = await service.submitDraft('user', { baseVersion, employee: { [field + 'Id']: selectedId }, profile: {} }, operator);
+      expect(result.request?.proposedValue).toMatchObject({ referenceSnapshotVersion: 1,
+        employee: { [field + 'Id']: selectedId, [field]: selectedId ? 'New directory name' : null } });
+    }
+  });
+
   describe('archive directory baseline follows the displayed employment', () => {
     beforeEach(() => jest.useFakeTimers().setSystemTime(new Date('2026-11-14T16:30:00Z')));
     afterEach(() => jest.useRealTimers());
@@ -68,10 +83,13 @@ describe('personnel directory validation at formal submission boundaries', () =>
 
     it.each(['Unknown', 'Inactive', 'Future'])('still rejects a newly selected %s grade', async jobGrade => {
       const { service, prisma, options, baseVersion } = prepare([future(), current()]);
-      options.push({ kind: 'job_grade', name: 'Inactive', isActive: false });
-      await expect(service.submitDraft('user', { baseVersion, employee: { jobGrade },
+      options.push({ id: referenceId, kind: 'job_grade', name: 'Inactive', isActive: false });
+      await expect(service.submitDraft('user', { baseVersion, employee: { jobGrade, ...(jobGrade === 'Inactive' ? { jobGradeId: referenceId } : {}) },
         profile: { professionalTitle: 'Changed' } }, operator)).rejects.toMatchObject({
         response: { data: { fieldErrors: { 'employee.jobGrade': expect.any(String) } } },
+      });
+      if (jobGrade === 'Inactive') expect(prisma.personnelReferenceData.findMany).toHaveBeenCalledWith({
+        where: { id: { in: [referenceId] } }, select: { id: true, kind: true, name: true, isActive: true },
       });
       expect(prisma.employeeProfile.upsert).not.toHaveBeenCalled();
       expect(prisma.employeeDataChangeRequest.create).not.toHaveBeenCalled();
@@ -142,10 +160,13 @@ describe('personnel directory validation at formal submission boundaries', () =>
 
   it.each(controlled)('rejects new inactive %s.%s before any formal write', async (section, field, kind) => {
     const { service, prisma, options, baseVersion } = fixture();
-    options.push({ kind, name: 'Inactive', isActive: false });
-    const input = { baseVersion, employee: {}, profile: {}, [section]: { [field]: 'Inactive' } };
+    options.push({ id: referenceId, kind, name: 'Inactive', isActive: false });
+    const input = { baseVersion, employee: {}, profile: {}, [section]: { [field]: 'Inactive', [field + 'Id']: referenceId } };
     await expect(service.submitDraft('user', input, operator)).rejects.toMatchObject({
       response: { data: { fieldErrors: { [`${section}.${field}`]: expect.any(String) } } },
+    });
+    expect(prisma.personnelReferenceData.findMany).toHaveBeenCalledWith({
+      where: { id: { in: [referenceId] } }, select: { id: true, kind: true, name: true, isActive: true },
     });
     expect(prisma.employeeProfile.upsert).not.toHaveBeenCalled();
     expect(prisma.employeeDataChangeRequest.create).not.toHaveBeenCalled();
@@ -154,8 +175,8 @@ describe('personnel directory validation at formal submission boundaries', () =>
 
   it.each(controlled)('allows active new %s.%s', async (section, field, kind) => {
     const { service, options, baseVersion } = fixture();
-    options.push({ kind, name: 'Active', isActive: true });
-    await expect(service.submitDraft('user', { baseVersion, employee: {}, profile: {}, [section]: { [field]: 'Active' } }, operator))
+    options.push({ id: referenceId, kind, name: 'Active', isActive: true });
+    await expect(service.submitDraft('user', { baseVersion, employee: {}, profile: {}, [section]: { [field]: 'Active', [field + 'Id']: referenceId } }, operator))
       .resolves.toMatchObject({ reviewOutcome: 'not_required' });
   });
 
@@ -164,7 +185,7 @@ describe('personnel directory validation at formal submission boundaries', () =>
     const profile = { education: 'Historical', maritalStatus: 'Historical', politicalStatus: 'Historical',
       householdType: 'Historical', emergencyContactRelation: 'Historical' };
     const { service, prisma, baseVersion } = fixture({ employee, profile });
-    const result = await service.submitDraft('user', { baseVersion, employee: { ...employee, position: 'Changed' }, profile }, operator);
+    const result = await service.submitDraft('user', { baseVersion, employee: { ...employee, name: 'Changed' }, profile }, operator);
     expect(result.request?.proposedValue).toMatchObject({ employee, profile });
     expect(prisma.personnelReferenceData.findMany).not.toHaveBeenCalled();
   });
@@ -189,7 +210,7 @@ describe('personnel directory validation at formal submission boundaries', () =>
 
   it('blocks unknown new-hire values before reserving an employee or creating a request', async () => {
     const { service, prisma } = fixture();
-    await expect(service.createEmployee({ name: 'Synthetic', deptId: 'dept', company: 'fuede',
+    await expect(service.createEmployee({ name: 'Synthetic', deptId: 'dept', positionId, company: 'fuede',
       employeeStatus: 'active', employmentType: 'full_time', effectiveFrom: new Date('2026-11-14'),
       employee: { jobGrade: 'Unknown' }, profile: { education: 'Unknown' } } as any, operator))
       .rejects.toMatchObject({ response: { data: { fieldErrors: {

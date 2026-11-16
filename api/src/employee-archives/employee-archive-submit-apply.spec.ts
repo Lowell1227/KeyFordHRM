@@ -34,10 +34,12 @@ function setup(config?: any) {
     ...['Changed', 'First', 'Second', 'Draft', 'Must roll back', 'Master', 'Do not apply', 'X'.repeat(50), 'x'.repeat(50)]
       .map(name => ({ kind: 'education', name, isActive: true })),
     ...['P2', 'P3'].map(name => ({ kind: 'job_grade', name, isActive: true })),
-  ];
+    ...['New office', 'New location'].map(name => ({ kind: 'work_location', name, isActive: true })),
+  ].map((row, index) => ({ ...row, id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}` }));
   const tx: any = {
     personnelReferenceData: { findMany: jest.fn(async ({ where }) => referenceOptions.filter(option =>
-      option.isActive === where.isActive && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
+      where.id.in.includes(option.id))) },
+    position: { findUnique: jest.fn(async () => ({ id: '00000000-0000-4000-8000-000000000099', name: 'Revised position', jobFamily: null, isActive: true })) },
     user: {
       findUnique: jest.fn(async ({ where }) => where.id === user.id ? user
         : { id: where.id, status: 'active', accountType: 'employee', directManagerId: null, deletedAt: null }),
@@ -81,8 +83,16 @@ function setup(config?: any) {
     }
   }) };
   const service = new EmployeeArchivesService(db, config);
+  const selections = (value: Record<string, unknown>) => {
+    const output = { ...value };
+    for (const [field, kind] of [['education', 'education'], ['jobGrade', 'job_grade'], ['workLocation', 'work_location']]) {
+      const row = referenceOptions.find(option => option.kind === kind && option.name === String(value[field] ?? '').trim());
+      if (row && !(field + 'Id' in output)) output[field + 'Id'] = row.id;
+    }
+    return output;
+  };
   const input = (employee = {}, profile = {}, performance?: any, contracts?: any[]) => ({
-    baseVersion: (service as any).archiveVersion(user), employee, profile, ...(performance ? { performance } : {}), ...(contracts ? { contracts } : {}),
+    baseVersion: (service as any).archiveVersion(user), employee: selections(employee), profile: selections(profile), ...(performance ? { performance } : {}), ...(contracts ? { contracts } : {}),
   });
   return { service, db, tx, user, requests, audits, input };
 }
@@ -162,7 +172,7 @@ describe('N08 formal archive version protection', () => {
     expect(f.input().baseVersion).toBe(before);
     expect(f.user.employeeProfile.education).toBe('Original');
     expect(f.tx.user.update).not.toHaveBeenCalled();
-    await f.service.submitDraft('employee', { employee: {}, profile: { education: 'Draft' },
+    await f.service.submitDraft('employee', { ...f.input({}, { education: 'Draft' }),
       draftId: draft!.id, expectedVersion: draft!.requestVersion }, editor);
     expect(f.input().baseVersion).not.toBe(before);
   });
@@ -332,7 +342,7 @@ describe('manual archive changes apply at submission', () => {
     const education = `${side !== 'trailing' ? ' ' : ''}${text}${side !== 'leading' ? ' ' : ''}`;
     await f.service.submitDraft('employee', f.input({}, { education }), editor);
     expect(f.user.employeeProfile.education).toBe(text);
-    expect(f.tx.employeeProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { education: text } }));
+    expect(f.tx.employeeProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { education: text, educationId: expect.any(String) } }));
     expect(f.audits.find(a => a.action === 'employee_profile_direct_update').newValue.education).toBe(text);
     f.tx.employeeProfile.upsert.mockClear();
     await expect(f.service.submitDraft('employee', f.input({}, { education: ` ${text}X ` }), editor))
@@ -520,7 +530,7 @@ describe('manual archive changes apply at submission', () => {
   it('preserves an omitted company in a legacy unlinked archive payload', async () => {
     const f = setup();
     f.user.employmentHistory[0].company = 'fansibao';
-    await f.service.submitDraft('employee', f.input({ position: 'Revised position' }), editor);
+    await f.service.submitDraft('employee', f.input({ positionId: '00000000-0000-4000-8000-000000000099', position: 'Revised position' }), editor);
     expect(f.user.employmentHistory[0]).toMatchObject({ company: 'fansibao', position: 'Revised position' });
   });
 
@@ -542,12 +552,12 @@ describe('manual archive changes apply at submission', () => {
     else expect(f.user.employmentHistory[0]).not.toHaveProperty('company');
   });
 
-  it('derives a null company from a newly selected mapped subject on archive submission', async () => {
+  it('applies a newly selected company with no legacy code even if its directory mapping exists', async () => {
     const f = setup();
     const id = '11111111-1111-4111-8111-111111111111';
     f.tx.contractSubject = { findUnique: jest.fn(async () => ({ id, name: 'Selected subject', isActive: true, internalCompany: CompanyCode.fansibao })) };
     await f.service.submitDraft('employee', f.input({ contractSubjectId: id, company: null }), editor);
-    expect(f.user.employmentHistory[0]).toMatchObject({ contractSubjectId: id, company: 'fansibao', companyText: 'Selected subject' });
+    expect(f.user.employmentHistory[0]).toMatchObject({ contractSubjectId: id, company: null, companyText: 'Selected subject' });
   });
 
   it.each([null, 'invalid-code'])('rejects invalid stored archive company %s at the apply boundary too', async company => {
@@ -563,12 +573,55 @@ describe('manual archive changes apply at submission', () => {
   it.each([true, false])('inherits an omitted stored archive company without defaulting to fuede (base has company: %s)', async baseHasCompany => {
     const f = setup();
     f.user.employmentHistory[0].company = 'fansibao';
-    const draft: any = await f.service.saveArchiveDraft('employee', f.input({ position: 'Revised position' }), editor);
+    const draft: any = await f.service.saveArchiveDraft('employee', f.input({ positionId: '00000000-0000-4000-8000-000000000099', position: 'Revised position' }), editor);
     Object.assign(f.requests[0], { recordStatus: 'submitted' });
     delete f.requests[0].proposedValue.employee.company;
     if (!baseHasCompany) delete f.requests[0].baseValue.employee.company;
     await f.db.$transaction((tx: any) => new EmployeeDataReviewsService(f.db).applyArchiveChange(tx, draft.id, editor));
     expect(f.user.employmentHistory[0]).toMatchObject({ company: 'fansibao', position: 'Revised position' });
+  });
+
+  it('applies unrelated employment changes when historical company is missing without guessing', async () => {
+    const f = setup();
+    Object.assign(f.user.employmentHistory[0], { company: null, companyText: 'Historical company', contractSubjectId: null });
+    await f.service.submitDraft('employee', f.input({ positionId: '00000000-0000-4000-8000-000000000099', position: 'Revised position' }), editor);
+    expect(f.user.employmentHistory[0]).toMatchObject({ company: null, companyText: 'Historical company',
+      contractSubjectId: null, position: 'Revised position' });
+  });
+
+  it.each([null, 'fansibao'])('keeps same-subject submissions a no-op after directory rename or deactivation: %s', async company => {
+    const f = setup();
+    const id = '11111111-1111-4111-8111-111111111111';
+    Object.assign(f.user.employmentHistory[0], { company, contractSubjectId: id, companyText: 'Original company' });
+    f.tx.contractSubject = { findUnique: jest.fn(async () => ({ id, name: 'Renamed company', isActive: false, internalCompany: 'fuede' })) };
+    const before = structuredClone({ user: f.user, requests: f.requests, audits: f.audits });
+    await expect(f.service.submitDraft('employee', f.input({ contractSubjectId: id, company: null, companyText: 'Renamed company' }), editor))
+      .rejects.toThrow('未检测到实际变更');
+    expect({ user: f.user, requests: f.requests, audits: f.audits }).toEqual(before);
+    expect(f.tx.contractSubject.findUnique).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 'fansibao'])('keeps full unlinked historical company payloads a no-op: %s', async company => {
+    const f = setup();
+    Object.assign(f.user.employmentHistory[0], { company, contractSubjectId: null, companyText: 'Historical company' });
+    const before = structuredClone({ user: f.user, requests: f.requests, audits: f.audits });
+    await expect(f.service.submitDraft('employee', f.input({ contractSubjectId: null, company, companyText: 'Historical company' }), editor))
+      .rejects.toThrow('未检测到实际变更');
+    expect({ user: f.user, requests: f.requests, audits: f.audits }).toEqual(before);
+  });
+
+  it('replays an old draft without subject fields against the unchanged inactive formal company', async () => {
+    const f = setup();
+    const id = '11111111-1111-4111-8111-111111111111';
+    Object.assign(f.user.employmentHistory[0], { company: null, contractSubjectId: id, companyText: 'Original company' });
+    const saved: any = await f.service.saveArchiveDraft('employee', f.input({ workLocation: 'New location' }), editor);
+    delete f.requests[0].baseValue.employee.contractSubjectId;
+    delete f.requests[0].proposedValue.employee.contractSubjectId;
+    f.tx.contractSubject = { findUnique: jest.fn(async () => ({ id, name: 'Renamed company', isActive: false })) };
+    await f.service.submitDraft('employee', { ...f.input({ workLocation: 'New location' }),
+      draftId: saved.id, expectedVersion: saved.requestVersion }, editor);
+    expect(f.user.employmentHistory[0]).toMatchObject({ company: null, contractSubjectId: id,
+      companyText: 'Original company', workLocation: 'New location' });
   });
 
   it('the legacy profile endpoint applies defined fields immediately and never rewrites an existing draft', async () => {
@@ -724,7 +777,7 @@ describe('manual archive changes apply at submission', () => {
     Object.assign(previous, { recordStatus: 'submitted', profileReviewStatus: 'approved', performanceReviewStatus: 'pending' });
     previous.proposedValue.performance = { managerId: 'manager' }; previous.baseValue.employee.positionId = 'position-1';
     Object.assign(f.user, { positionId: 'position-2', position: 'Directory label' });
-    Object.assign(f.user.employmentHistory[0], { positionId: 'position-2', position: 'Directory label', jobFamily: 'Approved family' });
+    Object.assign(f.user.employmentHistory[0], { sourceRequestId: previous.id, positionId: 'position-2', position: 'Directory label', jobFamily: 'Approved family' });
     f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-2', name: 'Directory label', jobFamily: 'Approved family' })) };
     const revision = await f.service.saveArchiveDraft('employee', { ...f.input({ jobFamily: 'Explicit correction', positionId: 'position-2' }), draftId: draft.id, expectedVersion: draft.requestVersion }, editor);
     expect(revision).toMatchObject({ profileReviewStatus: 'pending', proposedValue: { employee: { jobFamily: 'Explicit correction' } } });

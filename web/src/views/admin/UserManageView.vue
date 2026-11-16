@@ -1443,7 +1443,7 @@ function draftMissingLabel(draft: EmployeeDataReview) {
     [employee.deptId, '部门'],
     [employee.entryDate, '入职日期'],
     [employee.effectiveFrom, '任职开始'],
-    [employee.company && (employee.contractSubjectId || employee.companyText), '所属公司'],
+    [employee.contractSubjectId || employee.companyText || employee.company, '所属公司'],
     [employee.employmentType === null ? null : true, '用工类型'],
     [employee.employeeStatus === null ? null : true, '员工状态'],
   ].filter(([value]) => !value).map(([, label]) => label);

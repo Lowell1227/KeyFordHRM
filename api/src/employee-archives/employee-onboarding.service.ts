@@ -1,4 +1,6 @@
-import { normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
+import { normalizeEmployeePosition } from './employee-position-reference';
+import { validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
+import { assertSubmittedEmployeeCompany, normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuthUser } from '@/common/types/auth.types';
 import { hasHrCapability } from '@/auth/hr-capabilities';
@@ -17,7 +19,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { EmployeeIdentityMatchService } from './employee-identity-match.service';
 import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeEffectiveDateService } from './employee-effective-date.service';
-import { shanghaiBusinessDate } from './employment-timeline';
+import { approvedEmploymentSourceWhere, shanghaiBusinessDate } from './employment-timeline';
 import { employeeDataChangeView } from './employee-data-change-view';
 import { lockTalentSource, resolveTalentSource, talentSourceSelect } from './employee-talent-source';
 import {
@@ -209,7 +211,7 @@ export class EmployeeOnboardingService {
     return this.prisma.$transaction(async (tx) => {
       const user = await tx.user.findUnique({
         where: { id: userId, deletedAt: null, accountType: AccountType.employee },
-        include: { employmentHistory: { orderBy: { effectiveFrom: 'desc' }, take: 1 } },
+        include: { employmentHistory: { where: approvedEmploymentSourceWhere, orderBy: { effectiveFrom: 'desc' }, take: 1 } },
       });
       if (!user) throw new NotFoundException('员工不存在');
 
@@ -246,6 +248,7 @@ export class EmployeeOnboardingService {
       await this.normalizePosition(tx, employee, this.record(user.employmentHistory[0]));
       await normalizeContractSubject(tx, employee, {}, 'companyText');
       await validateContractSubject(tx, employee, {}, 'companyText');
+      assertSubmittedEmployeeCompany(employee, {}, 'contractSubjectId');
       const request = await tx.employeeDataChangeRequest.create({
         data: {
           userId,
@@ -268,6 +271,7 @@ export class EmployeeOnboardingService {
             performance: { managerId: user.directManagerId },
           }),
           proposedValue: this.json({
+            referenceSnapshotVersion: 1,
             employee,
             performance: { managerId: input.performanceManagerId ?? null },
             contracts: input.contractReferences ?? [],
@@ -288,6 +292,7 @@ export class EmployeeOnboardingService {
         data: {
           employeeNo,
           proposedValue: this.json({
+            referenceSnapshotVersion: 1,
             employee: { ...employee, employeeNo },
             performance: { managerId: input.performanceManagerId ?? null },
             contracts: input.contractReferences ?? [],
@@ -332,6 +337,9 @@ export class EmployeeOnboardingService {
         if (changed) throw new ConflictException('基础档案已生效，本次只可重提退回的绩效关系；任职调整请另办变更');
       }
       const baseValue = this.record(request.baseValue);
+      const referenceBase = performanceOnly ? {} : await this.reentryReferenceBase(tx, request);
+      const supplySourceBase = !performanceOnly && request.sourceType === 'onboarding_intake'
+        && !('latestEmployment' in this.record(baseValue.employee));
       const reviewedEmployment = !performanceOnly
         ? await tx.employmentRecord.findUnique({ where: { sourceRequestId: request.id } }) : null;
       // Revision may remove the pending projection; retain its reviewed company for later review.
@@ -351,9 +359,13 @@ export class EmployeeOnboardingService {
         payloadHash: this.hashPayload(input),
       };
       if (!performanceOnly) {
-        await this.normalizePosition(tx, next.employee as Record<string, unknown>, this.reentryPositionSnapshot(request));
+        await this.normalizePosition(tx, next.employee as Record<string, unknown>,
+          referenceBase,
+          this.record(request.proposedValue).referenceSnapshotVersion === 1 ? this.reentryPositionSnapshot(request) : {});
         await normalizeContractSubject(tx, next.employee as Record<string, unknown>, this.record(this.record(request.proposedValue).employee), 'companyText', companyBase);
         await validateContractSubject(tx, next.employee as Record<string, unknown>, companyBase, 'companyText');
+        assertSubmittedEmployeeCompany(next.employee as Record<string, unknown>, companyBase, 'contractSubjectId');
+        (next as Record<string, unknown>).referenceSnapshotVersion = 1;
       }
       if (request.onboardingStatus === OnboardingStatus.pending_entry && !performanceOnly) {
         await this.undoPendingProjection(tx, request);
@@ -363,7 +375,10 @@ export class EmployeeOnboardingService {
         include: { talentCandidate: { select: talentSourceSelect } },
         data: {
           ...(input.talentCandidateId ? { talentCandidateId: input.talentCandidateId } : {}),
-          ...(reviewedEmployment ? { baseValue: this.json({ ...baseValue, reviewedEmploymentCompany: companyBase }) } : {}),
+          ...(reviewedEmployment || supplySourceBase ? { baseValue: this.json({ ...baseValue,
+            ...(supplySourceBase ? { employee: { ...this.record(baseValue.employee), latestEmployment: referenceBase } } : {}),
+            ...(reviewedEmployment ? { reviewedEmploymentCompany: companyBase } : {}),
+          }) } : {}),
           proposedValue: this.json(next),
           validationWarnings: performanceOnly ? request.validationWarnings ?? [] : this.json(this.buildWarnings(input)),
           requestVersion: { increment: 1 },
@@ -500,10 +515,9 @@ export class EmployeeOnboardingService {
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, undefined, matchedEmployeeId);
       const employee = this.normalizedEmployee(input);
       const previousEmployment = matchedEmployeeId ? await tx.employmentRecord.findFirst({
-        where: { userId: matchedEmployeeId }, orderBy: { effectiveFrom: 'desc' },
-        select: { positionId: true, position: true, jobFamily: true },
+        where: { userId: matchedEmployeeId, ...approvedEmploymentSourceWhere }, orderBy: { effectiveFrom: 'desc' },
       }) : null;
-      await this.normalizePosition(tx, employee, this.record(previousEmployment));
+      if (employee.positionId) await this.normalizePosition(tx, employee, this.record(previousEmployment));
       await normalizeContractSubject(tx, employee, {}, 'companyText');
       const created = await tx.employeeDataChangeRequest.create({ data: {
         userId: matchedEmployeeId,
@@ -514,7 +528,7 @@ export class EmployeeOnboardingService {
         onboardingStatus: OnboardingStatus.draft,
         requiresArrivalConfirmation: !(input.effectiveTo && input.effectiveTo < shanghaiBusinessDate()),
         talentCandidateId,
-        baseValue: this.json({}),
+        baseValue: this.json(matchedEmployeeId ? { employee: { latestEmployment: previousEmployment } } : {}),
         proposedValue: this.json({
           payloadHash,
           identitySnapshot: {
@@ -562,7 +576,9 @@ export class EmployeeOnboardingService {
     const existing = await tx.employmentRecord.findUnique({ where: { sourceRequestId: requestId } });
     const proposed = this.record(request.proposedValue);
     const employee = { ...this.record(proposed.employee) };
-    await this.normalizePosition(tx, employee, this.reentryPositionSnapshot(request));
+    await this.normalizePosition(tx, employee,
+      await this.reentryReferenceBase(tx, request),
+      proposed.referenceSnapshotVersion === 1 ? this.reentryPositionSnapshot(request) : {});
     const effectiveFrom = this.requiredDate(employee.effectiveDate, '再入职日期不能为空');
     const effectiveTo = this.dateOrNull(employee.effectiveTo);
     const today = this.startOfTodayInShanghai(at);
@@ -582,11 +598,13 @@ export class EmployeeOnboardingService {
       await validateContractSubject(tx, employee, companyBase, 'companyText');
       const employmentData = {
         effectiveFrom, effectiveTo,
-        company: employee.company as any,
+        company: (employee.company ?? null) as any,
         contractSubjectId: this.stringOrNull(employee.contractSubjectId), companyText: this.stringOrNull(employee.companyText),
         deptId: this.stringOrNull(employee.deptId), positionId: this.stringOrNull(employee.positionId),
         position: this.stringOrNull(employee.position), directManagerId: this.stringOrNull(employee.managerId),
-        jobFamily: this.stringOrNull(employee.jobFamily),
+        jobFamily: this.stringOrNull(employee.jobFamily), jobFamilyId: this.stringOrNull(employee.jobFamilyId),
+        jobGrade: this.stringOrNull(employee.jobGrade), jobGradeId: this.stringOrNull(employee.jobGradeId),
+        workLocation: this.stringOrNull(employee.workLocation), workLocationId: this.stringOrNull(employee.workLocationId),
         employmentType: employee.employmentType as any, employeeStatus: employee.employeeStatus as any,
         entryDate: effectiveFrom, plannedRegularDate: this.dateOrNull(employee.plannedRegularDate),
         probationMonths: typeof employee.probationMonths === 'number' ? employee.probationMonths : null,
@@ -653,33 +671,38 @@ export class EmployeeOnboardingService {
       ? { ...historical, ...previous } : previous;
   }
 
+  private async reentryReferenceBase(tx: Prisma.TransactionClient, request: EmployeeDataChangeRequest): Promise<Record<string, unknown>> {
+    const employeeBase = this.record(this.record(request.baseValue).employee);
+    if ('latestEmployment' in employeeBase) return this.record(employeeBase.latestEmployment);
+    if (request.sourceType !== 'onboarding_intake' || !request.userId) return {};
+    // Old source drafts did not freeze history. Only official employment outside this
+    // application can supply that missing baseline; its draft values never qualify.
+    return this.record(await tx.employmentRecord.findFirst({
+      where: { userId: request.userId, AND: [approvedEmploymentSourceWhere,
+        { OR: [{ sourceRequestId: null }, { sourceRequestId: { not: request.id } }] }] },
+      orderBy: { effectiveFrom: 'desc' },
+    }));
+  }
+
   private async normalizePosition(
     tx: Prisma.TransactionClient, employee: Record<string, unknown>, previous: Record<string, unknown>,
+    snapshot: Record<string, unknown> = {},
   ): Promise<void> {
-    const id = this.stringOrNull(employee.positionId);
-    const samePosition = id === this.stringOrNull(previous.positionId);
-    const position = id ? await tx.position.findUnique({ where: { id },
-      select: { id: true, name: true, jobFamily: true, isActive: true } }) : null;
-    if (id && !position?.isActive) throw new BadRequestException('岗位不存在或已停用');
-    for (const field of ['position', 'jobFamily'] as const) {
-      const unchanged = employee[field] === undefined
-        || this.stringOrNull(employee[field]) === this.stringOrNull(previous[field]);
-      if (samePosition && unchanged && Object.prototype.hasOwnProperty.call(previous, field)) {
-        employee[field] = previous[field] ?? null;
-      } else if (position) {
-        employee[field] = (field === 'position' ? position.name : position.jobFamily) ?? null;
-      } else {
-        employee[field] = this.stringOrNull(employee[field]);
-      }
+    for (const field of ['jobGrade', 'jobGradeId', 'workLocation', 'workLocationId']) {
+      if (employee[field] === undefined) employee[field] = snapshot[field] !== undefined ? snapshot[field] : previous[field] ?? null;
     }
+    const referenceBase = await normalizeEmployeePosition(tx, employee, previous, false, snapshot);
+    await validatePersonnelReferences(tx, { employee }, { employee: referenceBase }, { employee: snapshot });
   }
 
   private normalizedEmployee(input: EmployeeReentryFieldsDto) {
     return {
       ...(input.contractSubjectId !== undefined ? { contractSubjectId: input.contractSubjectId } : {}),
+      ...(input.companyText !== undefined ? { companyText: input.companyText } : {}),
       company: input.company, deptId: input.deptId ?? null, positionId: input.positionId ?? null,
       ...(input.position !== undefined ? { position: this.stringOrNull(input.position) } : {}),
       ...(input.jobFamily !== undefined ? { jobFamily: this.stringOrNull(input.jobFamily) } : {}),
+      ...(input.jobFamilyId !== undefined ? { jobFamilyId: this.stringOrNull(input.jobFamilyId) } : {}),
       managerId: input.rosterManagerId ?? null,
       effectiveDate: input.effectiveDate, effectiveTo: input.effectiveTo ?? null,
       employeeStatus: input.employeeStatus, employmentType: input.employmentType,

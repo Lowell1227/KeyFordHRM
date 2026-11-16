@@ -71,18 +71,30 @@ const form = reactive({
   contracts: [] as Array<Record<string, any> & { __key: string }>,
   performance: {} as Record<string, any>,
 });
-const positionOptions = computed(() => positions.value.filter(position => position.isActive || position.id === form.employee.positionId));
+const positionOptions = computed(() => {
+  const selectedId = form.employee.positionId;
+  const options = positions.value.filter(position => position.isActive || position.id === selectedId)
+    .map(position => position.id === selectedId ? { ...position, name: form.employee.position || position.name,
+      jobFamily: form.employee.jobFamily ?? null } : position);
+  if (selectedId && !options.some(position => position.id === selectedId)) options.push({ id: selectedId, code: '',
+    name: form.employee.position || '历史岗位（已不可用）', jobFamily: form.employee.jobFamily ?? null,
+    jobFamilyId: form.employee.jobFamilyId ?? null, isActive: false, activeEmployeeCount: 0 });
+  return options;
+});
 function changePosition(id?: string | null) {
   const position = positions.value.find(item => item.id === id);
   form.employee.positionId = id || null;
   form.employee.position = position?.name ?? null;
   form.employee.jobFamily = position?.jobFamily ?? null;
+  form.employee.jobFamilyId = position?.jobFamilyId ?? null;
 }
 function fieldSnapshot(path: string) {
   if (path === 'employee.companyText') return JSON.stringify([form.employee.company, form.employee.companyText, form.employee.contractSubjectId]);
   if (path === 'employee.positionId') return JSON.stringify([form.employee.positionId, form.employee.position]);
   const [scope, field] = path.split('.');
-  return JSON.stringify(form[scope as 'employee' | 'profile' | 'performance']?.[field ?? '']);
+  const section = form[scope as 'employee' | 'profile' | 'performance'];
+  if (section && field && `${field}Id` in section) return JSON.stringify([section[field], section[`${field}Id`]]);
+  return JSON.stringify(section?.[field ?? '']);
 }
 const contractUploads = useContractUploads(contract => props.editing && form.contracts.some(item => item === contract && !item.__removed));
 const uploadBlocked = contractUploads.blocked;
@@ -135,10 +147,10 @@ function reset() {
     deptId: archive.dept?.id ?? employment?.deptId ?? null,
     positionId: archive.positionId ?? employment?.positionId ?? null,
     position: archive.position ?? employment?.position ?? null,
-    jobGrade: employment?.jobGrade ?? null,
-    jobFamily: employment?.jobFamily ?? null,
+    jobGrade: employment?.jobGrade ?? null, jobGradeId: employment?.jobGradeId ?? null,
+    jobFamily: employment?.jobFamily ?? null, jobFamilyId: employment?.jobFamilyId ?? null,
     managerId: employment?.directManagerId ?? archive.rosterManager?.id ?? null,
-    workLocation: employment?.workLocation ?? null,
+    workLocation: employment?.workLocation ?? null, workLocationId: employment?.workLocationId ?? null,
     employmentType: archive.employmentType ?? employment?.employmentType ?? 'full_time',
     employeeStatus: archive.status,
     entryDate: dateValue(archive.entryDate ?? employment?.entryDate),
@@ -154,22 +166,22 @@ function reset() {
     gender: profile?.gender ?? null,
     birthDate: dateValue(profile?.birthDate),
     ethnicity: profile?.ethnicity ?? null,
-    education: profile?.education ?? null,
+    education: profile?.education ?? null, educationId: profile?.educationId ?? null,
     professionalTitle: profile?.professionalTitle ?? null,
     school: profile?.school ?? null,
     graduationDate: dateValue(profile?.graduationDate),
     major: profile?.major ?? null,
-    maritalStatus: profile?.maritalStatus ?? null,
+    maritalStatus: profile?.maritalStatus ?? null, maritalStatusId: profile?.maritalStatusId ?? null,
     childrenStatus: profile?.childrenStatus ?? null,
     childrenCount: profile?.childrenCount ?? null,
-    politicalStatus: profile?.politicalStatus ?? null,
+    politicalStatus: profile?.politicalStatus ?? null, politicalStatusId: profile?.politicalStatusId ?? null,
     nativePlace: profile?.nativePlace ?? null,
-    householdType: profile?.householdType ?? null,
+    householdType: profile?.householdType ?? null, householdTypeId: profile?.householdTypeId ?? null,
     idAddress: profile?.idAddress ?? null,
     idNumber: '',
     currentAddress: profile?.currentAddress ?? null,
     emergencyContactName: profile?.emergencyContactName ?? null,
-    emergencyContactRelation: profile?.emergencyContactRelation ?? null,
+    emergencyContactRelation: profile?.emergencyContactRelation ?? null, emergencyContactRelationId: profile?.emergencyContactRelationId ?? null,
     emergencyContactPhone: profile?.emergencyContactPhone ?? null,
     socialSecurityStatus: profile?.socialSecurityStatus ?? null,
     socialSecurityStartDate: dateValue(profile?.socialSecurityStartDate),
@@ -209,6 +221,17 @@ function reset() {
     if (restoreProfile) replaceRecord(form.employee, { ...form.employee, ...(proposed.employee ?? {}) });
     if (form.employee.contractSubjectId == null && !employment?.contractSubjectId) form.employee.contractSubjectId = undefined;
     if (restoreProfile) replaceRecord(form.profile, { ...form.profile, ...(proposed.profile ?? {}) });
+    if (restoreProfile) {
+      for (const [section, keys] of [['employee', ['jobGrade', 'jobFamily', 'workLocation']],
+        ['profile', ['education', 'maritalStatus', 'politicalStatus', 'householdType', 'emergencyContactRelation']]] as const) {
+        for (const key of keys) {
+          if (key in (proposed[section] ?? {}) && !(`${key}Id` in (proposed[section] ?? {}))
+            && proposed[section][key] !== (section === 'employee' ? employment?.[key as keyof typeof employment] : profile?.[key as keyof typeof profile])) {
+            form[section][`${key}Id`] = null;
+          }
+        }
+      }
+    }
     if (props.draft.performanceReviewStatus !== 'approved') replaceRecord(form.performance, { ...form.performance, ...(proposed.performance ?? {}) });
     if (restoreProfile && Array.isArray(proposed.contracts)) {
       form.contracts = proposed.contracts.map((item: Record<string, any>, index: number) => ({
@@ -305,7 +328,7 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
 function changePayload(): ArchiveChangePayload {
   const employee: Record<string, unknown> = { ...form.employee, phone: form.profile.phone || null,
     positionId: form.employee.positionId ?? null, managerId: form.employee.managerId ?? null };
-  if (unchangedMissingCompany()) delete employee.company;
+  if (form.employee.company == null && unchangedCompany()) delete employee.company;
   return {
     draftId,
     expectedVersion: draftId ? draftVersion : undefined,
@@ -317,11 +340,10 @@ function changePayload(): ArchiveChangePayload {
   };
 }
 
-function unchangedMissingCompany() {
+function unchangedCompany() {
   const archive = props.archive;
   const employment = archive?.pendingEmployment ?? archive?.currentEmployment ?? archive?.employmentHistory[0];
-  return !employment?.company && form.employee.company == null
-    && (form.employee.contractSubjectId ?? null) === (employment?.contractSubjectId ?? null)
+  return (form.employee.contractSubjectId ?? null) === (employment?.contractSubjectId ?? null)
     && (form.employee.companyText ?? null) === (employment?.companyText ?? null);
 }
 
@@ -349,8 +371,8 @@ async function submit() {
     ElMessage.info('未检测到变更，无需提交');
     return;
   }
-  if (!form.employee.company && !unchangedMissingCompany()) {
-    companyError.value = '请选择已配置内部公司映射的所属公司';
+  if (!(form.employee.contractSubjectId || form.employee.companyText) && !unchangedCompany()) {
+    companyError.value = '请选择所属公司';
     await focusField('employee.companyText');
     return;
   }
@@ -503,18 +525,18 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="姓名" data-archive-field="employee.name" :error="serverFieldErrors['employee.name']"><el-input v-model="form.employee.name" /></el-form-item>
         <el-form-item label="当前工号" data-archive-field="employee.employeeNo" :error="serverFieldErrors['employee.employeeNo']"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
-        <el-form-item label="所属公司" data-archive-field="employee.companyText" :error="companyError || serverFieldErrors['employee.companyText']"><EmployeeCompanySelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" v-model:company="form.employee.company" @update:company="companyError = ''" /></el-form-item>
+        <el-form-item label="所属公司" data-archive-field="employee.companyText" :error="companyError || serverFieldErrors['employee.companyText']"><EmployeeCompanySelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" :company="form.employee.company" @update:model-value="companyError = ''" /></el-form-item>
         <el-form-item label="所属部门" data-archive-field="employee.deptId" :error="serverFieldErrors['employee.deptId']"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
         <el-form-item label="岗位" data-archive-field="employee.positionId" :error="serverFieldErrors['employee.positionId']"><el-select v-model="form.employee.positionId" filterable clearable @change="changePosition"><el-option v-for="position in positionOptions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" :disabled="!position.isActive" /></el-select></el-form-item>
-        <el-form-item v-if="!form.employee.positionId" label="岗位名称" data-archive-field="employee.position" :error="serverFieldErrors['employee.position']"><el-input v-model="form.employee.position" /></el-form-item>
-        <el-form-item label="职级" data-archive-field="employee.jobGrade" :error="serverFieldErrors['employee.jobGrade']"><PersonnelReferenceSelect v-model="form.employee.jobGrade" kind="job_grade" /></el-form-item>
+        <el-form-item v-if="!form.employee.positionId" label="岗位名称" data-archive-field="employee.position" :error="serverFieldErrors['employee.position']"><el-input v-model="form.employee.position" readonly /></el-form-item>
+        <el-form-item label="职级" data-archive-field="employee.jobGrade" :error="serverFieldErrors['employee.jobGrade']"><PersonnelReferenceSelect v-model="form.employee.jobGrade" v-model:reference-id="form.employee.jobGradeId" kind="job_grade" /></el-form-item>
         <el-form-item label="职系" data-archive-field="employee.jobFamily" :error="serverFieldErrors['employee.jobFamily']">
           <template v-if="form.employee.positionId"><el-input :model-value="form.employee.jobFamily" readonly placeholder="未设置" /><small class="field-help">随岗位只读，特殊情况请先维护岗位目录；历史已存值保留。</small></template>
-          <PersonnelReferenceSelect v-else v-model="form.employee.jobFamily" kind="job_family" label="职系" />
+          <PersonnelReferenceSelect v-else v-model="form.employee.jobFamily" v-model:reference-id="form.employee.jobFamilyId" kind="job_family" label="职系" />
         </el-form-item>
         <el-form-item label="花名册直属主管" data-archive-field="employee.managerId" :error="serverFieldErrors['employee.managerId']"><UserSelect v-model="form.employee.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
         <el-form-item label="绩效直属上级" data-archive-field="performance.managerId" :error="serverFieldErrors['performance.managerId']"><UserSelect v-model="form.performance.managerId" eligible-for="direct_manager" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
-          <el-form-item label="工作地点" data-archive-field="employee.workLocation" :error="serverFieldErrors['employee.workLocation']"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
+          <el-form-item label="工作地点" data-archive-field="employee.workLocation" :error="serverFieldErrors['employee.workLocation']"><PersonnelReferenceSelect v-model="form.employee.workLocation" v-model:reference-id="form.employee.workLocationId" kind="work_location" label="工作地点" /></el-form-item>
         <el-form-item label="用工类型" data-archive-field="employee.employmentType" :error="serverFieldErrors['employee.employmentType']"><el-select v-model="form.employee.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
         <el-form-item data-archive-field="employee.employeeStatus" :error="serverFieldErrors['employee.employeeStatus']"><template #label>当前状态 <el-tooltip content="入职、再入职和离职请在入离职页面办理；这里可调整在职与试用期状态。" placement="top"><el-icon aria-label="任职状态说明"><QuestionFilled /></el-icon></el-tooltip></template><el-select v-model="form.employee.employeeStatus" :disabled="!['active', 'probation'].includes(archive?.status ?? '')"><template v-if="['active', 'probation'].includes(archive?.status ?? '')"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /></template><el-option v-else-if="archive?.status === 'resigned'" label="已离职" value="resigned" /><el-option v-else label="待入职" value="pending_entry" /></el-select></el-form-item>
         <el-form-item label="入职日期" data-archive-field="employee.entryDate" :error="serverFieldErrors['employee.entryDate']"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" :disabled="archive?.status === 'pending_entry'" /><small v-if="archive?.status === 'pending_entry'" class="field-help">待到岗员工请在入离职申请中修改到岗日期。</small></el-form-item>
@@ -532,17 +554,17 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
         <el-form-item label="性别" data-archive-field="profile.gender" :error="serverFieldErrors['profile.gender']"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
         <el-form-item label="出生日期" data-archive-field="profile.birthDate" :error="serverFieldErrors['profile.birthDate']"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="民族" data-archive-field="profile.ethnicity" :error="serverFieldErrors['profile.ethnicity']"><el-input v-model="form.profile.ethnicity" /></el-form-item>
-        <el-form-item label="学历" data-archive-field="profile.education" :error="serverFieldErrors['profile.education']"><PersonnelReferenceSelect v-model="form.profile.education" kind="education" /></el-form-item>
+        <el-form-item label="学历" data-archive-field="profile.education" :error="serverFieldErrors['profile.education']"><PersonnelReferenceSelect v-model="form.profile.education" v-model:reference-id="form.profile.educationId" kind="education" /></el-form-item>
         <el-form-item label="职称" data-archive-field="profile.professionalTitle" :error="serverFieldErrors['profile.professionalTitle']"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
         <el-form-item label="毕业院校" data-archive-field="profile.school" :error="serverFieldErrors['profile.school']"><el-input v-model="form.profile.school" /></el-form-item>
         <el-form-item label="毕业日期" data-archive-field="profile.graduationDate" :error="serverFieldErrors['profile.graduationDate']"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="专业" data-archive-field="profile.major" :error="serverFieldErrors['profile.major']"><el-input v-model="form.profile.major" /></el-form-item>
-        <el-form-item label="婚姻状况" data-archive-field="profile.maritalStatus" :error="serverFieldErrors['profile.maritalStatus']"><PersonnelReferenceSelect v-model="form.profile.maritalStatus" kind="marital_status" /></el-form-item>
+        <el-form-item label="婚姻状况" data-archive-field="profile.maritalStatus" :error="serverFieldErrors['profile.maritalStatus']"><PersonnelReferenceSelect v-model="form.profile.maritalStatus" v-model:reference-id="form.profile.maritalStatusId" kind="marital_status" /></el-form-item>
         <el-form-item label="子女状况" data-archive-field="profile.childrenStatus" :error="serverFieldErrors['profile.childrenStatus']"><el-input v-model="form.profile.childrenStatus" /></el-form-item>
         <el-form-item label="子女数量" data-archive-field="profile.childrenCount" :error="serverFieldErrors['profile.childrenCount']"><el-input-number v-model="form.profile.childrenCount" :min="0" /></el-form-item>
-        <el-form-item label="政治面貌" data-archive-field="profile.politicalStatus" :error="serverFieldErrors['profile.politicalStatus']"><PersonnelReferenceSelect v-model="form.profile.politicalStatus" kind="political_status" /></el-form-item>
+        <el-form-item label="政治面貌" data-archive-field="profile.politicalStatus" :error="serverFieldErrors['profile.politicalStatus']"><PersonnelReferenceSelect v-model="form.profile.politicalStatus" v-model:reference-id="form.profile.politicalStatusId" kind="political_status" /></el-form-item>
         <el-form-item label="籍贯" data-archive-field="profile.nativePlace" :error="serverFieldErrors['profile.nativePlace']"><el-input v-model="form.profile.nativePlace" /></el-form-item>
-        <el-form-item label="户籍类型" data-archive-field="profile.householdType" :error="serverFieldErrors['profile.householdType']"><PersonnelReferenceSelect v-model="form.profile.householdType" kind="household_type" /></el-form-item>
+        <el-form-item label="户籍类型" data-archive-field="profile.householdType" :error="serverFieldErrors['profile.householdType']"><PersonnelReferenceSelect v-model="form.profile.householdType" v-model:reference-id="form.profile.householdTypeId" kind="household_type" /></el-form-item>
       </el-form>
     </section>
 
@@ -553,7 +575,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
         <el-form-item data-archive-field="profile.idNumber" :error="serverFieldErrors['profile.idNumber']" :label="form.profile.idNumberConfigured || archive?.employeeProfile?.idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'"><el-input v-model="form.profile.idNumber" type="password" show-password /></el-form-item>
         <el-form-item label="现住址" data-archive-field="profile.currentAddress" :error="serverFieldErrors['profile.currentAddress']" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
         <el-form-item label="紧急联系人" data-archive-field="profile.emergencyContactName" :error="serverFieldErrors['profile.emergencyContactName']"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
-        <el-form-item label="与联系人关系" data-archive-field="profile.emergencyContactRelation" :error="serverFieldErrors['profile.emergencyContactRelation']"><PersonnelReferenceSelect v-model="form.profile.emergencyContactRelation" kind="contact_relation" /></el-form-item>
+        <el-form-item label="与联系人关系" data-archive-field="profile.emergencyContactRelation" :error="serverFieldErrors['profile.emergencyContactRelation']"><PersonnelReferenceSelect v-model="form.profile.emergencyContactRelation" v-model:reference-id="form.profile.emergencyContactRelationId" kind="contact_relation" /></el-form-item>
         <el-form-item label="紧急联系电话" data-archive-field="profile.emergencyContactPhone" :error="serverFieldErrors['profile.emergencyContactPhone']"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
         <el-form-item label="社保状态" data-archive-field="profile.socialSecurityStatus" :error="serverFieldErrors['profile.socialSecurityStatus']"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
         <el-form-item label="社保起始日期" data-archive-field="profile.socialSecurityStartDate" :error="serverFieldErrors['profile.socialSecurityStartDate']"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>

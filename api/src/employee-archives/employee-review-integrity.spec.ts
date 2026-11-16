@@ -1,3 +1,4 @@
+const locationId = '00000000-0000-4000-8000-000000000002';
 import { SysRole } from '@prisma/client';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 
@@ -11,7 +12,7 @@ function archiveReview(positionChanged: boolean, directoryFamily: string | null,
     workLocation: '原工作地点', entryDate: '2024-01-01T00:00:00.000Z', plannedRegularDate: null,
     actualRegularDate: null, leaveDate: null, probationMonths: null,
     employmentType: 'full_time', employeeStatus: 'active' };
-  const proposal = { ...employee, workLocation: '新工作地点',
+  const proposal = { ...employee, workLocation: '新工作地点', workLocationId: locationId,
     ...(proposedFamily !== undefined ? { jobFamily: proposedFamily } : {}),
     ...(positionChanged ? { positionId: 'new-position', position: '提案岗位名称' } : {}) };
   const review = { id: 'synthetic-review', userId: 'synthetic-employee', sourceType: 'manual_archive_change',
@@ -27,10 +28,11 @@ function archiveReview(positionChanged: boolean, directoryFamily: string | null,
     }] };
   const written: Record<string, any>[] = [];
   const tx = {
+    personnelReferenceData: { findMany: async () => [{ id: locationId, kind: 'work_location', name: '新工作地点', isActive: true }] },
     employeeDataChangeRequest: { findUnique: jest.fn(async () => review),
       updateMany: jest.fn(async () => ({ count: 1 })), update: jest.fn(async ({ data }: any) => ({ ...review, ...data })) },
     user: { findUnique: jest.fn(async () => current), update: jest.fn(async ({ data }: any) => Object.assign(current, data)) },
-    position: { findUnique: jest.fn(async () => ({ id: proposal.positionId, name: '目录岗位名称', jobFamily: directoryFamily })) },
+    position: { findUnique: jest.fn(async () => ({ id: proposal.positionId, name: '目录岗位名称', jobFamily: directoryFamily, isActive: true })) },
     employmentRecord: { findFirst: jest.fn(async () => null), update: jest.fn(),
       create: jest.fn(async ({ data }: any) => { written.push(data); return { id: 'new-employment', ...data }; }) },
     employeeContract: { findMany: jest.fn(async () => []) },

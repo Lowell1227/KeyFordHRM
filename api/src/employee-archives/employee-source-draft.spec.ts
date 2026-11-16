@@ -1,3 +1,4 @@
+const selectedPositionId = '00000000-0000-4000-8000-000000000099';
 import { CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client';
 import { EmployeeArchivesService } from './employee-archives.service';
 
@@ -13,6 +14,7 @@ function fixture() {
   };
   const tx: any = { employeeDataChangeRequest: { findFirst: jest.fn(async () => draft),
     update: jest.fn(async ({ data }) => Object.assign(draft, data, { requestVersion: data.requestVersion?.increment ? draft.requestVersion + 1 : draft.requestVersion })) },
+    position: { findUnique: jest.fn(async () => ({ id: selectedPositionId, name: 'Selected position', jobFamily: null, isActive: true })) },
     department: { findUnique: jest.fn(async () => ({ id: 'department-1', isActive: true })) },
     auditLog: { create: jest.fn() },
   };
@@ -29,7 +31,7 @@ describe('source draft preservation', () => {
   ])('rejects invalid new hire contracts before reserving an employee number: %j', async (contract, field) => {
     const f = fixture();
     await expect(f.service.createEmployee({ draftId: f.draft.id, expectedVersion: 1, name: 'Synthetic', company: CompanyCode.fuede,
-      deptId: 'department-1', entryDate: new Date('2026-11-01'), effectiveFrom: new Date('2026-11-01'),
+      deptId: 'department-1', positionId: selectedPositionId, entryDate: new Date('2026-11-01'), effectiveFrom: new Date('2026-11-01'),
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active, contracts: [contract] }, operator))
       .rejects.toMatchObject({ response: { code: 4001, data: { fieldErrors: { [`contracts.0.${field}`]: expect.any(String) } } } });
     expect(f.numbers.reserveNext).not.toHaveBeenCalled();
@@ -39,7 +41,7 @@ describe('source draft preservation', () => {
   it('accepts a back-signed new hire contract without bypassing review or arrival', async () => {
     const f = fixture();
     const result: any = await f.service.createEmployee({ draftId: f.draft.id, expectedVersion: 1, name: 'Synthetic', company: CompanyCode.fuede,
-      deptId: 'department-1', entryDate: new Date('2026-11-01'), effectiveFrom: new Date('2026-11-01'),
+      deptId: 'department-1', positionId: selectedPositionId, entryDate: new Date('2026-11-01'), effectiveFrom: new Date('2026-11-01'),
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active,
       contracts: [{ contractType: 'contract', signedAt: '2026-11-12', effectiveFrom: '2026-08-01' }] }, operator);
     expect(result).toMatchObject({ reviewOutcome: 'pending', recordStatus: 'submitted', profileReviewStatus: 'pending',
@@ -62,7 +64,7 @@ describe('source draft preservation', () => {
   it('retains provenance and source warnings when a completed draft is submitted into the normal review flow', async () => {
     const { service, draft, warnings, source, numbers } = fixture();
     const result: any = await service.createEmployee({ draftId: draft.id, expectedVersion: draft.requestVersion, name: 'Synthetic', company: CompanyCode.fuede,
-      deptId: 'department-1', entryDate: new Date('2020-01-01'), effectiveFrom: new Date('2020-01-01'),
+      deptId: 'department-1', positionId: selectedPositionId, entryDate: new Date('2020-01-01'), effectiveFrom: new Date('2020-01-01'),
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active }, operator);
     expect(result.proposedValue).toMatchObject({ source, sourceFileHash: 'a'.repeat(64), identityCandidateUserId: 'candidate-1' });
     expect(result.validationWarnings).toEqual(warnings);
@@ -84,7 +86,7 @@ describe('source draft preservation', () => {
     expect(saved.proposedValue).toMatchObject({ source, identityCandidateUserId: 'candidate-1' });
     expect(saved.proposedValue).not.toHaveProperty('sourceFileHash');
     const submitted: any = await service.createEmployee({ draftId: draft.id, expectedVersion: draft.requestVersion, name: 'Synthetic', company: CompanyCode.fuede,
-      deptId: 'department-1', entryDate: new Date('2020-01-01'), effectiveFrom: new Date('2020-01-01'),
+      deptId: 'department-1', positionId: selectedPositionId, entryDate: new Date('2020-01-01'), effectiveFrom: new Date('2020-01-01'),
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active }, operator);
     expect(submitted).toMatchObject({ sourceSystem: 'synthetic_non_file_channel', sourceReference: 'synthetic-reference-1',
       validationWarnings: warnings, recordStatus: 'submitted', profileReviewStatus: 'pending', userId: null });

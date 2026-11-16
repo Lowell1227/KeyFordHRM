@@ -40,6 +40,7 @@ export class CreatePositionDto {
   @IsString()
   @MaxLength(100)
   jobFamily?: string | null;
+  @IsOptional() @IsUUID('4') jobFamilyId?: string | null;
 }
 
 export class UpdatePositionDto {
@@ -64,6 +65,7 @@ export class UpdatePositionDto {
   @IsString()
   @MaxLength(100)
   jobFamily?: string | null;
+  @IsOptional() @IsUUID('4') jobFamilyId?: string | null;
 }
 
 export class PositionChangeReviewQueryDto {

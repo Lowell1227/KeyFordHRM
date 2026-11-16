@@ -1,3 +1,4 @@
+import { validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
 import {
   BadRequestException,
   ConflictException,
@@ -62,8 +63,9 @@ export class PositionsService {
   }
 
   async create(dto: CreatePositionDto, operator: AuthUser) {
-    const proposedValue = this.normalized({ ...dto, code: dto.code || `POS-${randomUUID()}` });
+    const proposedValue = { ...this.normalized({ ...dto, code: dto.code || `POS-${randomUUID()}` }), referenceSnapshotVersion: 1 };
     const request = await this.prisma.$transaction(async (tx) => {
+      await validatePersonnelReferences(tx, { employee: proposedValue });
       const duplicates = await tx.position.findFirst({
         where: {
           OR: [
@@ -121,17 +123,21 @@ export class PositionsService {
     const position = await this.prisma.position.findUnique({ where: { id } });
     if (!position) throw this.notFound();
     const proposedValue = {
+      referenceSnapshotVersion: 1,
       ...this.normalized({
         code: dto.code ?? position.code,
         name: dto.name ?? position.name,
         jobFamily: dto.jobFamily !== undefined ? dto.jobFamily : position.jobFamily,
+        jobFamilyId: dto.jobFamilyId !== undefined ? dto.jobFamilyId : position.jobFamilyId,
       }),
       isActive: dto.activationRequested === true ? true : position.isActive,
       ...(dto.activationRequested === true ? { activationRequested: true } : {}),
     };
+    await validatePersonnelReferences(this.prisma, { employee: proposedValue }, { employee: position });
     if (proposedValue.code === position.code
       && proposedValue.name === position.name
       && proposedValue.jobFamily === (position.jobFamily ?? null)
+      && proposedValue.jobFamilyId === (position.jobFamilyId ?? null)
       && proposedValue.isActive === position.isActive) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
@@ -201,8 +207,10 @@ export class PositionsService {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该岗位变更正在处理中' });
       }
       const proposed = this.record(request.proposedValue);
+      const referenceSnapshot = proposed.referenceSnapshotVersion === 1 ? { employee: { ...proposed } } : {};
       let positionId = request.positionId;
       if (request.action === 'create') {
+        await validatePersonnelReferences(tx, { employee: proposed }, {}, referenceSnapshot);
         const code = this.requiredString(proposed.code, '岗位编码不能为空');
         const exists = await tx.position.findFirst({ where: { code } });
         if (exists) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '岗位编码已存在' });
@@ -211,6 +219,7 @@ export class PositionsService {
             code,
             name: this.requiredString(proposed.name, '岗位名称不能为空'),
             jobFamily: this.nullableString(proposed.jobFamily),
+            jobFamilyId: this.nullableString(proposed.jobFamilyId),
             isActive: true,
           },
         });
@@ -226,12 +235,14 @@ export class PositionsService {
           });
         }
         if (request.action === 'update') {
+          await validatePersonnelReferences(tx, { employee: proposed }, { employee: current }, referenceSnapshot);
           await tx.position.update({
             where: { id: positionId },
             data: {
               code: this.requiredString(proposed.code, '岗位编码不能为空'),
               name: this.requiredString(proposed.name, '岗位名称不能为空'),
               jobFamily: this.nullableString(proposed.jobFamily),
+            jobFamilyId: this.nullableString(proposed.jobFamilyId),
               // Legacy update proposals defaulted isActive to true without activation intent.
               isActive: proposed.activationRequested === true ? true : current.isActive,
             },
@@ -358,22 +369,24 @@ export class PositionsService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
-  private normalized(dto: { code: string; name: string; jobFamily?: string | null }) {
+  private normalized(dto: { code: string; name: string; jobFamily?: string | null; jobFamilyId?: string | null }) {
     return {
       code: dto.code.trim().toUpperCase(),
       name: dto.name.trim(),
       jobFamily: dto.jobFamily?.trim() || null,
+      jobFamilyId: dto.jobFamilyId ?? null,
       isActive: true,
     };
   }
 
   private samePositionValue(
-    current: { code: string; name: string; jobFamily?: string | null; isActive: boolean },
+    current: { code: string; name: string; jobFamily?: string | null; jobFamilyId?: string | null; isActive: boolean },
     base: Record<string, unknown>,
   ): boolean {
     return current.code === base.code
       && current.name === base.name
       && (current.jobFamily ?? null) === (base.jobFamily ?? null)
+      && (current.jobFamilyId ?? null) === (base.jobFamilyId ?? null)
       && current.isActive === base.isActive;
   }
 

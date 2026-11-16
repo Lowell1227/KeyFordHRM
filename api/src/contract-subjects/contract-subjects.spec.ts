@@ -1,8 +1,9 @@
 import 'reflect-metadata';
+import { ValidationPipe } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { CompanyCode, SysRole } from '@prisma/client';
+import { SysRole } from '@prisma/client';
 import { ContractSubjectsService } from './contract-subjects.service';
 import { ContractSubjectsController } from './contract-subjects.controller';
 import { ContractSubjectQueryDto, CreateContractSubjectDto, UpdateContractSubjectDto } from './contract-subjects.dto';
@@ -10,33 +11,29 @@ import { RolesGuard } from '@/common/guards/roles.guard';
 import { normalizeContractSubject, validateContractSubject } from './contract-subject-reference';
 
 describe('contract subject directory', () => {
-  it.each([CreateContractSubjectDto, UpdateContractSubjectDto])('validates explicit internal company codes in %p', async Dto => {
-    for (const internalCompany of [...Object.values(CompanyCode), null]) {
-      expect(await validate(plainToInstance<UpdateContractSubjectDto, unknown>(Dto, { name: 'Synthetic', internalCompany }))).toEqual([]);
-    }
-    for (const internalCompany of ['guessed-company', '', 1, true]) {
-      expect((await validate(plainToInstance<UpdateContractSubjectDto, unknown>(Dto, { name: 'Synthetic', internalCompany })))
-        .map(error => error.property)).toContain('internalCompany');
-    }
+  it.each([CreateContractSubjectDto, UpdateContractSubjectDto])('strips the retired mapping from directory HTTP writes in %p', async Dto => {
+    const pipe = new ValidationPipe({ transform: true, whitelist: true });
+    const result = await pipe.transform({ name: 'Synthetic', internalCompany: 'fansibao' }, { type: 'body', metatype: Dto });
+    expect(result).not.toHaveProperty('internalCompany');
   });
-  it('persists explicit mappings, preserves omissions, clears with null and audits both values', async () => {
-    let row: any;
+  it('preserves the database-only mapping and hides it from directory responses and audit changes', async () => {
+    let row: any = { id: 'subject', name: 'Synthetic', isActive: true, internalCompany: 'fansibao' };
     const audit: any[] = [];
     const tx = { contractSubject: {
-      create: jest.fn(async ({ data }) => (row = { id: 'subject', isActive: true, internalCompany: null, ...data })),
+      create: jest.fn(async ({ data }) => ({ id: 'new', isActive: true, internalCompany: null, ...data })),
+      findMany: jest.fn(async () => [row]),
       findUnique: jest.fn(async () => ({ ...row })),
       update: jest.fn(async ({ data }) => (row = { ...row, ...data })),
     }, auditLog: { create: jest.fn(async ({ data }) => audit.push(data)) } };
-    const service = new ContractSubjectsService({ $transaction: async (run: any) => run(tx) } as any);
-    expect(await service.create({ name: 'Synthetic', internalCompany: 'fansibao' } as any, { id: 'hr' } as any))
-      .toMatchObject({ internalCompany: 'fansibao' });
-    expect(audit.at(-1).newValue).toMatchObject({ internalCompany: 'fansibao' });
-    expect(await service.update('subject', { name: 'Renamed' }, { id: 'hr' } as any)).toMatchObject({ internalCompany: 'fansibao' });
-    await service.update('subject', { internalCompany: 'fuede_sports' } as any, { id: 'hr' } as any);
-    expect(audit.at(-1)).toMatchObject({ oldValue: { internalCompany: 'fansibao' }, newValue: { internalCompany: 'fuede_sports' } });
-    expect(await service.update('subject', { internalCompany: null } as any, { id: 'hr' } as any)).toMatchObject({ internalCompany: null });
-    expect(audit.at(-1)).toMatchObject({ oldValue: { internalCompany: 'fuede_sports' }, newValue: { internalCompany: null } });
-    await expect(service.update('subject', { internalCompany: 'guessed' } as any, { id: 'hr' } as any)).rejects.toThrow();
+    const service = new ContractSubjectsService({ ...tx, $transaction: async (run: any) => run(tx) } as any);
+    const result = await service.update('subject', { name: 'Renamed', internalCompany: null } as any, { id: 'hr' } as any);
+    expect(row.internalCompany).toBe('fansibao');
+    expect(result).not.toHaveProperty('internalCompany');
+    expect((await service.findAll({}))[0]).not.toHaveProperty('internalCompany');
+    expect(audit.at(-1).newValue).toEqual({ name: 'Renamed', isActive: true });
+    const created = await service.create({ name: 'New', internalCompany: 'fuede' } as any, { id: 'hr' } as any);
+    expect(tx.contractSubject.create).toHaveBeenCalledWith({ data: { name: 'New' } });
+    expect(created).not.toHaveProperty('internalCompany');
   });
   it.each(['false', 'true', 0, 1])('rejects non-boolean write status %s despite implicit conversion', async (isActive) => {
     const input = plainToInstance(UpdateContractSubjectDto, { isActive }, { enableImplicitConversion: true });

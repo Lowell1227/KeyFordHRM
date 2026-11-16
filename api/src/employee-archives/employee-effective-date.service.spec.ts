@@ -3,9 +3,10 @@ import { EmployeeEffectiveDateService } from './employee-effective-date.service'
 describe('EmployeeEffectiveDateService', () => {
   it('projects the latest reviewed employment covering the effective date', async () => {
     const prisma = {
-      employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null) },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'u1' }]),
+        findUnique: jest.fn().mockResolvedValue({ id: 'u1', status: 'active', accountType: 'employee' }),
         update: jest.fn().mockResolvedValue({ id: 'u1' }),
       },
       position: {
@@ -21,13 +22,13 @@ describe('EmployeeEffectiveDateService', () => {
           },
           {
             id: 'new', userId: 'u1', effectiveFrom: new Date('2026-09-01'), effectiveTo: null,
-            deptId: 'd2', positionId: 'p2', position: null, entryDate: new Date('2025-01-01'),
+            deptId: 'd2', positionId: 'p2', position: '历史店长名称', entryDate: new Date('2025-01-01'),
             plannedRegularDate: null, actualRegularDate: null, leaveDate: null,
             employmentType: 'full_time', employeeStatus: 'active',
           },
         ]),
       },
-      $transaction: jest.fn(async (actions: unknown[]) => Promise.all(actions)),
+      $transaction: jest.fn(async (work: (tx: any) => Promise<unknown>) => work(prisma)),
     } as any;
     const service = new EmployeeEffectiveDateService(prisma);
 
@@ -36,17 +37,18 @@ describe('EmployeeEffectiveDateService', () => {
     expect(result).toEqual({ checked: 1, updated: 1, overlaps: 1 });
     expect(prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'u1' },
-      data: expect.objectContaining({ deptId: 'd2', positionId: 'p2', position: '店长' }),
+      data: expect.objectContaining({ deptId: 'd2', positionId: 'p2', position: '历史店长名称' }),
     }));
   });
 
   it('does not change a user when no employment covers the date', async () => {
     const prisma = {
-      employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
-      user: { findMany: jest.fn().mockResolvedValue([{ id: 'u1' }]), update: jest.fn() },
+      employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null) },
+      user: { findMany: jest.fn().mockResolvedValue([{ id: 'u1' }]), update: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue({ id: 'u1', accountType: 'employee', status: 'active' }) },
       position: { findMany: jest.fn().mockResolvedValue([]) },
       employmentRecord: { findMany: jest.fn().mockResolvedValue([]) },
-      $transaction: jest.fn(),
+      $transaction: jest.fn(async (work: (tx: any) => Promise<unknown>) => work(prisma)),
     } as any;
     const service = new EmployeeEffectiveDateService(prisma);
 
@@ -122,6 +124,48 @@ describe('EmployeeEffectiveDateService', () => {
     await expect(new EmployeeEffectiveDateService({} as any).activateApprovedOnboarding(tx, 'r1', new Date('2026-09-26')))
       .resolves.toEqual({ activated: false, historicalOnly: false });
     expect(tx.user.update).not.toHaveBeenCalled();
+  });
+
+  it('retries a serialization conflict with a fresh employment read instead of replaying a stale projection', async () => {
+    const user: any = { id: 'u1', accountType: 'employee', status: 'probation' };
+    const regularDate = new Date('2026-11-16T00:00:00.000Z');
+    let regular = false;
+    const tx: any = {
+      employeeDataChangeRequest: { findFirst: jest.fn(async () => null) },
+      user: { findUnique: jest.fn(async () => ({ ...user })), update: jest.fn(async ({ data }) => Object.assign(user, data)) },
+      employmentRecord: { findMany: jest.fn(async () => [{ id: 'e1', effectiveFrom: new Date('2026-01-01'),
+        effectiveTo: null, employeeStatus: regular ? 'active' : 'probation', actualRegularDate: regular ? regularDate : null }]) },
+    };
+    let attempts = 0;
+    const prisma: any = { ...tx, $transaction: jest.fn(async (work) => {
+      attempts += 1;
+      const before = { ...user };
+      const result = await work(tx);
+      if (attempts === 1) {
+        Object.assign(user, before); regular = true;
+        throw Object.assign(new Error('serialization failure'), { code: 'P2034' });
+      }
+      return result;
+    }) };
+    await new EmployeeEffectiveDateService(prisma).refreshUserProjection('u1', regularDate);
+    expect(user).toMatchObject({ status: 'active', actualRegularDate: regularDate });
+    expect(attempts).toBe(2);
+    expect(tx.employeeDataChangeRequest.findFirst).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { code: 'P2034' },
+    { code: 'P2010', meta: { code: '40001' } },
+    { code: 'P2010', meta: { code: '40P01' } },
+  ])('bounds retries for transaction conflict %j without retrying unrelated failures', async details => {
+    const conflict = Object.assign(new Error('serialization failure'), details);
+    const prisma: any = { $transaction: jest.fn().mockRejectedValue(conflict) };
+    await expect(new EmployeeEffectiveDateService(prisma).refreshUserProjection('u1')).rejects.toMatchObject({ status: 409 });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(3);
+    const other = new Error('database unavailable');
+    prisma.$transaction.mockClear().mockRejectedValue(other);
+    await expect(new EmployeeEffectiveDateService(prisma).refreshUserProjection('u1')).rejects.toBe(other);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it.each([

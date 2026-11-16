@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { CompanyCode } from '@prisma/client';
+import type { ContractSubject } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
 import { ContractSubjectQueryDto, CreateContractSubjectDto, UpdateContractSubjectDto } from './contract-subjects.dto';
@@ -7,27 +7,27 @@ import { ContractSubjectQueryDto, CreateContractSubjectDto, UpdateContractSubjec
 @Injectable()
 export class ContractSubjectsService {
   constructor(private readonly prisma: PrismaService) {}
-  findAll(query: ContractSubjectQueryDto) {
-    return this.prisma.contractSubject.findMany({ where: query.includeInactive === true ? {} : { isActive: true }, orderBy: [{ isActive: 'desc' }, { name: 'asc' }] });
+  async findAll(query: ContractSubjectQueryDto) {
+    const subjects = await this.prisma.contractSubject.findMany({ where: query.includeInactive === true ? {} : { isActive: true }, orderBy: [{ isActive: 'desc' }, { name: 'asc' }] });
+    return subjects.map(subject => this.directoryView(subject));
   }
+  private directoryView({ internalCompany: _legacyMapping, ...subject }: ContractSubject) { return subject; }
   create(input: CreateContractSubjectDto, operator: AuthUser) { return this.write(null, input, operator); }
   update(id: string, input: UpdateContractSubjectDto, operator: AuthUser) { return this.write(id, input, operator); }
   private async write(id: string | null, input: UpdateContractSubjectDto, operator: AuthUser) {
     const name = input.name?.trim();
     if ((!id || input.name !== undefined) && (!name || name.length > 150)) throw new BadRequestException('合同主体名称须为1至150字');
     if (input.isActive !== undefined && typeof input.isActive !== 'boolean') throw new BadRequestException('启用状态无效');
-    if (input.internalCompany != null && !Object.values(CompanyCode).includes(input.internalCompany)) throw new BadRequestException('内部公司映射无效');
     try {
       return await this.prisma.$transaction(async (tx) => {
         const before = id ? await tx.contractSubject.findUnique({ where: { id } }) : null;
         if (id && !before) throw new NotFoundException('合同主体不存在');
-        const data = { ...(name !== undefined ? { name } : {}), ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-          ...(input.internalCompany !== undefined ? { internalCompany: input.internalCompany } : {}) };
+        const data = { ...(name !== undefined ? { name } : {}), ...(input.isActive !== undefined ? { isActive: input.isActive } : {}) };
         const result = id ? await tx.contractSubject.update({ where: { id }, data }) : await tx.contractSubject.create({ data: { ...data, name: name! } });
         await tx.auditLog.create({ data: { userId: operator.id, action: id ? 'update_contract_subject' : 'create_contract_subject', entityType: 'contract_subject', entityId: result.id,
-          ...(before ? { oldValue: { name: before.name, isActive: before.isActive, internalCompany: before.internalCompany ?? null } } : {}),
-          newValue: { name: result.name, isActive: result.isActive, internalCompany: result.internalCompany ?? null } } });
-        return result;
+          ...(before ? { oldValue: { name: before.name, isActive: before.isActive } } : {}),
+          newValue: { name: result.name, isActive: result.isActive } } });
+        return this.directoryView(result);
       });
     } catch (error) {
       if ((error as { code?: string }).code === 'P2002') throw new ConflictException('合同主体名称已存在');

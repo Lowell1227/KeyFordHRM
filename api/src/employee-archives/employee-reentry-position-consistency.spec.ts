@@ -60,6 +60,45 @@ function setup(history: Record<string, unknown> = {
 describe('reentry position and job-family persistence', () => {
   const pipe = new ValidationPipe({ transform: true, whitelist: true });
 
+  it('carries hidden grade and location IDs with their formal historical snapshots', async () => {
+    const f = setup({ positionId: oldId, position: 'Historical title', jobFamily: 'Historical family',
+      jobGradeId: managerId, jobGrade: 'Historical grade', workLocationId: emptyId, workLocation: 'Historical office' });
+    await f.create({ positionId: oldId });
+    await f.approve();
+    expect(f.employment()).toMatchObject({ jobGradeId: managerId, jobGrade: 'Historical grade',
+      workLocationId: emptyId, workLocation: 'Historical office' });
+  });
+
+  it.each([false, true])('inherits hidden references from formal history when submitting a source draft (old empty base=%s)', async oldDraft => {
+    const history = { positionId: oldId, position: 'Historical title', jobFamily: 'Historical family',
+      jobGradeId: managerId, jobGrade: 'Historical grade', workLocationId: emptyId, workLocation: 'Historical office' };
+    const f = setup(history);
+    await f.service.createOnboardingIntake({ ...input, intakeType: 'reentry', existingEmployeeId: 'user',
+      identitySnapshot: { name: 'Synthetic source' }, sourceSystem: 'synthetic', sourceReference: 'source-1',
+      positionId: oldId } as any, 'hr');
+    if (oldDraft) f.request().baseValue = {};
+    // These labels are untrusted input; only the formal employment can supply omitted fields.
+    f.request().proposedValue.employee.jobGrade = 'Forged draft grade';
+    f.request().proposedValue.employee.workLocation = 'Forged draft office';
+    await f.revise({ positionId: oldId });
+    await f.approve();
+    expect(f.employment()).toMatchObject({ jobGradeId: managerId, jobGrade: 'Historical grade',
+      workLocationId: emptyId, workLocation: 'Historical office' });
+    expect(history).toEqual({ positionId: oldId, position: 'Historical title', jobFamily: 'Historical family',
+      jobGradeId: managerId, jobGrade: 'Historical grade', workLocationId: emptyId, workLocation: 'Historical office' });
+  });
+
+  it('does not trust a draft label as a submitted snapshot', async () => {
+    const f = setup();
+    await f.create({ positionId: newId });
+    f.request().recordStatus = 'draft';
+    delete f.request().proposedValue.referenceSnapshotVersion;
+    f.request().proposedValue.employee.position = 'Forged draft title';
+    f.request().proposedValue.employee.jobFamily = 'Forged draft family';
+    await f.revise({ positionId: newId, position: 'Forged draft title', jobFamily: 'Forged draft family' });
+    expect(f.request().proposedValue.employee).toMatchObject({ position: 'New title', jobFamily: 'New family' });
+  });
+
   it.each(['A'.repeat(100), null])('keeps valid optional jobFamily in the HTTP DTO: %s', async jobFamily => {
     const parsed = await pipe.transform({ ...input, jobFamily }, { type: 'body', metatype: CreateEmployeeReentryDto });
     expect(parsed.jobFamily).toBe(jobFamily);
@@ -114,20 +153,15 @@ describe('reentry position and job-family persistence', () => {
     expect(f.employment()).toMatchObject({ positionId: null, position: 'Free title', jobFamily: 'Free family' });
   });
 
-  it('allows explicit no-ID free text and clearing instead of retaining a former directory snapshot', async () => {
+  it('rejects a newly typed free position or clearing an existing directory position', async () => {
     const f = setup();
-    await f.create({ positionId: null, position: 'New free title', jobFamily: 'New free family' });
-    expect(f.request().proposedValue.employee).toMatchObject({ positionId: null, position: 'New free title', jobFamily: 'New free family' });
-    await f.revise({ positionId: null, position: null, jobFamily: null });
-    await f.approve();
-    expect(f.employment()).toMatchObject({ positionId: null, position: null, jobFamily: null });
-  });
-
-  it('clears linked text when clearing the directory ID without replacement text', async () => {
-    const f = setup();
+    await expect(f.create({ positionId: null, position: 'New free title', jobFamily: 'New free family' }))
+      .rejects.toMatchObject({ response: { data: { fieldErrors: { 'employee.positionId': expect.any(String) } } } });
     await f.create({ positionId: oldId });
-    await f.revise({ positionId: null });
-    expect(f.request().proposedValue.employee).toMatchObject({ positionId: null, position: null, jobFamily: null });
+    await expect(f.revise({ positionId: null })).rejects.toMatchObject({
+      response: { data: { fieldErrors: { 'employee.positionId': expect.any(String) } } },
+    });
+    expect(f.request().proposedValue.employee.positionId).toBe(oldId);
   });
 
   it('preserves saved null family on the same ID after the directory gains a family', async () => {

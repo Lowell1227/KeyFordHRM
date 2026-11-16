@@ -13,7 +13,7 @@ const route = useRoute();
 const router = useRouter();
 const buttons = ref<HTMLButtonElement[]>([]);
 const choices = [
-  { key: 'contract-subjects', label: '合同主体', component: markRaw(ContractSubjectManageView), kind: 'work_location' as const },
+  { key: 'contract-subjects', label: '公司目录', component: markRaw(ContractSubjectManageView), kind: 'work_location' as const },
   { key: 'work-locations', label: '工作地点', component: markRaw(PersonnelReferenceManageView), kind: 'work_location' as const },
   { key: 'job-families', label: '职系', component: markRaw(PersonnelReferenceManageView), kind: 'job_family' as const },
   { key: 'positions', label: '岗位', component: markRaw(PositionDirectoryView), kind: 'job_family' as const },

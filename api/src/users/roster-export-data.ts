@@ -21,7 +21,7 @@ export interface RosterContract {
   createdAt?: Date;
 }
 interface RosterEmployment extends EmploymentInterval {
-  company?: string;
+  company?: string | null;
   companyText?: string | null;
   contractSubject?: { name: string } | null;
   jobGrade?: string | null;
@@ -104,8 +104,7 @@ export function rosterArchiveCells(source: RosterArchiveSource, at = new Date())
     if (today.getUTCMonth() < birthDate.getUTCMonth() || (today.getUTCMonth() === birthDate.getUTCMonth() && today.getUTCDate() < birthDate.getUTCDate())) age--;
   }
   const cells: Record<string, RosterCell> = {
-    companyText: current?.companyText ?? current?.contractSubject?.name ?? '',
-    organization: COMPANY_LABELS[current?.company ?? source.dept?.company ?? ''] ?? '',
+    companyText: current?.companyText ?? current?.contractSubject?.name ?? COMPANY_LABELS[current?.company ?? ''] ?? '',
     departmentLevel1: departmentPath[0] ?? '', departmentLevel2: departmentPath[1] ?? '', departmentLevel3: departmentPath[2] ?? '',
     jobGrade: current?.jobGrade ?? '', jobFamily: current?.jobFamily ?? '', rosterManagerName: current?.directManager?.name ?? '',
     workLocation: current?.workLocation ?? '', employmentType: EMPLOYMENT_LABELS[source.employmentType ?? ''] ?? source.employmentType ?? '',

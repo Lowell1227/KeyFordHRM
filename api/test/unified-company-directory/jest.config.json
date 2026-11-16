@@ -1,0 +1,9 @@
+{
+  "rootDir": "../..",
+  "testMatch": ["**/test/unified-company-directory/*.integration.spec.ts"],
+  "testEnvironment": "node",
+  "transform": { "^.+\\.ts$": "ts-jest" },
+  "moduleNameMapper": { "^@/(.*)$": "<rootDir>/src/$1" },
+  "setupFilesAfterEnv": ["<rootDir>/test/jest-setup.ts"],
+  "maxWorkers": 1
+}

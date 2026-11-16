@@ -38,7 +38,8 @@ async function loadFields() {
     modules.value = result;
     const available = result.flatMap(module => module.fields);
     selected.value = initialized.value
-      ? selected.value.filter(key => available.some(field => field.key === key))
+      ? [...new Set(selected.value.map(key => key === 'organization' ? 'companyText' : key))]
+        .filter(key => available.some(field => field.key === key))
       : available.filter(field => field.defaultSelected).map(field => field.key);
     initialized.value = true;
   } catch {

@@ -1,23 +1,25 @@
 import { personnelReferenceFieldErrors, validatePersonnelReferences } from './personnel-reference-validation';
 
+const educationId = '00000000-0000-4000-8000-000000000001';
+const inactiveId = '00000000-0000-4000-8000-000000000002';
 const fixture = () => {
-  const options = [{ kind: 'education', name: 'Degree', isActive: true },
-    { kind: 'political_status', name: 'Inactive', isActive: false }];
+  const options = [{ id: educationId, kind: 'education', name: 'Degree', isActive: true },
+    { id: inactiveId, kind: 'political_status', name: 'Inactive', isActive: false }];
   const client = { personnelReferenceData: { findMany: jest.fn(async ({ where }) => options.filter(option =>
-    option.isActive === where.isActive && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) } };
+    where.id.in.includes(option.id))) } };
   return { client, options };
 };
 
 describe('shared personnel directory validation', () => {
-  it('matches trimmed names within their kind, without rewriting caller data', async () => {
+  it('checks selected IDs within their kind without mutating the validation-only caller data', async () => {
     const { client } = fixture();
-    const input = { profile: { education: ' Degree ', politicalStatus: 'Degree', maritalStatus: 'Inactive' } };
+    const input = { profile: { educationId, education: ' Degree ', politicalStatusId: educationId, politicalStatus: 'Degree', maritalStatusId: inactiveId, maritalStatus: 'Inactive' } };
     const before = structuredClone(input);
     const errors = await personnelReferenceFieldErrors(client as any, input);
     expect(errors).toEqual({ 'profile.politicalStatus': expect.any(String), 'profile.maritalStatus': expect.any(String) });
     expect(input).toEqual(before);
     expect(client.personnelReferenceData.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ isActive: true }), select: { kind: true, name: true },
+      where: { id: { in: [educationId, inactiveId] } }, select: { id: true, kind: true, name: true, isActive: true },
     }));
   });
 

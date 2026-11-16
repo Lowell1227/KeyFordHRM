@@ -133,7 +133,7 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
   it('retains both return reasons and their exact version snapshots across resubmission', async () => {
     const f = setup('reentry');
     await f.reopen();
-    const input = { company: CompanyCode.fuede, deptId: 'd1', position: 'Round one',
+    const input = { company: CompanyCode.fuede, deptId: 'd1', positionId: 'p1', position: 'Original position',
       effectiveDate: new Date('2026-11-11'), employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
     const firstVersion = f.request.requestVersion;
     const firstBase = structuredClone(f.request.baseValue);
@@ -141,12 +141,12 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
     await f.onboarding.reviseReentry('r1', input, editor.id);
     const secondVersion = f.request.requestVersion;
     await f.reviews.rejectBatch(['r1'], 'Second correction', reviewer);
-    await f.onboarding.reviseReentry('r1', { ...input, position: 'Round two' }, editor.id);
+    await f.onboarding.reviseReentry('r1', { ...input, positionId: 'p2', position: 'New position' }, editor.id);
     expect(f.request.revisionHistory.find((item: any) => item.version === firstVersion)).toMatchObject({
       rejectedReason: 'First correction', baseValue: firstBase,
     });
     expect(f.request.revisionHistory.find((item: any) => item.version === secondVersion)).toMatchObject({
-      rejectedReason: 'Second correction', proposedValue: { employee: { position: 'Round one' } },
+      rejectedReason: 'Second correction', proposedValue: { employee: { positionId: 'p1', position: 'Original position' } },
     });
     expect(f.audit.filter(item => item.action === 'reject_employee_data_change').map(item => item.newValue))
       .toEqual([{ reason: 'First correction', requestVersion: firstVersion },
@@ -162,20 +162,20 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
     f.tx.contractSubject.findUnique.mockResolvedValue({ id: subjectId, name: 'Renamed subject',
       isActive: directoryState !== 'inactive', internalCompany: directoryState === 'unmapped' ? null : CompanyCode.beijing_fuede });
     const input = { contractSubjectId: subjectId, company: CompanyCode.fansibao,
-      deptId: 'd1', position: 'First revision', effectiveDate: new Date('2026-11-11'),
+      deptId: 'd1', positionId: 'p1', position: 'Original position', effectiveDate: new Date('2026-11-11'),
       employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
     expect((await f.onboarding.reviseReentry('r1', input, editor.id)).proposedValue.employee).toMatchObject(frozen);
     expect(f.records).toEqual([]);
     await f.reviews.rejectBatch(['r1'], 'Synthetic correction', reviewer);
-    expect((await f.onboarding.reviseReentry('r1', { ...input, contractSubjectId: undefined, position: 'Second revision' }, editor.id))
+    expect((await f.onboarding.reviseReentry('r1', { ...input, contractSubjectId: undefined, positionId: 'p2', position: 'New position' }, editor.id))
       .proposedValue.employee).toMatchObject(frozen);
     expect((await f.approve()).failed).toEqual([]);
     expect(f.records).toHaveLength(1);
-    expect(f.records[0]).toMatchObject({ ...frozen, position: 'Second revision' });
+    expect(f.records[0]).toMatchObject({ ...frozen, positionId: 'p2', position: 'New position' });
     expect(f.tx.contractSubject.findUnique).not.toHaveBeenCalled();
   });
 
-  it('recomputes only a newly selected subject and still rejects mapping drift on approval', async () => {
+  it('freezes only a newly selected subject and ignores retired mapping drift on approval', async () => {
     const f = setup('reentry');
     const frozen = { contractSubjectId: subjectId, company: 'fuede', companyText: 'Reviewed subject' };
     Object.assign(f.records[0], frozen);
@@ -184,10 +184,10 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
     const input = { contractSubjectId: nextId, company: CompanyCode.fuede, deptId: 'd1',
       effectiveDate: new Date('2026-11-11'), employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
     const revised = await f.onboarding.reviseReentry('r1', input, editor.id);
-    expect(revised.proposedValue.employee).toMatchObject({ contractSubjectId: nextId, company: 'beijing_fuede', companyText: 'Synthetic subject' });
+    expect(revised.proposedValue.employee).toMatchObject({ contractSubjectId: nextId, company: null, companyText: 'Synthetic subject' });
     f.tx.contractSubject.findUnique.mockResolvedValue({ id: nextId, name: 'Synthetic subject', isActive: true, internalCompany: null });
-    expect((await f.approve()).failed).toEqual([{ requestId: 'r1', reason: expect.stringContaining('内部公司映射') }]);
-    expect(f.records).toEqual([]);
+    expect((await f.approve()).failed).toEqual([]);
+    expect(f.records[0]).toMatchObject({ contractSubjectId: nextId, company: null, companyText: 'Synthetic subject' });
   });
 
   it('applies all reviewed reentry fields after date revision and return, without replacing the employment identity', async () => {
@@ -201,7 +201,7 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
     expect((await f.approve()).failed).toEqual([]);
     expect(f.records).toHaveLength(1);
     expect(f.records[0]).toMatchObject({ id: 'e1', sourceRequestId: 'r1', deptId: 'd2', positionId: 'p2',
-      position: 'New position', directManagerId: 'm2', company: 'beijing_fuede', contractSubjectId: subjectId,
+      position: 'New position', directManagerId: 'm2', company: null, contractSubjectId: subjectId,
       companyText: 'Synthetic subject', employmentType: 'part_time', employeeStatus: 'active',
       probationMonths: 1, plannedRegularDate: new Date('2026-12-11'), effectiveFrom: new Date('2026-11-11') });
     await f.onboarding.confirmArrival('r1', { arrivalDate: '2026-11-11', requestVersion: f.request.requestVersion }, reviewer);
@@ -287,7 +287,7 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
 
   it('retains saved profile, contracts and the existing performance review state on reopening', async () => {
     const f = setup();
-    f.request.proposedValue.profile = { education: 'Synthetic education' };
+    f.request.proposedValue.profile = { school: 'Synthetic school' };
     f.request.proposedValue.contracts = [{ contractNo: 'synthetic-contract', contractType: 'labor' }];
     f.request.proposedValue.performance = { managerId: 'm1' };
     f.request.performanceReviewStatus = 'approved';

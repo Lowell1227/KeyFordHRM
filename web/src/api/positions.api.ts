@@ -5,6 +5,7 @@ export interface PositionRecord {
   code: string;
   name: string;
   jobFamily: string | null;
+  jobFamilyId?: string | null;
   isActive: boolean;
   activeEmployeeCount: number;
 }
@@ -26,11 +27,11 @@ export const positionsApi = {
   findAll(params: { keyword?: string; includeInactive?: boolean } = {}): Promise<PositionRecord[]> {
     return http.get('/positions', { params }) as unknown as Promise<PositionRecord[]>;
   },
-  create(body: { name: string; jobFamily?: string | null }): Promise<PositionChangeRequest> {
-    return http.post('/positions', body) as unknown as Promise<PositionChangeRequest>;
+  create(body: { name: string; jobFamily?: string | null; jobFamilyId?: string | null }, options?: { skipErrorMessage?: boolean }): Promise<PositionChangeRequest> {
+    return http.post('/positions', body, options) as unknown as Promise<PositionChangeRequest>;
   },
-  update(id: string, body: { code?: string; name?: string; jobFamily?: string | null; activationRequested?: true }): Promise<PositionChangeRequest> {
-    return http.patch(`/positions/${id}`, body) as unknown as Promise<PositionChangeRequest>;
+  update(id: string, body: { code?: string; name?: string; jobFamily?: string | null; jobFamilyId?: string | null; activationRequested?: true }, options?: { skipErrorMessage?: boolean }): Promise<PositionChangeRequest> {
+    return http.patch(`/positions/${id}`, body, options) as unknown as Promise<PositionChangeRequest>;
   },
   deactivate(id: string): Promise<PositionChangeRequest> {
     return http.delete(`/positions/${id}`) as unknown as Promise<PositionChangeRequest>;

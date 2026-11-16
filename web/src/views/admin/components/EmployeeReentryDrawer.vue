@@ -32,6 +32,7 @@ const saving = ref(false);
 const cancelling = ref(false);
 const currentRequest = ref<EmployeeDataReview | null>(null);
 const positions = ref<PositionRecord[]>([]);
+const historicalPosition = ref<{ id: string | null; name: string | null; jobFamily: string | null; jobFamilyId: string | null }>();
 let savedSnapshot = '';
 const loadError = ref('');
 const submitError = ref('');
@@ -41,7 +42,7 @@ let generation = 0;
 const form = reactive({
   contractSubjectId: undefined as string | null | undefined, companyText: null as string | null,
   company: null as string | null, deptId: '', positionId: '',
-  position: null as string | null, jobFamily: null as string | null,
+  position: null as string | null, jobFamily: null as string | null, jobFamilyId: null as string | null,
   rosterManagerId: null as string | null, performanceManagerId: null as string | null,
   effectiveDate: '', effectiveTo: '', employeeStatus: 'probation' as 'active' | 'probation',
   employmentType: 'full_time', plannedRegularDate: '', probationMonths: 3 as number | null,
@@ -64,19 +65,26 @@ function warningMessage(value: unknown): string {
 const statusLabel = computed(() => currentRequest.value ? applicationProgress(currentRequest.value) : '未提交');
 const performanceOnly = computed(() => !!currentRequest.value && ['effective', 'pending_entry'].includes(currentRequest.value.onboardingStatus ?? '')
   && currentRequest.value.profileReviewStatus === 'approved' && currentRequest.value.performanceReviewStatus === 'rejected');
+const hasCompany = computed(() => Boolean(form.contractSubjectId || form.companyText || form.company));
 const positionOptions = computed(() => {
-  const active = positions.value.filter(position => position.isActive);
+  const active = positions.value.filter(position => position.isActive)
+    .map(position => position.id === form.positionId ? { ...position, name: form.position || position.name } : position);
   if (!form.positionId || active.some(position => position.id === form.positionId)) return active;
   const previous = positions.value.find(position => position.id === form.positionId);
   return [...active, { id: form.positionId, name: `${form.position || previous?.name || '历史岗位'}（${previous ? '已停用' : '已不可用'}）`, isActive: false }];
 });
-const positionError = computed(() => !performanceOnly.value && form.positionId && !positions.value.some(position => position.id === form.positionId && position.isActive)
-  ? '历史岗位已停用或不可用，请重新选择启用岗位或清空。' : '');
+const keepingHistoricalPosition = computed(() => historicalPosition.value && (form.positionId || null) === historicalPosition.value.id
+  && form.position === historicalPosition.value.name && form.jobFamily === historicalPosition.value.jobFamily
+  && form.jobFamilyId === historicalPosition.value.jobFamilyId);
+const positionError = computed(() => !performanceOnly.value && !keepingHistoricalPosition.value
+  && (!form.positionId || !positions.value.some(position => position.id === form.positionId && position.isActive))
+  ? '请选择岗位目录中启用的岗位；未修改的历史岗位可保留。' : '');
 function changePosition(id?: string | null) {
   const position = positions.value.find(item => item.id === id);
   form.positionId = id || '';
   form.position = position?.name ?? null;
   form.jobFamily = position?.jobFamily ?? null;
+  form.jobFamilyId = position?.jobFamilyId ?? null;
 }
 const isNewHire = computed(() => currentRequest.value?.intakeType === 'new_hire');
 const canEdit = computed(() => !currentRequest.value || performanceOnly.value
@@ -94,14 +102,17 @@ const flowStep = computed(() => {
 function setFormFromRequest(request: EmployeeDataReview | null, archive?: EmployeeArchive) {
   const employee = request?.proposedValue?.employee ?? {};
   const previous = archive?.currentEmployment ?? archive?.employmentHistory[0];
+  historicalPosition.value = { id: previous?.positionId ?? null, name: previous?.position ?? props.employee?.position ?? null,
+    jobFamily: previous?.jobFamily ?? null, jobFamilyId: previous?.jobFamilyId ?? null };
   Object.assign(form, {
     contractSubjectId: employee.contractSubjectId ?? undefined,
     companyText: employee.companyText ?? null,
-    company: employee.company ?? previous?.company ?? null,
+    company: employee.company ?? null,
     deptId: employee.deptId ?? props.employee?.deptId ?? '',
     positionId: request ? employee.positionId ?? '' : previous?.positionId ?? '',
     position: request ? employee.position ?? null : previous?.position ?? props.employee?.position ?? null,
     jobFamily: request ? employee.jobFamily ?? null : previous?.jobFamily ?? null,
+    jobFamilyId: request ? employee.jobFamilyId ?? null : previous?.jobFamilyId ?? null,
     rosterManagerId: employee.managerId ?? null,
     performanceManagerId: request?.proposedValue?.performance?.managerId ?? null,
     effectiveDate: dateValue(employee.effectiveDate),
@@ -126,7 +137,7 @@ async function load() {
   try {
     const availablePositions = await positionsApi.findAll({ includeInactive: true });
     const request = await employeeArchivesApi.getCurrentReentry(employeeId);
-    const archive = request ? undefined : await employeeArchivesApi.getArchive(employeeId);
+    const archive = await employeeArchivesApi.getArchive(employeeId);
     if (session !== generation) return;
     positions.value = availablePositions;
     currentRequest.value = request;
@@ -164,12 +175,14 @@ onBeforeUnmount(() => { generation++; });
 function body(): EmployeeReentryBody & { jobFamily: string | null } {
   return {
     talentCandidateId: currentRequest.value?.talentCandidateId ?? props.talentCandidateId,
-    company: form.company ?? '',
+    company: form.company,
+    companyText: form.companyText,
     contractSubjectId: form.contractSubjectId,
     deptId: form.deptId || null,
     positionId: form.positionId || null,
     position: form.position || null,
     jobFamily: form.jobFamily || null,
+    jobFamilyId: form.jobFamilyId,
     rosterManagerId: form.rosterManagerId,
     performanceManagerId: form.performanceManagerId,
     effectiveDate: form.effectiveDate,
@@ -191,7 +204,7 @@ async function submit() {
   }
   if (!props.employee) return;
   submitAttempted.value = true;
-  if (!performanceOnly.value && (!form.company || !form.deptId || !form.effectiveDate || positionError.value)) {
+  if (!performanceOnly.value && (!hasCompany.value || !form.deptId || !form.effectiveDate || positionError.value)) {
     await nextTick();
     const field = formElement.value?.querySelector<HTMLElement>('.el-form-item.is-error');
     field?.scrollIntoView({ block: 'center' });
@@ -266,13 +279,13 @@ async function cancelRequest() {
 
       <el-form label-position="top" :disabled="!canEdit || loading || saving || cancelling || !!loadError">
         <div class="form-grid">
-          <el-form-item label="所属公司" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !form.company ? '请选择已配置内部公司映射的所属公司' : ''"><EmployeeCompanySelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" v-model:company="form.company" :disabled="performanceOnly" /></el-form-item>
+          <el-form-item label="所属公司" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !hasCompany ? '请选择所属公司' : ''"><EmployeeCompanySelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" :company="form.company" :disabled="performanceOnly" /></el-form-item>
           <el-form-item label="部门" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !form.deptId ? '请选择部门' : ''"><el-select v-model="form.deptId" :disabled="performanceOnly" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
-          <el-form-item label="岗位" :error="positionError"><el-select v-model="form.positionId" :disabled="performanceOnly" filterable clearable @change="changePosition"><el-option v-for="position in positionOptions" :key="position.id" :label="position.name" :value="position.id" :disabled="!position.isActive" /></el-select></el-form-item>
-          <el-form-item v-if="!form.positionId" label="岗位名称"><el-input v-model="form.position" :disabled="performanceOnly" /></el-form-item>
+          <el-form-item label="岗位" :error="submitAttempted ? positionError : ''"><el-select v-model="form.positionId" :disabled="performanceOnly" filterable clearable @change="changePosition"><el-option v-for="position in positionOptions" :key="position.id" :label="position.name" :value="position.id" :disabled="!position.isActive" /></el-select></el-form-item>
+          <el-form-item v-if="!form.positionId" label="岗位名称"><el-input v-model="form.position" readonly :disabled="performanceOnly" /></el-form-item>
           <el-form-item label="职系">
             <template v-if="form.positionId"><el-input :model-value="form.jobFamily" readonly placeholder="未设置" /><small class="field-help">随岗位只读，特殊情况请先维护岗位目录；历史已存值保留。</small></template>
-            <PersonnelReferenceSelect v-else v-model="form.jobFamily" :disabled="performanceOnly" kind="job_family" label="职系" />
+            <PersonnelReferenceSelect v-else v-model="form.jobFamily" v-model:reference-id="form.jobFamilyId" :disabled="performanceOnly" kind="job_family" label="职系" />
           </el-form-item>
           <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" :disabled="performanceOnly" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
           <el-form-item label="绩效直属上级"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>

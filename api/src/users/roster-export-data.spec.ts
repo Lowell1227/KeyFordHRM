@@ -14,6 +14,30 @@ const employee = (overrides: Partial<RosterWorkbookItem> = {}): RosterWorkbookIt
 });
 
 describe('roster archive export', () => {
+  it('exposes one company field and normalizes retired organization selections without changing access', async () => {
+    const viewer = { sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] };
+    const fields = rosterExportFieldGroups(viewer).flatMap(group => group.fields);
+    expect(fields.filter(field => field.key === 'companyText')).toHaveLength(1);
+    expect(fields.map(field => field.key)).not.toContain('organization');
+    expect(parseRosterExportColumns('name,organization,companyText', viewer)).toEqual(['name', 'companyText']);
+    expect(parseRosterExportColumns('organization', viewer)).toEqual(['companyText']);
+    expect(() => parseRosterExportColumns('organization', { sysRole: 'hr_user', hrCapabilities: ['organization_edit'] })).toThrow('权限');
+    expect(() => parseRosterExportColumns('name,name', viewer)).toThrow('重复');
+    const book = await buildRosterWorkbook([employee({ archiveFields: { companyText: '示例公司' } })],
+      parseRosterExportColumns('organization,companyText', viewer));
+    expect(book.getWorksheet('花名册')!.columnCount).toBe(1);
+    expect(book.getWorksheet('花名册')!.getCell('A2').value).toBe('所属公司');
+    expect(book.getWorksheet('花名册')!.getCell('A3').value).toBe('示例公司');
+  });
+
+  it('keeps company snapshots and legacy labels without guessing an employee company from the department', () => {
+    const base = { id: 'legacy', effectiveFrom: day('2020-01-01'), effectiveTo: null };
+    const source = { status: 'active', dept: { name: '示例部门', company: 'fuede' } };
+    expect(rosterArchiveCells({ ...source, employmentHistory: [{ ...base, company: 'fansibao' }] }).companyText).toBe('凡思堡');
+    expect(rosterArchiveCells(source).companyText).toBe('');
+    expect(rosterArchiveCells({ ...source, employmentHistory: [{ ...base, companyText: '任职时公司名', contractSubject: { name: '目录改名后' } }] }).companyText).toBe('任职时公司名');
+  });
+
   it('returns eight ordered groups without default-selecting additional personal fields', () => {
     const groups = rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] });
     expect(groups.map(group => group.key)).toEqual(['employment', 'personal', 'contact', 'insurance', 'bank', 'contract', 'history', 'system']);
@@ -82,11 +106,12 @@ describe('roster archive export', () => {
         bankAccountEncrypted: 'private-cipher', bankAccountFingerprint: 'private-bank-fingerprint' },
       employmentHistory: [current, { ...current, id: 'future', effectiveFrom: day('2027-01-01'), companyText: '未来公司' }],
     }, day('2026-11-13'));
-    expect(cells).toMatchObject({ companyText: '示例合同主体', organization: '孚德', departmentLevel1: '一级部',
+    expect(cells).toMatchObject({ companyText: '示例合同主体', departmentLevel1: '一级部',
       departmentLevel2: '二级部', departmentLevel3: '三级组', age: 25, childrenCount: 0, probationMonths: 0,
       plannedRegularDate: current.plannedRegularDate, actualRegularDate: current.actualRegularDate, leaveDate: null,
       idNumberConfigured: '已录入', bankAccountConfigured: '已录入' });
     expect(JSON.stringify(cells)).not.toMatch(/private-|Encrypted|Fingerprint/);
+    expect(cells).not.toHaveProperty('organization');
   });
 
   it('keeps missing fields empty, rejects future birth dates, and uses latest formal former employment', () => {

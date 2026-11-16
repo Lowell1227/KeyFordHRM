@@ -22,11 +22,11 @@ describe('archive contract subject references', () => {
     const { service, baseVersion } = fixture();
     const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '伪造名称' }, profile: {} }, operator);
     if (!result) throw new Error('expected review request');
-    expect(result.proposedValue).toMatchObject({ employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '服务器名称', company: 'fansibao' } });
+    expect(result.proposedValue).toMatchObject({ employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '服务器名称', company: null } });
   });
   it('keeps an existing snapshot despite a supplied replacement name and directory rename', async () => {
     const { service, prisma, baseVersion } = fixture('11111111-1111-4111-8111-111111111111');
-    const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '伪造名称', position: '新岗位' }, profile: {} }, operator);
+    const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '伪造名称', probationMonths: 3 }, profile: {} }, operator);
     if (!result) throw new Error('expected review request');
     expect(result.proposedValue).toMatchObject({ employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '原名' } });
     expect(prisma.contractSubject.findUnique).not.toHaveBeenCalled();
@@ -70,18 +70,19 @@ describe('archive contract subject references', () => {
   it.each([undefined, '11111111-1111-4111-8111-111111111111'])('preserves formal company and snapshot on unrelated edits with subject %s', async contractSubjectId => {
     const { service, prisma, baseVersion } = fixture('11111111-1111-4111-8111-111111111111');
     const result = await service.submitDraft('user', { baseVersion, employee: {
-      contractSubjectId, company: 'beijing_fuede', companyText: 'Forged', position: 'New position',
+      contractSubjectId, company: 'beijing_fuede', companyText: 'Forged', probationMonths: 3,
     }, profile: {} }, operator);
     expect(result.request?.proposedValue).toMatchObject({ employee: { company: 'fuede', companyText: '原名' } });
     expect(prisma.contractSubject.findUnique).not.toHaveBeenCalled();
   });
 
-  it('allows an unmapped archive draft but blocks submission even with a forged company', async () => {
+  it('submits an unmapped archive draft without accepting a forged legacy company', async () => {
     const { service, prisma, baseVersion } = fixture();
     prisma.contractSubject.findUnique.mockResolvedValue({ name: 'Synthetic', isActive: true, internalCompany: null });
     const input = { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', company: 'fuede' }, profile: {} };
     const saved = await service.saveArchiveDraft('user', input, operator);
     expect(saved?.proposedValue).toMatchObject({ employee: { company: null, companyText: 'Synthetic' } });
-    await expect(service.submitDraft('user', input, operator)).rejects.toThrow('内部公司映射');
+    const result = await service.submitDraft('user', input, operator);
+    expect(result.request?.proposedValue).toMatchObject({ employee: { company: null, companyText: 'Synthetic' } });
   });
 });

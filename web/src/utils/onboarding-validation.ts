@@ -27,9 +27,9 @@ export function validateOnboardingStep(input: EmployeeCreateDraftPayload, step: 
     if (present(input.idNumber) && !/^(?:\d{15}|\d{17}[\dX])$/.test(String(input.idNumber))) errors['profile.idNumber'] = '请填写完整的身份证号，或清空后稍后补充';
   }
   if (step === 1) {
-    required('employee.companyText', employee.contractSubjectId || employee.companyText, '请选择所属公司');
-    if (!input.company && !errors['employee.companyText']) errors['employee.companyText'] = '所属公司尚未配置内部公司映射，请先在基础资料中配置';
+    required('employee.companyText', employee.contractSubjectId || employee.companyText || input.company, '请选择所属公司');
     required('employee.deptId', input.deptId, '请选择部门');
+    required('employee.positionId', input.positionId, '请选择岗位目录中的岗位');
     required('employee.entryDate', input.entryDate, '请选择入职日期');
     required('employee.effectiveFrom', input.effectiveFrom, '请选择任职开始日期');
     required('employee.employmentType', input.employmentType, '请选择用工类型');

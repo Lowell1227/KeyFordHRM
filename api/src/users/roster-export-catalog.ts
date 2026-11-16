@@ -17,7 +17,6 @@ export const ROSTER_EXPORT_COLUMNS = [
   { key: 'name', header: '姓名', group: 'employment', width: 14 },
   { key: 'employeeNo', header: '工号', group: 'employment', width: 14 },
   { key: 'companyText', header: '所属公司', group: 'employment', width: 22 },
-  { key: 'organization', header: '组织归属', group: 'employment', width: 18 },
   { key: 'departmentLevel1', header: '一级部门', group: 'employment', width: 20 },
   { key: 'departmentLevel2', header: '二级部门', group: 'employment', width: 20 },
   { key: 'departmentLevel3', header: '三级部门', group: 'employment', width: 20 },
@@ -113,13 +112,15 @@ export function rosterExportFieldGroups(viewer: HrCapabilitySubject) {
 export function parseRosterExportColumns(value?: string, viewer?: HrCapabilitySubject): RosterExportColumnKey[] {
   if (value === undefined) return defaultRosterExportColumns(viewer);
   if (typeof value !== 'string') throw new BadRequestException('导出字段格式不正确');
-  const keys = value.split(',').map(key => key.trim());
+  const requested = value.split(',').map(key => key.trim());
+  // Older clients may retain the retired company classification column.
+  const keys = requested.map(key => key === 'organization' ? 'companyText' : key);
   const allowed = new Set<string>(ROSTER_EXPORT_COLUMNS.map(column => column.key));
-  if (keys.some(key => !allowed.has(key)) || new Set(keys).size !== keys.length) {
+  if (keys.some(key => !allowed.has(key)) || new Set(requested).size !== requested.length) {
     throw new BadRequestException('请至少选择一个有效的导出字段，且字段不能重复');
   }
   if (viewer && !canExportArchiveFields(viewer) && keys.some(key => !LEGACY_KEYS.has(key))) {
     throw new ForbiddenException('没有导出员工档案详细字段的权限');
   }
-  return keys as RosterExportColumnKey[];
+  return [...new Set(keys)] as RosterExportColumnKey[];
 }

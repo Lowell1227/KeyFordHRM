@@ -1,5 +1,7 @@
 import { SysRole } from '@prisma/client';
 import { EmployeeRosterImportService } from './employee-roster-import.service';
+import { EmployeeDataReviewsService } from './employee-data-reviews.service';
+import { approvedEmploymentSourceWhere } from './employment-timeline';
 import type { ParsedEmployeeRosterRow } from './employee-roster.excel';
 
 function row(rowNumber: number, employeeNo: string, name: string): ParsedEmployeeRosterRow {
@@ -11,11 +13,12 @@ function row(rowNumber: number, employeeNo: string, name: string): ParsedEmploye
       companyText: '孚德',
       departmentPath: ['项目中心'],
       position: '项目经理',
-      jobGrade: 'P4',
-      jobFamily: '项目管理',
+      // Directory text-only input has no identity; reference-validation cases set it explicitly.
+      jobGrade: null,
+      jobFamily: null,
       managerName: null,
       entryDate: new Date('2024-01-01T00:00:00.000Z'),
-      workLocation: '杭州',
+      workLocation: null,
       employmentTypeText: '全职',
       employeeStatusText: '正式',
       probationMonths: null,
@@ -157,6 +160,7 @@ describe('roster directory validation uses only formal employment on the Shangha
       expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
     }
     expect(tx.user.findUnique.mock.calls[0][0].select.employmentHistory.where).toEqual({
+      AND: [approvedEmploymentSourceWhere],
       effectiveFrom: { lte: new Date() }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: new Date() } }],
     });
   });
@@ -174,6 +178,7 @@ describe('EmployeeRosterImportService', () => {
     };
     const service = new EmployeeRosterImportService(prisma as any);
     const parsed = row(2, '001', 'Synthetic');
+    parsed.employee.jobGrade = 'P4';
     parsed.profile.education = 'SYNTHETIC-UNMAINTAINED';
     const result = await service.createPreviewFromRows([parsed], { mode: 'full', fileName: 'synthetic.xlsx', fileHash: 'hash' }, hrOperator);
     expect(result).toMatchObject({ canConfirm: false, summary: { blockingErrorCount: 1 } });
@@ -183,11 +188,11 @@ describe('EmployeeRosterImportService', () => {
     expect(JSON.stringify(persisted[0].errors)).not.toContain('SYNTHETIC-UNMAINTAINED');
   });
 
-  it('revalidates directory values on confirmation when an option was disabled after preview', async () => {
+  it('旧导入名称即使存在于启用目录也不会在确认时自动补 ID', async () => {
     const parsed = row(2, '001', 'Synthetic');
     parsed.employee.jobGrade = 'New grade';
     const { service, tx } = confirmationFor(parsed);
-    Object.assign(tx, { personnelReferenceData: { findMany: jest.fn().mockResolvedValue([]) } });
+    Object.assign(tx, { personnelReferenceData: { findMany: jest.fn().mockResolvedValue([{ id: '60000000-0000-4000-8000-000000000001', kind: 'job_grade', name: 'New grade', isActive: true }]) } });
     await expect(service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator))
       .rejects.toMatchObject({ response: { data: { fieldErrors: { 'employee.jobGrade': expect.any(String) } } } });
     expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
@@ -195,6 +200,7 @@ describe('EmployeeRosterImportService', () => {
 
   it('keeps unchanged unmaintained historical options eligible in preview', async () => {
     const parsed = row(2, '001', 'Synthetic');
+    parsed.employee.jobGrade = 'P4';
     parsed.profile.education = 'Historical';
     const persisted: any[] = [];
     const prisma = {
@@ -215,6 +221,7 @@ describe('EmployeeRosterImportService', () => {
 
   it('retains unchanged historical grade and profile options during confirmation', async () => {
     const parsed = row(2, '001', 'Synthetic');
+    parsed.employee.jobGrade = 'P4';
     parsed.profile.education = 'Historical';
     const { service, tx, current } = confirmationFor(parsed);
     Object.assign(current, { employeeProfile: { education: 'Historical' } });
@@ -224,6 +231,88 @@ describe('EmployeeRosterImportService', () => {
     expect(tx.employeeDataChangeRequest.create.mock.calls[0][0].data.proposedValue)
       .toMatchObject({ employee: { jobGrade: 'P4' }, profile: { education: 'Historical' } });
     expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps disabled historical reference identities through a closed-path incremental import and review', async () => {
+    const parsed = row(2, '001', 'Synthetic corrected name');
+    parsed.employee.companyText = '原公司';
+    Object.assign(parsed.employee, { jobGrade: 'P4', jobFamily: '项目管理', workLocation: '杭州' });
+    const { service, tx, current } = confirmationFor(parsed);
+    const references = { jobGradeId: '60000000-0000-4000-8000-000000000001',
+      jobFamilyId: '60000000-0000-4000-8000-000000000002', workLocationId: '60000000-0000-4000-8000-000000000003' };
+    Object.assign(current.employmentHistory[0], references);
+    const findMany = jest.fn(async () => []); // The current directory cannot validate these retired selections.
+    Object.assign(tx, { personnelReferenceData: { findMany }, employeeContract: { findMany: jest.fn(async () => []) } });
+    Object.assign(tx.user, { update: jest.fn() });
+    await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    const data = tx.employeeDataChangeRequest.create.mock.calls[0][0].data;
+    expect(data.baseValue.employee).toMatchObject(references);
+    expect(data.proposedValue).toMatchObject({ referenceSnapshotVersion: 1, employee: references });
+    await expect((new EmployeeDataReviewsService({} as any) as any).applyProfile(tx,
+      { id: 'request', ...data }, hrOperator)).resolves.toBe('employee-1');
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['echoed', 'omitted'])('inherits unchanged formal position and roster manager through generated import review (%s)', async fields => {
+    const parsed = row(2, '001', '员工甲');
+    parsed.employee.companyText = '原公司';
+    parsed.employee.probationMonths = 6;
+    const { service, tx, current } = confirmationFor(parsed);
+    const formal = { positionId: '60000000-0000-4000-8000-000000000004', position: '项目经理',
+      directManagerId: '60000000-0000-4000-8000-000000000005', directManager: {
+        id: '60000000-0000-4000-8000-000000000005', name: '正式花名册主管' },
+      id: 'employment-current', effectiveFrom: new Date('2024-01-01') };
+    Object.assign(current, { positionId: formal.positionId });
+    Object.assign(current.employmentHistory[0], formal);
+    parsed.employee.position = fields === 'echoed' ? formal.position : null;
+    parsed.employee.managerName = fields === 'echoed' ? formal.directManager.name : null;
+    Object.assign(tx, { position: { findUnique: jest.fn(async () => ({ id: formal.positionId,
+      name: 'Renamed directory position', jobFamily: 'Renamed family', isActive: false })) },
+      employeeContract: { findMany: jest.fn(async () => []) } });
+    const userUpdate = jest.fn();
+    const employmentCreate = jest.fn();
+    Object.assign(tx.user, { update: userUpdate });
+    Object.assign(tx.employmentRecord, { update: jest.fn(), create: employmentCreate });
+    await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    const data = tx.employeeDataChangeRequest.create.mock.calls[0][0].data;
+    await expect((new EmployeeDataReviewsService({} as any) as any).applyProfile(tx,
+      { id: 'request', ...data }, hrOperator)).resolves.toBe('employee-1');
+    expect(data.baseValue.employee).toMatchObject({ positionId: formal.positionId, managerId: formal.directManagerId });
+    expect(employmentCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ positionId: formal.positionId,
+      position: formal.position, directManagerId: formal.directManagerId, probationMonths: 6 }) });
+    expect(userUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ positionId: formal.positionId }) }));
+  });
+
+  it.each(['position', 'manager'])('does not inherit an old identity for a changed import %s name', async changed => {
+    const parsed = row(2, '001', '员工甲');
+    const { service, tx, current } = confirmationFor(parsed);
+    const positionId = '60000000-0000-4000-8000-000000000004';
+    const managerId = '60000000-0000-4000-8000-000000000005';
+    Object.assign(current, { positionId });
+    Object.assign(current.employmentHistory[0], { positionId, position: '项目经理', directManagerId: managerId,
+      directManager: { id: managerId, name: '正式花名册主管' } });
+    parsed.employee.position = changed === 'position' ? 'New free title' : '项目经理';
+    parsed.employee.managerName = changed === 'manager' ? 'Another manager name' : '正式花名册主管';
+    Object.assign(tx, { position: { findUnique: jest.fn(async () => ({ id: positionId, name: '项目经理', jobFamily: '项目管理', isActive: true })) } });
+    const update = jest.fn();
+    Object.assign(tx.user, { update });
+    await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    const data = tx.employeeDataChangeRequest.create.mock.calls[0][0].data;
+    const field = changed === 'position' ? 'positionId' : 'managerId';
+    expect(data.proposedValue.employee[field]).toBeNull();
+    await expect((new EmployeeDataReviewsService({} as any) as any).applyProfile(tx,
+      { id: 'request', ...data }, hrOperator)).rejects.toMatchObject({ response: { data: {
+        fieldErrors: { ['employee.' + field]: expect.any(String) },
+      } } });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing null legacy company in the closed import path baseline instead of substituting a parsed code', async () => {
+    const parsed = row(2, '001', 'Synthetic');
+    const { service, tx, current } = confirmationFor(parsed);
+    Object.assign(current.employmentHistory[0], { company: null });
+    await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    expect(tx.employeeDataChangeRequest.create.mock.calls[0][0].data.baseValue.employee.company).toBeNull();
   });
 
   it.each([null, '实际签约公司'])('导入不从员工所属公司推定合同签约公司：%s', async (signingCompany) => {
@@ -929,6 +1018,7 @@ describe('EmployeeRosterImportService', () => {
 
   it('重复确认与正式档案一致的花名册时不生成无效待审核记录', async () => {
     const parsed = row(2, '001', '存量员工');
+    Object.assign(parsed.employee, { jobGrade: 'P4', jobFamily: '项目管理', workLocation: '杭州' });
     parsed.employee.managerName = '花名册主管';
     parsed.contracts = [{
       sequence: 0, kind: 'contract', name: '劳动合同',
@@ -941,7 +1031,7 @@ describe('EmployeeRosterImportService', () => {
     const today = new Date('2026-08-24T00:00:00.000Z');
     const reviewCreate = jest.fn();
     const tx = {
-      employmentRecord: { findFirst: jest.fn().mockResolvedValue({ jobGrade: 'P4' }) },
+      employmentRecord: { findFirst: jest.fn().mockResolvedValue({ jobGrade: 'P4', jobFamily: '项目管理', workLocation: '杭州' }) },
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn(async ({ data }: any) => ({ id: 'batch-unchanged', ...data })),

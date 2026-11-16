@@ -16,85 +16,49 @@ export class EmployeeEffectiveDateService {
       select: { userId: true },
       distinct: ['userId'],
     });
-    for (const item of dueUsers) {
-      if (item.userId) await this.refreshUserProjection(item.userId, at);
-    }
-    const effectiveAt = shanghaiBusinessDate(at);
-    const [users, records, positions] = await Promise.all([
-      this.prisma.user.findMany({
-        where: { deletedAt: null, accountType: 'employee', status: { not: 'pending_entry' } },
-        select: { id: true, status: true },
-      }),
-      this.prisma.employmentRecord.findMany({
-        where: approvedEmploymentSourceWhere,
-        orderBy: [{ userId: 'asc' }, { effectiveFrom: 'desc' }],
-      }),
-      this.prisma.position.findMany({ select: { id: true, name: true } }),
-    ]);
-    const recordsByUser = new Map<string, typeof records>();
-    for (const record of records) {
-      const group = recordsByUser.get(record.userId) ?? [];
-      group.push(record);
-      recordsByUser.set(record.userId, group);
-    }
-    const positionNames = new Map(positions.map((position) => [position.id, position.name]));
+    const users = await this.prisma.user.findMany({
+      where: { deletedAt: null, accountType: 'employee', status: { not: 'pending_entry' } },
+      select: { id: true },
+    });
+    const userIds = new Set([...dueUsers.map(item => item.userId).filter((id): id is string => Boolean(id)),
+      ...users.map(user => user.id)]);
     let overlaps = 0;
     let updated = 0;
-    const updates: Prisma.PrismaPromise<unknown>[] = [];
-
-    for (const user of users) {
-      const selection = selectEmploymentAt(recordsByUser.get(user.id) ?? [], effectiveAt);
-      if (!selection.current) continue;
-      if (selection.matches.length > 1) overlaps += 1;
-      const current = selection.current;
-      if (user.status === 'resigned' && current.employeeStatus !== 'resigned') continue;
-      updated += 1;
-      updates.push(this.prisma.user.update({
-        where: { id: user.id },
-        data: {
-          deptId: current.deptId,
-          positionId: current.positionId,
-          position: current.positionId
-            ? (positionNames.get(current.positionId) ?? current.position)
-            : current.position,
-          entryDate: current.entryDate,
-          plannedRegularDate: current.plannedRegularDate,
-          actualRegularDate: current.actualRegularDate,
-          leaveDate: current.leaveDate,
-          employmentType: current.employmentType,
-          status: current.employeeStatus,
-        },
-      }));
-      if (current.employeeStatus === 'resigned') {
-        updates.push(this.prisma.externalIdentityBinding.updateMany({ where: {
-          userId: user.id, status: ExternalIdentityStatus.enabled, endedAt: null,
-        }, data: { status: ExternalIdentityStatus.disabled, disabledAt: at, disabledReason: RESIGNATION_BINDING_DISABLED_REASON } }));
-      }
-      if (current.sourceRequestId) {
-        updates.push(this.prisma.employeeDataChangeRequest.updateMany({ where: {
-          id: current.sourceRequestId, profileReviewStatus: 'approved', appliedAt: null,
-        }, data: { appliedAt: at } }));
-      }
+    for (const userId of userIds) {
+      const result = await this.refreshProjection(userId, at);
+      if (result.updated) updated += 1;
+      if (result.overlap) overlaps += 1;
     }
-
-    if (updates.length > 0) await this.prisma.$transaction(updates);
-    return { checked: users.length, updated, overlaps };
+    return { checked: userIds.size, updated, overlaps };
   }
 
   async refreshUserProjection(userId: string, at = new Date()): Promise<{ activated: boolean; historicalOnly: boolean }> {
-    const request = await this.prisma.employeeDataChangeRequest.findFirst({
-      where: { userId, onboardingStatus: OnboardingStatus.pending_entry },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true },
-    });
-    return this.prisma.$transaction(async (tx) => {
-      const result = request ? await this.activateApprovedOnboarding(tx, request.id, at)
-        : { activated: false, historicalOnly: false };
-      if (!result.activated && !result.historicalOnly) await this.refreshCurrentEmployment(tx, userId, at);
-      return result;
-    }, {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-    });
+    const { activated, historicalOnly } = await this.refreshProjection(userId, at);
+    return { activated, historicalOnly };
+  }
+
+  private async refreshProjection(userId: string, at: Date) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const request = await tx.employeeDataChangeRequest.findFirst({
+            where: { userId, onboardingStatus: OnboardingStatus.pending_entry },
+            orderBy: { createdAt: 'desc' }, select: { id: true },
+          });
+          const result = request ? await this.activateApprovedOnboarding(tx, request.id, at)
+            : { activated: false, historicalOnly: false };
+          const projection = !result.activated && !result.historicalOnly
+            ? await this.refreshCurrentEmployment(tx, userId, at) : { updated: result.activated, overlap: false };
+          return { ...result, ...projection };
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        const details = error as { code?: string; meta?: { code?: string } } | null;
+        const conflict = details?.code === 'P2034'
+          || (details?.code === 'P2010' && ['40001', '40P01'].includes(details.meta?.code ?? ''));
+        if (!conflict) throw error;
+        if (attempt >= 2) throw new ConflictException('员工任职正在更新，请稍后重试');
+      }
+    }
   }
 
   private async refreshCurrentEmployment(tx: Prisma.TransactionClient, userId: string, at: Date) {
@@ -102,19 +66,20 @@ export class EmployeeEffectiveDateService {
       id: true, accountType: true, status: true, deptId: true, positionId: true, position: true,
       entryDate: true, plannedRegularDate: true, actualRegularDate: true, leaveDate: true, employmentType: true,
     } });
-    if (!user || user.accountType !== 'employee' || user.status === 'pending_entry') return;
+    if (!user || user.accountType !== 'employee' || user.status === 'pending_entry') return { updated: false, overlap: false };
     const records = await tx.employmentRecord.findMany({ where: { userId, ...approvedEmploymentSourceWhere }, orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] });
-    const current = selectEmploymentAt(records, shanghaiBusinessDate(at)).current;
-    if (!current) return;
-    if (user.status === 'resigned' && current.employeeStatus !== 'resigned') return;
-    const position = current.positionId ? await tx.position.findUnique({ where: { id: current.positionId }, select: { name: true } }) : null;
+    const selection = selectEmploymentAt(records, shanghaiBusinessDate(at));
+    const current = selection.current;
+    const overlap = selection.matches.length > 1;
+    if (!current || (user.status === 'resigned' && current.employeeStatus !== 'resigned')) return { updated: false, overlap };
     const projection = {
-      deptId: current.deptId, positionId: current.positionId, position: position?.name ?? current.position,
+      deptId: current.deptId, positionId: current.positionId, position: current.position,
       entryDate: current.entryDate, plannedRegularDate: current.plannedRegularDate,
       actualRegularDate: current.actualRegularDate, leaveDate: current.leaveDate,
       employmentType: current.employmentType, status: current.employeeStatus,
     };
-    if (Object.entries(projection).some(([key, value]) => JSON.stringify((user as any)[key]) !== JSON.stringify(value))) {
+    const updated = Object.entries(projection).some(([key, value]) => JSON.stringify((user as any)[key]) !== JSON.stringify(value));
+    if (updated) {
       await tx.user.update({ where: { id: userId }, data: projection });
     }
     if (current.employeeStatus === 'resigned') {
@@ -126,6 +91,7 @@ export class EmployeeEffectiveDateService {
         id: current.sourceRequestId, profileReviewStatus: 'approved', appliedAt: null,
       }, data: { appliedAt: at } });
     }
+    return { updated, overlap };
   }
 
   async activateApprovedOnboarding(

@@ -26,6 +26,7 @@ const loading = ref(false);
 const saving = ref(false);
 const draftDialogVisible = ref(false);
 const draftId = ref<string | null>(null);
+const draftSubmissionVersion = ref<number | undefined>();
 const summary = ref('');
 const summaryError = ref('');
 const actionError = ref('');
@@ -84,6 +85,7 @@ function handleDetailVisibility(value: boolean) {
 
 function openCreate() {
   draftId.value = null;
+  draftSubmissionVersion.value = undefined;
   summary.value = '';
   summaryError.value = '';
   actionError.value = '';
@@ -94,6 +96,7 @@ function openCreate() {
 async function openDraft(row: ConfirmationApplication) {
   const detail = await confirmationApi.findOne(row.id);
   draftId.value = detail.id;
+  draftSubmissionVersion.value = detail.submissionVersion;
   summary.value = detail.summary ?? '';
   summaryError.value = '';
   actionError.value = '';
@@ -108,9 +111,10 @@ function errorText(error: unknown): string {
 
 async function persistDraft(): Promise<string> {
   const saved = draftId.value
-    ? await confirmationApi.saveSelfDraft(draftId.value, summary.value)
+    ? await confirmationApi.saveSelfDraft(draftId.value, summary.value, draftSubmissionVersion.value)
     : await confirmationApi.createSelfDraft(summary.value);
   draftId.value = saved.id;
+  draftSubmissionVersion.value = saved.submissionVersion;
   return saved.id;
 }
 
@@ -136,7 +140,7 @@ async function submitDraft() {
   actionError.value = '';
   try {
     const id = await persistDraft();
-    await confirmationApi.submitSelf(id);
+    await confirmationApi.submitSelf(id, draftSubmissionVersion.value);
     draftDialogVisible.value = false;
     ElMessage.success('申请已提交，下一步由直属主管评价');
     await loadList();
@@ -227,7 +231,7 @@ function statusType(status: string): string {
       <p v-if="draftReturnReason" class="return-reason">退回原因：{{ draftReturnReason }}</p>
       <div v-if="roster" class="roster-check" data-testid="confirmation-roster-check">
         <div><span>员工</span><strong>{{ roster.name }}</strong></div>
-        <div><span>所属公司</span><strong>{{ companyLabels[roster.company ?? ''] || '待核实' }}</strong></div>
+        <div><span>所属公司</span><strong>{{ roster.companyText || companyLabels[roster.company ?? ''] || '待核实' }}</strong></div>
         <div><span>部门 / 岗位</span><strong>{{ roster.deptName || '待核实' }} / {{ roster.position || '待核实' }}</strong></div>
         <div><span>入职 / 计划转正</span><strong>{{ formatDate(roster.entryDate) }} / {{ formatDate(roster.plannedRegularDate) }}</strong></div>
         <div><span>花名册直属主管</span><strong>{{ roster.managerName || '待 HR 核实' }}</strong></div>

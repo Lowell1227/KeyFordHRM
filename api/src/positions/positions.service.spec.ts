@@ -1,3 +1,6 @@
+const familyId = '00000000-0000-4000-8000-000000000001';
+const referenceData = () => ({ findMany: async () => [{ id: familyId, kind: 'job_family', name: '人力资源', isActive: true }] });
+
 import { PositionsService } from './positions.service';
 import { ValidationPipe } from '@nestjs/common';
 import { UpdatePositionDto } from './dto/position.dto';
@@ -21,6 +24,7 @@ const reviewer = {
 describe('PositionsService', () => {
   it('新增岗位只生成待审核申请，不提前创建正式岗位', async () => {
     const tx = {
+      personnelReferenceData: referenceData(),
       position: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
@@ -37,13 +41,14 @@ describe('PositionsService', () => {
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
+      personnelReferenceData: referenceData(),
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new PositionsService(prisma as any);
 
     await expect(service.create({
       name: 'HRBP',
-      jobFamily: '人力资源',
+      jobFamily: '人力资源', jobFamilyId: familyId,
     }, submitter)).resolves.toMatchObject({ status: 'pending', action: 'create' });
 
     expect(tx.positionChangeRequest.create).toHaveBeenCalledWith({
@@ -55,7 +60,7 @@ describe('PositionsService', () => {
         proposedValue: expect.objectContaining({
           code: expect.stringMatching(/^POS-[0-9A-F-]{36}$/),
           name: 'HRBP',
-          jobFamily: '人力资源',
+          jobFamily: '人力资源', jobFamilyId: familyId,
           isActive: true,
         }),
       }),
@@ -65,11 +70,12 @@ describe('PositionsService', () => {
 
   it('相同的新建岗位已有待审核申请时不重复生成', async () => {
     const tx = {
+      personnelReferenceData: referenceData(),
       position: { findFirst: jest.fn().mockResolvedValue(null) },
       positionChangeRequest: {
         findMany: jest.fn().mockResolvedValue([{
           id: 'position-create-pending',
-          proposedValue: { code: 'POS-EXISTING', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+          proposedValue: { code: 'POS-EXISTING', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true },
         }]),
         create: jest.fn(),
       },
@@ -81,7 +87,7 @@ describe('PositionsService', () => {
 
     await expect(service.create({
       name: 'HRBP',
-      jobFamily: ' 人力资源 ',
+      jobFamily: ' 人力资源 ', jobFamilyId: familyId,
     }, submitter)).rejects.toMatchObject({
       response: expect.objectContaining({ message: '相同岗位已有变更审核中，请先处理现有申请' }),
     });
@@ -91,9 +97,10 @@ describe('PositionsService', () => {
   it('岗位名称和岗位族未变化时不生成审核', async () => {
     const create = jest.fn();
     const prisma = {
+      personnelReferenceData: referenceData(),
       position: {
         findUnique: jest.fn().mockResolvedValue({
-          id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true,
+          id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true,
         }),
       },
       positionChangeRequest: { create },
@@ -102,7 +109,7 @@ describe('PositionsService', () => {
 
     await expect(service.update('position-1', {
       name: 'HRBP',
-      jobFamily: ' 人力资源 ',
+      jobFamily: ' 人力资源 ', jobFamilyId: familyId,
     }, submitter)).rejects.toMatchObject({
       response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
     });
@@ -111,6 +118,7 @@ describe('PositionsService', () => {
 
   it('同一岗位已有待审核变更时不重复生成申请', async () => {
     const tx = {
+      personnelReferenceData: referenceData(),
       positionChangeRequest: {
         findFirst: jest.fn().mockResolvedValue({ id: 'position-change-pending' }),
         create: jest.fn(),
@@ -118,9 +126,10 @@ describe('PositionsService', () => {
       auditLog: { create: jest.fn() },
     };
     const prisma = {
+      personnelReferenceData: referenceData(),
       position: {
         findUnique: jest.fn().mockResolvedValue({
-          id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true,
+          id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true,
         }),
       },
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
@@ -144,10 +153,11 @@ describe('PositionsService', () => {
       action: 'create',
       status: 'pending',
       baseValue: {},
-      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true },
       createdById: ownReviewer.id,
     };
     const tx = {
+      personnelReferenceData: referenceData(),
       positionChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -159,13 +169,14 @@ describe('PositionsService', () => {
           id: '1560b58d-f432-4e2e-a98f-e04ca77981d5',
           code: 'HRBP',
           name: 'HRBP',
-          jobFamily: '人力资源',
+          jobFamily: '人力资源', jobFamilyId: familyId,
           isActive: true,
         }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-own-approve' }) },
     };
     const prisma = {
+      personnelReferenceData: referenceData(),
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new PositionsService(prisma as any);
@@ -189,10 +200,11 @@ describe('PositionsService', () => {
       action: 'create',
       status: 'pending',
       baseValue: {},
-      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true },
       createdById: ownReviewer.id,
     };
     const tx = {
+      personnelReferenceData: referenceData(),
       positionChangeRequest: {
         findUnique: jest.fn()
           .mockResolvedValueOnce(request)
@@ -202,6 +214,7 @@ describe('PositionsService', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-own-reject' }) },
     };
     const prisma = {
+      personnelReferenceData: referenceData(),
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new PositionsService(prisma as any);
@@ -228,10 +241,11 @@ describe('PositionsService', () => {
       action: 'create',
       status: 'pending',
       baseValue: {},
-      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true },
       createdById: submitter.id,
     };
     const tx = {
+      personnelReferenceData: referenceData(),
       positionChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -243,13 +257,14 @@ describe('PositionsService', () => {
           id: '1560b58d-f432-4e2e-a98f-e04ca77981d5',
           code: 'HRBP',
           name: 'HRBP',
-          jobFamily: '人力资源',
+          jobFamily: '人力资源', jobFamilyId: familyId,
           isActive: true,
         }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
+      personnelReferenceData: referenceData(),
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new PositionsService(prisma as any);
@@ -259,7 +274,7 @@ describe('PositionsService', () => {
       positionId: '1560b58d-f432-4e2e-a98f-e04ca77981d5',
     });
     expect(tx.position.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ code: 'HRBP', name: 'HRBP', jobFamily: '人力资源' }),
+      data: expect.objectContaining({ code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId }),
     });
     expect(tx.positionChangeRequest.update).toHaveBeenCalledWith({
       where: { id: request.id },
@@ -278,11 +293,12 @@ describe('PositionsService', () => {
       positionName: 'HRBP',
       action: 'update',
       status: 'pending',
-      baseValue: { id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
-      proposedValue: { code: 'HRBP', name: '高级 HRBP', jobFamily: '人力资源', isActive: true },
+      baseValue: { id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true },
+      proposedValue: { code: 'HRBP', name: '高级 HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true },
       createdById: submitter.id,
     };
     const tx = {
+      personnelReferenceData: referenceData(),
       positionChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -290,13 +306,14 @@ describe('PositionsService', () => {
       },
       position: {
         findUnique: jest.fn().mockResolvedValue({
-          id: 'position-1', code: 'HRBP', name: '业务 HRBP', jobFamily: '人力资源', isActive: true,
+          id: 'position-1', code: 'HRBP', name: '业务 HRBP', jobFamily: '人力资源', jobFamilyId: familyId, isActive: true,
         }),
         update: jest.fn(),
       },
       auditLog: { create: jest.fn() },
     };
     const prisma = {
+      personnelReferenceData: referenceData(),
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new PositionsService(prisma as any);

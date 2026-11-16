@@ -8,7 +8,7 @@ const row = (id: string, name: string, isActive = true, kind: Kind = 'work_locat
 const response = (data: unknown) => ({ code: 0, data, message: 'success', timestamp: Date.now() });
 
 async function setup(page: Page, options: {
-  panel?: boolean; kind?: Kind; value?: string; disabled?: boolean;
+  panel?: boolean; kind?: Kind; value?: string; referenceId?: string | null; disabled?: boolean;
   sysRole?: string; capabilities?: string[]; rows?: Row[]; failGet?: boolean;
 } = {}) {
   const state = {
@@ -72,11 +72,14 @@ async function setup(page: Page, options: {
         : '/src/components/common/PersonnelReferenceSelect.vue');
       createApp({ setup() {
         const value = ref(options.value);
+        const referenceId = ref(options.referenceId ?? null);
         return () => h('main', { style: options.panel ? 'height:calc(100dvh - 32px);padding:16px;box-sizing:border-box' : 'max-width:520px;padding:16px' }, [
           !options.panel && h('textarea', { 'aria-label': '备注草稿', value: '尚未提交的备注' }),
-          h(Component, { kind: options.kind, compact: true, modelValue: value.value, disabled: options.disabled,
+          h(Component, { kind: options.kind, compact: true, modelValue: value.value, referenceId: referenceId.value, disabled: options.disabled,
+            'onUpdate:referenceId': next => { referenceId.value = next; },
             'onUpdate:modelValue': next => { value.value = next; window.__changes.push(next); } }),
           !options.panel && h('output', { 'data-testid': 'selected-value' }, value.value),
+          !options.panel && h('output', { 'data-testid': 'selected-id' }, referenceId.value || ''),
         ]);
       } }).use(pinia).use(ElementPlus).mount('#app');
     } catch { document.querySelector('#app').textContent = '人员基础资料组件尚未实现'; }
@@ -84,6 +87,38 @@ async function setup(page: Page, options: {
   await page.goto('/__personnel-reference-test');
   return state;
 }
+
+for (const width of [1440, 390]) {
+  test(`stable reference ID survives rename and clears with its snapshot at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const state = await setup(page, { value: '杭州旧称', referenceId: 'hz', rows: [row('hz', '杭州新称'), row('sz', '苏州')] });
+    await expect.poll(() => state.gets).toBeGreaterThan(0);
+    await expect(page.getByTestId('selected-id')).toHaveText('hz');
+    await expect(page.getByTestId('selected-value')).toHaveText('杭州旧称');
+    await expect(page.locator('.el-select__selected-item').filter({ hasText: '杭州旧称' })).toBeVisible();
+    await expect(page.getByText('原值尚未维护', { exact: false })).toHaveCount(0);
+    await page.getByRole('combobox').click();
+    await page.getByRole('option', { name: '苏州', exact: true }).click();
+    await expect(page.getByTestId('selected-id')).toHaveText('sz');
+    await expect(page.getByTestId('selected-value')).toHaveText('苏州');
+    await page.locator('.el-select').hover();
+    await page.locator('.el-select__clear').click();
+    await expect(page.getByTestId('selected-id')).toBeEmpty();
+    await expect(page.getByTestId('selected-value')).toBeEmpty();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  });
+}
+
+test('same-name historical text stays unlinked until an explicit selection', async ({ page }) => {
+  const state = await setup(page, { value: '杭州', referenceId: null });
+  await expect.poll(() => state.gets).toBeGreaterThan(0);
+  await expect(page.getByTestId('selected-id')).toBeEmpty();
+  expect(await page.evaluate(() => (window as any).__changes)).toEqual([]);
+  await page.getByRole('combobox').click();
+  await page.getByRole('option', { name: '杭州', exact: true }).click();
+  await expect(page.getByTestId('selected-id')).toHaveText('hz');
+  await expect(page.getByTestId('selected-value')).toHaveText('杭州');
+});
 
 for (const width of [1440, 1024, 390, 320]) {
   test(`directory create rename and disable preserves filters at ${width}px`, async ({ page }) => {
@@ -103,7 +138,7 @@ for (const width of [1440, 1024, 390, 320]) {
     await expect(page.getByRole('textbox', { name: '搜索工作地点名称' })).toHaveValue('上海');
     const renamed = page.locator(width <= 390 ? '.mobile-result-card' : '.el-table__row').filter({ hasText: '上海长名称更新后的项目服务中心' });
     await renamed.getByRole('button', { name: '停用', exact: true }).click();
-    await expect(page.getByText('已有任职和岗位的原值仍保留', { exact: false })).toBeVisible();
+    await expect(page.getByText('原值仍保留', { exact: false })).toBeVisible();
     await page.getByRole('button', { name: '停用工作地点', exact: true }).click();
     await expect(renamed.getByText('停用', { exact: true }).first()).toBeVisible();
     expect(state.writes).toHaveLength(3);

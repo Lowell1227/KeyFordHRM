@@ -1,4 +1,5 @@
-import { normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
+import { normalizeEmployeePosition, requireEmployeePosition } from './employee-position-reference';
+import { assertSubmittedEmployeeCompany, normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
 import { companyTenure } from '@/common/personnel/company-tenure';
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -50,14 +51,17 @@ export interface CreateEmploymentRecordInput {
   contractSubjectId?: string | null;
   effectiveFrom: Date;
   effectiveTo?: Date | null;
-  company: CompanyCode;
+  company?: CompanyCode | null;
   deptId?: string | null;
   position?: string | null;
   positionId?: string | null;
   jobGrade?: string | null;
+  jobGradeId?: string | null;
   jobFamily?: string | null;
+  jobFamilyId?: string | null;
   directManagerId?: string | null;
   workLocation?: string | null;
+  workLocationId?: string | null;
   employmentType: EmploymentType;
   employeeStatus: UserStatus;
   entryDate?: Date | null;
@@ -117,6 +121,7 @@ export class EmployeeArchivesService {
       }) : null;
       if (sourceDraft?.sourceSystem === 'archive_assistant_pilot') throw new BadRequestException('测试资料仅可保存待核草稿');
       if (input.draftId) this.assertDraftVersion(sourceDraft, input.expectedVersion);
+      requireEmployeePosition(input.positionId);
       const name = input.name.trim();
       const department = await tx.department.findUnique({
         where: { id: input.deptId },
@@ -128,21 +133,21 @@ export class EmployeeArchivesService {
       const position = input.positionId
         ? await tx.position.findUnique({
           where: { id: input.positionId },
-          select: { id: true, name: true, jobFamily: true, isActive: true },
+          select: { id: true, name: true, jobFamily: true, jobFamilyId: true, isActive: true },
         })
         : null;
       if (input.positionId && !position) {
         throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位不存在' });
       }
       const warnings: string[] = [];
-      if (position && !position.isActive) warnings.push('所选岗位已停用');
+      if (position && !position.isActive) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位已停用，请重新选择', data: { fieldErrors: { 'employee.positionId': '岗位已停用，请重新选择' } } });
       if (input.effectiveTo && input.effectiveTo < input.effectiveFrom) {
         warnings.push('任职结束日期早于生效日期');
       }
       let proposedValue = this.employeeCreateProposedValue(input, position ? {
         id: position.id,
         name: position.name,
-        jobFamily: position.jobFamily,
+        jobFamily: position.jobFamily, jobFamilyId: position.jobFamilyId,
       } : null);
       let draftVersion: number | null = null;
       let savedDraft: Record<string, any> | null = null;
@@ -159,7 +164,10 @@ export class EmployeeArchivesService {
       await this.normalizeSubjectPayload(tx, proposedValue, {}, this.record(savedDraft?.proposedValue));
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
       await this.validateSubjectPayload(tx, proposedValue, {});
-      await validatePersonnelReferences(tx, proposedValue);
+      assertSubmittedEmployeeCompany(this.record(proposedValue.employee));
+      const referenceBase = await normalizeEmployeePosition(tx, this.record(proposedValue.employee), {}, true);
+      await validatePersonnelReferences(tx, proposedValue, { employee: referenceBase });
+      proposedValue.referenceSnapshotVersion = 1;
       assertValidContractChanges(proposedValue.contracts as Record<string, unknown>[]);
       await this.assertEmployeeCreateIdentity(
         tx,
@@ -354,13 +362,13 @@ export class EmployeeArchivesService {
 
   private employeeCreateProposedValue(
     input: Partial<CreateEmployeeDto>,
-    resolvedPosition: { id: string; name: string; jobFamily: string | null } | null,
+    resolvedPosition: { id: string; name: string; jobFamily: string | null; jobFamilyId?: string | null } | null,
   ): Record<string, unknown> {
     const phone = input.phone?.trim()
       .replace(/[\s-]/g, '')
       .replace(/^\+86/, '') || null;
     const inputEmployee = this.pickFields(this.record(input.employee), [
-      'position', 'jobGrade', 'jobFamily', 'workLocation', 'probationMonths',
+      'position', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId', 'workLocation', 'workLocationId', 'probationMonths',
       'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'contractSubjectId', 'companyText',
     ]);
     const employee: Record<string, unknown> = {
@@ -373,6 +381,9 @@ export class EmployeeArchivesService {
       positionId: resolvedPosition?.id ?? input.positionId ?? null,
       position: resolvedPosition?.name ?? inputEmployee.position ?? null,
       jobFamily: resolvedPosition ? resolvedPosition.jobFamily : inputEmployee.jobFamily ?? null,
+      jobFamilyId: resolvedPosition ? resolvedPosition.jobFamilyId ?? null : inputEmployee.jobFamilyId ?? null,
+      jobGradeId: inputEmployee.jobGradeId ?? null,
+      workLocationId: inputEmployee.workLocationId ?? null,
       jobGrade: inputEmployee.jobGrade ?? null,
       workLocation: inputEmployee.workLocation ?? null,
       probationMonths: inputEmployee.probationMonths ?? null,
@@ -388,10 +399,10 @@ export class EmployeeArchivesService {
       changeType: 'hire',
     };
     const inputProfile = this.pickFields(this.record(input.profile), [
-      'phone', 'gender', 'birthDate', 'ethnicity', 'education', 'professionalTitle', 'school',
-      'graduationDate', 'major', 'maritalStatus', 'childrenStatus', 'childrenCount', 'politicalStatus',
-      'nativePlace', 'householdType', 'idAddress', 'idNumber', 'currentAddress',
-      'emergencyContactName', 'emergencyContactRelation', 'emergencyContactPhone',
+      'phone', 'gender', 'birthDate', 'ethnicity', 'education', 'educationId', 'professionalTitle', 'school',
+      'graduationDate', 'major', 'maritalStatus', 'maritalStatusId', 'childrenStatus', 'childrenCount', 'politicalStatus', 'politicalStatusId',
+      'nativePlace', 'householdType', 'householdTypeId', 'idAddress', 'idNumber', 'currentAddress',
+      'emergencyContactName', 'emergencyContactRelation', 'emergencyContactRelationId', 'emergencyContactPhone',
       'socialSecurityStatus', 'socialSecurityStartDate', 'housingFundStatus', 'housingFundStartDate',
       'bankName', 'bankBranch', 'bankAccount',
     ]);
@@ -992,22 +1003,22 @@ export class EmployeeArchivesService {
             gender: true,
             birthDate: true,
             ethnicity: true,
-            education: true,
+            education: true, educationId: true,
             professionalTitle: true,
             school: true,
             graduationDate: true,
             major: true,
-            maritalStatus: true,
+            maritalStatus: true, maritalStatusId: true,
             childrenStatus: true,
             childrenCount: true,
-            politicalStatus: true,
+            politicalStatus: true, politicalStatusId: true,
             nativePlace: true,
-            householdType: true,
+            householdType: true, householdTypeId: true,
             idAddress: true,
             idNumberFingerprint: true,
             currentAddress: true,
             emergencyContactName: true,
-            emergencyContactRelation: true,
+            emergencyContactRelation: true, emergencyContactRelationId: true,
             emergencyContactPhone: true,
             socialSecurityStatus: true,
             socialSecurityStartDate: true,
@@ -1259,6 +1270,10 @@ export class EmployeeArchivesService {
       const savedEmployee = profileApproved
         ? await this.appliedEmployeeReviewData(client as Prisma.TransactionClient, this.record(profileBase.employee), this.record(savedBase.employee), this.record(savedProposal.performance))
         : this.record(profileBase.employee);
+      const sourceEmployment = profileApproved ? user.employmentHistory.find(item => item.sourceRequestId === existing!.id) : undefined;
+      if (sourceEmployment && sourceEmployment.positionId === savedEmployee.positionId) {
+        for (const field of ['position', 'jobFamily', 'jobFamilyId'] as const) savedEmployee[field] = sourceEmployment[field] ?? null;
+      }
       const savedProfile = profileApproved ? this.appliedProfileReviewData(this.record(profileBase.profile)) : this.record(profileBase.profile);
       const profileKeys = [...new Set([...Object.keys(savedProfile), ...Object.keys(baseProfile)])]
         .filter(key => !['idNumberEncrypted', 'bankAccountEncrypted'].includes(key));
@@ -1278,18 +1293,23 @@ export class EmployeeArchivesService {
     }
     if (recordStatus === 'submitted') {
       input = normalizeArchiveSubmission(input, { employee: baseEmployee, profile: baseProfile, contracts: baseContracts });
-      let referenceGrade: string | null = null;
-      if (typeof input.employee.jobGrade === 'string' && input.employee.jobGrade.trim()) {
-        // Directory exemptions follow the displayed formal employment, without changing the proposal/CAS baseline.
-        const pending = user.employmentHistory.filter(item => item.sourceRequest?.requiresArrivalConfirmation
-          && !item.sourceRequest.arrivalConfirmedAt);
-        const formal = user.employmentHistory.filter(item => !pending.includes(item));
-        const referenceEmployment = (user.status === UserStatus.pending_entry ? pending[0] : null)
-          ?? selectEmploymentAt(formal, shanghaiBusinessDate()).current ?? formal[0];
-        referenceGrade = referenceEmployment?.jobGrade ?? null;
+      const hasReferenceInput = ['jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId', 'workLocation', 'workLocationId']
+        .some(key => input.employee[key] != null && input.employee[key] !== '');
+      const pending = user.employmentHistory.filter(item => item.sourceRequest?.requiresArrivalConfirmation && !item.sourceRequest.arrivalConfirmedAt);
+      const formal = user.employmentHistory.filter(item => !pending.includes(item));
+      const referenceEmployment = hasReferenceInput
+        ? (user.status === UserStatus.pending_entry ? pending[0] : null) ?? selectEmploymentAt(formal, shanghaiBusinessDate()).current ?? formal[0]
+        : employment;
+      const formalReference = this.employeeReviewData(user, referenceEmployment);
+      const referenceEmployee = { ...baseEmployee, ...input.employee };
+      const referenceBase = await normalizeEmployeePosition(client as Prisma.TransactionClient, referenceEmployee, formalReference);
+      await validatePersonnelReferences(client as Prisma.TransactionClient,
+        { employee: referenceEmployee, profile: input.profile }, { employee: referenceBase, profile: baseProfile });
+      for (const key of Object.keys(referenceEmployee)) {
+        if (key in input.employee || ['positionId', 'position', 'jobFamily', 'jobFamilyId', 'jobGrade', 'jobGradeId', 'workLocation', 'workLocationId'].includes(key)) {
+          input.employee[key] = referenceEmployee[key];
+        }
       }
-      await validatePersonnelReferences(client as Prisma.TransactionClient, input,
-        { employee: { jobGrade: referenceGrade }, profile: baseProfile });
       assertValidContractChanges(input.contracts ?? baseContracts, baseContracts);
     }
     // An applied employment continues to reference the original request. Keep its
@@ -1328,18 +1348,9 @@ export class EmployeeArchivesService {
           && this.sameReviewRecord(input.employee, previousEmployee, [key])) proposedEmployee[key] = baseEmployee[key];
       }
     }
-    if (recordStatus === 'submitted' && proposedEmployee.positionId
-      && ['positionId', 'position', 'jobFamily'].some(key => key in input.employee
-        && !this.sameReviewRecord(proposedEmployee, baseEmployee, [key]))) {
-      const position = await (client as Prisma.TransactionClient).position.findUnique({
-        where: { id: String(proposedEmployee.positionId) }, select: { id: true, name: true, jobFamily: true },
-      });
-      if (!position) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位不存在，请重新选择',
-        data: { fieldErrors: { 'employee.positionId': '岗位不存在，请重新选择' } } });
-      proposedEmployee.position = position.name;
-      proposedEmployee.jobFamily = position.jobFamily;
+    if (recordStatus === 'draft' && input.employee.positionId === null && baseEmployee.positionId != null) {
+      proposedEmployee.position = null; proposedEmployee.jobFamily = null; proposedEmployee.jobFamilyId = null;
     }
-    if (input.employee.positionId === null && baseEmployee.positionId != null) proposedEmployee.position = null;
     if (user.status === UserStatus.resigned && proposedEmployee.employeeStatus !== UserStatus.resigned) {
       throw new ConflictException('已离职员工请通过“办理再入职”生成新工号，不能直接修改为在职');
     }
@@ -1372,9 +1383,6 @@ export class EmployeeArchivesService {
       { employee: baseEmployee, contracts: baseContracts }, this.record(existing?.proposedValue));
     if (recordStatus === 'submitted') await this.validateSubjectPayload(client as Prisma.TransactionClient,
       { employee: proposedEmployee, contracts: proposedContracts }, { employee: baseEmployee, contracts: baseContracts });
-    if (recordStatus === 'submitted' && proposedEmployee.company == null && baseEmployee.company != null) {
-      throw new BadRequestException('所属公司内部代码无效，请重新选择所属公司');
-    }
     const proposedPerformance = {
       managerId: user.directManagerId,
       ...(input.performance && 'managerId' in input.performance ? { managerId: input.performance.managerId } : {}),
@@ -1385,8 +1393,8 @@ export class EmployeeArchivesService {
     const comparableEmployee = proposedEmployee;
     const comparableProfile = proposedProfile;
     const profileChanged = !this.sameReviewRecord(baseEmployee, comparableEmployee, [
-      'employeeNo', 'name', 'phone', 'company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade',
-      'jobFamily', 'managerId', 'workLocation', 'employmentType', 'employeeStatus', 'entryDate',
+      'employeeNo', 'name', 'phone', 'company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobGradeId',
+      'jobFamily', 'jobFamilyId', 'managerId', 'workLocation', 'workLocationId', 'employmentType', 'employeeStatus', 'entryDate',
       'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths',
     ])
       || !this.sameReviewRecord(baseProfile, comparableProfile, [...new Set([...Object.keys(baseProfile), ...Object.keys(comparableProfile)])]
@@ -1395,9 +1403,15 @@ export class EmployeeArchivesService {
     const performanceManagerId = performanceApproved
       ? await this.appliedPerformanceManagerId(client as Prisma.TransactionClient, proposedPerformance) : proposedPerformance.managerId ?? null;
     const performanceChanged = performanceManagerId !== (user.directManagerId ?? null);
+    const retainedBase = this.record(existing?.baseValue);
+    if (existing && this.record(retainedBase.employee).contractSubjectId === undefined) {
+      // The saved fields already passed the formal-baseline check above. An old
+      // omitted reference must keep the current company through apply validation.
+      retainedBase.employee = { ...this.record(retainedBase.employee), contractSubjectId: baseEmployee.contractSubjectId };
+    }
     const data = {
       baseValue: existing
-        ? this.toJson(this.baseValueWithDirectChanges(existing.baseValue, directChanges))
+        ? this.toJson(this.baseValueWithDirectChanges(retainedBase, directChanges))
         : this.toJson({
         employee: baseEmployee,
         profile: baseProfile,
@@ -1406,6 +1420,7 @@ export class EmployeeArchivesService {
         performance: { managerId: user.directManagerId },
       }),
       proposedValue: this.toJson(this.baseValueWithDirectChanges({
+        ...(recordStatus === 'submitted' ? { referenceSnapshotVersion: 1 } : {}),
         employee: proposedEmployee,
         profile: proposedProfile,
         contracts: proposedContracts,
@@ -1597,33 +1612,22 @@ export class EmployeeArchivesService {
       effectiveTo: input.effectiveTo ?? null,
     });
 
-    const position = input.positionId
-      ? await this.prisma.position.findUnique({
-        where: { id: input.positionId },
-        select: { id: true, name: true, jobFamily: true, isActive: true },
-      })
-      : null;
-    if (input.positionId && !position) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位不存在' });
-    }
-    if (position && !position.isActive) warnings.push('所选岗位已停用');
-
     const currentEmployment = user.employmentHistory[0] ?? null;
     const baseEmployee = this.employeeReviewData(user, currentEmployment);
-    const positionChanged = !currentEmployment || (position?.id ?? null) !== this.nullableString(baseEmployee.positionId);
     const proposedEmployee = {
       ...baseEmployee,
-      company: input.company,
+      company: input.company === undefined ? baseEmployee.company : input.company,
       ...(input.contractSubjectId !== undefined ? { contractSubjectId: input.contractSubjectId } : {}),
       deptId: input.deptId ?? null,
-      positionId: position?.id ?? null,
-      position: position?.name ?? (input.position !== undefined ? input.position : positionChanged ? null : baseEmployee.position),
+      positionId: input.positionId === undefined ? baseEmployee.positionId : input.positionId,
+      position: input.position !== undefined ? input.position : baseEmployee.position,
       jobGrade: input.jobGrade !== undefined ? input.jobGrade : baseEmployee.jobGrade,
-      jobFamily: position && (positionChanged || (input.jobFamily !== undefined
-        && this.nullableString(input.jobFamily) !== this.nullableString(baseEmployee.jobFamily))) ? position.jobFamily
-        : input.jobFamily !== undefined ? input.jobFamily : positionChanged ? null : baseEmployee.jobFamily,
+      jobFamily: input.jobFamily === undefined ? baseEmployee.jobFamily : input.jobFamily,
+      jobFamilyId: input.jobFamilyId === undefined ? baseEmployee.jobFamilyId : input.jobFamilyId,
+      jobGradeId: input.jobGradeId === undefined ? baseEmployee.jobGradeId : input.jobGradeId,
+      workLocationId: input.workLocationId === undefined ? baseEmployee.workLocationId : input.workLocationId,
       managerId: input.directManagerId ?? null,
-      workLocation: input.workLocation ?? null,
+      workLocation: input.workLocation === undefined ? baseEmployee.workLocation : input.workLocation,
       employmentType: input.employmentType,
       employeeStatus: input.employeeStatus,
       entryDate: input.entryDate ?? user.entryDate ?? null,
@@ -1639,7 +1643,8 @@ export class EmployeeArchivesService {
     if (input.contractSubjectId === undefined) delete proposedEmployee.contractSubjectId;
     await normalizeContractSubject(this.prisma, proposedEmployee as Record<string, unknown>, baseEmployee, 'companyText');
     await validateContractSubject(this.prisma, proposedEmployee as Record<string, unknown>, baseEmployee, 'companyText');
-    await validatePersonnelReferences(this.prisma, { employee: proposedEmployee }, { employee: baseEmployee });
+    const referenceBase = await normalizeEmployeePosition(this.prisma, proposedEmployee, baseEmployee);
+    await validatePersonnelReferences(this.prisma, { employee: proposedEmployee }, { employee: referenceBase });
     const profile = this.profileReviewData(user.employeeProfile);
     const view = employeeDataChangeView(await this.prisma.employeeDataChangeRequest.create({
       data: {
@@ -1656,6 +1661,7 @@ export class EmployeeArchivesService {
           performance: { managerId: user.directManagerId },
         }),
         proposedValue: this.toJson({
+          referenceSnapshotVersion: 1,
           employee: proposedEmployee,
           profile,
           contracts: [],
@@ -1815,9 +1821,12 @@ export class EmployeeArchivesService {
       positionId: user.positionId ?? employment?.positionId ?? null,
       position: user.position ?? employment?.position ?? null,
       jobGrade: employment?.jobGrade ?? null,
+      jobGradeId: employment?.jobGradeId ?? null,
       jobFamily: employment?.jobFamily ?? null,
+      jobFamilyId: employment?.jobFamilyId ?? null,
       managerId: employment?.directManagerId ?? null,
       workLocation: employment?.workLocation ?? null,
+      workLocationId: employment?.workLocationId ?? null,
       employmentType: user.employmentType ?? employment?.employmentType ?? EmploymentType.full_time,
       employeeStatus: user.status ?? employment?.employeeStatus ?? UserStatus.active,
       entryDate: user.entryDate ?? employment?.entryDate ?? null,
@@ -1890,7 +1899,7 @@ export class EmployeeArchivesService {
     }
     await client.employeeProfile.upsert({
       where: { userId: user.id },
-      create: { user: { connect: { id: user.id } }, ...directChanges } as Prisma.EmployeeProfileCreateInput,
+      create: { userId: user.id, ...directChanges } as Prisma.EmployeeProfileUncheckedCreateInput,
       update: directChanges,
     });
     user.employeeProfile = { ...profile, ...directChanges };
@@ -1936,7 +1945,7 @@ export class EmployeeArchivesService {
     }
 
     const changedKeys = Object.keys(directChanges);
-    directApplied.push(...changedKeys.map(key => DIRECT_APPLY_PROFILE_FIELD_LABELS[key as DirectApplyProfileField] ?? key));
+    directApplied.push(...new Set(changedKeys.map(key => DIRECT_APPLY_PROFILE_FIELD_LABELS[key as DirectApplyProfileField] ?? key)));
   }
 
   /** 把免审直改后的字段值回填进审核单 base 快照，保持审批基准与正式档案一致。 */
@@ -2017,31 +2026,22 @@ export class EmployeeArchivesService {
     return applied;
   }
 
-  private async reviewedManagerByName(client: Prisma.TransactionClient, name: string): Promise<string | null> {
-    const candidates = await client.user.findMany({ where: { name, deletedAt: null, accountType: AccountType.employee,
-      status: { in: CURRENT_WORKER_STATUSES } }, select: { id: true }, take: 2 });
-    return candidates.length === 1 ? candidates[0].id : null;
-  }
-
-  private async appliedPerformanceManagerId(client: Prisma.TransactionClient, performance: Record<string, unknown>): Promise<string | null> {
-    const id = typeof performance.managerId === 'string' ? performance.managerId : null;
-    const name = this.nullableString(performance.managerName);
-    return !id && name ? this.reviewedManagerByName(client, name) : id;
+  private async appliedPerformanceManagerId(_client: Prisma.TransactionClient, performance: Record<string, unknown>): Promise<string | null> {
+    return typeof performance.managerId === 'string' ? performance.managerId : null;
   }
 
   private async appliedEmployeeReviewData(client: Prisma.TransactionClient, employee: Record<string, unknown>,
     previous: Record<string, unknown>, performance: Record<string, unknown>, reviewedEmployee = employee): Promise<Record<string, unknown>> {
     const comparable = (value: unknown) => value == null || value === '' ? 'null' : value instanceof Date ? value.toISOString() : String(value);
-    const writesEmployment = ['company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily',
-      'managerId', 'managerName', 'workLocation', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths']
+    const writesEmployment = ['company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId',
+      'managerId', 'managerName', 'workLocation', 'workLocationId', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths']
       .some(key => comparable(previous[key]) !== comparable(reviewedEmployee[key]));
-    const employmentOnly = new Set(['company', 'companyText', 'contractSubjectId', 'jobGrade', 'jobFamily', 'managerId', 'workLocation', 'probationMonths']);
+    const employmentOnly = new Set(['company', 'companyText', 'contractSubjectId', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId', 'managerId', 'workLocation', 'workLocationId', 'probationMonths']);
     const applied = { ...employee };
-    for (const key of ['name', 'employeeNo', 'phone', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'workLocation', 'companyText', 'contractSubjectId']) {
+    for (const key of ['name', 'employeeNo', 'phone', 'deptId', 'positionId', 'position', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId', 'managerId', 'workLocation', 'workLocationId', 'companyText', 'contractSubjectId']) {
       if (key in applied && (writesEmployment || !employmentOnly.has(key))) applied[key] = this.nullableString(applied[key]);
     }
     for (const [key, options, fallback] of [
-      ['company', Object.values(CompanyCode), CompanyCode.fuede],
       ['employmentType', Object.values(EmploymentType), EmploymentType.full_time],
       ['employeeStatus', Object.values(UserStatus), UserStatus.active],
     ] as const) {
@@ -2051,21 +2051,6 @@ export class EmployeeArchivesService {
       if (key in applied) applied[key] = this.nullableAppliedDate(applied[key]);
     }
     if (writesEmployment && 'probationMonths' in applied && typeof applied.probationMonths !== 'number') applied.probationMonths = null;
-    if (applied.positionId) {
-      const position = await client.position.findUnique({ where: { id: String(applied.positionId) }, select: { id: true, name: true, jobFamily: true } });
-      if (!position) throw new ConflictException('已通过档案的岗位已变化，请重新核对最新档案');
-      applied.position = position.name;
-      if (writesEmployment && (this.nullableString(reviewedEmployee.positionId) !== this.nullableString(previous.positionId)
-        || this.nullableString(reviewedEmployee.jobFamily) !== this.nullableString(previous.jobFamily))) {
-        applied.jobFamily = position.jobFamily;
-      }
-    }
-    const managerName = this.nullableString(employee.managerName);
-    if (writesEmployment && !applied.managerId && managerName) {
-      const suggestedId = this.nullableString(performance.managerId);
-      applied.managerId = suggestedId && this.nullableString(performance.managerName) === managerName
-        ? suggestedId : await this.reviewedManagerByName(client, managerName);
-    }
     if (writesEmployment && employee.contractSubjectId === undefined && 'contractSubjectId' in previous) applied.contractSubjectId = previous.contractSubjectId;
     if (writesEmployment && (employee.companyText === undefined || (employee.contractSubjectId === undefined && previous.contractSubjectId))) {
       applied.companyText = this.nullableString(previous.companyText);

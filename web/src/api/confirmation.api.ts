@@ -21,20 +21,21 @@ export const confirmationApi = {
   },
 
   /** 新流程：员工本人保存工作小结。 */
-  saveSelfDraft(id: string, summary: string): Promise<ConfirmationApplication> {
-    return http.put(`/confirmation-applications/${id}`, { summary }, { skipErrorMessage: true }) as unknown as Promise<ConfirmationApplication>;
+  saveSelfDraft(id: string, summary: string, submissionVersion: number | undefined): Promise<ConfirmationApplication> {
+    return http.put(`/confirmation-applications/${id}`, { summary, submissionVersion }, { skipErrorMessage: true }) as unknown as Promise<ConfirmationApplication>;
   },
 
   /** 新流程：员工本人提交。 */
-  submitSelf(id: string): Promise<{ id: string; status: string }> {
-    return http.post(`/confirmation-applications/${id}/submit`, {}, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  submitSelf(id: string, submissionVersion: number | undefined): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/submit`, { submissionVersion }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
   },
 
-  submitManagerEvaluation(id: string, recommendation: boolean, comment: string): Promise<{ id: string; status: string }> {
-    return http.post(`/confirmation-applications/${id}/approve`, { recommendation, comment }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  submitManagerEvaluation(id: string, recommendation: boolean, comment: string, submissionVersion: number | undefined): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/approve`, { recommendation, comment, submissionVersion }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
   },
 
   submitHrConclusion(id: string, body: {
+    submissionVersion: number | undefined;
     voteResult: 'pass' | 'extend' | 'fail';
     voteComment?: string;
     meetingDate?: string;
@@ -44,9 +45,10 @@ export const confirmationApi = {
     return http.post(`/confirmation-applications/${id}/approve`, body, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
   },
 
-  uploadMeetingAttachment(id: string, file: File): Promise<{ id: string; name: string; size: number; mimeType: string; uploadedById: string; createdAt: string }> {
+  uploadMeetingAttachment(id: string, file: File, submissionVersion: number | undefined): Promise<{ id: string; name: string; size: number; mimeType: string; uploadedById: string; createdAt: string }> {
     const formData = new FormData();
     formData.append('file', file);
+    if (submissionVersion !== undefined) formData.append('submissionVersion', String(submissionVersion));
     return http.post(`/confirmation-applications/${id}/meeting-attachments`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' }, skipErrorMessage: true,
     }) as unknown as Promise<{ id: string; name: string; size: number; mimeType: string; uploadedById: string; createdAt: string }>;
@@ -58,20 +60,20 @@ export const confirmationApi = {
     }).then((response) => (response as unknown as { data: Blob }).data);
   },
 
-  backfillMeetingDate(id: string, meetingDate: string): Promise<{ id: string; meetingDate: string }> {
-    return http.put(`/confirmation-applications/${id}/meeting-date`, { meetingDate }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; meetingDate: string }>;
+  backfillMeetingDate(id: string, meetingDate: string, submissionVersion: number | undefined): Promise<{ id: string; meetingDate: string }> {
+    return http.put(`/confirmation-applications/${id}/meeting-date`, { meetingDate, submissionVersion }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; meetingDate: string }>;
   },
 
-  approveCompany(id: string, confirmedRegularDate: string, comment?: string): Promise<{ id: string; status: string }> {
-    return http.post(`/confirmation-applications/${id}/approve`, { confirmedRegularDate, comment }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  approveCompany(id: string, confirmedRegularDate: string, submissionVersion: number | undefined, comment?: string): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/approve`, { confirmedRegularDate, comment, submissionVersion }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
   },
 
-  declineCompany(id: string, reason?: string): Promise<{ id: string; status: string }> {
-    return http.post(`/confirmation-applications/${id}/reject`, { reason }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  declineCompany(id: string, submissionVersion: number | undefined, reason?: string): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/reject`, { reason, submissionVersion }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
   },
 
-  returnForSupplement(id: string, reason: string): Promise<{ id: string; status: string; returnReason: string }> {
-    return http.post(`/confirmation-applications/${id}/return`, { reason }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string; returnReason: string }>;
+  returnForSupplement(id: string, reason: string, submissionVersion: number | undefined): Promise<{ id: string; status: string; returnReason: string }> {
+    return http.post(`/confirmation-applications/${id}/return`, { reason, submissionVersion }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string; returnReason: string }>;
   },
 
   /** GET /confirmation-applications — HR 管理列表 */

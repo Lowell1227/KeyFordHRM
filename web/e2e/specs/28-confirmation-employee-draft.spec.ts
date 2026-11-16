@@ -14,6 +14,7 @@ test.beforeEach(async ({ page }) => {
 async function mockEmployeePage(page: import('@playwright/test').Page, status: 'probation' | 'active') {
   let draft: Record<string, unknown> | null = null;
   const createBodies: unknown[] = [];
+  const writeBodies: unknown[] = [];
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-confirmation-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -27,7 +28,7 @@ async function mockEmployeePage(page: import('@playwright/test').Page, status: '
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path.endsWith('/my-roster')) return route.fulfill({ json: apiResponse({
-      name: '试用期员工', employeeNo: 'E001', company: 'fuede', deptName: '业务部', position: '业务专员',
+      name: '试用期员工', employeeNo: 'E001', company: 'fuede', companyText: '虚构任职公司', deptName: '业务部', position: '业务专员',
       entryDate: '2026-07-01', plannedRegularDate: '2026-10-01', managerName: '花名册直属主管',
     }) });
     if (path.endsWith('/mine')) {
@@ -37,7 +38,7 @@ async function mockEmployeePage(page: import('@playwright/test').Page, status: '
     if (request.method() === 'POST' && path.endsWith('/confirmation-applications')) {
       createBodies.push(request.postDataJSON());
       draft = {
-        id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, status: 'draft',
+        id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, submissionVersion: 0, status: 'draft',
         employeeId: 'employee-1', employee: { id: 'employee-1', name: '试用期员工' },
         manager: { id: 'manager-1', name: '花名册直属主管' }, hr: null, companyApprover: null,
         summary: (request.postDataJSON() as { summary: string }).summary, actualRegularDate: null,
@@ -45,10 +46,12 @@ async function mockEmployeePage(page: import('@playwright/test').Page, status: '
       return route.fulfill({ json: apiResponse(draft) });
     }
     if (request.method() === 'PUT' && draft) {
+      writeBodies.push(request.postDataJSON());
       draft = { ...draft, summary: (request.postDataJSON() as { summary: string }).summary };
       return route.fulfill({ json: apiResponse(draft) });
     }
     if (request.method() === 'POST' && path.endsWith('/submit') && draft) {
+      writeBodies.push(request.postDataJSON());
       draft = { ...draft, status: 'submitted', hr: null,
         companyApprover: { id: 'approver-1', name: '公司审批人' } };
       return route.fulfill({ json: apiResponse({ id: draft.id, status: 'submitted' }) });
@@ -56,14 +59,16 @@ async function mockEmployeePage(page: import('@playwright/test').Page, status: '
     if (request.method() === 'GET' && draft) return route.fulfill({ json: apiResponse(draft) });
     return route.fulfill({ status: 404, json: { message: '未找到' } });
   });
-  return { createBodies };
+  return { createBodies, writeBodies };
 }
 
 test('probation employee saves a draft then submits without HR assignment', async ({ page }) => {
-  const { createBodies } = await mockEmployeePage(page, 'probation');
+  const { createBodies, writeBodies } = await mockEmployeePage(page, 'probation');
   await page.goto('/confirmation-applications/mine');
   await page.getByRole('button', { name: '发起转正申请' }).click();
   const dialog = page.getByRole('dialog', { name: '转正申请 · 工作小结' });
+  await expect(dialog.getByTestId('confirmation-roster-check')).toContainText('虚构任职公司');
+  await expect(dialog.getByTestId('confirmation-roster-check')).not.toContainText('孚德');
   await expect(dialog).toContainText('业务部 / 业务专员');
   await expect(dialog).toContainText('2026-10-01');
   await dialog.getByRole('button', { name: '提交转正申请' }).click();
@@ -80,6 +85,10 @@ test('probation employee saves a draft then submits without HR assignment', asyn
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole('button', { name: '继续填写' })).toHaveCount(0);
   await expect(page.getByText('公司审批人').first()).toBeVisible();
+  expect(writeBodies).toEqual([
+    { summary: '完成项目交付，继续改进协作', submissionVersion: 0 },
+    { submissionVersion: 0 },
+  ]);
 });
 
 test('formal employee has no new probation application action on mobile', async ({ page }) => {
@@ -118,16 +127,17 @@ test('the same person completes manager evaluation before a separate HR step', a
       return route.fulfill({ json: apiResponse({ id: '11111111-1111-4111-8111-111111111111', status }) });
     }
     return route.fulfill({ json: apiResponse({
-      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, status,
+      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, submissionVersion: 2, status,
       employeeId: 'employee-1', employee: { id: 'employee-1', name: '试用期员工' },
       managerId: 'manager-1', manager: { id: 'manager-1', name: '花名册直属主管' },
       hrId: 'hr-1', hr: { id: 'hr-1', name: 'HR 办理人' },
       companyApproverId: 'approver-1', companyApprover: { id: 'approver-1', name: '公司审批人' },
       summary: '完成项目交付，继续改进协作', salary: null, actualRegularDate: null,
+      roster: { company: 'fuede', companyText: '虚构任职公司', deptName: '业务部', position: '业务专员' },
       canApprove: ['submitted', 'manager_approved'].includes(status), canReturn: true, canReject: false,
       pendingRole: status === 'submitted' ? 'manager' : 'hr',
       history: [
-        { id: 'history-submit', label: '员工提交申请', actorName: '试用期员工', occurredAt: '2026-09-15T02:32:00.000Z', submissionVersion: 1, note: null },
+        { id: 'history-submit', label: '员工提交申请', actorName: '试用期员工', occurredAt: '2026-09-15T02:32:00.000Z', submissionVersion: 2, note: null },
       ],
       steps: [
         { role: 'manager', status: 'pending', approver: { id: 'manager-1', name: '花名册直属主管' }, comment: null, actedAt: null },
@@ -137,6 +147,8 @@ test('the same person completes manager evaluation before a separate HR step', a
     }) });
   });
   await page.goto('/confirmation-applications/11111111-1111-4111-8111-111111111111');
+  await expect(page.getByText('虚构任职公司', { exact: true })).toBeVisible();
+  await expect(page.getByText('孚德', { exact: true })).toHaveCount(0);
   const performanceHelp = page.getByLabel('绩效参考说明');
   await expect(performanceHelp).toBeVisible();
   await expect(page.getByText('仅展示您按绩效模块原有权限可见的记录；绩效等级以已发布的正式结果为准。', { exact: true })).toHaveCount(0);
@@ -145,7 +157,7 @@ test('the same person completes manager evaluation before a separate HR step', a
   const approvalTimeline = page.getByTestId('confirmation-approval-timeline');
   await expect(approvalTimeline).toBeVisible();
   await expect(approvalTimeline.locator('.approval-timeline__title').filter({ hasText: '员工提交申请' })).toBeVisible();
-  await expect(approvalTimeline.getByText('直属主管', { exact: true })).toBeVisible();
+  await expect(approvalTimeline.locator('.approval-timeline__title').filter({ hasText: '直属主管' })).toBeVisible();
   await expect(approvalTimeline.getByText('待办理', { exact: true })).toBeVisible();
   await expect(page.getByText('办理记录（1）', { exact: true })).toHaveCount(0);
   await page.getByText('查看可见的绩效记录（最近 2 条）').click();
@@ -160,7 +172,7 @@ test('the same person completes manager evaluation before a separate HR step', a
   await managerDialog.getByText('暂不建议转正', { exact: true }).click();
   await managerDialog.getByPlaceholder('请说明工作表现和评价原因').fill('需要继续改进协作');
   await managerDialog.getByRole('button', { name: '提交评价' }).click();
-  await expect.poll(() => submitted).toEqual([{ recommendation: false, comment: '需要继续改进协作' }]);
+  await expect.poll(() => submitted).toEqual([{ submissionVersion: 2, recommendation: false, comment: '需要继续改进协作' }]);
   await expect(managerDialog).not.toBeVisible();
   await expect(page.getByRole('button', { name: '办理', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '办理', exact: true }).click();
@@ -173,6 +185,7 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
   let status = 'manager_approved';
   const attachments: Array<Record<string, unknown>> = [];
   const attachmentContentTypes: string[] = [];
+  const attachmentBodies: string[] = [];
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-hr-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -187,6 +200,7 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === 'POST' && path.endsWith('/meeting-attachments')) {
       attachmentContentTypes.push(route.request().headers()['content-type'] ?? '');
+      attachmentBodies.push(route.request().postData() ?? '');
       const attachment = { id: 'file-1', name: '依据.pdf', size: 12, mimeType: 'application/pdf', uploadedById: 'hr-1', createdAt: new Date().toISOString() };
       attachments.push(attachment);
       return route.fulfill({ json: apiResponse(attachment) });
@@ -197,7 +211,7 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
       return route.fulfill({ json: apiResponse({ id: '11111111-1111-4111-8111-111111111111', status }) });
     }
     return route.fulfill({ json: apiResponse({
-      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, status,
+      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, submissionVersion: 2, status,
       employeeId: 'employee-1', employee: { id: 'employee-1', name: '试用期员工' },
       managerId: 'manager-1', manager: { id: 'manager-1', name: '直属主管' },
       hrId: status === 'hr_approved' ? 'hr-1' : null,
@@ -234,9 +248,10 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
   await expect(hrDialog.getByText('已上传 1 个附件')).toBeVisible();
   expect(attachmentContentTypes).toHaveLength(1);
   expect(attachmentContentTypes[0]).toMatch(/^multipart\/form-data; boundary=/);
+  expect(attachmentBodies[0]).toMatch(/name="submissionVersion"\r\n\r\n2\r\n/);
   await hrDialog.getByRole('button', { name: '提交公司审批' }).click();
   await expect.poll(() => submitted).toHaveLength(1);
-  expect(submitted[0]).toMatchObject({ voteResult: 'extend', proposedRegularDate: '2026-10-01' });
+  expect(submitted[0]).toMatchObject({ submissionVersion: 2, voteResult: 'extend', proposedRegularDate: '2026-10-01' });
   expect(submitted[0]).not.toHaveProperty('meetingDate');
   await expect(hrDialog).not.toBeVisible();
 });
@@ -261,7 +276,7 @@ test('company approver uses one optional reason and two decision buttons on mobi
       return route.fulfill({ json: apiResponse({ id: '11111111-1111-4111-8111-111111111111', status }) });
     }
     return route.fulfill({ json: apiResponse({
-      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, status,
+      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, submissionVersion: 2, status,
       employeeId: 'employee-1', employee: { id: 'employee-1', name: '试用期员工' },
       managerId: 'manager-1', manager: { id: 'manager-1', name: '直属主管' },
       hrId: 'hr-1', hr: { id: 'hr-1', name: 'HR 办理人' },
@@ -270,9 +285,9 @@ test('company approver uses one optional reason and two decision buttons on mobi
       meetingAttachments: [], actualRegularDate: status === 'approved' ? '2026-10-01' : null,
       canApprove: status === 'hr_approved', canReject: status === 'hr_approved', pendingRole: status === 'hr_approved' ? 'company' : null,
       history: [
-        { id: 'history-submit', label: '员工提交申请', actorName: '试用期员工', occurredAt: '2026-09-15T02:32:00.000Z', submissionVersion: 1, note: null },
-        { id: 'history-manager', label: '直属主管提交评价', actorName: '直属主管', occurredAt: '2026-09-15T03:00:00.000Z', submissionVersion: 1, note: null },
-        { id: 'history-hr', label: 'HR 记录线下评议', actorName: 'HR 办理人', occurredAt: '2026-09-15T04:00:00.000Z', submissionVersion: 1, note: null },
+        { id: 'history-submit', label: '员工提交申请', actorName: '试用期员工', occurredAt: '2026-09-15T02:32:00.000Z', submissionVersion: 2, note: null },
+        { id: 'history-manager', label: '直属主管提交评价', actorName: '直属主管', occurredAt: '2026-09-15T03:00:00.000Z', submissionVersion: 2, note: null },
+        { id: 'history-hr', label: 'HR 记录线下评议', actorName: 'HR 办理人', occurredAt: '2026-09-15T04:00:00.000Z', submissionVersion: 2, note: null },
       ],
       steps: [
         { role: 'manager', status: 'approved', approver: { id: 'manager-1', name: '直属主管' }, comment: '建议转正', actedAt: '2026-09-15T03:00:00.000Z' },
@@ -282,7 +297,7 @@ test('company approver uses one optional reason and two decision buttons on mobi
     }) });
   });
   await page.goto('/confirmation-applications/11111111-1111-4111-8111-111111111111');
-  await expect(page.getByTestId('confirmation-approval-timeline').getByText('公司审批', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('confirmation-approval-timeline').locator('.approval-timeline__title').filter({ hasText: '公司审批' })).toBeVisible();
   await expect(page.getByRole('button', { name: '同意转正', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '办理', exact: true }).click();
   const companyDialog = page.getByRole('dialog', { name: '公司最终决定' });
@@ -293,7 +308,7 @@ test('company approver uses one optional reason and two decision buttons on mobi
   await expect(companyDialog.getByRole('button', { name: '退回员工补充' })).toHaveCount(0);
   await companyDialog.getByPlaceholder('请输入理由（选填）').fill('业务确认');
   await companyDialog.getByRole('button', { name: '同意', exact: true }).click();
-  await expect.poll(() => submitted).toEqual([{ confirmedRegularDate: '2026-10-01', comment: '业务确认' }]);
+  await expect.poll(() => submitted).toEqual([{ submissionVersion: 2, confirmedRegularDate: '2026-10-01', comment: '业务确认' }]);
   await expect(companyDialog).not.toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
@@ -335,8 +350,83 @@ test('company approver can decline without filling the optional reason', async (
   await page.getByRole('button', { name: '办理', exact: true }).click();
   const companyDialog = page.getByRole('dialog', { name: '公司最终决定' });
   await companyDialog.getByRole('button', { name: '不同意', exact: true }).click();
-  await expect.poll(() => submitted).toEqual([{}]);
+  await expect.poll(() => submitted).toEqual([{ submissionVersion: 1 }]);
   await expect(companyDialog).not.toBeVisible();
+});
+
+test('stale approval preserves the entered opinion and shows a readable conflict once', async ({ page }) => {
+  const submitted: unknown[] = [];
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-stale-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', route => route.fulfill({ json: apiResponse(0) }));
+  await page.route('**/api/v1/auth/me', route => route.fulfill({ json: apiResponse({
+    id: 'approver-1', name: '虚构审批人', status: 'active', sysRole: 'employee', deptId: null,
+    isAssessorOnly: false, canViewAll: false,
+  }) }));
+  await page.route('**/api/v1/confirmation-applications/**', route => {
+    if (route.request().method() === 'POST') {
+      submitted.push(route.request().postDataJSON());
+      return route.fulfill({ status: 409, json: { code: 409, message: '申请已重新提交，请重新打开后办理' } });
+    }
+    return route.fulfill({ json: apiResponse({
+      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, submissionVersion: 3,
+      status: 'hr_approved', employeeId: 'employee-1', employee: { id: 'employee-1', name: '虚构员工' },
+      companyApproverId: 'approver-1', companyApprover: { id: 'approver-1', name: '虚构审批人' },
+      proposedRegularDate: '2035-03-20', canApprove: true, canReject: true, pendingRole: 'company', steps: [],
+    }) });
+  });
+  await page.goto('/confirmation-applications/11111111-1111-4111-8111-111111111111');
+  await page.getByRole('button', { name: '办理', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '公司最终决定' });
+  await dialog.getByPlaceholder('请输入理由（选填）').fill('保留本页输入');
+  await dialog.getByRole('button', { name: '同意', exact: true }).click();
+  await expect(dialog.getByText('申请已重新提交，请重新打开后办理')).toBeVisible();
+  await expect(dialog.getByPlaceholder('请输入理由（选填）')).toHaveValue('保留本页输入');
+  expect(submitted).toEqual([{ submissionVersion: 3, confirmedRegularDate: '2035-03-20', comment: '保留本页输入' }]);
+  await expect(page.locator('.el-message--error')).toHaveCount(0);
+});
+
+test('company approver can return an old application that needs its employment identified again', async ({ page }) => {
+  const returned: unknown[] = [];
+  let status = 'hr_approved';
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-legacy-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', route => route.fulfill({ json: apiResponse(0) }));
+  await page.route('**/api/v1/auth/me', route => route.fulfill({ json: apiResponse({
+    id: 'approver-1', name: '虚构审批人', status: 'active', sysRole: 'employee', deptId: null,
+    isAssessorOnly: false, canViewAll: false,
+  }) }));
+  await page.route('**/api/v1/confirmation-applications/**', route => {
+    if (route.request().method() === 'POST' && route.request().url().endsWith('/approve')) {
+      return route.fulfill({ status: 409, json: { code: 409, message: '原申请未记录本次任职，请退回员工后重新提交，以确认本次任职' } });
+    }
+    if (route.request().method() === 'POST' && route.request().url().endsWith('/return')) {
+      returned.push(route.request().postDataJSON()); status = 'draft';
+      return route.fulfill({ json: apiResponse({ status }) });
+    }
+    return route.fulfill({ json: apiResponse({
+      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, submissionVersion: 1, status,
+      employeeId: 'employee-1', employee: { id: 'employee-1', name: '虚构员工' },
+      proposedRegularDate: '2035-03-20', canApprove: status === 'hr_approved', canReject: true,
+      canReturn: true, pendingRole: status === 'hr_approved' ? 'company' : null, steps: [],
+    }) });
+  });
+  await page.goto('/confirmation-applications/11111111-1111-4111-8111-111111111111');
+  await page.getByRole('button', { name: '办理', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '公司最终决定' });
+  await dialog.getByRole('button', { name: '同意', exact: true }).click();
+  await expect(dialog.getByText('原申请未记录本次任职，请退回员工后重新提交，以确认本次任职')).toBeVisible();
+  await dialog.getByRole('button', { name: '退回员工', exact: true }).click();
+  await expect(dialog.getByText('请填写退回员工的原因')).toBeVisible();
+  await dialog.getByPlaceholder('请输入理由（选填）').fill('请确认本次任职后重新提交');
+  await dialog.getByRole('button', { name: '退回员工', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(returned).toEqual([{ submissionVersion: 1, reason: '请确认本次任职后重新提交' }]);
 });
 
 test('assigned approver uses the same transfer management filters, columns and row actions as HR', async ({ page }) => {

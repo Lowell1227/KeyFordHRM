@@ -27,6 +27,7 @@ import { StorageService } from '@/storage/storage.service';
 import { BackfillMeetingDateDto } from './dto/backfill-meeting-date.dto';
 import { ReturnConfirmationDto } from './dto/return-confirmation.dto';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
+import { ConfirmationMutationDto } from './dto/confirmation-mutation.dto';
 
 @Controller('confirmation-applications')
 export class ConfirmationController {
@@ -82,8 +83,9 @@ export class ConfirmationController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() viewer: AuthUser,
+    @Body() dto: ConfirmationMutationDto,
   ) {
-    return this.confirmationService.addMeetingAttachment(id, file, viewer);
+    return this.confirmationService.addMeetingAttachment(id, file, viewer, dto);
   }
 
   @Get(':id/meeting-attachments/:attachmentId/download')
@@ -121,8 +123,8 @@ export class ConfirmationController {
   }
 
   @Post(':id/submit')
-  submit(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
-    return this.confirmationService.submit(id, viewer);
+  submit(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser, @Body() dto: ConfirmationMutationDto) {
+    return this.confirmationService.submit(id, viewer, dto);
   }
 
   @Post(':id/return')

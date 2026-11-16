@@ -12,7 +12,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: string | null];
   'update:snapshotName': [value: string | null];
-  'update:company': [value: string | null];
 }>();
 const legacyCompany = computed(() => {
   const names: Record<string, string> = { fuede: '孚德', fuede_sports: '孚德体育文化', beijing_fuede: '北京孚德', fansibao: '凡思堡' };
@@ -20,18 +19,16 @@ const legacyCompany = computed(() => {
 });
 
 function select(subject: ContractSubject | null) {
-  if (subject && !subject.internalCompany) return;
-  // Directory loading and snapshot hydration must never rewrite historical codes.
+  // Selecting a directory company must never rewrite historical organization codes.
   emit('update:modelValue', subject?.id ?? null);
   emit('update:snapshotName', subject?.name ?? null);
-  emit('update:company', subject?.internalCompany ?? null);
 }
 </script>
 
 <template>
   <div class="employee-company-select">
-    <ContractSubjectSelect :model-value="modelValue" :snapshot-name="snapshotName" :disabled="disabled" require-company-mapping placeholder="选择所属公司" @select="select" />
-    <span v-if="!modelValue && !snapshotName && legacyCompany" class="legacy-company">{{ legacyCompany }} · 历史公司，尚未关联主体</span>
+    <ContractSubjectSelect :model-value="modelValue" :snapshot-name="snapshotName" :disabled="disabled" placeholder="选择所属公司" @select="select" />
+    <span v-if="!modelValue && !snapshotName && legacyCompany" class="legacy-company">{{ legacyCompany }} · 历史公司，尚未关联公司目录</span>
   </div>
 </template>
 

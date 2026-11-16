@@ -12,7 +12,7 @@ import {
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
-import { personnelReferenceFieldErrors, validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
+import { PERSONNEL_REFERENCE_FIELDS, personnelReferenceFieldErrors, validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
 import { parseEmployeeRosterExcel, ParsedEmployeeRosterRow } from './employee-roster.excel';
 import { approvedEmploymentSourceWhere, shanghaiBusinessDate } from './employment-timeline';
 import {
@@ -50,7 +50,7 @@ interface ExistingRosterUser {
   dept: { name: string; fullPath: string | null } | null;
   externalIdentityBindings?: Array<{ status: ExternalIdentityStatus }>;
   employeeProfile?: Record<string, unknown> | null;
-  employmentHistory?: Array<{ jobGrade: string | null }>;
+  employmentHistory?: Array<{ jobGrade: string | null; jobGradeId?: string | null; jobFamily?: string | null; jobFamilyId?: string | null; workLocation?: string | null; workLocationId?: string | null }>;
 }
 
 function referenceEmploymentWhere(date: Date): Prisma.EmploymentRecordWhereInput {
@@ -211,6 +211,7 @@ export class EmployeeRosterImportService {
               name: true,
               phone: true,
               deptId: true,
+              positionId: true,
               position: true,
               entryDate: true,
               plannedRegularDate: true,
@@ -242,6 +243,7 @@ export class EmployeeRosterImportService {
               dept: { select: { parentId: true, leaderId: true, fullPath: true } },
               employmentHistory: {
                 where: {
+                  AND: [approvedEmploymentSourceWhere],
                   effectiveFrom: { lte: new Date() },
                   OR: [{ effectiveTo: null }, { effectiveTo: { gte: new Date() } }],
                 },
@@ -256,14 +258,24 @@ export class EmployeeRosterImportService {
           : null;
         const currentEmployment = current?.employmentHistory?.[0];
         // Keep the import's existing projection unchanged; only directory exemptions use formal data.
-        const referenceEmployment = current && raw.employee.jobGrade?.trim()
+        const referenceEmployment = current && [raw.employee.jobGrade, raw.employee.jobFamily, raw.employee.workLocation].some(value => value?.trim())
           ? await tx.employmentRecord.findFirst({
             where: { userId: importRow.matchedUserId!, ...referenceEmploymentWhere(referenceDate) },
-            orderBy: { effectiveFrom: 'desc' }, select: { jobGrade: true },
+            orderBy: { effectiveFrom: 'desc' }, select: { jobGrade: true, jobGradeId: true, jobFamily: true, jobFamilyId: true, workLocation: true, workLocationId: true },
           }) : null;
-        await validatePersonnelReferences(tx, { employee: { ...raw.employee }, profile: { ...raw.profile } },
-          { employee: { jobGrade: referenceEmployment?.jobGrade }, profile: current?.employeeProfile ?? {} });
+        const referenceValue = { employee: { ...raw.employee }, profile: { ...raw.profile } };
+        await validatePersonnelReferences(tx, referenceValue,
+          { employee: referenceEmployment ?? {}, profile: current?.employeeProfile ?? {} });
         const isIncrementalUpdate = batch.mode === 'incremental' && importRow.action === 'update';
+        const position = isIncrementalUpdate && raw.employee.position == null ? current?.position ?? null : raw.employee.position;
+        const managerName = isIncrementalUpdate && raw.employee.managerName == null
+          ? currentEmployment?.directManager?.name ?? null : raw.employee.managerName;
+        // Carry existing identities only when their formal fields are unchanged.
+        // A different text value remains unresolved and must be maintained explicitly.
+        const positionId = current && position === (current.position ?? null)
+          ? current.positionId ?? currentEmployment?.positionId ?? null : null;
+        const managerId = current && managerName === (currentEmployment?.directManager?.name ?? null)
+          ? currentEmployment?.directManagerId ?? null : null;
         const organizationPath = batch.mode === 'full' ? raw.employee.departmentPath : [];
         const targetFullPath = organizationPath.join(' / ');
         const currentDepartmentMatches = Boolean(
@@ -288,7 +300,13 @@ export class EmployeeRosterImportService {
           companyText: isIncrementalUpdate && raw.employee.companyText == null
             ? currentEmployment?.companyText ?? null : raw.employee.companyText,
           deptId: normalized.deptId ?? (currentDepartmentMatches ? current?.deptId ?? null : null),
-          position: isIncrementalUpdate && raw.employee.position == null ? current?.position ?? null : raw.employee.position,
+          position, positionId, managerName, managerId,
+          jobGradeId: isIncrementalUpdate && raw.employee.jobGrade == null
+            ? currentEmployment?.jobGradeId ?? null : (referenceValue.employee as Record<string, unknown>).jobGradeId ?? null,
+          jobFamilyId: isIncrementalUpdate && raw.employee.jobFamily == null
+            ? currentEmployment?.jobFamilyId ?? null : (referenceValue.employee as Record<string, unknown>).jobFamilyId ?? null,
+          workLocationId: isIncrementalUpdate && raw.employee.workLocation == null
+            ? currentEmployment?.workLocationId ?? null : (referenceValue.employee as Record<string, unknown>).workLocationId ?? null,
           jobGrade: isIncrementalUpdate && raw.employee.jobGrade == null ? currentEmployment?.jobGrade ?? null : raw.employee.jobGrade,
           jobFamily: isIncrementalUpdate && raw.employee.jobFamily == null ? currentEmployment?.jobFamily ?? null : raw.employee.jobFamily,
           workLocation: isIncrementalUpdate && raw.employee.workLocation == null ? currentEmployment?.workLocation ?? null : raw.employee.workLocation,
@@ -317,7 +335,13 @@ export class EmployeeRosterImportService {
             }
             : {}),
         };
-        const parsedProfile = this.prepareProfile(raw.profile);
+        const parsedProfile: Record<string, unknown> = this.prepareProfile(raw.profile);
+        for (const [section, field] of PERSONNEL_REFERENCE_FIELDS) {
+          if (section !== 'profile') continue;
+          const value = referenceValue.profile as Record<string, unknown>;
+          const idField = `${field}Id`;
+          if (idField in value) parsedProfile[idField] = value[idField];
+        }
         const currentProfile = this.profileReviewData(current?.employeeProfile);
         const proposedProfile = isIncrementalUpdate
           ? { ...currentProfile, ...this.withoutNullish(parsedProfile) }
@@ -337,14 +361,19 @@ export class EmployeeRosterImportService {
           employeeNo: current.employeeNo,
           name: current.name,
           phone: current.phone,
-          company: currentEmployment?.company ?? normalized.company,
+          company: currentEmployment ? currentEmployment.company : normalized.company,
           companyText: currentEmployment?.companyText ?? null,
           deptId: current.deptId,
+          positionId: current.positionId ?? currentEmployment?.positionId ?? null,
           position: current.position,
           jobGrade: currentEmployment?.jobGrade ?? null,
+          jobGradeId: currentEmployment?.jobGradeId ?? null,
           jobFamily: currentEmployment?.jobFamily ?? null,
+          jobFamilyId: currentEmployment?.jobFamilyId ?? null,
           managerName: currentEmployment?.directManager?.name ?? null,
+          managerId: currentEmployment?.directManagerId ?? null,
           workLocation: currentEmployment?.workLocation ?? null,
+          workLocationId: currentEmployment?.workLocationId ?? null,
           entryDate: current.entryDate,
           plannedRegularDate: current.plannedRegularDate,
           actualRegularDate: current.actualRegularDate,
@@ -354,8 +383,8 @@ export class EmployeeRosterImportService {
           employeeStatus: current.status,
         } : null;
         const employeeReviewKeys = [
-          'employeeNo', 'name', 'phone', 'company', 'companyText', 'deptId', 'position', 'jobGrade', 'jobFamily',
-          'managerName', 'workLocation', 'entryDate', 'plannedRegularDate', 'actualRegularDate',
+          'employeeNo', 'name', 'phone', 'company', 'companyText', 'deptId', 'position', 'positionId', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId',
+          'managerName', 'managerId', 'workLocation', 'workLocationId', 'entryDate', 'plannedRegularDate', 'actualRegularDate',
           'leaveDate', 'probationMonths', 'employmentType', 'employeeStatus',
         ];
         const leaderFullPaths = organizationLeaderPaths.map((path) => path.join(' / '));
@@ -397,6 +426,7 @@ export class EmployeeRosterImportService {
           ? []
           : ['绩效直属上级待设置'];
         const proposedValue = this.toJson({
+          referenceSnapshotVersion: 1,
           employee: proposedEmployee,
           profile: proposedProfile,
           contracts: proposedContracts,
@@ -756,7 +786,7 @@ export class EmployeeRosterImportService {
             householdType: true, emergencyContactRelation: true } },
           employmentHistory: {
             where: referenceEmploymentWhere(referenceDate),
-            orderBy: { effectiveFrom: 'desc' }, take: 1, select: { jobGrade: true },
+            orderBy: { effectiveFrom: 'desc' }, take: 1, select: { jobGrade: true, jobGradeId: true, jobFamily: true, jobFamilyId: true, workLocation: true, workLocationId: true },
           },
           externalIdentityBindings: {
             where: { status: ExternalIdentityStatus.enabled, endedAt: null },
@@ -821,7 +851,7 @@ export class EmployeeRosterImportService {
       const existing = this.matchExistingEmployee(row, existingByNo, existingUsers, warnings, errors);
       const referenceErrors = await personnelReferenceFieldErrors(this.prisma,
         { employee: { ...row.employee }, profile: { ...row.profile } },
-        { employee: { jobGrade: existing?.employmentHistory?.[0]?.jobGrade }, profile: existing?.employeeProfile ?? {} });
+        { employee: existing?.employmentHistory?.[0] ?? {}, profile: existing?.employeeProfile ?? {} });
       errors.push(...Object.values(referenceErrors));
       if (existing) matchedUserIds.add(existing.id);
       let company = this.mapCompany(row.employee.companyText, warnings);

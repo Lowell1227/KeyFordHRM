@@ -1,3 +1,5 @@
+import { normalizeEmployeePosition } from './employee-position-reference';
+import { validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
 import { validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { assertValidContractChanges } from './employee-contract-validation';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -648,45 +650,41 @@ export class EmployeeDataReviewsService {
     const proposed = this.record(request.proposedValue);
     const employee = this.record(proposed.employee);
     const baseEmployee = this.record(this.record(request.baseValue).employee);
+    const referenceSnapshot = proposed.referenceSnapshotVersion === 1 ? structuredClone(proposed) : {};
+    const referenceBase = await normalizeEmployeePosition(tx, employee, baseEmployee, !request.userId, this.record(referenceSnapshot.employee));
+    await validatePersonnelReferences(tx, { employee, profile: this.record(proposed.profile) },
+      { employee: referenceBase, profile: this.record(this.record(request.baseValue).profile) }, referenceSnapshot);
+    const rosterManagerName = this.nullableString(employee.managerName);
+    const rosterManagerId = this.nullableString(employee.managerId);
+    if (!rosterManagerId && rosterManagerName) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请维护者明确选择花名册直属主管并重新提交',
+        data: { fieldErrors: { 'employee.managerId': '请选择花名册直属主管，不能仅凭姓名自动匹配' } } });
+    }
+
     const canKeepHistoricalMissing = Boolean(request.userId)
       && request.sourceType === 'manual_archive_change' && !request.intakeType;
     const name = this.requiredString(employee.name, '姓名不能为空');
     const employeeNo = directArchiveEdit && employee.employeeStatus === UserStatus.pending_entry
       ? this.nullableString(employee.employeeNo) : this.requiredString(employee.employeeNo, '工号不能为空');
     let companyValue = employee.company;
-    if (['manual_archive_change', 'manual_employment_change'].includes(request.sourceType)) {
-      let companyBase = baseEmployee.company;
-      if (companyValue == null && companyBase === undefined && request.userId) {
-        companyBase = (await tx.employmentRecord.findFirst({ where: { userId: request.userId },
+    if (companyValue === undefined) {
+      companyValue = baseEmployee.company;
+      if (companyValue === undefined && request.userId) {
+        companyValue = (await tx.employmentRecord.findFirst({ where: { userId: request.userId },
           orderBy: { effectiveFrom: 'desc' }, select: { company: true } }))?.company;
       }
-      if (companyValue === undefined) {
-        companyValue = companyBase;
-        employee.company = companyValue;
-      }
-      const unchangedHistoricalMissing = canKeepHistoricalMissing && companyValue == null && companyBase == null
-        && !this.hasEmploymentChange(baseEmployee, employee);
-      if (!unchangedHistoricalMissing && !Object.values(CompanyCode).includes(companyValue as CompanyCode)) {
-        throw new BadRequestException('所属公司内部代码无效，请重新选择所属公司');
-      }
+      employee.company = companyValue ?? null;
     }
-    const company = this.enumValue(companyValue, Object.values(CompanyCode), CompanyCode.fuede);
-    const organizationPath = this.stringArrayValue(employee.organizationPath);
-    const organizationNodes = Array.isArray(employee.organizationNodes)
-      ? employee.organizationNodes.map((item) => this.record(item))
-      : [];
-    let deptId = this.nullableString(employee.deptId);
-    if (organizationPath.length > 0) {
-      deptId = (await this.ensureReviewedDepartmentPath(tx, organizationPath, company, organizationNodes)).id;
-      employee.deptId = deptId;
+    if (companyValue != null && !Object.values(CompanyCode).includes(companyValue as CompanyCode)) {
+      throw new BadRequestException('所属公司资料无效，请重新选择');
     }
-    const organizationEnsurePaths = Array.isArray(employee.organizationEnsurePaths)
-      ? employee.organizationEnsurePaths
-        .map((item) => this.stringArrayValue(item))
-        .filter((path) => path.length > 0)
-      : [];
-    for (const ensurePath of organizationEnsurePaths) {
-      await this.ensureReviewedDepartmentPath(tx, ensurePath, company, organizationNodes);
+    const company = companyValue == null ? null : companyValue as CompanyCode;
+    const deptId = this.nullableString(employee.deptId);
+    if ((!deptId && this.stringArrayValue(employee.organizationPath).length)
+      || (Array.isArray(employee.organizationEnsurePaths) && employee.organizationEnsurePaths.length)
+      || (Array.isArray(employee.organizationLeaderPaths) && employee.organizationLeaderPaths.length)) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '旧申请含未确认的组织路径，请维护者明确选择部门并重新提交',
+        data: { fieldErrors: { 'employee.deptId': '请明确选择部门；组织路径不能自动创建或匹配部门' } } });
     }
     if (!deptId && !(canKeepHistoricalMissing && baseEmployee.deptId === null && employee.deptId === null)) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门不能为空' });
@@ -696,24 +694,9 @@ export class EmployeeDataReviewsService {
     const employmentType = this.enumValue(employee.employmentType, Object.values(EmploymentType), EmploymentType.full_time);
     const employeeStatus = this.enumValue(employee.employeeStatus, Object.values(UserStatus), UserStatus.active);
     const phone = this.nullableString(employee.phone);
-    let positionId = this.nullableString(employee.positionId);
-    let position = this.nullableString(employee.position);
-    let jobFamily = this.nullableString(employee.jobFamily);
-    if (positionId) {
-      const positionRecord = await tx.position.findUnique({
-        where: { id: positionId },
-        select: { id: true, name: true, jobFamily: true },
-      });
-      if (!positionRecord) {
-        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位不存在' });
-      }
-      positionId = positionRecord.id;
-      position = positionRecord.name;
-      if (!request.userId || positionId !== this.nullableString(baseEmployee.positionId)
-        || jobFamily !== this.nullableString(baseEmployee.jobFamily)) {
-        jobFamily = positionRecord.jobFamily;
-      }
-    }
+    const positionId = this.nullableString(employee.positionId);
+    const position = this.nullableString(employee.position);
+    const jobFamily = this.nullableString(employee.jobFamily);
     const plannedRegularDate = this.nullableDate(employee.plannedRegularDate);
     const actualRegularDate = this.nullableDate(employee.actualRegularDate);
     const leaveDate = this.nullableDate(employee.leaveDate);
@@ -812,32 +795,6 @@ export class EmployeeDataReviewsService {
       });
     }
 
-    const performance = this.record(proposed.performance);
-    const rosterManagerName = this.nullableString(employee.managerName);
-    let rosterManagerId = this.nullableString(employee.managerId);
-    if (!rosterManagerId && rosterManagerName) {
-      const suggestedName = this.nullableString(performance.managerName);
-      const suggestedId = this.nullableString(performance.managerId);
-      if (suggestedId && suggestedName === rosterManagerName) {
-        rosterManagerId = suggestedId;
-      } else {
-        const candidates = await tx.user.findMany({
-          where: {
-            name: rosterManagerName,
-            deletedAt: null,
-            accountType: AccountType.employee,
-            status: { in: CURRENT_WORKER_STATUSES },
-          },
-          select: { id: true },
-          take: 2,
-        });
-        if (candidates.length !== 1) {
-          throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: `花名册直属主管“${rosterManagerName}”无法唯一匹配` });
-        }
-        rosterManagerId = candidates[0].id;
-      }
-    }
-
     const shouldWriteEmployment = !request.userId
       || isManualEmployment
       || this.hasEmploymentChange(baseEmployee, employee);
@@ -867,9 +824,12 @@ export class EmployeeDataReviewsService {
       positionId,
       position,
       jobGrade: this.nullableString(employee.jobGrade),
+      jobGradeId: this.nullableString(employee.jobGradeId),
       jobFamily,
+      jobFamilyId: this.nullableString(employee.jobFamilyId),
       directManagerId: rosterManagerId,
       workLocation: this.nullableString(employee.workLocation),
+      workLocationId: this.nullableString(employee.workLocationId),
       employmentType,
       employeeStatus,
       entryDate,
@@ -974,26 +934,6 @@ export class EmployeeDataReviewsService {
         request.sourceType,
       );
     }
-    const organizationLeaderPaths = Array.isArray(employee.organizationLeaderPaths)
-      ? employee.organizationLeaderPaths
-        .map((item) => this.stringArrayValue(item))
-        .filter((path) => path.length > 0)
-      : [];
-    const baseOrganizationLeaders = this.record(this.record(request.baseValue).organizationLeaders);
-    for (const leaderPath of organizationLeaderPaths) {
-      const department = await this.ensureReviewedDepartmentPath(tx, leaderPath, company, organizationNodes);
-      const fullPath = leaderPath.join(' / ');
-      const baseLeaderId = this.nullableString(baseOrganizationLeaders[fullPath]);
-      if ((department.leaderId ?? null) !== baseLeaderId && department.leaderId !== userId) {
-        throw new BadRequestException({
-          code: ERROR_CODE.CONFLICT,
-          message: `部门“${fullPath}”负责人已发生变化，请重新提交审核`,
-        });
-      }
-      if (department.leaderId !== userId) {
-        await this.queueDepartmentLeaderChange(tx, department, userId, operator);
-      }
-    }
     return userId;
   }
 
@@ -1020,17 +960,8 @@ export class EmployeeDataReviewsService {
     let managerId = typeof performance.managerId === 'string' ? performance.managerId : null;
     const managerName = this.nullableString(performance.managerName);
     if (!managerId && managerName) {
-      const candidates = await tx.user.findMany({
-        where: {
-          name: managerName,
-          deletedAt: null,
-          accountType: AccountType.employee,
-          status: { in: CURRENT_WORKER_STATUSES },
-        },
-        select: { id: true },
-        take: 2,
-      });
-      if (candidates.length === 1) managerId = candidates[0].id;
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请维护者明确选择绩效直属上级并重新提交',
+        data: { fieldErrors: { 'performance.managerId': '请选择绩效直属上级，不能仅凭姓名自动匹配' } } });
     }
     const subject = await tx.user.findUnique({
       where: { id: request.userId },
@@ -1103,10 +1034,10 @@ export class EmployeeDataReviewsService {
 
   private profileUpdate(value: Record<string, unknown>): Record<string, unknown> {
     const allowedFields = new Set([
-      'phone', 'gender', 'birthDate', 'ethnicity', 'education', 'professionalTitle', 'school',
-      'graduationDate', 'major', 'maritalStatus', 'childrenStatus', 'childrenCount', 'politicalStatus',
-      'nativePlace', 'householdType', 'idAddress', 'idNumberEncrypted', 'idNumberFingerprint',
-      'currentAddress', 'emergencyContactName', 'emergencyContactRelation', 'emergencyContactPhone',
+      'phone', 'gender', 'birthDate', 'ethnicity', 'education', 'educationId', 'professionalTitle', 'school',
+      'graduationDate', 'major', 'maritalStatus', 'maritalStatusId', 'childrenStatus', 'childrenCount', 'politicalStatus', 'politicalStatusId',
+      'nativePlace', 'householdType', 'householdTypeId', 'idAddress', 'idNumberEncrypted', 'idNumberFingerprint',
+      'currentAddress', 'emergencyContactName', 'emergencyContactRelation', 'emergencyContactRelationId', 'emergencyContactPhone',
       'socialSecurityStatus', 'socialSecurityStartDate', 'housingFundStatus', 'housingFundStartDate',
       'bankName', 'bankBranch', 'bankAccountEncrypted', 'bankAccountFingerprint',
     ]);
@@ -1132,8 +1063,8 @@ export class EmployeeDataReviewsService {
     proposed: Record<string, unknown>,
   ): boolean {
     const keys = [
-      'company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'managerName',
-      'workLocation', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate',
+      'company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId', 'managerId', 'managerName',
+      'workLocation', 'workLocationId', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate',
       'actualRegularDate', 'leaveDate', 'probationMonths',
     ];
     return keys.some((key) => this.comparableValue(base[key]) !== this.comparableValue(proposed[key]));
@@ -1149,93 +1080,6 @@ export class EmployeeDataReviewsService {
     return Array.isArray(value)
       ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
       : [];
-  }
-
-  private async ensureReviewedDepartmentPath(
-    tx: Prisma.TransactionClient,
-    path: string[],
-    _fallbackCompany: CompanyCode,
-    _organizationNodes: Record<string, unknown>[],
-  ): Promise<{ id: string; name: string; fullPath: string | null; leaderId: string | null }> {
-    let leaf: { id: string; name: string; fullPath: string | null; leaderId: string | null } | null = null;
-    for (let index = 0; index < path.length; index++) {
-      const segments = path.slice(0, index + 1);
-      const fullPath = segments.join(' / ');
-      const existing = await tx.department.findMany({
-        where: {
-          isActive: true,
-          OR: [
-            { fullPath },
-            { name: segments.at(-1)! },
-          ],
-        },
-        select: { id: true, name: true, leaderId: true, fullPath: true },
-      });
-      const exact = existing.filter((item) => (
-        (item.fullPath ?? (segments.length === 1 ? item.name : ''))
-          .replaceAll('／', '/').replace(/\s*\/\s*/g, '/').trim()
-          === fullPath.replaceAll('／', '/').replace(/\s*\/\s*/g, '/').trim()
-      ));
-      if (exact.length > 1) {
-        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: `组织路径“${fullPath}”存在重复，请先清理` });
-      }
-      if (exact.length === 0) {
-        throw new BadRequestException({
-          code: ERROR_CODE.CONFLICT,
-          message: `部门“${fullPath}”尚未通过部门架构审核`,
-        });
-      }
-      leaf = exact[0];
-    }
-    if (!leaf) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门路径不能为空' });
-    }
-    return leaf;
-  }
-
-  private async queueDepartmentLeaderChange(
-    tx: Prisma.TransactionClient,
-    department: { id: string; name: string; fullPath: string | null; leaderId: string | null },
-    leaderId: string | null,
-    operator: AuthUser,
-  ): Promise<void> {
-    const pending = await tx.departmentChangeRequest.findFirst({
-      where: { departmentId: department.id, action: 'update_leader', status: 'pending' },
-    });
-    if (pending) {
-      const pendingProposed = this.record(pending.proposedValue);
-      if (this.nullableString(pendingProposed.leaderId) === leaderId) return;
-      throw new BadRequestException({
-        code: ERROR_CODE.CONFLICT,
-        message: `部门“${department.fullPath ?? department.name}”已有待审核的负责人变更`,
-      });
-    }
-    const request = await tx.departmentChangeRequest.create({
-      data: {
-        departmentId: department.id,
-        departmentName: department.name,
-        action: 'update_leader',
-        status: 'pending',
-        baseValue: {
-          id: department.id,
-          name: department.name,
-          fullPath: department.fullPath,
-          leaderId: department.leaderId,
-        },
-        proposedValue: { leaderId },
-        createdById: operator.id,
-      },
-    });
-    await tx.auditLog.create({
-      data: {
-        userId: operator.id,
-        action: 'submit_department_change',
-        entityType: 'department_change_request',
-        entityId: request.id,
-        oldValue: { leaderId: department.leaderId },
-        newValue: { action: 'update_leader', departmentId: department.id, leaderId },
-      },
-    });
   }
 
   private async assertProfileBaseStillCurrent(
@@ -1321,10 +1165,13 @@ export class EmployeeDataReviewsService {
       positionId: current.positionId ?? employment?.positionId ?? null,
       position: directArchiveEdit ? current.position ?? employment?.position ?? null : current.position,
       jobGrade: employment?.jobGrade ?? null,
+      jobGradeId: employment?.jobGradeId ?? null,
       jobFamily: employment?.jobFamily ?? null,
+      jobFamilyId: employment?.jobFamilyId ?? null,
       managerId: employment?.directManagerId ?? null,
       managerName: employment?.directManager?.name ?? null,
       workLocation: employment?.workLocation ?? null,
+      workLocationId: employment?.workLocationId ?? null,
       entryDate: directArchiveEdit ? current.entryDate ?? employment?.entryDate ?? null : current.entryDate,
       plannedRegularDate: directArchiveEdit ? current.plannedRegularDate ?? employment?.plannedRegularDate ?? null : current.plannedRegularDate,
       actualRegularDate: directArchiveEdit ? current.actualRegularDate ?? employment?.actualRegularDate ?? null : current.actualRegularDate,

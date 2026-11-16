@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { isAxiosError } from 'axios';
 import { RefreshRight } from '@element-plus/icons-vue';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import ChartCard from '@/components/common/ChartCard.vue';
@@ -22,7 +23,12 @@ const includeInactive = ref(false);
 const page = ref(1);
 const pageSize = ref(10);
 const activatingId = ref('');
-const dialog = reactive({ visible: false, editingId: '', name: '', jobFamily: '', saving: false });
+const dialog = reactive({ visible: false, editingId: '', name: '', jobFamily: '', jobFamilyId: null as string | null, saving: false });
+const fieldErrors = reactive({ name: '', jobFamily: '' });
+const submitError = ref('');
+function clearErrors() { fieldErrors.name = ''; fieldErrors.jobFamily = ''; submitError.value = ''; }
+watch(() => dialog.name, () => { fieldErrors.name = ''; });
+watch(() => [dialog.jobFamily, dialog.jobFamilyId], () => { fieldErrors.jobFamily = ''; });
 let initialPositionSnapshot = '';
 let loadGeneration = 0;
 
@@ -33,8 +39,8 @@ const pagedItems = computed(() => {
 
 watch(pageSize, () => { page.value = 1; });
 
-function positionSnapshot(value: { name: string; jobFamily: string | null }) {
-  return JSON.stringify({ name: value.name.trim(), jobFamily: value.jobFamily?.trim() || null });
+function positionSnapshot(value: { name: string; jobFamily: string | null; jobFamilyId?: string | null }) {
+  return JSON.stringify({ name: value.name.trim(), jobFamily: value.jobFamily?.trim() || null, jobFamilyId: value.jobFamilyId ?? null });
 }
 
 async function load() {
@@ -49,23 +55,33 @@ async function load() {
   finally { if (generation === loadGeneration) loading.value = false; }
 }
 function search() { page.value = 1; void load(); }
-function openCreate() { initialPositionSnapshot = ''; Object.assign(dialog, { visible: true, editingId: '', name: '', jobFamily: '' }); }
+function openCreate() { clearErrors(); initialPositionSnapshot = ''; Object.assign(dialog, { visible: true, editingId: '', name: '', jobFamily: '', jobFamilyId: null }); }
 function openEdit(row: PositionRecord) {
-  Object.assign(dialog, { visible: true, editingId: row.id, name: row.name, jobFamily: row.jobFamily ?? '' });
-  initialPositionSnapshot = positionSnapshot({ name: row.name, jobFamily: row.jobFamily });
+  clearErrors();
+  Object.assign(dialog, { visible: true, editingId: row.id, name: row.name, jobFamily: row.jobFamily ?? '', jobFamilyId: row.jobFamilyId ?? null });
+  initialPositionSnapshot = positionSnapshot({ name: row.name, jobFamily: row.jobFamily, jobFamilyId: row.jobFamilyId });
 }
 async function submit() {
-  if (!dialog.name.trim()) { ElMessage.warning('请填写岗位名称'); return; }
-  const body = { name: dialog.name.trim(), jobFamily: dialog.jobFamily.trim() || null };
+  if (dialog.saving) return;
+  clearErrors();
+  if (!dialog.name.trim()) { fieldErrors.name = '请填写岗位名称'; return; }
+  const body = { name: dialog.name.trim(), jobFamily: dialog.jobFamily.trim() || null, jobFamilyId: dialog.jobFamilyId };
   if (dialog.editingId && positionSnapshot(body) === initialPositionSnapshot) {
     ElMessage.info('未检测到变更，无需提交审核');
     return;
   }
   dialog.saving = true;
   try {
-    const result = dialog.editingId ? await positionsApi.update(dialog.editingId, body) : await positionsApi.create(body);
+    const result = dialog.editingId ? await positionsApi.update(dialog.editingId, body, { skipErrorMessage: true }) : await positionsApi.create(body, { skipErrorMessage: true });
     ElMessage.success(result.status === 'approved' ? '岗位变更已生效' : '已提交岗位变更，HR 管理员审核后生效'); dialog.visible = false;
     await load();
+  } catch (error) {
+    const response = isAxiosError(error) ? error.response?.data : undefined;
+    const fields = response?.data?.fieldErrors;
+    if (typeof fields?.name === 'string') fieldErrors.name = fields.name;
+    if (typeof fields?.jobFamily === 'string') fieldErrors.jobFamily = fields.jobFamily;
+    if (!fieldErrors.name && !fieldErrors.jobFamily) submitError.value = typeof response?.message === 'string'
+      ? response.message : '提交未完成，填写内容已保留，请重试。';
   } finally { dialog.saving = false; }
 }
 async function deactivate(row: PositionRecord) {
@@ -120,8 +136,9 @@ onMounted(load);
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="items.length" />
     </ChartCard>
     <BusinessDetailDrawer v-model="dialog.visible" :title="dialog.editingId ? '编辑岗位' : '新增岗位'" variant="standard" :saving="dialog.saving">
-      <el-form label-position="top"><el-form-item label="岗位名称"><el-input v-model="dialog.name" /></el-form-item><el-form-item label="职系"><PersonnelReferenceSelect v-model="dialog.jobFamily" kind="job_family" label="职系" /></el-form-item></el-form>
-      <template #footer><el-button @click="dialog.visible = false">取消</el-button><el-button type="primary" :loading="dialog.saving" @click="submit">提交审核</el-button></template>
+      <el-alert v-if="submitError" :title="submitError" type="error" :closable="false" />
+      <el-form label-position="top"><el-form-item label="岗位名称" :error="fieldErrors.name"><el-input v-model="dialog.name" /></el-form-item><el-form-item label="职系" :error="fieldErrors.jobFamily"><PersonnelReferenceSelect v-model="dialog.jobFamily" v-model:reference-id="dialog.jobFamilyId" kind="job_family" label="职系" /></el-form-item></el-form>
+      <template #footer><el-button :disabled="dialog.saving" @click="dialog.visible = false">取消</el-button><el-button type="primary" :loading="dialog.saving" @click="submit">提交审核</el-button></template>
     </BusinessDetailDrawer>
     </template>
   </BusinessListPage>

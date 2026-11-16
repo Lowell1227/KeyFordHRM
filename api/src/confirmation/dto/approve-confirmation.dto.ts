@@ -1,8 +1,9 @@
 import { Type } from 'class-transformer';
 import { VoteResult } from '@prisma/client';
 import { IsBoolean, IsDate, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ConfirmationMutationDto } from './confirmation-mutation.dto';
 
-export class ApproveConfirmationDto {
+export class ApproveConfirmationDto extends ConfirmationMutationDto {
   @IsOptional()
   @IsBoolean()
   recommendation?: boolean;

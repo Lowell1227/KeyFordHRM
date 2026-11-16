@@ -519,6 +519,9 @@ model Position {
   @@index([name, isActive])
   @@index([jobFamily, isActive])
   @@map("positions")
+  jobFamilyId String? @map("job_family_id") @db.Uuid
+  jobFamilyRef PersonnelReferenceData? @relation("PositionJobFamily", fields: [jobFamilyId], references: [id], onDelete: Restrict)
+  @@index([jobFamilyId])
 }
 
 model PositionChangeRequest {
@@ -713,6 +716,21 @@ model EmployeeProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@map("employee_profiles")
+  educationId String? @map("education_id") @db.Uuid
+  educationRef PersonnelReferenceData? @relation("EmployeeProfileEducation", fields: [educationId], references: [id], onDelete: Restrict)
+  @@index([educationId])
+  maritalStatusId String? @map("marital_status_id") @db.Uuid
+  maritalStatusRef PersonnelReferenceData? @relation("EmployeeProfileMaritalStatus", fields: [maritalStatusId], references: [id], onDelete: Restrict)
+  @@index([maritalStatusId])
+  politicalStatusId String? @map("political_status_id") @db.Uuid
+  politicalStatusRef PersonnelReferenceData? @relation("EmployeeProfilePoliticalStatus", fields: [politicalStatusId], references: [id], onDelete: Restrict)
+  @@index([politicalStatusId])
+  householdTypeId String? @map("household_type_id") @db.Uuid
+  householdTypeRef PersonnelReferenceData? @relation("EmployeeProfileHouseholdType", fields: [householdTypeId], references: [id], onDelete: Restrict)
+  @@index([householdTypeId])
+  emergencyContactRelationId String? @map("emergency_contact_relation_id") @db.Uuid
+  emergencyContactRelationRef PersonnelReferenceData? @relation("EmployeeProfileEmergencyContactRelation", fields: [emergencyContactRelationId], references: [id], onDelete: Restrict)
+  @@index([emergencyContactRelationId])
 }
 
 model PersonnelReferenceData {
@@ -722,6 +740,16 @@ model PersonnelReferenceData {
   isActive  Boolean                    @default(true) @map("is_active")
   createdAt DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime                   @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  employeeProfileEducation EmployeeProfile[] @relation("EmployeeProfileEducation")
+  employeeProfileMaritalStatus EmployeeProfile[] @relation("EmployeeProfileMaritalStatus")
+  employeeProfilePoliticalStatus EmployeeProfile[] @relation("EmployeeProfilePoliticalStatus")
+  employeeProfileHouseholdType EmployeeProfile[] @relation("EmployeeProfileHouseholdType")
+  employeeProfileEmergencyContactRelation EmployeeProfile[] @relation("EmployeeProfileEmergencyContactRelation")
+  employmentRecordJobGrade EmploymentRecord[] @relation("EmploymentRecordJobGrade")
+  employmentRecordJobFamily EmploymentRecord[] @relation("EmploymentRecordJobFamily")
+  employmentRecordWorkLocation EmploymentRecord[] @relation("EmploymentRecordWorkLocation")
+  positionJobFamily Position[] @relation("PositionJobFamily")
 
   @@unique([kind, name])
   @@map("personnel_reference_data")
@@ -779,11 +807,12 @@ model EmployeeContract {
 }
 
 model EmploymentRecord {
+  confirmationApplications ConfirmationApplication[]
   id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId             String         @map("user_id") @db.Uuid
   effectiveFrom      DateTime       @map("effective_from") @db.Date
   effectiveTo        DateTime?      @map("effective_to") @db.Date
-  company            CompanyCode
+  company            CompanyCode?
   companyText        String?        @map("company_text") @db.VarChar(150)
   deptId             String?        @map("dept_id") @db.Uuid
   positionId         String?        @map("position_id") @db.Uuid
@@ -825,6 +854,15 @@ model EmploymentRecord {
   contractSubject ContractSubject? @relation(fields: [contractSubjectId], references: [id], onDelete: Restrict)
   @@index([contractSubjectId])
 
+  jobGradeId String? @map("job_grade_id") @db.Uuid
+  jobGradeRef PersonnelReferenceData? @relation("EmploymentRecordJobGrade", fields: [jobGradeId], references: [id], onDelete: Restrict)
+  @@index([jobGradeId])
+  jobFamilyId String? @map("job_family_id") @db.Uuid
+  jobFamilyRef PersonnelReferenceData? @relation("EmploymentRecordJobFamily", fields: [jobFamilyId], references: [id], onDelete: Restrict)
+  @@index([jobFamilyId])
+  workLocationId String? @map("work_location_id") @db.Uuid
+  workLocationRef PersonnelReferenceData? @relation("EmploymentRecordWorkLocation", fields: [workLocationId], references: [id], onDelete: Restrict)
+  @@index([workLocationId])
 }
 
 model ExternalIdentityBinding {
@@ -1791,6 +1829,9 @@ model ProbationReviewIndicator {
 }
 
 model ConfirmationApplication {
+  employmentRecordId String? @map("employment_record_id") @db.Uuid
+  employmentRecord EmploymentRecord? @relation(fields: [employmentRecordId], references: [id], onDelete: Restrict)
+  @@index([employmentRecordId])
   id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   employeeId            String             @map("employee_id") @db.Uuid
   probationReviewId     String?            @map("probation_review_id") @db.Uuid

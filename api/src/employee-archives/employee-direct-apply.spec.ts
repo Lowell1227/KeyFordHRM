@@ -2,6 +2,8 @@ import { SysRole, UserStatus, CompanyCode, EmploymentType } from '@prisma/client
 import { BadRequestException } from '@nestjs/common';
 import { EmployeeArchivesService } from './employee-archives.service';
 
+const educationId = '60000000-0000-4000-8000-000000000002';
+
 describe('员工档案免审个人信息字段直改', () => {
   const operator = {
     id: '20000000-0000-4000-8000-000000000001',
@@ -82,8 +84,7 @@ describe('员工档案免审个人信息字段直改', () => {
   const buildService = (user: Record<string, unknown>, pendingRequests: Array<{ id: string; baseValue: unknown }> = []) => {
     const tx = {
       personnelReferenceData: { findMany: jest.fn(async ({ where }) =>
-        [{ kind: 'education', name: '硕士', isActive: true }].filter(option => option.isActive === where.isActive
-          && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
+        [{ id: educationId, kind: 'education', name: '硕士', isActive: true }].filter(option => where.id.in.includes(option.id))) },
       user: {
         findUnique: jest.fn().mockResolvedValue(user),
         update: jest.fn().mockResolvedValue({}),
@@ -121,7 +122,7 @@ describe('员工档案免审个人信息字段直改', () => {
     const result = await service.submitDraft(user.id, {
       baseVersion,
       employee: { phone: '13911112222' },
-      profile: { phone: '13911112222', education: '硕士' },
+      profile: { phone: '13911112222', educationId, education: '硕士' },
     }, operator);
 
     expect(result.request).toBeNull();
@@ -129,7 +130,7 @@ describe('员工档案免审个人信息字段直改', () => {
     expect(tx.user.update).toHaveBeenCalledWith({ where: { id: user.id }, data: { phone: '13911112222' } });
     expect(tx.employeeProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId: user.id },
-      update: { phone: '13911112222', education: '硕士' },
+      update: { phone: '13911112222', educationId, education: '硕士' },
     }));
     expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
     expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
@@ -140,7 +141,7 @@ describe('员工档案免审个人信息字段直改', () => {
         entityType: 'user',
         entityId: user.id,
         oldValue: expect.objectContaining({ phone: '138****0000', education: '本科' }),
-        newValue: expect.objectContaining({ phone: '139****2222', education: '硕士' }),
+        newValue: expect.objectContaining({ phone: '139****2222', educationId, education: '硕士' }),
       }),
     }));
   });
@@ -268,7 +269,7 @@ describe('员工档案免审个人信息字段直改', () => {
     };
     tx.employeeDataChangeRequest.findFirst.mockResolvedValue(existing as any);
     const result = await service.submitDraft(user.id, {
-      draftId: existing.id, expectedVersion: 1, employee: {}, profile: { education: '硕士' },
+      draftId: existing.id, expectedVersion: 1, employee: {}, profile: { educationId, education: '硕士' },
     }, operator);
     expect(result.request).toBeNull();
     expect(result.directApplied).toEqual(['学历']);
@@ -283,7 +284,7 @@ describe('员工档案免审个人信息字段直改', () => {
       id: 'pending-conflict', baseValue: { profile: { education: '本科' } },
       proposedValue: { profile: { education: '博士' } },
     } as any]);
-    await expect(service.submitDraft(user.id, { baseVersion, employee: {}, profile: { education: '硕士' } }, operator))
+    await expect(service.submitDraft(user.id, { baseVersion, employee: {}, profile: { educationId, education: '硕士' } }, operator))
       .rejects.toMatchObject({ status: 409 });
   });
 

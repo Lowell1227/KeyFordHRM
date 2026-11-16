@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { isAxiosError } from 'axios';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue';
@@ -27,6 +28,10 @@ const performanceLoading = ref(false);
 const performanceUnavailable = ref(false);
 const approving = ref(false);
 const approvalDialogVisible = ref(false);
+const approvalSubmissionVersion = ref<number | undefined>();
+watch(approvalDialogVisible, (visible) => {
+  if (visible) approvalSubmissionVersion.value = app.value?.submissionVersion;
+});
 const managerRecommendation = ref<boolean | undefined>(undefined);
 const managerComment = ref('');
 const managerError = ref('');
@@ -102,6 +107,11 @@ function voteType(result?: string | null): string {
   return VOTE_RESULT_LABELS[result as keyof typeof VOTE_RESULT_LABELS]?.type ?? 'info';
 }
 
+function actionErrorText(error: unknown, fallback: string): string {
+  const message = isAxiosError(error) ? error.response?.data?.message : error instanceof Error ? error.message : null;
+  return typeof message === 'string' && message.trim() ? message : fallback;
+}
+
 async function handleApprove() {
   if (!app.value) return;
   managerError.value = managerRecommendation.value === undefined || !managerComment.value.trim()
@@ -109,12 +119,12 @@ async function handleApprove() {
   if (managerError.value) return;
   approving.value = true;
   try {
-    await confirmationApi.submitManagerEvaluation(app.value.id, managerRecommendation.value!, managerComment.value.trim());
+    await confirmationApi.submitManagerEvaluation(app.value.id, managerRecommendation.value!, managerComment.value.trim(), approvalSubmissionVersion.value);
     approvalDialogVisible.value = false;
     ElMessage.success('评价已提交，下一步由 HR 办理');
     await reloadAfterChange();
   } catch (error) {
-    managerError.value = error instanceof Error ? error.message : '提交失败，请稍后重试';
+    managerError.value = actionErrorText(error, '提交失败，请稍后重试');
   } finally {
     approving.value = false;
   }
@@ -146,6 +156,7 @@ async function handleHrSubmit() {
   approving.value = true;
   try {
     await confirmationApi.submitHrConclusion(app.value.id, {
+      submissionVersion: approvalSubmissionVersion.value,
       voteResult: hrResult.value as 'pass' | 'extend' | 'fail',
       voteComment: hrBasis.value.trim() || undefined,
       meetingDate: hrMeetingDate.value || undefined,
@@ -156,7 +167,7 @@ async function handleHrSubmit() {
     ElMessage.success('评议结论已提交，下一步由公司审批人决定');
     await reloadAfterChange();
   } catch (error) {
-    hrError.value = error instanceof Error ? error.message : '提交失败，请稍后重试';
+    hrError.value = actionErrorText(error, '提交失败，请稍后重试');
   } finally {
     approving.value = false;
   }
@@ -169,11 +180,11 @@ async function handleAttachmentUpload(event: Event) {
   uploading.value = true;
   hrError.value = '';
   try {
-    await confirmationApi.uploadMeetingAttachment(app.value.id, file);
+    const attachment = await confirmationApi.uploadMeetingAttachment(app.value.id, file, approvalSubmissionVersion.value);
+    app.value.meetingAttachments = [...(app.value.meetingAttachments ?? []), attachment];
     ElMessage.success('内部附件已上传');
-    await reloadAfterChange();
   } catch (error) {
-    hrError.value = error instanceof Error ? error.message : '附件上传失败';
+    hrError.value = actionErrorText(error, '附件上传失败');
   } finally {
     uploading.value = false;
     input.value = '';
@@ -197,11 +208,11 @@ async function handleMeetingDateBackfill() {
   if (backfillError.value) return;
   backfilling.value = true;
   try {
-    await confirmationApi.backfillMeetingDate(app.value.id, backfillDate.value);
+    await confirmationApi.backfillMeetingDate(app.value.id, backfillDate.value, app.value.submissionVersion);
     ElMessage.success('会议日期已补录');
     await reloadAfterChange();
   } catch (error) {
-    backfillError.value = error instanceof Error ? error.message : '补录失败，请稍后重试';
+    backfillError.value = actionErrorText(error, '补录失败，请稍后重试');
   } finally {
     backfilling.value = false;
   }
@@ -213,12 +224,12 @@ async function handleCompanyApprove() {
   if (companyError.value) return;
   approving.value = true;
   try {
-    await confirmationApi.approveCompany(app.value.id, app.value.proposedRegularDate!, companyReason.value.trim() || undefined);
+    await confirmationApi.approveCompany(app.value.id, app.value.proposedRegularDate!, approvalSubmissionVersion.value, companyReason.value.trim() || undefined);
     approvalDialogVisible.value = false;
-    ElMessage.success('已同意转正，员工状态和实际转正日期已更新');
+    ElMessage.success('已同意转正，将按确认日期生效');
     await reloadAfterChange();
   } catch (error) {
-    companyError.value = error instanceof Error ? error.message : '审批失败，请稍后重试';
+    companyError.value = actionErrorText(error, '审批失败，请稍后重试');
   } finally {
     approving.value = false;
   }
@@ -229,35 +240,37 @@ async function handleCompanyDecline() {
   companyError.value = '';
   declining.value = true;
   try {
-    await confirmationApi.declineCompany(app.value.id, companyReason.value.trim() || undefined);
+    await confirmationApi.declineCompany(app.value.id, approvalSubmissionVersion.value, companyReason.value.trim() || undefined);
     approvalDialogVisible.value = false;
     ElMessage.success('已记录不同意转正，后续人事安排由 HR 另行办理');
     await reloadAfterChange();
   } catch (error) {
-    companyError.value = error instanceof Error ? error.message : '办理失败，请稍后重试';
+    companyError.value = actionErrorText(error, '办理失败，请稍后重试');
   } finally {
     declining.value = false;
   }
 }
 
-async function handleReturn(reason: string, role: 'manager' | 'hr') {
+async function handleReturn(reason: string, role: 'manager' | 'hr' | 'company') {
   if (!app.value) return;
   const trimmedReason = reason.trim();
   if (!trimmedReason) {
     if (role === 'manager') managerError.value = '请填写退回员工的原因';
-    else hrError.value = '请填写退回员工的原因';
+    else if (role === 'hr') hrError.value = '请填写退回员工的原因';
+    else companyError.value = '请填写退回员工的原因';
     return;
   }
   returning.value = true;
   try {
-    await confirmationApi.returnForSupplement(app.value.id, trimmedReason);
+    await confirmationApi.returnForSupplement(app.value.id, trimmedReason, approvalSubmissionVersion.value);
     approvalDialogVisible.value = false;
     ElMessage.success('已退回员工补充；重新提交后将从直属主管重新流转');
     await reloadAfterChange();
   } catch (error) {
-    const message = error instanceof Error ? error.message : '退回失败，请稍后重试';
+    const message = actionErrorText(error, '退回失败，请稍后重试');
     if (role === 'manager') managerError.value = message;
-    else hrError.value = message;
+    else if (role === 'hr') hrError.value = message;
+    else companyError.value = message;
   } finally {
     returning.value = false;
   }
@@ -402,7 +415,7 @@ function actorInitial(name: string): string {
             <el-tag :type="statusType(app.status) as any" size="small">{{ app.status === 'draft' && app.returnReason ? '退回补充' : statusLabel(app.status) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="主管">{{ app.manager?.name || '待 HR 核实' }}</el-descriptions-item>
-          <el-descriptions-item label="所属公司">{{ companyLabels[app.roster?.company ?? ''] || '待核实' }}</el-descriptions-item>
+          <el-descriptions-item label="所属公司">{{ app.roster?.companyText || companyLabels[app.roster?.company ?? ''] || '待核实' }}</el-descriptions-item>
           <el-descriptions-item label="部门">{{ app.roster?.deptName || '待核实' }}</el-descriptions-item>
           <el-descriptions-item label="岗位">{{ app.roster?.position || '待核实' }}</el-descriptions-item>
           <el-descriptions-item label="入职日期">{{ formatDate(app.roster?.entryDate) }}</el-descriptions-item>
@@ -541,13 +554,14 @@ function actorInitial(name: string): string {
           <div v-else-if="app.pendingRole === 'company'" class="company-decision">
             <p>HR 拟生效日期：<b>{{ formatDate(app.proposedRegularDate) }}</b></p>
             <label class="company-reason">
-              <span>理由（选填）</span>
+              <span>理由（选填；退回时请填写原因）</span>
               <el-input v-model="companyReason" type="textarea" :rows="3" maxlength="1000" show-word-limit placeholder="请输入理由（选填）" @input="companyError = ''" />
             </label>
             <p v-if="companyError" class="field-error">{{ companyError }}</p>
             <div class="company-actions">
-              <el-button type="primary" :loading="approving" :disabled="declining" @click="handleCompanyApprove">同意</el-button>
-              <el-button v-if="app.canReject" type="danger" plain :loading="declining" :disabled="approving" @click="handleCompanyDecline">不同意</el-button>
+              <el-button type="primary" :loading="approving" :disabled="declining || returning" @click="handleCompanyApprove">同意</el-button>
+              <el-button v-if="app.canReject" type="danger" plain :loading="declining" :disabled="approving || returning" @click="handleCompanyDecline">不同意</el-button>
+              <el-button v-if="app.canReturn" :loading="returning" :disabled="approving || declining" @click="handleReturn(companyReason, 'company')">退回员工</el-button>
             </div>
           </div>
         </div>

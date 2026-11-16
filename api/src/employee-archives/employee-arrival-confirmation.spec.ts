@@ -86,13 +86,14 @@ describe('explicit arrival confirmation', () => {
 
   it('reviewing a new hire creates a non-login projection even when the date has passed', async () => {
     const { tx } = setup();
+    tx.position = { findUnique: jest.fn(async () => ({ id: 'p1', name: 'Test position', jobFamily: null, isActive: true })) };
     tx.user.create = jest.fn(async () => ({ id: 'u1' }));
     tx.employmentRecord.create = jest.fn();
     tx.employeeContract = { findMany: jest.fn(async () => []) };
     const service = new EmployeeDataReviewsService({} as any);
     await (service as any).applyProfile(tx, { id: 'r1', userId: null, employeeNo: '358', sourceType: 'manual_employee_create',
       intakeType: 'new_hire', requiresArrivalConfirmation: true, sourceBatchId: null, baseValue: {}, proposedValue: {
-        employee: { name: 'Synthetic', employeeNo: '358', deptId: 'd1', company: 'fuede', entryDate: '2026-11-10',
+        employee: { name: 'Synthetic', employeeNo: '358', deptId: 'd1', positionId: 'p1', company: 'fuede', entryDate: '2026-11-10',
           effectiveFrom: '2026-11-10', employeeStatus: 'active', employmentType: 'full_time' },
       } }, reviewer);
     expect(tx.user.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'pending_entry' }) }));
@@ -139,12 +140,13 @@ describe('explicit arrival confirmation', () => {
   });
 
   it('scheduler excludes unconfirmed employment from its projection query', async () => {
-    const { effective, db, tx } = setup();
+    const { effective, db, tx, user } = setup();
+    user.status = 'active';
     db.employeeDataChangeRequest.findMany = jest.fn(async () => [{ userId: 'u1' }]);
     db.user.findMany = jest.fn(async () => [{ id: 'u1', status: 'active' }]);
     db.position = { findMany: jest.fn(async () => []) };
     await effective.refreshEffectiveProjections();
-    expect(tx.employmentRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: approvedEmploymentSourceWhere }));
+    expect(tx.employmentRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'u1', ...approvedEmploymentSourceWhere } }));
     expect(tx.user.update).not.toHaveBeenCalled();
   });
 

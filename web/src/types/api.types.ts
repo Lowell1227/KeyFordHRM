@@ -2049,7 +2049,7 @@ export interface ConfirmationApplication {
   companyApproverId: string | null;
   companyApprover: { id: string; name: string } | null;
   summary?: string | null;
-  roster?: { employeeNo: string | null; company: CompanyCode | null; deptName: string | null;
+  roster?: { employeeNo: string | null; company: CompanyCode | null; companyText?: string | null; deptName: string | null;
     position: string | null; entryDate: string | null; plannedRegularDate: string | null };
   managerRecommendation?: boolean | null;
   salary?: number | null;
@@ -2083,6 +2083,7 @@ export interface ConfirmationRoster {
   managerName: string | null;
   employeeNo: string | null;
   company: CompanyCode | null;
+  companyText?: string | null;
   deptName: string | null;
   position: string | null;
   entryDate: string | null;

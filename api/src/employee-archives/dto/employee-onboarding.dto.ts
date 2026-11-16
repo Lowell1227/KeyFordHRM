@@ -26,12 +26,14 @@ export class ContractReferenceDto {
 export class EmployeeReentryFieldsDto {
   @IsOptional() @IsUUID('4') talentCandidateId?: string;
   @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
-  @ValidateIf(input => input.company != null || !input.contractSubjectId)
-  @IsIn(Object.values(CompanyCode)) company!: CompanyCode;
+  @IsOptional() @IsString() @MaxLength(150) companyText?: string | null;
+  @IsOptional()
+  @IsIn(Object.values(CompanyCode)) company?: CompanyCode | null;
   @IsOptional() @IsUUID('4') deptId?: string | null;
   @IsOptional() @IsUUID('4') positionId?: string | null;
   @IsOptional() @IsString() @MaxLength(100) position?: string | null;
   @IsOptional() @IsString() @MaxLength(100) jobFamily?: string | null;
+  @IsOptional() @IsUUID('4') jobFamilyId?: string | null;
   @IsOptional()
   @IsUUID(undefined, { message: '花名册直属主管信息无效，请重新选择' })
   rosterManagerId?: string | null;
@@ -55,7 +57,7 @@ export class CreateEmployeeReentryDto extends EmployeeReentryFieldsDto {
 
 export class ReviseEmployeeReentryDto extends EmployeeReentryFieldsDto {
   @IsOptional() @IsBoolean() performanceOnly?: boolean;
-  @ValidateIf((input) => input.performanceOnly !== true && (input.company != null || !input.contractSubjectId)) company!: CompanyCode;
+  @ValidateIf((input) => input.performanceOnly !== true && input.company != null) company?: CompanyCode | null;
   @ValidateIf((input) => input.performanceOnly !== true) effectiveDate!: Date;
   @ValidateIf((input) => input.performanceOnly !== true) employeeStatus!: UserStatus;
   @ValidateIf((input) => input.performanceOnly !== true) employmentType!: EmploymentType;

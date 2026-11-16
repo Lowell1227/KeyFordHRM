@@ -8,7 +8,7 @@ const profileFields = new Set(['phone', 'gender', 'birthDate', 'ethnicity', 'edu
   'bankName', 'bankBranch', 'bankAccount']);
 
 export function archiveFieldPath(field: string): string {
-  const path = field.replace(/\[(\d+)\]/g, '.$1');
+  const path = field.replace(/\[(\d+)\]/g, '.$1').replace(/(jobGrade|jobFamily|workLocation|education|maritalStatus|politicalStatus|householdType|emergencyContactRelation)Id$/, '$1');
   if (['company', 'companyText', 'contractSubjectId', 'employee.company', 'employee.contractSubjectId'].includes(path)) return 'employee.companyText';
   if (path === 'status' || path === 'employee.status') return 'employee.employeeStatus';
   if (path === 'position' || path === 'employee.position') return 'employee.positionId';

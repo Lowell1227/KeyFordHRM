@@ -8,7 +8,7 @@ export type ReviewDifferenceGroup = { key: string; title: string; kind?: '新增
 
 // 与申请详情使用相同业务字段；只展示允许公开的字段，不遍历未知或加密信息。
 const fieldLabels: Record<string, string> = {
-  employeeNo: '工号', name: '姓名', phone: '手机号', company: '组织归属', companyText: '所属公司（合同主体）', contractSubjectId: '合同主体关联',
+  employeeNo: '工号', name: '姓名', phone: '手机号', company: '所属公司', companyText: '所属公司', contractSubjectId: '公司关联',
   deptId: '部门', positionId: '岗位关联', position: '岗位', jobGrade: '职级', jobFamily: '职系', workLocation: '工作地点',
   employeeStatus: '任职状态', status: '任职状态', employmentType: '用工类型', entryDate: '入职日期', effectiveFrom: '生效日期', effectiveDate: '生效日期', effectiveTo: '结束日期', leaveDate: '最后工作日',
   managerId: '花名册直属上级', probationMonths: '试用期（月）', plannedRegularDate: '预计转正日期', actualRegularDate: '实际转正日期', reason: '原因', changeType: '变更类型',
@@ -81,14 +81,63 @@ function managerReference(source: RecordValue): RecordValue {
   return { ...source, managerId: name ? `name:${name}` : null, managerName: name || null };
 }
 
+function employeeCompanyDifference(before: RecordValue, proposed: RecordValue, names: ReviewNames): ReviewDifference[] {
+  if (!['company', 'companyText', 'contractSubjectId'].some(key => key in proposed)) return [];
+  const after = { ...before, ...proposed };
+  const beforeId = text(before.contractSubjectId), afterId = text(after.contractSubjectId);
+  // A partial ID change must not borrow the previous company's name.
+  if (beforeId !== afterId && !('companyText' in proposed)) delete after.companyText;
+  const name = (value: RecordValue) => text(value.companyText) || text(value.contractSubjectName)
+    || names.contractSubjectId?.[text(value.contractSubjectId)]
+    || (!value.contractSubjectId ? enumLabels.company?.[text(value.company)] || text(value.company) : '')
+    || (value.contractSubjectId ? '已关联公司（历史名称未记录）' : '');
+  let previous = name(before), next = name(after);
+  if (beforeId === afterId && previous === next) return [];
+  const kind = !next && !afterId ? '清空' : !previous && !beforeId ? '新增' : '修改';
+  // Two distinct directory entries can share a historical display name.
+  if (previous === next && beforeId !== afterId) {
+    previous += beforeId ? '（原公司关联）' : '（历史名称，未关联）';
+    next += afterId ? '（新公司关联）' : '（已取消关联）';
+  }
+  return [{ key: 'employee.companyText', label: '所属公司', kind, before: previous || '未填写', after: next || '未填写' }];
+}
+
+const referenceFields = {
+  employee: ['jobGrade', 'jobFamily', 'workLocation'],
+  profile: ['education', 'maritalStatus', 'politicalStatus', 'householdType', 'emergencyContactRelation'],
+  performance: [],
+} as const;
+
+function referenceDifferences(section: keyof typeof referenceFields, before: RecordValue, proposed: RecordValue): ReviewDifference[] {
+  return referenceFields[section].flatMap(field => {
+    const id = `${field}Id`;
+    if (!(field in proposed) && !(id in proposed)) return [];
+    const after = { ...before, ...proposed };
+    const previousId = text(before[id]), nextId = text(after[id]);
+    let previous = text(before[field]), next = text(after[field]);
+    if (previousId !== nextId && !(field in proposed)) next = nextId ? '已关联目录（历史名称未记录）' : '';
+    if (previous === next && previousId === nextId) return [];
+    const kind = !next && !nextId ? '清空' : !previous && !previousId ? '新增' : '修改';
+    if (previous === next && previousId !== nextId) {
+      previous += previousId ? '（原目录关联）' : '（历史名称，未关联）';
+      next += nextId ? '（已关联目录）' : '（已取消关联）';
+    }
+    return [{ key: `${section}.${field}`, label: fieldLabels[field]!, kind, before: previous || '未填写', after: next || '未填写' }];
+  });
+}
+
 type ReviewSnapshot = Pick<EmployeeDataReview, 'baseValue' | 'proposedValue' | 'sourceType' | 'changedFields'>;
 
 export function employeeReviewDifferences(request: ReviewSnapshot, names: ReviewNames = {}): ReviewDifferenceGroup[] {
   const groups: ReviewDifferenceGroup[] = [];
   for (const [section, title] of [['employee', '员工任职信息'], ['profile', '员工档案资料'], ['performance', '绩效关系']] as const) {
-    const labels = section === 'performance' ? { managerId: '绩效直属上级' } : fieldLabels;
+    const labels = section === 'performance' ? { managerId: '绩效直属上级' } : section === 'employee'
+      ? Object.fromEntries(Object.entries(fieldLabels).filter(([key]) => !['company', 'companyText', 'contractSubjectId'].includes(key))) : fieldLabels;
     const before = record(request.baseValue[section]), after = record(request.proposedValue[section]);
-    const fields = differences(section === 'profile' ? before : managerReference(before), section === 'profile' ? after : managerReference(after), labels, names, `${section}.`);
+    const ordinaryLabels = Object.fromEntries(Object.entries(labels).filter(([key]) => !(referenceFields[section] as readonly string[]).includes(key)));
+    const fields = differences(section === 'profile' ? before : managerReference(before), section === 'profile' ? after : managerReference(after), ordinaryLabels, names, `${section}.`);
+    fields.push(...referenceDifferences(section, before, after));
+    if (section === 'employee') fields.unshift(...employeeCompanyDifference(before, after, names));
     if (section === 'profile') {
       for (const [key, label] of [['idNumber', '身份证'], ['bankAccount', '银行卡']] as const) {
         const configured = `${key}Configured`;

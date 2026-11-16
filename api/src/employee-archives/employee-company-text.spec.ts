@@ -22,9 +22,10 @@ describe('employee company text', () => {
     const request = { id: 'review-1', userId: overrides.userId === undefined ? current.id : overrides.userId,
       intakeType: null, sourceType: overrides.sourceType ?? 'manual_archive_change', sourceBatchId: null,
       recordStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
-      baseValue: { employee }, proposedValue: { employee: { ...employee, companyText: '已补公司', ...overrides.proposed },
+      baseValue: { employee }, proposedValue: { employee: { ...employee, ...(overrides.userId === null ? { positionId: 'position' } : {}), companyText: '已补公司', ...overrides.proposed },
         profile: { phone: '已审核测试号码' }, contracts: [{ id: 'contract-1', contractType: 'contract', signedAt: '2025-01-01' }] } };
     const tx = {
+      position: { findUnique: jest.fn(async () => ({ id: 'position', name: 'Position', jobFamily: null, isActive: true })) },
       user: { findUnique: jest.fn().mockResolvedValue(current), update: jest.fn(), create: jest.fn() },
       employeeDataChangeRequest: { findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn() },
@@ -56,7 +57,7 @@ describe('employee company text', () => {
     const employment = { company: 'fuede', companyText: '花名册公司原文',
       contractSubjectId: '11111111-1111-4111-8111-111111111111' };
     const { tx, approve } = incompleteArchiveReview({ current: { employmentHistory: [employment] },
-      proposed: { company: 'beijing_fuede', position: 'Synthetic position' } });
+      proposed: { company: 'beijing_fuede', probationMonths: 3 } });
     tx.employmentRecord.findFirst.mockImplementation(async ({ select }: any) => select?.companyText ? employment as never : null);
     expect((await approve()).failed).toEqual([]);
     expect(tx.employmentRecord.create).toHaveBeenCalledWith({ data: expect.objectContaining(employment) });
@@ -128,7 +129,7 @@ describe('employee company text', () => {
       id: 'review-1', userId: current.id, intakeType: null, sourceType: 'manual_archive_change', sourceBatchId: null,
       recordStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
       baseValue: { employee: companyText === undefined ? { ...baseEmployee, companyText: undefined } : baseEmployee },
-      proposedValue: { employee: { ...baseEmployee, companyText, ...(companyText === undefined ? { position: '新岗位' } : {}) } },
+      proposedValue: { employee: { ...baseEmployee, companyText, ...(companyText === undefined ? { probationMonths: 3 } : {}) } },
     };
     if (companyText === undefined) {
       delete (request.baseValue.employee as Record<string, unknown>).companyText;
@@ -136,6 +137,7 @@ describe('employee company text', () => {
     }
     if (stale) current.employmentHistory[0].companyText = '已被他人更正';
     const tx = {
+      position: { findUnique: jest.fn(async () => ({ id: 'position', name: 'Position', jobFamily: null, isActive: true })) },
       user: { findUnique: jest.fn().mockResolvedValue(current), update: jest.fn() },
       employeeDataChangeRequest: { findUnique: jest.fn().mockResolvedValue(request),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn() },

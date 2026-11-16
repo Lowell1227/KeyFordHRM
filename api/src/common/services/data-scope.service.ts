@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuthUser } from '../types/auth.types';
 import { findDepartmentsByEffectiveApprover } from '@/departments/department-relations';
 import { hasHrCapability } from '@/auth/hr-capabilities';
+import { findCurrentEmploymentCompanies } from '../personnel/current-employment-company';
 
 /**
  * 数据权限助手服务。
@@ -19,11 +20,11 @@ export class DataScopeService {
   /** 转正管理专用：普通 HR 的授权限定在花名册所属公司，不扩大其他员工档案权限。 */
   async getConfirmationEmployeeFilter(viewer: AuthUser): Promise<Prisma.UserWhereInput> {
     if (viewer.sysRole === SysRole.hr) return {};
-    const operator = await this.prisma.user.findUnique({
-      where: { id: viewer.id }, select: { dept: { select: { company: true } } },
-    });
-    if (!operator?.dept?.company) return { id: { in: [] } };
-    return { dept: { is: { company: operator.dept.company } } };
+    if (viewer.sysRole !== SysRole.hr_user || !hasHrCapability(viewer, 'confirmation_manage')) return { id: { in: [] } };
+    const companies = await findCurrentEmploymentCompanies(this.prisma);
+    const companyId = companies.get(viewer.id);
+    if (!companyId) return { id: { in: [] } };
+    return { id: { in: [...companies].filter(([, id]) => id === companyId).map(([id]) => id) } };
   }
 
   /**
