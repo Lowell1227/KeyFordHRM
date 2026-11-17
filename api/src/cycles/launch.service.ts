@@ -220,9 +220,7 @@ export class LaunchService {
       ));
       warnings.push(...launchTimeSequenceWarnings(effectiveCycle, schedules));
     }
-    const candidates = isWorkflowV2
-      ? this.includeCompanyFinalApprover(selection.included, companyFinalApprover)
-      : selection.included;
+    const candidates = selection.included;
     const exclusions = isWorkflowV2 && this.isEligibleCompanyFinalApprover(companyFinalApprover)
       ? selection.exclusions.filter(({ employeeId }) => employeeId !== companyFinalApprover.id)
       : selection.exclusions;
@@ -447,9 +445,7 @@ export class LaunchService {
           });
         }
       }
-      const candidates = isWorkflowV2
-        ? this.includeCompanyFinalApprover(selection.included, companyFinalApprover)
-        : selection.included;
+      const candidates = selection.included;
       if (candidates.length === 0) {
         throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '当前没有符合被考核条件的员工' });
       }
@@ -1127,17 +1123,6 @@ export class LaunchService {
       WHERE "key" = 'performance_company_final_approver'
       FOR SHARE
     `);
-  }
-
-  private includeCompanyFinalApprover(
-    candidates: Candidate[],
-    companyFinalApprover: CompanyFinalApprover | null,
-  ): Candidate[] {
-    if (!this.isEligibleCompanyFinalApprover(companyFinalApprover)
-      || candidates.some((candidate) => candidate.id === companyFinalApprover.id)) {
-      return candidates;
-    }
-    return [...candidates, companyFinalApprover];
   }
 
   private isEligibleCompanyFinalApprover(

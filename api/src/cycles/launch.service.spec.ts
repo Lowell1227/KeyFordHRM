@@ -666,10 +666,12 @@ describe('LaunchService preflight', () => {
 
     expect(checked.ready).toBe(true);
     expect(checked.companyFinalApprover).toEqual({ id: companyFinalApproverId, name: '李宏' });
-    expect(checked.participants).toContainEqual(expect.objectContaining({
-      employeeId: companyFinalApproverId,
-      participantDisposition: 'top_leader_exempt',
-    }));
+    expect(checked.participants).toEqual([
+      expect.objectContaining({
+        employeeId: candidate.id,
+        participantDisposition: 'active',
+      }),
+    ]);
   });
 
   it('changes the preflight hash when the configured final approver changes', async () => {
@@ -699,7 +701,7 @@ describe('LaunchService preflight', () => {
     expect(after.planHash).not.toBe(before.planHash);
   });
 
-  it('force-includes an active company final approver outside the participant scope for audit', async () => {
+  it('keeps the company final approver outside a one-person participant scope', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
       participantUserIds: [candidate.id],
     }));
@@ -708,31 +710,30 @@ describe('LaunchService preflight', () => {
 
     const checked = await service.preflight(cycleId);
 
-    expect(checked.participants).toEqual(expect.arrayContaining([
+    expect(checked.participants).toEqual([
       expect.objectContaining({
         employeeId: candidate.id,
         participantDisposition: 'active',
       }),
-      expect.objectContaining({
-        employeeId: companyFinalApproverId,
-        participantDisposition: 'top_leader_exempt',
-      }),
-    ]));
-    expect(checked.participantCount).toBe(2);
+    ]);
+    expect(checked.participantCount).toBe(1);
 
     await service.launch(cycleId, operator, {
       now: new Date('2026-12-23T00:00:00.000Z'),
       expectedPlanHash: checked.planHash!,
     });
 
-    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+    expect(tx.assessmentTask.create).not.toHaveBeenCalledWith({
       data: expect.objectContaining({
         employeeId: companyFinalApproverId,
-        managerId: null,
-        status: 'exempted',
-        participantDisposition: 'top_leader_exempt',
       }),
     });
+    expect(tx.assessmentCycle.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        companyFinalApproverId,
+        launchPlan: expect.objectContaining({ companyFinalApproverId }),
+      }),
+    }));
     expect(tx.indicatorVersion.create).toHaveBeenCalledTimes(1);
     expect(tx.assessmentPeriod.createMany).toHaveBeenCalledTimes(1);
   });
@@ -788,7 +789,7 @@ describe('LaunchService preflight', () => {
       select: expect.objectContaining({ status: true }),
     }));
     expect(tx.user.findMany).toHaveBeenCalledTimes(1);
-    expect(preflight.participantCount).toBe(3);
+    expect(preflight.participantCount).toBe(2);
     expect(preflight.participants).toContainEqual(expect.objectContaining({
       employeeId: probationEmployee.id,
       participantDisposition: 'active',
@@ -802,7 +803,7 @@ describe('LaunchService preflight', () => {
       expectedPlanHash: preflight.planHash!,
     });
 
-    expect(launch).toEqual(expect.objectContaining({ activeTasks: 2, exemptedTasks: 1 }));
+    expect(launch).toEqual(expect.objectContaining({ activeTasks: 2, exemptedTasks: 0 }));
     expect(tx.assessmentTask.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         employeeId: probationEmployee.id,
@@ -1049,10 +1050,7 @@ describe('LaunchService preflight', () => {
               managerDueAt: '2027-02-08T10:00:00.000Z',
             }),
           ]),
-          participants: expect.arrayContaining([
-            expect.objectContaining({ participantDisposition: 'active' }),
-            expect.objectContaining({ participantDisposition: 'top_leader_exempt' }),
-          ]),
+          participants: [expect.objectContaining({ participantDisposition: 'active' })],
         }),
       }),
     }));
@@ -1092,7 +1090,7 @@ describe('LaunchService preflight', () => {
       ],
     });
     expect(result).toEqual(expect.objectContaining({
-      totalTasks: 2,
+      totalTasks: 1,
       activeTasks: 1,
       periodCount: 3,
       indicatorVersionCount: 1,
