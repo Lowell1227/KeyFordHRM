@@ -1162,6 +1162,8 @@ describe('CyclesService', () => {
             employeeId: 'employee-active', employeeName: '俞丹',
             deptId: 'hr-team', deptName: '人事组',
             managerId: 'manager-1', managerName: '姚瑶',
+            deptHeadId: 'dept-head-1', deptHeadName: '方园',
+            approverId: 'approver-1', approverName: '李宏',
             participantDisposition: 'active', isExempt: false, exemptReason: null,
           },
           {
@@ -1170,6 +1172,15 @@ describe('CyclesService', () => {
             managerId: 'manager-1', managerName: '俞丹',
             participantDisposition: 'cycle_exempt', isExempt: true,
             exemptReason: '发起检查时的豁免原因',
+          },
+          {
+            employeeId: 'company-leader', employeeName: '李宏',
+            deptId: 'office', deptName: '总经办',
+            managerId: null, managerName: null,
+            deptHeadId: 'company-leader', deptHeadName: '李宏',
+            approverId: null, approverName: null,
+            participantDisposition: 'top_leader_exempt', isExempt: true,
+            exemptReason: '最高负责人豁免',
           },
         ],
       },
@@ -1182,6 +1193,10 @@ describe('CyclesService', () => {
       {
         employeeId: 'employee-exempt', status: 'exempted', isExempt: true,
         participantDisposition: 'cycle_exempt', exemptReason: 'HR 按部门设置为本周期豁免',
+      },
+      {
+        employeeId: 'company-leader', status: 'exempted', isExempt: true,
+        participantDisposition: 'top_leader_exempt', exemptReason: '最高负责人豁免',
       },
     ]);
     prisma.user.findUnique.mockResolvedValue({ id: creator.id, name: '姚瑶' });
@@ -1198,10 +1213,14 @@ describe('CyclesService', () => {
       participants: [
         expect.objectContaining({
           employeeId: 'employee-active', employeeName: '俞丹',
+          deptHeadId: 'dept-head-1', deptHeadName: '方园',
+          approverId: 'approver-1', approverName: '李宏',
           participantDisposition: 'active', status: 'indicator_drafting',
         }),
         expect.objectContaining({
           employeeId: 'employee-exempt', employeeName: '方园', deptName: '人事组',
+          deptHeadId: null, deptHeadName: null,
+          approverId: null, approverName: null,
           participantDisposition: 'cycle_exempt', status: 'exempted',
           exemptReason: 'HR 按部门设置为本周期豁免',
         }),

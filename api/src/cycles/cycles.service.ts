@@ -60,6 +60,10 @@ interface FrozenLaunchParticipant {
   deptName: string | null;
   managerId: string | null;
   managerName: string | null;
+  deptHeadId: string | null;
+  deptHeadName: string | null;
+  approverId: string | null;
+  approverName: string | null;
   participantDisposition: ParticipantRecordDisposition;
   isExempt: boolean;
   exemptReason: string | null;
@@ -858,7 +862,8 @@ export class CyclesService {
       });
     }
 
-    const frozenParticipants = this.frozenLaunchParticipants(cycle.launchPlan);
+    const frozenParticipants = this.frozenLaunchParticipants(cycle.launchPlan)
+      .filter((participant) => participant.participantDisposition !== 'top_leader_exempt');
     const [tasks, operator] = await Promise.all([
       this.prisma.assessmentTask.findMany({
         where: { cycleId: id },
@@ -927,6 +932,10 @@ export class CyclesService {
         deptName: typeof participant.deptName === 'string' ? participant.deptName : null,
         managerId: typeof participant.managerId === 'string' ? participant.managerId : null,
         managerName: typeof participant.managerName === 'string' ? participant.managerName : null,
+        deptHeadId: typeof participant.deptHeadId === 'string' ? participant.deptHeadId : null,
+        deptHeadName: typeof participant.deptHeadName === 'string' ? participant.deptHeadName : null,
+        approverId: typeof participant.approverId === 'string' ? participant.approverId : null,
+        approverName: typeof participant.approverName === 'string' ? participant.approverName : null,
         participantDisposition,
         isExempt,
         exemptReason: typeof participant.exemptReason === 'string' ? participant.exemptReason : null,
