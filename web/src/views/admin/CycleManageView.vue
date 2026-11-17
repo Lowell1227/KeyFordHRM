@@ -1539,7 +1539,7 @@ async function handleReviewCycle(cycle: AssessmentCycle) {
       : '周期结束统一评分，共 1 期'
     : '历史流程';
   const reviewSummary = cycle.workflowVersion === 2
-    ? `已调整月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；结果审批人 ${cycle.companyFinalApprover?.name || '未配置'}；`
+    ? `已调整月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；公司负责人（不参与绩效审批）：${cycle.companyFinalApprover?.name || '未配置'}；`
     : '';
   try {
     await ElMessageBox.confirm(

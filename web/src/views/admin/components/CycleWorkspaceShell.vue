@@ -273,7 +273,7 @@ watch(() => props.cycle?.id, () => {
           <div v-if="cycle" class="cycle-workspace__scoring" data-testid="cycle-workspace-scoring-summary">
             <span>{{ scoringSummary(cycle) }}</span>
             <span v-if="cycle.workflowVersion === 2">已调整月份：{{ scheduleExceptionCount(cycle) }}个</span>
-            <span v-if="cycle.workflowVersion === 2">结果审批人：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
+            <span v-if="cycle.workflowVersion === 2">公司负责人（不参与绩效审批）：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
           </div>
         </div>
       </div>
@@ -557,7 +557,7 @@ watch(() => props.cycle?.id, () => {
               </el-table-column>
               <el-table-column
                 v-if="isPrelaunch"
-                :label="cycle.workflowVersion === 2 ? '结果审批人' : '分管领导'"
+                label="分管领导"
                 min-width="210"
               >
                 <template #default="{ row }">

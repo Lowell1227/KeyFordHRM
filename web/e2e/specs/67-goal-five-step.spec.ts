@@ -189,6 +189,27 @@ test('leader without direct reports sees assigned review queue', async ({
     page.getByRole('button', { name: '目标审核通过', exact: true }),
   ).toBeVisible();
 });
+
+for (const width of [1440, 390]) {
+  test(`leader sees assigned goal review from performance workspace ${width}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({
+      width,
+      height: width === 390 ? 844 : 900,
+    });
+    await setup(page, 'leader');
+    await page.goto('/tasks');
+
+    await expect(page.getByRole('button', { name: '待我审核（1）', exact: true })).toBeVisible();
+    const notice = page.getByTestId('goal-review-notice');
+    await expect(notice).toContainText('1 条目标审核待办');
+    await notice.getByRole('button', { name: '查看待审目标', exact: true }).click();
+    await expect(page).toHaveURL(/goalView=review/);
+    await expect(page.getByTestId('goal-plan-list')).toBeVisible();
+  });
+}
+
 test('employee confirmation waits for leader', async ({ page }) => {
   await setup(page, 'employee', 'indicator_confirming');
   await page.goto('/tasks/goal-1?stage=goal-confirmation');

@@ -443,7 +443,7 @@ describe('LaunchService preflight', () => {
     }));
   });
 
-  it('blocks a workflow v2 participant from being their own result approver', async () => {
+  it('blocks a workflow v2 participant from being their own supervising leader', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
     mockV2Users();
@@ -461,7 +461,7 @@ describe('LaunchService preflight', () => {
       ready: false,
       blockers: expect.arrayContaining([expect.objectContaining({
         code: 'ORGANIZATION_RELATION_INVALID',
-        message: expect.stringContaining('以下员工的结果审批人不能是本人：测试员工'),
+        message: expect.stringContaining('以下员工的分管领导不能是本人：测试员工'),
       })]),
     }));
   });
@@ -844,6 +844,7 @@ describe('LaunchService preflight', () => {
       ready: false,
       blockers: expect.arrayContaining([expect.objectContaining({
         code: 'COMPANY_FINAL_APPROVER_MISSING',
+        message: '未设置有效的公司负责人（该角色不参与绩效审批），请先完成配置',
       })]),
     }));
   });
@@ -860,6 +861,7 @@ describe('LaunchService preflight', () => {
       ready: false,
       blockers: expect.arrayContaining([expect.objectContaining({
         code: 'COMPANY_FINAL_APPROVER_MISSING',
+        message: '未设置有效的公司负责人（该角色不参与绩效审批），请先完成配置',
       })]),
     }));
   });
@@ -960,14 +962,14 @@ describe('LaunchService preflight', () => {
       ready: false,
       blockers: expect.arrayContaining([expect.objectContaining({
         code: 'ORGANIZATION_RELATION_INVALID',
-        message: expect.stringContaining('结果审批人必须是没有绩效直属上级的最高负责人'),
+        message: expect.stringContaining('公司负责人必须是没有绩效直属上级的最高负责人'),
       })]),
     }));
   });
 
   it.each([
     { workflowVersion: 1, expectedCopy: '分管领导' },
-    { workflowVersion: 2, expectedCopy: '结果审批人' },
+    { workflowVersion: 2, expectedCopy: '分管领导' },
   ])('uses workflow v$workflowVersion organization blocker terminology', async ({
     workflowVersion,
     expectedCopy,

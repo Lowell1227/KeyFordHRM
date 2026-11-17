@@ -872,7 +872,7 @@ test.describe('compact cycle management list', () => {
     const details = page.getByTestId('cycle-preflight-details');
     await expect(details.getByRole('columnheader', { name: '绩效直属上级' })).toBeVisible();
     await expect(details.getByRole('columnheader', { name: '部门复核人' })).toBeVisible();
-    await expect(details.getByRole('columnheader', { name: '结果审批人' })).toBeVisible();
+    await expect(details.getByRole('columnheader', { name: '分管领导' })).toBeVisible();
     await expect(details).toContainText('周强');
     await expect(details).toContainText('员工档案中的绩效直属上级');
     await expect(details).toContainText('王敏');

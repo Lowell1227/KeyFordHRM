@@ -628,7 +628,7 @@ function getDeptIssueBadges(dept: Department | null): DeptIssueBadge[] {
   const directMemberCount = dept.directMemberCount ?? 0;
 
   if (directMemberCount > 0 && !dept.effectiveApproverId) {
-    badges.push({ label: '缺最终审批人', level: 'danger' });
+    badges.push({ label: '缺分管领导', level: 'danger' });
   }
   if (!dept.leaderId) {
     badges.push({ label: '缺负责人', level: 'warning' });

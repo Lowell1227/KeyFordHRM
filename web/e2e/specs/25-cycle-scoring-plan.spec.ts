@@ -917,7 +917,7 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度自评 · 3期');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('结果审核：按周期审核');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('已调整月份：1个');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审批人：李宏');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司负责人（不参与绩效审批）：李宏');
 
     await page.getByRole('button', { name: '发起考核' }).click();
     const preflightSummary = page.getByTestId('cycle-preflight-summary');

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
 import GoalPlanList from './components/GoalPlanList.vue';
-import { canMonitorGoals, type GoalScope } from '@/api/goal-plans.api';
+import { canMonitorGoals, goalPlansApi, type GoalScope } from '@/api/goal-plans.api';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { usersApi } from '@/api/users.api';
@@ -50,6 +50,7 @@ const route = useRoute();
 const auth = useAuthStore();
 const goalView = computed(() => ['mine','review','monitor'].includes(String(route.query.goalView)) ? route.query.goalView as GoalScope : null);
 const canMonitor = computed(() => canMonitorGoals(auth.user));
+const goalReviewTotal = ref(0);
 const workspaceQuery = useTaskWorkspaceQuery();
 
 const list = ref<TaskListItem[]>([]);
@@ -81,6 +82,7 @@ let personalRequestSerial = 0;
 let singleOperationSerial = 0;
 let saveRequestSerial = 0;
 let taskWorkspaceReady = false;
+let goalReviewCountRequestSerial = 0;
 const latestSaveRequestByTask = new Map<string, {
   requestId: number;
   operationToken: string;
@@ -440,6 +442,20 @@ function httpErrorMessage(error: unknown, fallback: string): string {
   return responseMessage || candidate.message || fallback;
 }
 
+async function loadGoalReviewTotal() {
+  if (goalView.value === 'monitor' && !canMonitor.value) {
+    goalReviewTotal.value = 0;
+    return;
+  }
+  const requestId = ++goalReviewCountRequestSerial;
+  try {
+    const response = await goalPlansApi.findAll({ scope: 'review', page: 1, pageSize: 1 });
+    if (requestId === goalReviewCountRequestSerial) goalReviewTotal.value = response.total;
+  } catch {
+    if (requestId === goalReviewCountRequestSerial) goalReviewTotal.value = 0;
+  }
+}
+
 async function hydrateSelectedTeamTask(response: TeamTaskPage) {
   const taskId = workspaceQuery.state.value.taskId;
   const requestId = ++teamDetailRequestSerial;
@@ -790,6 +806,7 @@ async function executeTeamApproval(tasks: TeamTaskVersion[], actionLabel: string
   try {
     const result = await tasksApi.batchApproveIndicators({ tasks });
     await applyBatchResult(actionLabel, result, labels, contextKey);
+    if (result.succeeded.length > 0) await loadGoalReviewTotal();
     if (tasks.some(({ taskId }) => taskId === workspaceQuery.state.value.taskId)) {
       await goalReviewRef.value?.reload();
     }
@@ -811,6 +828,7 @@ async function executeTeamRejection(
   try {
     const result = await tasksApi.batchRejectIndicators({ tasks, reason });
     await applyBatchResult(actionLabel, result, labels, contextKey);
+    if (result.succeeded.length > 0) await loadGoalReviewTotal();
     if (tasks.some(({ taskId }) => taskId === workspaceQuery.state.value.taskId)) {
       await goalReviewRef.value?.reload();
     }
@@ -917,6 +935,7 @@ async function executeSingleGoalReview(
     const result = await submit();
     if (!isCurrentRequest()) return;
     await applyBatchResult(actionLabel, result, labels, contextKey);
+    if (result.succeeded.length > 0) await loadGoalReviewTotal();
     if (isCurrentRequest()) await goalReviewRef.value?.reload();
   } catch (error) {
     if (!isCurrentRequest()) return;
@@ -974,8 +993,14 @@ async function initializeWorkspace() {
     ]);
   }
 }
-onMounted(initializeWorkspace);
-watch(goalView, (value) => { if (!value) void initializeWorkspace(); });
+onMounted(() => {
+  void loadGoalReviewTotal();
+  void initializeWorkspace();
+});
+watch(goalView, (value) => {
+  void loadGoalReviewTotal();
+  if (!value) void initializeWorkspace();
+});
 
 watch(
   () => ({
@@ -1060,7 +1085,9 @@ watch(
 <template>
   <nav class="goal-plan-navigation" aria-label="目标计划视图">
     <el-button :type="goalView === 'mine' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
-    <el-button :type="goalView === 'review' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=review')">待我审核</el-button>
+    <el-button :type="goalView === 'review' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=review')">
+      {{ goalReviewTotal > 0 ? `待我审核（${goalReviewTotal}）` : '待我审核' }}
+    </el-button>
     <el-button v-if="canMonitor" :type="goalView === 'monitor' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
     <el-button v-if="goalView" @click="router.push('/tasks')">绩效待办</el-button>
   </nav>
@@ -1225,6 +1252,21 @@ watch(
         </div>
       </PerformanceContextPanel>
     </template>
+
+    <section
+      v-if="goalReviewTotal > 0 && !isTeamTaskWorkspace"
+      class="goal-review-notice"
+      data-testid="goal-review-notice"
+      aria-label="目标审核待办提醒"
+    >
+      <div>
+        <strong>{{ goalReviewTotal }} 条目标审核待办</strong>
+        <span>这些目标计划已明确分配给你，请进入目标审核办理。</span>
+      </div>
+      <el-button type="primary" plain @click="router.push('/tasks?goalView=review')">
+        查看待审目标
+      </el-button>
+    </section>
 
     <TeamTaskWorkspaceShell
       v-if="isTeamTaskWorkspace"
@@ -1979,4 +2021,51 @@ watch(
 }
 </style>
 
-<style scoped>.goal-plan-navigation{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.goal-plan-navigation .el-button{margin-left:0}</style>
+<style scoped>
+.goal-plan-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.goal-plan-navigation .el-button {
+  margin-left: 0;
+}
+
+.goal-review-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 12px;
+  padding: 12px 14px;
+  border: 1px solid #cdddf8;
+  border-radius: 8px;
+  background: #f2f7ff;
+}
+
+.goal-review-notice > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.goal-review-notice strong {
+  color: #20283a;
+  font-size: 14px;
+}
+
+.goal-review-notice span {
+  color: #68748a;
+  font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .goal-review-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

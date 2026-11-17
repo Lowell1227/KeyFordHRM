@@ -1529,9 +1529,20 @@ test.describe('team list manager workspace', () => {
   test('goal review reuses complete outcome handling for single approve and reject', async ({ page }) => {
     let approveAttempt = 0;
     let rejectionBody: Record<string, unknown> | undefined;
+    let assignedReviewTotal = 1;
     await mockGoalReviewWorkspace(page);
+    await page.route('**/api/v1/goal-plans**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        items: assignedReviewTotal > 0 ? [{ id: 'task-1' }] : [],
+        total: assignedReviewTotal,
+        page: 1,
+        pageSize: 1,
+      })),
+    }));
     await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
       approveAttempt += 1;
+      if (approveAttempt === 2) assignedReviewTotal = 0;
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse(approveAttempt === 1 ? {
@@ -1555,6 +1566,7 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
+    await expect(page.getByRole('button', { name: '待我审核（1）', exact: true })).toBeVisible();
     await page.getByTestId('goal-review-approve').click();
     await page.getByRole('dialog', { name: '通过目标审核' })
       .getByRole('button', { name: '通过', exact: true }).click();
@@ -1567,6 +1579,7 @@ test.describe('team list manager workspace', () => {
       .getByRole('button', { name: '通过', exact: true }).click();
     await expect(page.locator('.el-message--success')).toContainText('单项通过成功 1 项');
     await expect(page.getByTestId('team-task-list')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '待我审核', exact: true })).toBeVisible();
 
     await page.getByTestId('goal-review-reject').click();
     const rejectDialog = page.getByRole('dialog', { name: '退回修改' });

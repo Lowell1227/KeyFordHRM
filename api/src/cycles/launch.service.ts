@@ -1171,12 +1171,12 @@ export class LaunchService {
     if (!cycle.companyFinalApproverId || !this.isEligibleCompanyFinalApprover(companyFinalApprover)) {
       blockers.push({
         code: 'COMPANY_FINAL_APPROVER_MISSING',
-        message: '未设置有效的结果审批人，请先完成配置',
+        message: '未设置有效的公司负责人（该角色不参与绩效审批），请先完成配置',
       });
     } else if (companyFinalApprover.directManagerId) {
       blockers.push({
         code: 'ORGANIZATION_RELATION_INVALID',
-        message: `结果审批人必须是没有绩效直属上级的最高负责人：${companyFinalApprover.name}`,
+        message: `公司负责人必须是没有绩效直属上级的最高负责人：${companyFinalApprover.name}`,
       });
     }
     if (schedules.length === 0) {
@@ -1402,9 +1402,7 @@ export class LaunchService {
       messages.push(`以下部门未设置部门负责人：${Array.from(missingDeptLeaders).join('、')}`);
     }
     if (missingApprovers.size > 0) {
-      const approverCopy = this.isWorkflowV2(cycle)
-        ? '结果审批人'
-        : '分管领导';
+      const approverCopy = '分管领导';
       messages.push(
         `以下部门未设置${approverCopy}，请补齐部门负责人及其直属上级；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
       );
@@ -1413,9 +1411,7 @@ export class LaunchService {
       messages.push(`以下员工的绩效直属上级不能是本人：${Array.from(selfManagers).join('、')}`);
     }
     if (selfApprovers.size > 0) {
-      const approverCopy = this.isWorkflowV2(cycle)
-        ? '结果审批人'
-        : '分管领导';
+      const approverCopy = '分管领导';
       messages.push(`以下员工的${approverCopy}不能是本人：${Array.from(selfApprovers).join('、')}`);
     }
 

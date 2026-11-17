@@ -6,6 +6,9 @@ import { isTopLevelDepartmentLeader } from '../../src/utils/organization-relatio
 const viewPath = fileURLToPath(
   new URL('../../src/views/admin/UserManageView.vue', import.meta.url),
 );
+const taskInfoPath = fileURLToPath(
+  new URL('../../src/views/task/components/TaskInfoCard.vue', import.meta.url),
+);
 
 const apiResponse = (data: unknown) => ({
   code: 0,
@@ -133,6 +136,16 @@ test('uses concise and consistent organization relationship concepts', async () 
   expect(source).not.toContain('审批责任人');
   expect(source).not.toContain('关系说明');
   expect(source).not.toContain('title="设置审批覆盖"');
+});
+
+test('uses supervising leader wording for department and task approvers', async () => {
+  const source = await readFile(viewPath, 'utf8');
+  const taskInfoSource = await readFile(taskInfoPath, 'utf8');
+
+  expect(source).not.toContain('缺最终审批人');
+  expect(source).toContain('缺分管领导');
+  expect(taskInfoSource).not.toContain('结果审批人');
+  expect(taskInfoSource).toContain('分管领导');
 });
 
 test('recognizes only the root department leader as eligible to have no performance manager', () => {
