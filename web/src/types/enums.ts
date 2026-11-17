@@ -2,7 +2,7 @@
 
 export type SysRole = 'system_admin' | 'hr' | 'hr_user' | 'chairman' | 'vp' | 'dept_head' | 'manager' | 'employee';
 
-export type EmploymentType = 'full_time' | 'part_time' | 'rehire' | 'external';
+export type EmploymentType = 'full_time' | 'part_time' | 'internship' | 'rehire' | 'external';
 
 export type UserStatus = 'active' | 'probation' | 'pending_entry' | 'resigned';
 

@@ -61,6 +61,28 @@ function row(rowNumber: number, employeeNo: string, name: string): ParsedEmploye
 
 const hrOperator = { id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true };
 
+describe('roster employment types', () => {
+  it.each([
+    ['全职', 'full_time'], ['兼职', 'part_time'], ['实习', 'internship'], ['实习生', 'internship'],
+    ['返聘', 'rehire'], ['外部', 'external'], ['外包', 'external'],
+  ])('preserves %s as %s without an unrecognized-value warning', async (source, expected) => {
+    const saved: any[] = [];
+    const prisma = {
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      personnelReferenceData: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: { create: jest.fn().mockResolvedValue({ id: 'batch-employment' }), update: jest.fn() },
+      employeeImportRow: { createMany: jest.fn(async ({ data }) => { saved.push(...data); return { count: data.length }; }) },
+    };
+    const parsed = row(2, 'SYNTHETIC-INTERN', '虚构实习员工');
+    parsed.employee.employmentTypeText = source;
+    await new EmployeeRosterImportService(prisma as any).createPreviewFromRows([parsed],
+      { mode: 'full', fileName: 'synthetic-internship.xlsx', fileHash: 'synthetic-internship' }, hrOperator);
+    expect(saved[0].normalizedValue.employee.employmentType).toBe(expected);
+    expect(saved[0].warnings).not.toEqual(expect.arrayContaining([expect.stringContaining('未识别用工情况')]));
+  });
+});
+
 const gradeDirectory = () => ({ findMany: jest.fn(async ({ where }) =>
   [{ kind: 'job_grade', name: 'P4', isActive: true }].filter(option => option.isActive === where.isActive
     && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) });

@@ -26,6 +26,7 @@ datasource db {
 enum EmploymentType {
   full_time
   part_time
+  internship
   rehire
   external
 

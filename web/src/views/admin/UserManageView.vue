@@ -101,6 +101,7 @@ const contractTypeLabels: Record<string, string> = {
 const employmentTypeLabels: Record<string, string> = {
   full_time: '全职',
   part_time: '兼职',
+  internship: '实习',
   rehire: '返聘',
   external: '外部',
 };

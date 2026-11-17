@@ -65,6 +65,15 @@ function initializationFixture(targets: ReturnType<typeof target>[], oldUsers: a
 }
 
 describe('confirmed roster initialization', () => {
+  it.each(['实习', '实习生'])('keeps %s in the employee projection and confirmed source', async (source) => {
+    const fixture = initializationFixture([target(3, 'SYNTHETIC-INTERN', 'intern')],
+      [{ id: 'intern', name: '虚构实习员工', employeeNo: 'SYNTHETIC-INTERN' }]);
+    Object.assign(fixture.input.rows[0].employee, { employmentTypeText: source });
+    await fixture.run();
+    expect(fixture.users[0].employmentType).toBe('internship');
+    expect(fixture.requests[0].proposedValue.employee.employmentType).toBe('internship');
+  });
+
   it('rejects duplicate source rows, reused identities and occupied target numbers before any write', () => {
     expect(() => validateInitializationTargets([target(3, '001'), target(3, '002')])).toThrow();
     expect(() => validateInitializationTargets([target(3, '001', 'u1'), target(4, '002', 'u1')])).toThrow();

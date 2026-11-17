@@ -90,6 +90,8 @@ describe('shared archive issue projection', () => {
   it.each([
     ['employeeStatus', '试用期', '试用期'],
     ['employmentType', '全职', '全职'],
+    ['employmentType', 'internship', '实习'],
+    ['employmentType', 'external', '外部'],
     ['employeeStatus', '源表待确认状态', '源表待确认状态'],
     ['employmentType', '源表特殊用工', '源表特殊用工'],
   ])('keeps source %s text %s visible', (field, sourceValue, expected) => {

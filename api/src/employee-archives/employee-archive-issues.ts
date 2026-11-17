@@ -23,7 +23,7 @@ const redact = (value: string) => value.replace(/(?:\+?86[\s-]?)?1\d{10}/g, '联
 const labels: Record<string, string> = { companyText: '所属公司', newCompany: '新主体', originalCompany: '原主体', employeeNo: '工号',
   signedAt: '签订日期', effectiveFrom: '生效日期', effectiveTo: '结束日期', expiresAt: '到期日期', signingCompany: '签约公司' };
 const statuses: Record<string, string> = { active: '在职', probation: '试用期', pending_entry: '待入职', resigned: '已离职' };
-const employmentTypes: Record<string, string> = { full_time: '全职', part_time: '兼职', rehire: '返聘', external: '外部用工' };
+const employmentTypes: Record<string, string> = { full_time: '全职', part_time: '兼职', internship: '实习', rehire: '返聘', external: '外部' };
 const displayKey = (field: string) => field.split('.').at(-1) === 'company' ? 'companyText' : field.split('.').at(-1)!;
 function display(field: string, value: unknown): string | null {
   if (sensitive(field)) return present(value) ? '敏感信息已隐藏' : null;

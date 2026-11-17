@@ -73,6 +73,13 @@ async function chooseCompany(page: Page) {
   await option.click();
   await expect(field(page, '所属公司')).toContainText(companies[0]!.name);
 }
+async function chooseInternship(page: Page) {
+  await field(page, '用工类型').locator('.el-select').click();
+  const options = page.getByRole('option').filter({ visible: true });
+  await expect(options).toHaveText(['全职', '兼职', '实习', '返聘', '外部']);
+  await page.getByRole('option', { name: '实习', exact: true }).click();
+  await expect(field(page, '用工类型')).toContainText('实习');
+}
 async function screenshot(page: Page, info: TestInfo, name: string) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: true, animations: 'disabled' });
@@ -95,6 +102,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const requests = await setup(page, 'create');
     await chooseCompany(page);
+    await chooseInternship(page);
     await page.getByRole('button', { name: '下一步', exact: true }).click();
     await expect(page.getByRole('button', { name: '合同与附件', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '下一步', exact: true }).click();
@@ -104,6 +112,7 @@ for (const width of [1440, 390]) {
     const body = requests.find(row => row.method === 'POST' && row.path === '/api/v1/employee-archives')!.body;
     expect(body.employee.contractSubjectId).toBe('company-new');
     expect(body.company ?? null).toBeNull();
+    expect(body.employmentType).toBe('internship');
     expect(body.contracts[0].contractSubjectId).toBe('company-contract');
   });
 
@@ -112,6 +121,7 @@ for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       const requests = await setup(page, kind);
       await chooseCompany(page);
+      await chooseInternship(page);
       if (kind !== 'archive') {
         const date = field(page, kind === 'reentry' ? '再入职日期' : '生效日期').locator('input');
         await date.fill('2026-11-16'); await date.press('Tab');
@@ -123,6 +133,7 @@ for (const width of [1440, 390]) {
         : requests.find(row => row.method === 'POST')!.body;
       expect(body.contractSubjectId).toBe('company-new');
       expect(body.company ?? null).toBeNull();
+      expect(body.employmentType).toBe('internship');
     });
   }
 }

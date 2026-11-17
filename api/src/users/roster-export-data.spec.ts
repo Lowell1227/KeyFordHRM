@@ -14,6 +14,17 @@ const employee = (overrides: Partial<RosterWorkbookItem> = {}): RosterWorkbookIt
 });
 
 describe('roster archive export', () => {
+  it.each([
+    ['full_time', '全职'], ['part_time', '兼职'], ['internship', '实习'], ['rehire', '返聘'], ['external', '外部'],
+  ])('exports the employment type %s with the same label as the form', async (employmentType, label) => {
+    const cells = rosterArchiveCells({ status: 'active', employmentType });
+    expect(cells.employmentType).toBe(label);
+    const built = await buildRosterWorkbook([employee({ archiveFields: cells })], ['employmentType']);
+    const reloaded = new ExcelJS.Workbook();
+    await reloaded.xlsx.load(await built.xlsx.writeBuffer() as any);
+    expect(reloaded.getWorksheet('花名册')!.getCell('A3').value).toBe(label);
+  });
+
   it('exposes one company field and normalizes retired organization selections without changing access', async () => {
     const viewer = { sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] };
     const fields = rosterExportFieldGroups(viewer).flatMap(group => group.fields);

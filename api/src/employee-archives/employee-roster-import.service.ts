@@ -1057,7 +1057,8 @@ export class EmployeeRosterImportService {
   private mapEmploymentType(value: string | null, warnings: string[]): EmploymentType {
     if (value?.includes('退休') || value?.includes('返聘')) return EmploymentType.rehire;
     if (value?.includes('兼职')) return EmploymentType.part_time;
-    if (value?.includes('外包')) return EmploymentType.external;
+    if (value?.includes('实习')) return EmploymentType.internship;
+    if (value?.includes('外包') || value?.includes('外部')) return EmploymentType.external;
     if (value && !value.includes('全职')) warnings.push(`未识别用工情况“${value}”，暂按全职`);
     return EmploymentType.full_time;
   }

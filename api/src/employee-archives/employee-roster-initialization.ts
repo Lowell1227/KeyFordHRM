@@ -163,7 +163,8 @@ export async function initializeConfirmedRoster(
     for (const { target, row, old, userId } of pairs) {
       const employmentType = /退休|返聘/.test(row.employee.employmentTypeText ?? '') ? EmploymentType.rehire
         : /兼职/.test(row.employee.employmentTypeText ?? '') ? EmploymentType.part_time
-          : /外包|外部/.test(row.employee.employmentTypeText ?? '') ? EmploymentType.external : EmploymentType.full_time;
+          : /实习/.test(row.employee.employmentTypeText ?? '') ? EmploymentType.internship
+            : /外包|外部/.test(row.employee.employmentTypeText ?? '') ? EmploymentType.external : EmploymentType.full_time;
       const data = { employeeNo: target.employeeNo, name: row.employee.name!, phone: row.profile.phone,
         deptId: target.deptId, positionId: target.positionId, position: row.employee.position,
         entryDate: row.employee.entryDate, plannedRegularDate: row.employee.plannedRegularDate,

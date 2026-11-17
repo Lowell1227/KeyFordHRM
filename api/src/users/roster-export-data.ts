@@ -48,7 +48,7 @@ export interface RosterArchiveSource {
 }
 
 const COMPANY_LABELS: Record<string, string> = { fuede: '孚德', fuede_sports: '孚德体育文化', beijing_fuede: '北京孚德', fansibao: '凡思堡' };
-const EMPLOYMENT_LABELS: Record<string, string> = { full_time: '全职', part_time: '兼职', rehire: '返聘', external: '外包' };
+const EMPLOYMENT_LABELS: Record<string, string> = { full_time: '全职', part_time: '兼职', internship: '实习', rehire: '返聘', external: '外部' };
 export const CONTRACT_TYPE_LABELS: Record<string, string> = { contract: '首签', renewal: '续签', transfer: '转签', attachment: '附件', unclassified: '待分类', confidentiality: '保密协议' };
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const date = (value: unknown): Date | null => value instanceof Date && Number.isFinite(value.getTime()) ? value : null;

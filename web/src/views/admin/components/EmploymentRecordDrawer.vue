@@ -253,7 +253,7 @@ onBeforeUnmount(() => { generation++; });
       </el-form-item>
       <el-form-item label="花名册直属主管"><UserSelect v-model="form.directManagerId" :disabled-ids="archive ? [archive.id] : []" clearable /></el-form-item>
       <el-form-item label="员工状态" :error="submitAttempted ? employmentStatusError : ''"><el-select v-model="form.employeeStatus" :disabled="!isHistoricalEmployment && !['active', 'probation'].includes(archive?.status ?? '')"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /><el-option v-if="isHistoricalEmployment || form.employeeStatus === 'resigned'" label="已离职" value="resigned" :disabled="!isHistoricalEmployment" /><el-option v-if="form.employeeStatus === 'pending_entry'" label="待入职" value="pending_entry" disabled /></el-select><span class="employment-help">入职、再入职和离职请在入离职页面办理；已结束的任职可补录历史状态。</span></el-form-item>
-      <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
+      <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="实习" value="internship" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
       <el-form-item label="原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
     </el-form>
     <section v-if="isResignation" class="approval-flow" aria-labelledby="resignation-approval-title">
