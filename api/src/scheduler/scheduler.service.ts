@@ -494,6 +494,7 @@ export class SchedulerService {
               },
             },
             indicatorInstances: {
+              where: { retiredAt: null },
               select: {
                 name: true,
                 dimensionName: true,

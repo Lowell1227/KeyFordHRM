@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ObjectiveLevel, ObjectiveStatus, Prisma, SysRole } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { DataScopeService } from '@/common/services/data-scope.service';
@@ -65,6 +65,36 @@ describe('ObjectivesService confirmed AI drafts', () => {
     const { save, indicator } = setup();
     const saved = await save();
     indicator.task.closedAt = new Date() as any;
+    expect((await save()).id).toBe(saved.id);
+  });
+
+  it.each([false, true])('denies new progress on a retired goal (AI: %s)', async (ai) => {
+    const { service, prisma, indicator } = setup();
+    prisma.indicatorInstance.findUnique.mockResolvedValue({ ...indicator, retiredAt: new Date() });
+    await expect(service.updateIndicatorProgress('goal', {
+      progress: 20, healthStatus: null, content: 'Retired goal update',
+    }, viewer, ai ? { aiDraftId: 'draft-retired', aiAssisted: true } : undefined))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('rechecks retirement after locking before saving progress (AI: %s)', async (ai) => {
+    const { service, prisma, indicator } = setup();
+    prisma.indicatorInstance.findUnique.mockResolvedValueOnce(indicator)
+      .mockResolvedValue({ ...indicator, retiredAt: new Date() });
+    await expect(service.updateIndicatorProgress('goal', {
+      progress: 20, healthStatus: null, content: 'Racing update',
+    }, viewer, ai ? { aiDraftId: 'draft-race', aiAssisted: true } : undefined))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+  });
+
+  it('still reads a committed progress record after its source goal is retired', async () => {
+    const { save, indicator } = setup();
+    const saved = await save();
+    Object.assign(indicator, { retiredAt: new Date() });
     expect((await save()).id).toBe(saved.id);
   });
 
@@ -262,6 +292,9 @@ describe('ObjectivesService bot goal access', () => {
       status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
     } }));
     expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { employeeId: 'me', cycleId: { in: ['cycle'] } } }));
+    expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({ indicatorInstances: expect.objectContaining({ where: { retiredAt: null } }) }),
+    }));
   });
 
   it('preserves all writable prior/current month candidates without selecting one', async () => {
@@ -635,6 +668,7 @@ describe('ObjectivesService visibility helpers', () => {
       },
       include: expect.objectContaining({
         indicatorInstances: expect.objectContaining({
+          where: expect.objectContaining({ retiredAt: null }),
           orderBy: { sortOrder: 'asc' },
         }),
       }),
@@ -1219,6 +1253,9 @@ describe('ObjectivesService visibility helpers', () => {
     ]);
 
     const result = await service.findIndicatorMap('cycle-1', viewer);
+    expect(prisma.indicatorInstance.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ retiredAt: null }),
+    }));
 
     expect(result.roots).toEqual(['parent-1']);
     expect(result.edges).toEqual([{ id: 'parent-1:child-1', source: 'parent-1', target: 'child-1' }]);
@@ -1919,6 +1956,20 @@ describe('ObjectivesService visibility helpers', () => {
     }));
   });
 
+  it('excludes a retired goal from the current tracking detail lookup', async () => {
+    prisma.indicatorInstance.findUnique.mockResolvedValue(null);
+    prisma.indicatorInstance.findFirst.mockResolvedValue(null);
+
+    await expect(service.findTrackingIndicator('retired', viewer)).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(prisma.indicatorInstance.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'retired', retiredAt: null },
+    }));
+    expect(prisma.indicatorInstance.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ retiredAt: null }),
+    }));
+  });
+
   it('rejects tracking requests without a deep link or owner-cycle pair', async () => {
     await expect(service.findTracking({ ownerId: 'employee-1' }, viewer))
       .rejects.toMatchObject({ response: expect.objectContaining({ message: '请选择人员和考核周期' }) });
@@ -1940,6 +1991,9 @@ describe('ObjectivesService visibility helpers', () => {
     }]);
 
     const result = await service.findIndicatorAlignmentCandidates('task-child', viewer);
+    expect(prisma.indicatorInstance.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ retiredAt: null }),
+    }));
 
     expect(result).toEqual({
       items: [{ id: 'parent-1', name: '部门交付目标', owner: { id: 'director-1', name: 'Director' } }],

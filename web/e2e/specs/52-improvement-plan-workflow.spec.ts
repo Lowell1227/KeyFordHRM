@@ -117,7 +117,7 @@ test('mobile creation keeps employee, background and goal fields usable without 
 test('improvement-plan detail opens in a routed drawer and browser back keeps the list', async ({ page }) => {
   await mock(page);
   await page.route('**/api/v1/improvement-plans/plan-drawer', (route) => route.fulfill({ json: envelope({
-    id: 'plan-drawer', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    id: 'plan-drawer', revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
     cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
     improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
     goals: [{ id: 'g1', name: '交付质量', description: '减少返工', weight: 100 }],
@@ -147,7 +147,7 @@ test('employee can return a specific goal suggestion without editing the approve
   await page.setViewportSize({ width: 390, height: 844 });
   await mock(page);
   const original = { id: 'g1', name: '交付质量', description: '减少返工', weight: 100 };
-  const plan = { id: 'plan-employee', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+  const plan = { id: 'plan-employee', revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
     cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
     improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
     goals: [original], selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
@@ -161,17 +161,17 @@ test('employee can return a specific goal suggestion without editing the approve
       return route.abort('timedout');
     }
     return route.fulfill({ json: envelope(decisionCommitted
-      ? { ...plan, status: 'goal_revision', allowedActions: [] }
+      ? { ...plan, revision: 5, status: 'goal_revision', allowedActions: [] }
       : plan) });
   });
   await page.goto('/improvement-plans/plan-employee');
   const overview = page.getByTestId('business-detail-drawer').locator('.chart-card').first();
-  await expect(overview.getByRole('button', { name: '退回发起人修改' })).toBeVisible();
+  await expect(overview.getByRole('button', { name: '退回修改', exact: true })).toBeVisible();
   await expect(overview.getByRole('button', { name: '确认目标' })).toBeVisible();
   await expect(page.getByText('目标确认', { exact: true })).toHaveCount(0);
   await expect(page.getByText('可在上方逐项目标填写建议', { exact: false })).toHaveCount(0);
-  await overview.getByRole('button', { name: '退回发起人修改' }).click();
-  let dialog = page.getByRole('dialog', { name: '退回发起人修改' });
+  await overview.getByRole('button', { name: '退回修改', exact: true }).click();
+  let dialog = page.getByRole('dialog', { name: '退回修改' });
   const suggestion = dialog.getByRole('textbox', { name: '目标 1 修改建议' });
   await expect(suggestion).toBeVisible();
   await expect(page.getByText('减少返工')).toBeVisible();
@@ -180,19 +180,28 @@ test('employee can return a specific goal suggestion without editing the approve
   await suggestion.fill('建议写明每周返工次数上限');
   const requestPromise = page.waitForRequest((request) => request.url().endsWith('/decide-goals'));
   await dialog.getByRole('button', { name: '确认退回' }).click();
-  expect((await requestPromise).postDataJSON()).toMatchObject({ approve: false, comment: '', suggestions: [
+  expect((await requestPromise).postDataJSON()).toMatchObject({ approve: false, comment: '', expectedRevision: 4, suggestions: [
     { goalId: original.id, comment: '建议写明每周返工次数上限' },
   ] });
-  await expect(page.getByText('目标已退回发起人修改', { exact: true })).toBeVisible();
+  const unknown = dialog.getByTestId('pip-mutation-error');
+  await expect(unknown).toContainText('处理结果暂未确认');
+  await expect(unknown).toContainText('当前输入已保留');
+  await expect(unknown).toHaveClass(/el-alert--warning/);
+  await expect(suggestion).toHaveValue('建议写明每周返工次数上限');
+  await expect(dialog.getByRole('button', { name: '确认退回' })).toBeDisabled();
+  await expect(page.locator('.el-message--success')).toHaveCount(0);
   await expect(page.getByText('网络错误，请稍后重试', { exact: true })).toHaveCount(0);
   expect(plan.goals[0]).toEqual(original);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  await unknown.getByRole('button', { name: '重新加载' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByTestId('business-detail-drawer').getByText('待发起人修改目标', { exact: true })).toBeVisible();
 });
 
 test('initiator sees the employee suggestion beside the goal and in the operation record', async ({ page }) => {
   await mock(page);
   await page.route('**/api/v1/improvement-plans/plan-revision', (route) => route.fulfill({ json: envelope({
-    id: 'plan-revision', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    id: 'plan-revision', revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
     cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
     improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
     goals: [{ id: 'g1', name: '交付质量', description: '减少返工', weight: 100 }],
@@ -219,7 +228,7 @@ test('operation records follow the time-first approval timeline visual hierarchy
   await page.setViewportSize({ width: 1440, height: 900 });
   await mock(page);
   await page.route('**/api/v1/improvement-plans/plan-history', (route) => route.fulfill({ json: envelope({
-    id: 'plan-history', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    id: 'plan-history', revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
     cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
     improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
     goals: [{ id: 'g1', name: '交付质量', description: '减少返工', weight: 100 }],
@@ -266,7 +275,7 @@ test('evaluation stage keeps each goal and its reviews in one compact card', asy
     { id: 'g2', name: '提升响应效率', description: '需求当天完成反馈', weight: 60 },
   ];
   await page.route('**/api/v1/improvement-plans/plan-evaluation-layout', (route) => route.fulfill({ json: envelope({
-    id: 'plan-evaluation-layout', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    id: 'plan-evaluation-layout', revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
     cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
     improvementNeed: '需要同步提升交付质量与响应速度', importance: null, improvementGoal: null, targetDate: null, measures: [],
     goals,
@@ -316,7 +325,7 @@ test('each evaluation role gets an explicit submit action', async ({ page }) => 
   ];
   for (const stage of stages) {
     await page.route(`**/api/v1/improvement-plans/plan-role-${stage.id}`, (route) => route.fulfill({ json: envelope({
-      id: `plan-role-${stage.id}`, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+      id: `plan-role-${stage.id}`, revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
       cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
       improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
       goals: [{ id: 'g1', name: '交付质量', description: '每周返工不超过两次', weight: 100 }],
@@ -334,7 +343,7 @@ test('goal confirmation actions stay in the page header and open the decision fo
   await page.setViewportSize({ width: 1440, height: 900 });
   await mock(page);
   const plan = {
-    id: 'plan-goal-dialog', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    id: 'plan-goal-dialog', revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
     cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
     improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
     goals: [{ id: 'g1', name: '交付质量', description: '每周返工不超过两次', weight: 100 }],
@@ -346,7 +355,7 @@ test('goal confirmation actions stay in the page header and open the decision fo
   await page.route('**/api/v1/improvement-plans/plan-goal-dialog**', (route) => {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as { approve: boolean };
-      return route.fulfill({ json: envelope({ ...plan, status: body.approve ? 'self_eval' : 'goal_revision', allowedActions: [] }) });
+      return route.fulfill({ json: envelope({ ...plan, revision: 5, status: body.approve ? 'self_eval' : 'goal_revision', allowedActions: [] }) });
     }
     return route.fulfill({ json: envelope(plan) });
   });
@@ -354,7 +363,7 @@ test('goal confirmation actions stay in the page header and open the decision fo
   await page.goto('/improvement-plans/plan-goal-dialog');
   const overview = page.getByTestId('business-detail-drawer').locator('.chart-card').first();
   const content = page.getByTestId('improvement-content-evaluation');
-  const rejectButton = overview.getByRole('button', { name: '退回发起人修改' });
+  const rejectButton = overview.getByRole('button', { name: '退回修改', exact: true });
   await expect(rejectButton).toBeVisible();
   const approveButton = overview.getByRole('button', { name: '确认目标' });
   await expect(approveButton).toBeVisible();
@@ -367,7 +376,7 @@ test('goal confirmation actions stay in the page header and open the decision fo
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   const mobileHeaderPositions = await overview.evaluate((card) => {
     const buttons = Array.from(card.querySelectorAll('button'));
-    const reject = buttons.find((button) => button.textContent?.includes('退回发起人修改'))!;
+    const reject = buttons.find((button) => button.textContent?.includes('退回修改'))!;
     const approve = buttons.find((button) => button.textContent?.includes('确认目标'))!;
     const status = Array.from(card.querySelectorAll('.el-tag')).find((tag) => tag.textContent?.includes('待员工确认目标'))!;
     return { status: status.getBoundingClientRect().top, reject: reject.getBoundingClientRect().top, approve: approve.getBoundingClientRect().top };
@@ -377,7 +386,7 @@ test('goal confirmation actions stay in the page header and open the decision fo
   await overview.screenshot({ path: test.info().outputPath('top-goal-actions-mobile.png') });
 
   await rejectButton.click();
-  const dialog = page.getByRole('dialog', { name: '退回发起人修改' });
+  const dialog = page.getByRole('dialog', { name: '退回修改' });
   await expect(dialog.getByRole('textbox', { name: '目标 1 修改建议' })).toBeVisible();
   await expect(dialog.getByRole('textbox', { name: '整体意见' })).toBeVisible();
   await dialog.getByRole('textbox', { name: '目标 1 修改建议' }).fill('请明确每周返工次数上限');
@@ -391,14 +400,14 @@ test('goal confirmation actions stay in the page header and open the decision fo
   await approveDialog.screenshot({ path: test.info().outputPath('goal-approve-dialog-mobile.png') });
   const requestPromise = page.waitForRequest((request) => request.url().endsWith('/decide-goals'));
   await approveDialog.getByRole('button', { name: '确认目标' }).click();
-  expect((await requestPromise).postDataJSON()).toEqual({ approve: true, comment: '' });
+  expect((await requestPromise).postDataJSON()).toEqual({ approve: true, comment: '', expectedRevision: 4 });
   await expect(approveDialog).toBeHidden();
 });
 
 test('final review actions stay in the page header and the return dialog keeps required-opinion validation', async ({ page }) => {
   await mock(page);
   const plan = {
-    id: 'plan-final-dialog', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    id: 'plan-final-dialog', revision: 4, workflowIssue: null, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
     cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
     improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
     goals: [{ id: 'g1', name: '交付质量', description: '每周返工不超过两次', weight: 100 }],
@@ -411,32 +420,32 @@ test('final review actions stay in the page header and the return dialog keeps r
   };
   await page.route('**/api/v1/improvement-plans/plan-final-dialog**', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill({ json: envelope({ ...plan, status: 'manager_review', allowedActions: [] }) });
+      return route.fulfill({ json: envelope({ ...plan, revision: 5, status: 'manager_review', allowedActions: [] }) });
     }
     return route.fulfill({ json: envelope(plan) });
   });
 
   await page.goto('/improvement-plans/plan-final-dialog');
   const overview = page.getByTestId('business-detail-drawer').locator('.chart-card').first();
-  await expect(overview.getByRole('button', { name: '退回直属上级重评' })).toBeVisible();
-  await expect(overview.getByRole('button', { name: '审核确认' })).toBeVisible();
+  await expect(overview.getByRole('button', { name: '退回重评', exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: '确认结果' })).toBeVisible();
   await expect(page.locator('.chart-card').filter({ has: page.getByText('分管总审核', { exact: true }) })).toHaveCount(0);
 
-  await overview.getByRole('button', { name: '审核确认' }).click();
-  const approveDialog = page.getByRole('dialog', { name: '审核确认' });
+  await overview.getByRole('button', { name: '确认结果' }).click();
+  const approveDialog = page.getByRole('dialog', { name: '确认结果' });
   await expect(approveDialog).toContainText('待确认综合分：76');
   await expect(approveDialog.getByRole('textbox')).toHaveCount(0);
   await expect(approveDialog).toContainText('确认后将完成改进计划，无需填写审核意见');
   await approveDialog.screenshot({ path: test.info().outputPath('final-review-dialog-desktop.png') });
   await approveDialog.getByRole('button', { name: '取消' }).click();
 
-  await overview.getByRole('button', { name: '退回直属上级重评' }).click();
-  const rejectDialog = page.getByRole('dialog', { name: '退回直属上级重评' });
+  await overview.getByRole('button', { name: '退回重评', exact: true }).click();
+  const rejectDialog = page.getByRole('dialog', { name: '退回重评' });
   await rejectDialog.getByRole('button', { name: '确认退回' }).click();
   await expect(rejectDialog.getByText('驳回时请填写理由')).toBeVisible();
   await rejectDialog.getByRole('textbox', { name: '分管总审核意见' }).fill('请直属上级重新核对评价');
   const requestPromise = page.waitForRequest((request) => request.url().endsWith('/decide-final'));
   await rejectDialog.getByRole('button', { name: '确认退回' }).click();
-  expect((await requestPromise).postDataJSON()).toEqual({ approve: false, comment: '请直属上级重新核对评价' });
+  expect((await requestPromise).postDataJSON()).toEqual({ approve: false, comment: '请直属上级重新核对评价', expectedRevision: 4 });
   await expect(rejectDialog).toBeHidden();
 });

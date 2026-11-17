@@ -193,7 +193,7 @@ export function createTasksApi(client: TasksApiClient) {
       id: string,
       body: UpdateActualValueBody,
       options?: { skipErrorMessage?: boolean },
-    ): Promise<{ id: string; updatedCount: number }> {
+    ): Promise<{ id: string; updatedCount: number; updatedAt?: string }> {
       return apiPut(`/tasks/${id}/actual-value`, body, options);
     },
 

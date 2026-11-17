@@ -499,6 +499,9 @@ describe("TeamTasksService", () => {
       failed: [{ taskId: "foreign-task", reason: "无权审核该员工目标" }],
     });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.assessmentTask.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({ indicatorInstances: { where: { retiredAt: null }, select: { weight: true } } }),
+    }));
     expect(transaction.assessmentTask.updateMany).toHaveBeenCalledWith({
       where: {
         id: "valid-task",

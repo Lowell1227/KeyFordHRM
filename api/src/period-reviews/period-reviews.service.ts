@@ -1008,10 +1008,14 @@ export class PeriodReviewsService {
     period: PeriodWithContext,
     expectedVersion: number,
   ): Promise<number> {
+    if (expectedVersion !== period.draftVersion) {
+      throw new ConflictException('读取版本与提交版本不一致，请刷新后继续');
+    }
     const claimed = await tx.assessmentPeriod.updateMany({
       where: {
         id: period.id,
         draftVersion: expectedVersion,
+        indicatorVersionId: period.indicatorVersionId,
         managerSubmittedAt: null,
         employeeSubmittedAt: null,
         status: { in: ['self_eval', 'manager_scoring'] },
@@ -1032,11 +1036,15 @@ export class PeriodReviewsService {
     period: PeriodWithContext,
     expectedVersion: number,
   ): Promise<number> {
+    if (expectedVersion !== period.draftVersion) {
+      throw new ConflictException('读取版本与提交版本不一致，请刷新后继续');
+    }
     const claimed = await tx.assessmentPeriod.updateMany({
       where: {
         id: period.id,
         managerId: period.managerId,
         draftVersion: expectedVersion,
+        indicatorVersionId: period.indicatorVersionId,
         managerSubmittedAt: null,
         lockedAt: null,
         status: 'manager_scoring',

@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsNotEmpty, IsNumber, IsOptional,
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsInt, IsNotEmpty, IsNumber, IsOptional,
   IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 
 export class ImprovementGoalDto {
@@ -7,6 +7,10 @@ export class ImprovementGoalDto {
   @IsString() @MaxLength(200) name: string;
   @IsString() @MaxLength(4000) description: string;
   @IsNumber() @Min(0) @Max(100) weight: number;
+}
+
+export class ImprovementRevisionDto {
+  @IsInt() @Min(0) expectedRevision: number;
 }
 
 export class CreateImprovementPlanDto {
@@ -18,7 +22,7 @@ export class CreateImprovementPlanDto {
   goals?: ImprovementGoalDto[];
 }
 
-export class UpdateImprovementPlanDto {
+export class UpdateImprovementPlanDto extends ImprovementRevisionDto {
   @IsOptional() @IsUUID() cycleId?: string | null;
   @IsOptional() @IsString() @MaxLength(4000) improvementNeed?: string;
   @IsOptional() @IsDateString() targetDate?: string | null;
@@ -26,7 +30,7 @@ export class UpdateImprovementPlanDto {
   goals?: ImprovementGoalDto[];
 }
 
-export class ImprovementDecisionDto {
+export class ImprovementDecisionDto extends ImprovementRevisionDto {
   @IsBoolean() approve: boolean;
   @IsOptional() @IsString() @MaxLength(4000) comment?: string;
 }
@@ -47,7 +51,7 @@ export class ImprovementGoalEvaluationDto {
   @IsString() @MaxLength(4000) comment: string;
 }
 
-export class ImprovementEvaluationDto {
+export class ImprovementEvaluationDto extends ImprovementRevisionDto {
   @IsArray() @ValidateNested({ each: true }) @Type(() => ImprovementGoalEvaluationDto)
   items: ImprovementGoalEvaluationDto[];
   @IsString() @MaxLength(4000) overallComment: string;
@@ -59,7 +63,7 @@ export class ImprovementGoalEvaluationDraftDto {
   @IsString() @MaxLength(4000) comment: string;
 }
 
-export class ImprovementEvaluationDraftDto {
+export class ImprovementEvaluationDraftDto extends ImprovementRevisionDto {
   @IsArray() @ValidateNested({ each: true }) @Type(() => ImprovementGoalEvaluationDraftDto)
   items: ImprovementGoalEvaluationDraftDto[];
   @IsString() @MaxLength(4000) overallComment: string;

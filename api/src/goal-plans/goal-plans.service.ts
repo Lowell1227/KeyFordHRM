@@ -56,6 +56,7 @@ const SUMMARY_SELECT = Prisma.validator<Prisma.AssessmentTaskSelect>()({
 const DETAIL_SELECT = Prisma.validator<Prisma.AssessmentTaskSelect>()({
   ...SUMMARY_SELECT,
   indicatorInstances: {
+    where: { retiredAt: null },
     orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
     select: {
       id: true,
@@ -84,6 +85,7 @@ const DETAIL_SELECT = Prisma.validator<Prisma.AssessmentTaskSelect>()({
         },
       },
       childAlignments: {
+        where: { parentIndicator: { retiredAt: null } },
         select: {
           parentIndicator: {
             select: {

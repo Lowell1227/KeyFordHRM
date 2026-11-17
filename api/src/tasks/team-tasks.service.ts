@@ -458,7 +458,7 @@ export class TeamTasksService {
         approverId: true,
         status: true,
         updatedAt: true,
-        indicatorInstances: { select: { weight: true } },
+        indicatorInstances: { where: { retiredAt: null }, select: { weight: true } },
         cycle: {select: {goalWorkflowVersion: true}},
       },
     });

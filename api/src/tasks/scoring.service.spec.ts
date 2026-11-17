@@ -191,6 +191,19 @@ describe('ScoringService', () => {
       expect(result.totalScore).toBe(80);
       expect(result.rawGrade).toBe('B');
     });
+
+    it('excludes retired indicators from the current task score', async () => {
+      const active = { ...stored('Current goal'), id: 'active', retiredAt: null };
+      const retired = { ...stored('Removed goal'), id: 'retired', retiredAt: new Date() };
+      prisma.indicatorInstance.findMany.mockImplementation(async ({ where }) =>
+        [active, retired].filter(indicator => where.retiredAt === null ? indicator.retiredAt === null : true));
+      prisma.systemConfig.findUnique.mockResolvedValue(null);
+
+      const result = await service.calculateTaskScore('fictional-task');
+
+      expect(result.totalScore).toBe(80);
+      expect(result.dimensionScores[0].indicators.map(indicator => indicator.id)).toEqual(['active']);
+    });
   });
 
   function makeIndicator(overrides: Partial<ScorableIndicator>): ScorableIndicator {

@@ -4,7 +4,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { ImprovementWorkflowService } from './improvement-workflow.service';
 import { ImprovementPlanQueryDto } from './dto/improvement-plan-query.dto';
 import { CreateImprovementPlanDto, UpdateImprovementPlanDto, ImprovementDecisionDto, ImprovementGoalDecisionDto,
-  ImprovementEvaluationDto, ImprovementEvaluationDraftDto } from './dto/improvement-workflow.dto';
+  ImprovementEvaluationDto, ImprovementEvaluationDraftDto, ImprovementRevisionDto } from './dto/improvement-workflow.dto';
 
 @Controller('improvement-plans')
 export class ImprovementPlansController {
@@ -41,8 +41,9 @@ export class ImprovementPlansController {
   }
 
   @Post(':id/submit-goals') @HttpCode(200)
-  submitGoals(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
-    return this.service.submitGoals(id, viewer);
+  submitGoals(@Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ImprovementRevisionDto, @CurrentUser() viewer: AuthUser) {
+    return this.service.submitGoals(id, viewer, dto.expectedRevision);
   }
 
   @Post(':id/decide-goals') @HttpCode(200)

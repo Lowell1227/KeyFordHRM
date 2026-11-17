@@ -12,6 +12,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DingtalkModule } from './dingtalk/dingtalk.module';
 import { TasksModule } from './tasks/tasks.module';
 import { GoalPlansModule } from './goal-plans/goal-plans.module';
+import { GoalChangesModule } from './goal-changes/goal-changes.module';
 import { CalibrationModule } from './calibration/calibration.module';
 import { FinalGradeModule } from './final-grade/final-grade.module';
 import { AuthModule } from './auth/auth.module';
@@ -77,6 +78,7 @@ import { PersonnelConfigModule } from './personnel-config/personnel-config.modul
     DingtalkModule,
     TasksModule,
     GoalPlansModule,
+    GoalChangesModule,
     CalibrationModule,
     FinalGradeModule,
     ApprovalModule,

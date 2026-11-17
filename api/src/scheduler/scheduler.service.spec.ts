@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Prisma } from '@prisma/client';
 import { SchedulerService } from './scheduler.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -270,6 +271,34 @@ describe('SchedulerService', () => {
   });
 
   describe('runAutoCloseCycles', () => {
+    it('archives only current targets without changing the stored grade or historical periods', async () => {
+      const current = {
+        name: 'Current target', dimensionName: 'KPI', weight: new Prisma.Decimal(1),
+        indicatorType: 'kpi', targetValue: null, targetValueText: null,
+        actualValue: null, selfScore: null, managerScore: null, finalScore: null,
+        retiredAt: null,
+      };
+      const retired = { ...current, name: 'Retired target', retiredAt: new Date() };
+      const gradeResult = { calculatedScore: new Prisma.Decimal(84.33), rawGrade: 'B', calibratedGrade: 'A', coefficient: null };
+      prisma.assessmentCycle.findMany.mockResolvedValue([{ id: 'cycle', status: 'published' }]);
+      prisma.assessmentTask.findMany.mockImplementation(async ({ include }) => [{
+        id: 'task', employeeId: 'employee', employee: { name: 'Fictional employee' }, dept: null, gradeResult,
+        indicatorInstances: [current, retired].filter(indicator =>
+          include.indicatorInstances.where?.retiredAt === null ? indicator.retiredAt === null : true),
+      }]);
+
+      await service.runAutoCloseCycles();
+
+      const archive = prisma.performanceArchive.upsert.mock.calls[0][0];
+      for (const snapshot of [archive.create, archive.update]) {
+        expect(snapshot.summary.indicators.map(indicator => indicator.name)).toEqual(['Current target']);
+        expect(snapshot.totalScore).toEqual(gradeResult.calculatedScore);
+        expect(snapshot.grade).toBe('A');
+      }
+      expect(prisma.assessmentPeriod.findMany).not.toHaveBeenCalled();
+      expect(prisma.assessmentPeriod.updateMany).not.toHaveBeenCalled();
+    });
+
     it('无满足条件周期时不执行任务', async () => {
       prisma.assessmentCycle.findMany.mockResolvedValue([]);
 

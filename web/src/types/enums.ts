@@ -93,6 +93,7 @@ export type InterviewMethod = 'one_on_one' | 'phone' | 'performance_meeting';
 export type InterviewStatus = 'pending' | 'filled' | 'employee_signed' | 'closed';
 
 export type ImprovementPlanStatus = 'draft' | 'goal_dept_review' | 'goal_employee_confirm'
+  | 'goal_hr_review' | 'goal_vp_review'
   | 'goal_revision' | 'self_eval' | 'manager_review' | 'dept_review' | 'vp_review'
   | 'in_progress' | 'completed';
 
@@ -145,6 +146,8 @@ export const IMPROVEMENT_PLAN_STATUS_META: Record<ImprovementPlanStatus, { label
   draft: { label: '待发起人提交', type: 'warning' },
   goal_dept_review: { label: '待部门负责人确认目标', type: 'warning' },
   goal_employee_confirm: { label: '待员工确认目标', type: 'warning' },
+  goal_hr_review: { label: '待HR确认目标', type: 'warning' },
+  goal_vp_review: { label: '待分管领导确认目标', type: 'warning' },
   goal_revision: { label: '待发起人修改目标', type: 'danger' },
   self_eval: { label: '待员工自评', type: 'primary' },
   manager_review: { label: '待直属上级评价', type: 'primary' },

@@ -105,6 +105,13 @@ describe("GoalPlansService goal-only read scope", () => {
     service = new GoalPlansService(prisma);
   });
 
+  it("excludes retired targets and retired parent alignments from current plan detail", async () => {
+    await service.findOne("task-1", specialist);
+    const query = prisma.assessmentTask.findUnique.mock.calls[0][0];
+    expect(query.select.indicatorInstances.where).toEqual({ retiredAt: null });
+    expect(query.select.indicatorInstances.select.childAlignments.where).toEqual({ parentIndicator: { retiredAt: null } });
+  });
+
   it("lets the configured performance specialist read another department saved goal draft without result data", async () => {
     const plan = await service.findOne("task-1", specialist);
     expect(plan.employeeName).toBe("Employee");

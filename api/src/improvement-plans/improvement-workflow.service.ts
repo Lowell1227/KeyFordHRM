@@ -23,21 +23,23 @@ export interface PlanDraftInput {
   targetDate?: string | null;
   goals?: ImprovementGoal[];
 }
-export interface PlanDecisionInput { approve: boolean; comment?: string }
+export interface PlanDecisionInput { approve: boolean; comment?: string; expectedRevision: number }
 export interface PlanGoalDecisionInput extends PlanDecisionInput {
   suggestions?: Array<{ goalId: string; comment: string }>;
 }
-export interface PlanEvaluationInput { items: Array<{ goalId: string; score: number; comment: string }>; overallComment: string }
-export interface PlanEvaluationDraftInput { items: Array<{ goalId: string; score: number | null; comment: string }>; overallComment: string }
+export interface PlanEvaluationInput { items: Array<{ goalId: string; score: number; comment: string }>; overallComment: string; expectedRevision: number }
+export interface PlanEvaluationDraftInput { items: Array<{ goalId: string; score: number | null; comment: string }>; overallComment: string; expectedRevision: number }
 export interface PlanQuery { employeeId?: string; cycleId?: string; deptId?: string; keyword?: string; status?: ImprovementPlanStatus }
 
 interface OrgContext {
-  employee: { id: string; name: string; deptId: string | null; directManagerId: string | null; status: string; deletedAt: Date | null };
+  employee: { id: string; name: string; deptId: string | null; directManagerId: string | null; status: string; deletedAt: Date | null; archivedAt: Date | null };
   headId: string | null;
   approverId: string | null;
   managerChain: string[];
   ancestorIds: string[];
   relations: DepartmentRelationRecord[];
+  activeActorIds: Set<string>;
+  hrReviewerIds: string[];
 }
 
 @Injectable()
@@ -48,18 +50,21 @@ export class ImprovementWorkflowService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  private isGlobalViewer(viewer: AuthUser): boolean {
-    return viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin || viewer.canViewAll
-      || (viewer.sysRole === SysRole.hr_user && Boolean(
-        viewer.hrCapabilities?.includes('cycle_plan_edit') && viewer.hrCapabilities.includes('performance_publish')));
+  private hasHrReviewRole(viewer: Pick<AuthUser, 'sysRole' | 'hrCapabilities'>): boolean {
+    return viewer.sysRole === SysRole.hr || (viewer.sysRole === SysRole.hr_user && Boolean(
+      viewer.hrCapabilities?.includes('cycle_plan_edit') && viewer.hrCapabilities.includes('performance_publish')));
   }
 
-  private async org(employeeId: string): Promise<OrgContext> {
-    const employee = await this.prisma.user.findUnique({ where: { id: employeeId }, select: {
-      id: true, name: true, deptId: true, directManagerId: true, status: true, deletedAt: true,
+  private isGlobalViewer(viewer: AuthUser): boolean {
+    return this.hasHrReviewRole(viewer) || viewer.sysRole === SysRole.system_admin || viewer.canViewAll;
+  }
+
+  private async org(employeeId: string, creatorId?: string | null, db: Prisma.TransactionClient = this.prisma): Promise<OrgContext> {
+    const employee = await db.user.findUnique({ where: { id: employeeId }, select: {
+      id: true, name: true, deptId: true, directManagerId: true, status: true, deletedAt: true, archivedAt: true,
     } });
     if (!employee) throw new NotFoundException('员工不存在');
-    const departments = await this.prisma.department.findMany({ select: {
+    const departments = await db.department.findMany({ select: {
       id: true, name: true, parentId: true, leaderId: true, approverId: true,
       leader: { select: { name: true, directManagerId: true, directManager: { select: { name: true } } } },
       approver: { select: { name: true } },
@@ -84,7 +89,16 @@ export class ImprovementWorkflowService {
     const approverId = employee.deptId
       ? buildEffectiveApproverMap(relations).get(employee.deptId)?.effectiveApproverId ?? null : null;
     const managerChain = await this.dataScope.getManagerChainIds(employeeId);
-    return { employee, headId, approverId, managerChain, ancestorIds, relations };
+    const actors = await db.user.findMany({ where: { OR: [
+      { id: { in: [employee.directManagerId, headId, approverId, creatorId].filter((id): id is string => Boolean(id)) } },
+      { sysRole: SysRole.hr, isAssessorOnly: false },
+      { sysRole: SysRole.hr_user, isAssessorOnly: false, hrCapabilities: { hasEvery: ['cycle_plan_edit', 'performance_publish'] } },
+    ] }, select: { id: true, status: true, deletedAt: true, archivedAt: true, sysRole: true, hrCapabilities: true, isAssessorOnly: true } });
+    const active = actors.filter((actor) => actor.status === 'active' && !actor.deletedAt && !actor.archivedAt);
+    return { employee, headId, approverId, managerChain, ancestorIds, relations,
+      activeActorIds: new Set(active.map((actor) => actor.id)),
+      hrReviewerIds: active.filter((actor) => actor.id !== employeeId && !actor.isAssessorOnly
+        && this.hasHrReviewRole(actor)).map((actor) => actor.id) };
   }
 
   private canInitiate(org: OrgContext, viewer: AuthUser): boolean {
@@ -98,7 +112,35 @@ export class ImprovementWorkflowService {
   }
 
   private assertNew(plan: Plan): void {
-    if (plan.workflowVersion !== 2) throw new ConflictException('历史改进计划仅供查看');
+    if (![2, 3].includes(plan.workflowVersion)) throw new ConflictException('历史改进计划仅供查看');
+  }
+
+  private assertRevision(expectedRevision: number, revision: number): void {
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new BadRequestException('请提供有效的计划版本');
+    if (expectedRevision !== revision) throw new ConflictException('计划已变化，请刷新后重试');
+  }
+
+  private workflowIssue(plan: Pick<Plan, 'status' | 'workflowVersion' | 'creatorId'>, org: OrgContext): string | null {
+    if (plan.status === 'completed' || ![2, 3].includes(plan.workflowVersion)) return null;
+    if (org.employee.status === 'resigned' || org.employee.deletedAt || org.employee.archivedAt) {
+      return '员工已离职或归档，改进计划暂停办理，请联系 HR';
+    }
+    if (!org.employee.directManagerId || org.employee.directManagerId === org.employee.id
+      || !org.activeActorIds.has(org.employee.directManagerId)) return '员工未配置有效直属上级，请联系 HR';
+    if (!org.headId || !org.activeActorIds.has(org.headId)) return '员工所属组织未配置有效部门负责人，请联系 HR';
+    if (!org.approverId || org.approverId === org.employee.id || !org.activeActorIds.has(org.approverId)) {
+      return '员工所属组织未配置有效上级审批人，请联系 HR';
+    }
+    if (!plan.creatorId || !org.activeActorIds.has(plan.creatorId)) {
+      return '改进计划发起人已失效，请联系 HR';
+    }
+    if (plan.workflowVersion === 3 && !org.hrReviewerIds.length) return '未配置可办理的 HR 确认人员，请联系 HR';
+    return null;
+  }
+
+  private assertWorkflow(plan: Pick<Plan, 'status' | 'workflowVersion' | 'creatorId'>, org: OrgContext): void {
+    const issue = this.workflowIssue(plan, org);
+    if (issue) throw new ConflictException(issue);
   }
 
   private async load(id: string): Promise<Plan> {
@@ -118,19 +160,24 @@ export class ImprovementWorkflowService {
 
   private owner(plan: Plan, org: OrgContext): string | null {
     switch (plan.status) {
-      case 'draft': case 'goal_revision': return plan.workflowVersion === 2 ? plan.creatorId : null;
+      case 'draft': case 'goal_revision': return [2, 3].includes(plan.workflowVersion) ? plan.creatorId : null;
       case 'goal_dept_review': case 'dept_review': return org.headId;
       case 'goal_employee_confirm': case 'self_eval': return plan.employeeId;
       case 'manager_review': return org.employee.directManagerId;
-      case 'vp_review': return org.approverId;
+      case 'goal_vp_review': case 'vp_review': return org.approverId;
       default: return null;
     }
   }
 
   private actions(plan: Plan, org: OrgContext, viewer: AuthUser): string[] {
-    if (plan.workflowVersion !== 2 || viewer.id !== this.owner(plan, org)) return [];
+    if (![2, 3].includes(plan.workflowVersion) || this.workflowIssue(plan, org)) return [];
+    if (plan.workflowVersion === 3 && plan.status === 'goal_hr_review') {
+      return !viewer.isAssessorOnly && this.hasHrReviewRole(viewer) && org.hrReviewerIds.includes(viewer.id) ? ['decide_goals'] : [];
+    }
+    if (viewer.id !== this.owner(plan, org)) return [];
     if (plan.status === 'draft' || plan.status === 'goal_revision') return ['edit', 'submit_goals'];
-    if (plan.status === 'goal_dept_review' || plan.status === 'goal_employee_confirm') return ['decide_goals'];
+    if (plan.status === 'goal_dept_review' || plan.status === 'goal_employee_confirm'
+      || (plan.workflowVersion === 3 && plan.status === 'goal_vp_review')) return ['decide_goals'];
     if (plan.status === 'self_eval' || plan.status === 'manager_review' || plan.status === 'dept_review') return ['evaluate'];
     if (plan.status === 'vp_review') return ['decide_final'];
     return [];
@@ -150,7 +197,8 @@ export class ImprovementWorkflowService {
       managerEvaluation: hidePendingResult ? null : this.evaluation(plan.managerEvaluation),
       departmentEvaluation: hidePendingResult ? null : this.evaluation(plan.departmentEvaluation),
       finalScore: hidePendingResult ? null : plan.finalScore, status: plan.status,
-      workflowVersion: plan.workflowVersion, startedAt: plan.startedAt, completedAt: plan.completedAt,
+      workflowVersion: plan.workflowVersion, revision: plan.revision, workflowIssue: this.workflowIssue(plan, org),
+      startedAt: plan.startedAt, completedAt: plan.completedAt,
       createdAt: plan.createdAt, updatedAt: plan.updatedAt,
       currentOwnerId: this.owner(plan, org), allowedActions: this.actions(plan, org, viewer),
     };
@@ -175,8 +223,9 @@ export class ImprovementWorkflowService {
     const contexts = new Map<string, OrgContext>();
     const visible: Array<ReturnType<typeof this.map>> = [];
     for (const plan of plans) {
-      let org = contexts.get(plan.employeeId);
-      if (!org) { org = await this.org(plan.employeeId); contexts.set(plan.employeeId, org); }
+      const contextKey = `${plan.employeeId}:${plan.creatorId ?? ''}`;
+      let org = contexts.get(contextKey);
+      if (!org) { org = await this.org(plan.employeeId, plan.creatorId); contexts.set(contextKey, org); }
       if (this.canView(plan, org, viewer)) visible.push(this.map(plan, org, viewer));
     }
     return paginated(visible.slice(pagination.skip, pagination.skip + pagination.take), visible.length, pagination);
@@ -184,7 +233,7 @@ export class ImprovementWorkflowService {
 
   async findOne(id: string, viewer: AuthUser) {
     const plan = await this.load(id);
-    const org = await this.org(plan.employeeId);
+    const org = await this.org(plan.employeeId, plan.creatorId);
     if (!this.canView(plan, org, viewer)) throw new ForbiddenException('无权查看该改进计划');
     const records = await this.prisma.auditLog.findMany({
       where: { entityType: 'improvement_plan', entityId: id }, include: { user: { select: { name: true } } },
@@ -204,13 +253,13 @@ export class ImprovementWorkflowService {
 
   async myPending(viewer: AuthUser) {
     const plans = await this.prisma.improvementPlan.findMany({
-      where: { workflowVersion: 2, status: { not: 'completed' } }, include: planInclude,
+      where: { workflowVersion: { in: [2, 3] }, status: { not: 'completed' } }, include: planInclude,
       orderBy: { updatedAt: 'desc' },
     });
     const result: Array<ReturnType<typeof this.map>> = [];
     for (const plan of plans) {
-      const org = await this.org(plan.employeeId);
-      if (this.owner(plan, org) === viewer.id) result.push(this.map(plan, org, viewer));
+      const org = await this.org(plan.employeeId, plan.creatorId);
+      if (this.actions(plan, org, viewer).length) result.push(this.map(plan, org, viewer));
     }
     return result;
   }
@@ -219,32 +268,13 @@ export class ImprovementWorkflowService {
     if (viewer.isAssessorOnly) return [];
     const users = await this.prisma.user.findMany({
       select: { id: true, name: true, employeeNo: true, deptId: true, directManagerId: true,
-        status: true, deletedAt: true, dept: { select: { name: true } } },
+        status: true, deletedAt: true, archivedAt: true, dept: { select: { name: true } } },
       orderBy: { name: 'asc' },
     });
-    const departments = await this.prisma.department.findMany({ select: { id: true, parentId: true, leaderId: true } });
-    const managerByUser = new Map(users.map((user) => [user.id, user.directManagerId]));
-    const departmentById = new Map(departments.map((department) => [department.id, department]));
     const result: Array<{ id: string; name: string; employeeNo: string | null; deptName: string | null }> = [];
     for (const employee of users) {
-      if (employee.status !== 'active' || employee.deletedAt || employee.id === viewer.id) continue;
-      let inScope = false;
-      let managerId = employee.directManagerId;
-      const seenUsers = new Set([employee.id]);
-      while (managerId && !seenUsers.has(managerId)) {
-        if (managerId === viewer.id) { inScope = true; break; }
-        seenUsers.add(managerId);
-        managerId = managerByUser.get(managerId) ?? null;
-      }
-      let departmentId = employee.deptId;
-      const seenDepartments = new Set<string>();
-      while (!inScope && departmentId && !seenDepartments.has(departmentId)) {
-        seenDepartments.add(departmentId);
-        const department = departmentById.get(departmentId);
-        if (department?.leaderId === viewer.id) inScope = true;
-        departmentId = department?.parentId ?? null;
-      }
-      if (inScope) result.push({ id: employee.id, name: employee.name,
+      if (employee.status !== 'active' || employee.deletedAt || employee.archivedAt || employee.id === viewer.id) continue;
+      if (employee.directManagerId === viewer.id) result.push({ id: employee.id, name: employee.name,
         employeeNo: employee.employeeNo, deptName: employee.dept?.name ?? null });
     }
     return result;
@@ -255,16 +285,25 @@ export class ImprovementWorkflowService {
   }
 
   async create(input: PlanDraftInput, viewer: AuthUser) {
-    const org = await this.org(input.employeeId);
-    if (org.employee.status !== 'active' || org.employee.deletedAt) throw new BadRequestException('只能为在职员工创建改进计划');
-    if (!this.canInitiate(org, viewer)) throw new ForbiddenException('只能为管理范围内的员工发起改进计划');
+    const org = await this.org(input.employeeId, viewer.id);
+    const assertCreation = (context: OrgContext) => {
+      if (context.employee.status !== 'active' || context.employee.deletedAt || context.employee.archivedAt) {
+        throw new BadRequestException('只能为在职员工创建改进计划');
+      }
+      if (viewer.isAssessorOnly || viewer.id === context.employee.id || context.employee.directManagerId !== viewer.id) {
+        throw new ForbiddenException('只能为直属员工发起改进计划');
+      }
+      this.assertWorkflow({ workflowVersion: 3, status: 'draft', creatorId: viewer.id }, context);
+    };
+    assertCreation(org);
     if (input.cycleId && !await this.prisma.assessmentCycle.findUnique({ where: { id: input.cycleId }, select: { id: true } })) {
       throw new BadRequestException('所选绩效周期不存在');
     }
     const plan = await this.prisma.$transaction(async (tx) => {
+      assertCreation(await this.org(input.employeeId, viewer.id, tx));
       const created = await tx.improvementPlan.create({ data: {
         employeeId: input.employeeId, cycleId: input.cycleId || null, taskId: null, creatorId: viewer.id,
-        workflowVersion: 2, status: 'draft', improvementNeed: input.improvementNeed?.trim() || null,
+        workflowVersion: 3, revision: 0, status: 'draft', improvementNeed: input.improvementNeed?.trim() || null,
         targetDate: input.targetDate ? new Date(input.targetDate) : null,
         goals: (input.goals ?? []) as unknown as Prisma.InputJsonValue,
       }, include: planInclude });
@@ -275,7 +314,7 @@ export class ImprovementWorkflowService {
     return this.map(plan, org, viewer);
   }
 
-  async updateDraft(id: string, input: Omit<PlanDraftInput, 'employeeId'>, viewer: AuthUser) {
+  async updateDraft(id: string, input: Omit<PlanDraftInput, 'employeeId'> & { expectedRevision: number }, viewer: AuthUser) {
     const plan = await this.load(id);
     this.assertNew(plan);
     if (plan.creatorId !== viewer.id) throw new ForbiddenException('仅发起人可修改目标');
@@ -288,25 +327,25 @@ export class ImprovementWorkflowService {
       cycleId: input.cycleId === undefined ? plan.cycleId : input.cycleId || null,
       targetDate: input.targetDate === undefined ? plan.targetDate : input.targetDate ? new Date(input.targetDate) : null,
       goals: (input.goals ?? this.goals(plan)) as unknown as Prisma.InputJsonValue,
-    }, { goals: input.goals ?? this.goals(plan), background: input.improvementNeed ?? plan.improvementNeed });
+    }, { goals: input.goals ?? this.goals(plan), background: input.improvementNeed ?? plan.improvementNeed }, input.expectedRevision);
     return this.findOne(id, viewer);
   }
 
-  async submitGoals(id: string, viewer: AuthUser) {
+  async submitGoals(id: string, viewer: AuthUser, expectedRevision: number) {
     const plan = await this.load(id);
     this.assertNew(plan);
     if (plan.creatorId !== viewer.id) throw new ForbiddenException('仅发起人可提交目标');
     if (!['draft', 'goal_revision'].includes(plan.status)) throw new ConflictException('当前不能提交目标');
     if (!plan.improvementNeed?.trim()) throw new BadRequestException('请填写改进背景');
     const goals = validateGoals(this.goals(plan));
-    const org = await this.org(plan.employeeId);
+    const org = await this.org(plan.employeeId, plan.creatorId);
     if (!org.headId) throw new BadRequestException('员工所属组织未配置部门负责人');
     if (!org.approverId || org.approverId === plan.employeeId) throw new BadRequestException('员工所属组织未配置有效上级审批人');
-    const bypass = org.headId === viewer.id;
-    const status = bypass ? 'goal_employee_confirm' : 'goal_dept_review';
+    const bypass = plan.workflowVersion === 2 && org.headId === viewer.id;
+    const status = plan.workflowVersion === 3 || bypass ? 'goal_employee_confirm' : 'goal_dept_review';
     await this.change(plan, viewer, 'submit_goals', { status, goals: goals as unknown as Prisma.InputJsonValue },
-      { status, goals, autoDepartmentConfirm: bypass });
-    await this.notify(this.owner({ ...plan, status } as Plan, org), viewer.id, id, '改进计划目标待确认');
+      { status, goals, autoDepartmentConfirm: bypass }, expectedRevision, org);
+    await this.notifyNext({ ...plan, status }, org, viewer.id, '改进计划目标待确认');
     if (plan.status === 'draft') {
       const specialists = await this.prisma.user.findMany({ where: { sysRole: 'hr_user',
         hrCapabilities: { hasEvery: ['cycle_plan_edit', 'performance_publish'] }, deletedAt: null }, select: { id: true } });
@@ -318,9 +357,12 @@ export class ImprovementWorkflowService {
   async decideGoals(id: string, input: PlanGoalDecisionInput, viewer: AuthUser) {
     const plan = await this.load(id);
     this.assertNew(plan);
-    if (!['goal_dept_review', 'goal_employee_confirm'].includes(plan.status)) throw new ConflictException('当前无需确认目标');
-    const org = await this.org(plan.employeeId);
-    if (this.owner(plan, org) !== viewer.id) throw new ForbiddenException('当前不是你的目标确认待办');
+    const statuses = plan.workflowVersion === 3
+      ? ['goal_employee_confirm', 'goal_dept_review', 'goal_hr_review', 'goal_vp_review'] : ['goal_dept_review', 'goal_employee_confirm'];
+    if (!statuses.includes(plan.status)) throw new ConflictException('当前无需确认目标');
+    const org = await this.org(plan.employeeId, plan.creatorId);
+    this.assertWorkflow(plan, org);
+    if (!this.actions(plan, org, viewer).includes('decide_goals')) throw new ForbiddenException('当前不是你的目标确认待办');
     const requested = input.suggestions ?? [];
     if (!Array.isArray(requested)) throw new BadRequestException('逐项目标建议格式不正确');
     if (requested.length && (input.approve || plan.status !== 'goal_employee_confirm')) {
@@ -338,11 +380,18 @@ export class ImprovementWorkflowService {
     if (!input.approve && !input.comment?.trim() && !suggestions.length) {
       throw new BadRequestException('退回目标时，请填写具体目标建议或整体意见');
     }
-    const status = !input.approve ? 'goal_revision' : plan.status === 'goal_dept_review' ? 'goal_employee_confirm' : 'self_eval';
+    const bypass = plan.workflowVersion === 3 && plan.status === 'goal_employee_confirm'
+      && org.headId === org.employee.directManagerId && org.headId === plan.creatorId;
+    const next: ImprovementPlanStatus = plan.workflowVersion === 2
+      ? plan.status === 'goal_dept_review' ? 'goal_employee_confirm' : 'self_eval'
+      : plan.status === 'goal_employee_confirm' ? bypass ? 'goal_hr_review' : 'goal_dept_review'
+        : plan.status === 'goal_dept_review' ? 'goal_hr_review' : plan.status === 'goal_hr_review' ? 'goal_vp_review' : 'self_eval';
+    const status = input.approve ? next : 'goal_revision';
     await this.change(plan, viewer, input.approve ? 'confirm_goals' : 'reject_goals', {
       status, ...(status === 'self_eval' ? { startedAt: new Date() } : {}),
-    }, { status, comment: input.comment?.trim() ?? '', ...(suggestions.length ? { suggestions } : {}) });
-    await this.notify(this.owner({ ...plan, status } as Plan, org), viewer.id, id,
+    }, { status, comment: input.comment?.trim() ?? '', ...(suggestions.length ? { suggestions } : {}),
+      ...(input.approve && bypass ? { autoDepartmentConfirm: true, skippedActorId: org.headId } : {}) }, input.expectedRevision, org);
+    await this.notifyNext({ ...plan, status }, org, viewer.id,
       status === 'goal_revision' ? '改进计划目标被退回' : status === 'self_eval' ? '请填写改进计划自评' : '改进计划目标待确认');
     return this.findOne(id, viewer);
   }
@@ -351,7 +400,7 @@ export class ImprovementWorkflowService {
     const plan = await this.load(id);
     this.assertNew(plan);
     if (!['self_eval', 'manager_review', 'dept_review'].includes(plan.status)) throw new ConflictException('当前无需评价');
-    const org = await this.org(plan.employeeId);
+    const org = await this.org(plan.employeeId, plan.creatorId);
     if (this.owner(plan, org) !== viewer.id) throw new ForbiddenException('当前不是你的评价待办');
     const evaluation = validateEvaluation(validateGoals(this.goals(plan)), input);
     let status: ImprovementPlanStatus;
@@ -371,8 +420,8 @@ export class ImprovementWorkflowService {
     data[field] = evaluation as unknown as Prisma.InputJsonValue;
     data.status = status;
     await this.change(plan, viewer, `submit_${field}`, data,
-      { status, evaluation, autoDepartmentEvaluation: plan.status === 'manager_review' && org.headId === viewer.id });
-    await this.notify(this.owner({ ...plan, status } as Plan, org), viewer.id, id, '改进计划评价待处理');
+      { status, evaluation, autoDepartmentEvaluation: plan.status === 'manager_review' && org.headId === viewer.id }, input.expectedRevision, org);
+    await this.notifyNext({ ...plan, status }, org, viewer.id, '改进计划评价待处理');
     return this.findOne(id, viewer);
   }
 
@@ -380,7 +429,7 @@ export class ImprovementWorkflowService {
     const plan = await this.load(id);
     this.assertNew(plan);
     if (!['self_eval', 'manager_review', 'dept_review'].includes(plan.status)) throw new ConflictException('当前无需评价');
-    const org = await this.org(plan.employeeId);
+    const org = await this.org(plan.employeeId, plan.creatorId);
     if (this.owner(plan, org) !== viewer.id) throw new ForbiddenException('当前不是你的评价待办');
     const goals = validateGoals(this.goals(plan));
     if (!Array.isArray(input.items) || input.items.length !== goals.length) throw new BadRequestException('草稿目标与已确认目标不一致');
@@ -397,7 +446,7 @@ export class ImprovementWorkflowService {
     const field = plan.status === 'self_eval' ? 'selfEvaluation'
       : plan.status === 'manager_review' ? 'managerEvaluation' : 'departmentEvaluation';
     await this.change(plan, viewer, 'save_evaluation_draft', { status: plan.status,
-      [field]: evaluation as unknown as Prisma.InputJsonValue }, { status: plan.status, evaluation });
+      [field]: evaluation as unknown as Prisma.InputJsonValue }, { status: plan.status, evaluation }, input.expectedRevision, org);
     return this.findOne(id, viewer);
   }
 
@@ -405,7 +454,7 @@ export class ImprovementWorkflowService {
     const plan = await this.load(id);
     this.assertNew(plan);
     if (plan.status !== 'vp_review') throw new ConflictException('当前无需最终审核');
-    const org = await this.org(plan.employeeId);
+    const org = await this.org(plan.employeeId, plan.creatorId);
     if (org.approverId !== viewer.id) throw new ForbiddenException('当前不是你的最终审核待办');
     if (!input.approve && !input.comment?.trim()) throw new BadRequestException('驳回必须填写理由');
     const evaluation = this.evaluation(plan.departmentEvaluation);
@@ -414,24 +463,45 @@ export class ImprovementWorkflowService {
     await this.change(plan, viewer, input.approve ? 'approve_final' : 'reject_final', {
       status, finalScore: input.approve ? evaluation.weightedScore : null,
       ...(input.approve ? { completedAt: new Date() } : { managerEvaluation: Prisma.DbNull, departmentEvaluation: Prisma.DbNull }),
-    }, { status, comment: input.comment?.trim() ?? '', finalScore: input.approve ? evaluation.weightedScore : null });
+    }, { status, comment: input.comment?.trim() ?? '', finalScore: input.approve ? evaluation.weightedScore : null }, input.expectedRevision, org);
     await this.notify(input.approve ? plan.employeeId : org.employee.directManagerId, viewer.id, id,
       input.approve ? '绩效改进计划已完成' : '绩效改进计划审核退回');
     return this.findOne(id, viewer);
   }
 
   private async change(plan: Plan, viewer: AuthUser, action: string,
-    data: Prisma.ImprovementPlanUncheckedUpdateManyInput, value: Record<string, unknown>) {
+    data: Prisma.ImprovementPlanUncheckedUpdateManyInput, value: Record<string, unknown>, expectedRevision: number,
+    previousOrg?: OrgContext) {
+    this.assertRevision(expectedRevision, plan.revision);
     await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.improvementPlan.updateMany({ where: { id: plan.id, status: plan.status, workflowVersion: 2 }, data });
+      const org = await this.org(plan.employeeId, plan.creatorId, tx);
+      this.assertWorkflow(plan, org);
+      if (previousOrg && (previousOrg.headId !== org.headId || previousOrg.approverId !== org.approverId
+        || previousOrg.employee.directManagerId !== org.employee.directManagerId)) {
+        throw new ConflictException('组织关系已变化，请刷新后重试');
+      }
+      const allowed = this.actions(plan, org, viewer);
+      const required = action === 'save_draft' ? 'edit' : action === 'submit_goals' ? 'submit_goals'
+        : action.endsWith('_goals') ? 'decide_goals' : action.endsWith('_final') ? 'decide_final' : 'evaluate';
+      if (!allowed.includes(required)) throw new ForbiddenException('当前不是你的改进计划待办');
+      const updated = await tx.improvementPlan.updateMany({
+        where: { id: plan.id, status: plan.status, workflowVersion: plan.workflowVersion, revision: expectedRevision },
+        data: { ...data, revision: { increment: 1 } },
+      });
       if (updated.count !== 1) throw new ConflictException('计划状态已变化，请刷新后重试');
       await tx.auditLog.create({ data: {
         userId: viewer.id, action, entityType: 'improvement_plan', entityId: plan.id,
-        oldValue: { status: plan.status, goals: plan.goals, managerEvaluation: plan.managerEvaluation,
+        oldValue: { status: plan.status, revision: plan.revision, goals: plan.goals, managerEvaluation: plan.managerEvaluation,
           departmentEvaluation: plan.departmentEvaluation } as Prisma.InputJsonValue,
-        newValue: value as Prisma.InputJsonValue,
+        newValue: { ...value, revision: expectedRevision + 1 } as Prisma.InputJsonValue,
       } });
     });
+  }
+
+  private async notifyNext(plan: Plan, org: OrgContext, senderId: string, title: string) {
+    const recipients = plan.workflowVersion === 3 && plan.status === 'goal_hr_review'
+      ? org.hrReviewerIds : [this.owner(plan, org)];
+    await Promise.allSettled(recipients.map((id) => this.notify(id, senderId, plan.id, title)));
   }
 
   private async notify(userId: string | null, senderId: string, planId: string, title: string) {

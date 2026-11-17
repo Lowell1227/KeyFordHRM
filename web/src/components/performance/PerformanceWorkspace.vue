@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useAuthStore } from '@/stores/auth.store';
 
-type PerformanceSection = 'tracking' | 'map' | 'tasks';
+const auth = useAuthStore();
+
+type PerformanceSection = 'tracking' | 'map' | 'tasks' | 'changes';
 
 const props = withDefaults(
   defineProps<{
@@ -16,7 +19,7 @@ const props = withDefaults(
     showHeader: true,
     showNavigation: true,
     showContext: true,
-    sections: () => ['tracking', 'map', 'tasks'],
+    sections: () => ['tracking', 'map', 'tasks', 'changes'],
   },
 );
 
@@ -24,10 +27,11 @@ const allSections = [
   { key: 'tracking', label: '目标跟进', to: '/action-items' },
   { key: 'map', label: '目标地图', to: '/objectives' },
   { key: 'tasks', label: '绩效待办', to: '/tasks' },
+  { key: 'changes', label: '目标变更', to: '/goal-changes' },
 ] as const;
 
 const visibleSections = computed(() =>
-  allSections.filter((section) => props.sections.includes(section.key)),
+  allSections.filter((section) => props.sections.includes(section.key) && (section.key !== 'changes' || !auth.user?.isAssessorOnly)),
 );
 </script>
 

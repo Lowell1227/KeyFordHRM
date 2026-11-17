@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
@@ -12,12 +12,26 @@ import type { ImprovementEvaluation, ImprovementGoal, ImprovementGoalSuggestion,
 
 const route = useRoute();
 const router = useRouter();
+const mobileQuery = window.matchMedia('(max-width: 768px)');
+const isMobile = ref(mobileQuery.matches);
+const updateMobile = (event: MediaQueryListEvent) => { isMobile.value = event.matches; };
+mobileQuery.addEventListener('change', updateMobile);
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 const emit = defineEmits<{ changed: [] }>();
 const plan = ref<ImprovementPlan | null>(null);
 const cycles = ref<Array<{ id: string; name: string }>>([]);
 const loading = ref(false);
 const busy = ref(false);
+const loadError = ref('');
+const cyclesError = ref('');
+const mutationError = ref('');
+const mutationUncertain = ref(false);
+const writesBlocked = ref(false);
+let generation = 0;
+let cyclesGeneration = 0;
+let disposed = false;
+type PlanSession = { id: string; generation: number };
+type MutationSession = PlanSession & { revision: number };
 const decisionComment = ref('');
 type DecisionDialogAction = 'goals-approve' | 'goals-reject' | 'final-approve' | 'final-reject';
 const decisionDialogOpen = ref(false);
@@ -31,6 +45,7 @@ const evaluation = reactive<{ items: Array<{ goalId: string; score: number | nul
   items: [], overallComment: '',
 });
 const canEdit = computed(() => plan.value?.allowedActions.includes('edit') ?? false);
+const canSubmitGoals = computed(() => plan.value?.allowedActions.includes('submit_goals') ?? false);
 const canDecideGoals = computed(() => plan.value?.allowedActions.includes('decide_goals') ?? false);
 const employeeGoalConfirmation = computed(() => canDecideGoals.value && plan.value?.status === 'goal_employee_confirm');
 const latestGoalRejection = computed(() => plan.value?.status === 'goal_revision'
@@ -41,9 +56,9 @@ const decisionDialogForGoals = computed(() => decisionDialogAction.value.startsW
 const decisionDialogReject = computed(() => decisionDialogAction.value.endsWith('-reject'));
 const decisionDialogTitle = computed(() => {
   if (decisionDialogAction.value === 'goals-approve') return '确认目标';
-  if (decisionDialogAction.value === 'goals-reject') return '退回发起人修改';
-  if (decisionDialogAction.value === 'final-approve') return '审核确认';
-  return '退回直属上级重评';
+  if (decisionDialogAction.value === 'goals-reject') return '退回修改';
+  if (decisionDialogAction.value === 'final-approve') return '确认结果';
+  return '退回重评';
 });
 const showEvaluation = computed(() => canEvaluate.value || Boolean(plan.value?.selfEvaluation
   || plan.value?.managerEvaluation || plan.value?.departmentEvaluation));
@@ -53,12 +68,23 @@ const currentStageLabel = computed(() => {
     case 'goal_revision': return '目标修改';
     case 'goal_dept_review': return '部门负责人确认目标';
     case 'goal_employee_confirm': return '员工确认目标';
+    case 'goal_hr_review': return 'HR确认目标';
+    case 'goal_vp_review': return '分管领导确认目标';
     case 'self_eval': return '员工自评';
     case 'manager_review': return '直属上级评价';
     case 'dept_review': return '部门负责人评价';
-    case 'vp_review': return '分管总审核';
+    case 'vp_review': return plan.value.workflowVersion >= 3 ? '分管领导确认结果' : '分管总审核';
     case 'completed': return '已完成';
     default: return '历史记录';
+  }
+});
+const nextGoalStage = computed(() => {
+  if (plan.value?.workflowVersion !== 3) return plan.value?.status === 'goal_dept_review' ? '员工确认' : '员工自评';
+  switch (plan.value.status) {
+    case 'goal_employee_confirm': return '部门负责人确认目标（发起人兼任时自动跳过）';
+    case 'goal_dept_review': return 'HR确认目标';
+    case 'goal_hr_review': return '分管领导确认目标';
+    default: return '员工自评';
   }
 });
 const currentEvaluationLabel = computed(() => {
@@ -95,20 +121,57 @@ const deadlineHint = computed(() => {
   return '';
 });
 
-onMounted(async () => {
-  cycles.value = await improvementPlansApi.cycles().catch(() => []);
-  await load();
+watch(() => route.params.id, () => { void load(); }, { immediate: true, flush: 'sync' });
+onBeforeUnmount(() => {
+  disposed = true;
+  generation += 1;
+  mobileQuery.removeEventListener('change', updateMobile);
 });
-watch(() => route.params.id, (id, previousId) => {
-  if (id && id !== previousId) void load();
-});
-async function load() {
-  const id = String(route.params.id || '');
-  if (!id) return;
-  loading.value = true;
-  try { sync(await improvementPlansApi.getDetail(id)); } finally { loading.value = false; }
+function isCurrent(session: PlanSession) {
+  return !disposed && session.generation === generation && session.id === String(route.params.id || '');
 }
-function sync(value: ImprovementPlan) {
+function errorMessage(error: unknown, fallback: string) {
+  if (isAxiosError(error) && error.response?.status === 403) return '无权限执行此操作';
+  const message = isAxiosError<{ message?: string }>(error) ? error.response?.data?.message
+    : error instanceof Error ? error.message : null;
+  return typeof message === 'string' && message.trim() ? message : fallback;
+}
+async function loadCycles(session: PlanSession = { id: String(route.params.id || ''), generation }) {
+  const request = ++cyclesGeneration;
+  cyclesError.value = '';
+  try {
+    const result = await improvementPlansApi.cycles();
+    if (isCurrent(session) && request === cyclesGeneration) cycles.value = result;
+  } catch (error) {
+    if (isCurrent(session) && request === cyclesGeneration) cyclesError.value = isAxiosError(error) && error.response?.status === 403
+      ? '无权查询关联周期' : '关联周期加载失败';
+  }
+}
+async function load() {
+  const session = { id: String(route.params.id || ''), generation: ++generation };
+  plan.value = null;
+  busy.value = false;
+  decisionDialogOpen.value = false;
+  loadError.value = '';
+  mutationError.value = '';
+  mutationUncertain.value = false;
+  writesBlocked.value = false;
+  cycles.value = [];
+  if (!session.id) { loading.value = false; return; }
+  loading.value = true;
+  void loadCycles(session);
+  try {
+    const result = await improvementPlansApi.getDetail(session.id);
+    if (isCurrent(session)) sync(result, session);
+  } catch (error) {
+    if (isCurrent(session)) loadError.value = isAxiosError(error) && error.response?.status === 403
+      ? '无权查看此改进计划' : isAxiosError(error) && error.response?.status === 404
+        ? '改进计划不存在' : '改进计划加载失败，请重试';
+  } finally { if (isCurrent(session)) loading.value = false; }
+}
+function sync(value: ImprovementPlan, session: PlanSession) {
+  if (!isCurrent(session)) return;
+  if (value.id !== session.id) throw new Error('返回的改进计划不匹配，请重新加载');
   plan.value = value;
   form.improvementNeed = value.improvementNeed ?? '';
   form.cycleId = value.cycleId ?? '';
@@ -127,6 +190,35 @@ function sync(value: ImprovementPlan) {
   Object.keys(goalSuggestions).forEach((key) => delete goalSuggestions[key]);
   Object.keys(errors).forEach((key) => delete errors[key]);
 }
+function mutationSession(action: string): MutationSession | null {
+  if (!plan.value || loading.value || busy.value || writesBlocked.value || plan.value.id !== String(route.params.id)
+    || !plan.value.allowedActions.includes(action)) return null;
+  return { id: plan.value.id, generation, revision: plan.value.revision };
+}
+async function mutate(session: MutationSession, operation: () => Promise<ImprovementPlan | undefined>, message: string) {
+  busy.value = true;
+  mutationError.value = '';
+  mutationUncertain.value = false;
+  try {
+    const updated = await operation();
+    if (!isCurrent(session) || !updated) return;
+    sync(updated, session);
+    emit('changed');
+    ElMessage.success(message);
+  } catch (error) {
+    if (!isCurrent(session)) return;
+    if (isAxiosError(error) && error.response?.status === 409) {
+      writesBlocked.value = true;
+      mutationError.value = `${errorMessage(error, '当前改进计划暂不能办理')}；当前输入已保留，请重新加载后再办理。`;
+    } else if (isAxiosError(error) && !error.response) {
+      writesBlocked.value = true;
+      mutationUncertain.value = true;
+      mutationError.value = '处理结果暂未确认；当前输入已保留，请重新加载核对当前环节和操作记录，避免重复提交。';
+    } else {
+      mutationError.value = errorMessage(error, '操作未完成，请稍后重试');
+    }
+  } finally { if (isCurrent(session)) busy.value = false; }
+}
 function addGoal() { form.goals.push({ id: crypto.randomUUID(), name: '', description: '', weight: 0 }); }
 function removeGoal(index: number) { form.goals.splice(index, 1); }
 function validateTargets() {
@@ -141,21 +233,23 @@ function validateTargets() {
   if (Math.abs(weightTotal.value - 100) > 0.001) errors.total = '目标权重合计必须为 100%';
   return !Object.keys(errors).length;
 }
-function draftBody() { return { improvementNeed: form.improvementNeed, cycleId: form.cycleId || null,
-  targetDate: form.targetDate || null, goals: form.goals }; }
 async function saveTargets(submit: boolean) {
-  if (!plan.value || (submit && !validateTargets())) return;
-  busy.value = true;
-  try {
-    await improvementPlansApi.update(plan.value.id, draftBody());
-    const updated = submit ? await improvementPlansApi.submitGoals(plan.value.id) : await improvementPlansApi.getDetail(plan.value.id);
-    sync(updated);
-    emit('changed');
-    ElMessage.success(submit ? '目标已提交，等待部门负责人或员工确认' : '草稿已保存');
-  } finally { busy.value = false; }
+  const session = mutationSession(submit ? 'submit_goals' : 'edit');
+  if (!session || (submit && !validateTargets())) return;
+  const body = { improvementNeed: form.improvementNeed, cycleId: form.cycleId || null,
+    targetDate: form.targetDate || null, goals: form.goals.map((goal) => ({ ...goal })), expectedRevision: session.revision };
+  const message = submit ? plan.value?.workflowVersion === 3 ? '目标已提交，等待员工确认'
+    : '目标已提交，等待部门负责人或员工确认' : '草稿已保存';
+  await mutate(session, async () => {
+    const saved = await improvementPlansApi.update(session.id, body);
+    if (!isCurrent(session)) return;
+    if (saved.id !== session.id) throw new Error('返回的改进计划不匹配，请重新加载');
+    return submit ? improvementPlansApi.submitGoals(session.id, { expectedRevision: saved.revision }) : saved;
+  }, message);
 }
 async function decideGoals(approve: boolean) {
-  if (!plan.value) return;
+  const session = mutationSession('decide_goals');
+  if (!session || !plan.value) return;
   delete errors.decision;
   const suggestions = !approve && employeeGoalConfirmation.value ? plan.value.goals
     .map((goal) => ({ goalId: goal.id, comment: goalSuggestions[goal.id]?.trim() ?? '' }))
@@ -163,35 +257,9 @@ async function decideGoals(approve: boolean) {
   if (!approve && !decisionComment.value.trim() && !suggestions.length) {
     errors.decision = employeeGoalConfirmation.value ? '请填写具体目标建议或整体意见' : '退回时请填写理由'; return;
   }
-  busy.value = true;
-  const id = plan.value.id;
-  const expectedStatus = approve
-    ? plan.value.status === 'goal_dept_review' ? 'goal_employee_confirm' : 'self_eval'
-    : 'goal_revision';
-  try {
-    sync(await improvementPlansApi.decideGoals(id, { approve, comment: approve ? '' : decisionComment.value,
-      ...(suggestions.length ? { suggestions } : {}) }));
-    emit('changed');
-    ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
-  } catch (error) {
-    if (isAxiosError(error) && !error.response) {
-      try {
-        const updated = await improvementPlansApi.getDetail(id);
-        if (updated.status === expectedStatus) {
-          sync(updated);
-          emit('changed');
-          ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
-          return;
-        }
-      } catch { /* 下面统一提示当前结果无法确认。 */ }
-      ElMessage.error('处理结果暂未确认，请刷新页面查看，避免重复提交');
-      return;
-    }
-    const message = isAxiosError<{ message?: string }>(error)
-      ? error.response?.data?.message
-      : error instanceof Error ? error.message : null;
-    ElMessage.error(typeof message === 'string' && message.trim() ? message : '操作未完成，请稍后重试');
-  } finally { busy.value = false; }
+  const body = { approve, comment: approve ? '' : decisionComment.value, expectedRevision: session.revision,
+    ...(suggestions.length ? { suggestions } : {}) };
+  await mutate(session, () => improvementPlansApi.decideGoals(session.id, body), approve ? '目标已确认' : '目标已退回发起人修改');
 }
 function validateEvaluation() {
   Object.keys(errors).forEach((key) => delete errors[key]);
@@ -203,27 +271,23 @@ function validateEvaluation() {
   return !Object.keys(errors).length;
 }
 async function saveEvaluation(submit: boolean) {
-  if (!plan.value || (submit && !validateEvaluation())) return;
-  busy.value = true;
-  try {
-    const body = { items: evaluation.items, overallComment: evaluation.overallComment };
-    sync(submit ? await improvementPlansApi.evaluate(plan.value.id, body)
-      : await improvementPlansApi.saveEvaluation(plan.value.id, body));
-    emit('changed');
-    ElMessage.success(submit ? '评价已提交' : '评价草稿已保存');
-  } finally { busy.value = false; }
+  const session = mutationSession('evaluate');
+  if (!session || (submit && !validateEvaluation())) return;
+  const body = { items: evaluation.items.map((item) => ({ ...item })), overallComment: evaluation.overallComment,
+    expectedRevision: session.revision };
+  await mutate(session, () => submit ? improvementPlansApi.evaluate(session.id, body)
+    : improvementPlansApi.saveEvaluation(session.id, body), submit ? '评价已提交' : '评价草稿已保存');
 }
 async function decideFinal(approve: boolean) {
-  if (!plan.value) return;
+  const session = mutationSession('decide_final');
+  if (!session) return;
   if (!approve && !decisionComment.value.trim()) { errors.decision = '驳回时请填写理由'; return; }
-  busy.value = true;
-  try {
-    sync(await improvementPlansApi.decideFinal(plan.value.id, { approve, comment: approve ? '' : decisionComment.value }));
-    emit('changed');
-    ElMessage.success(approve ? '改进计划已审核完成' : '已退回当前直属上级重新评价');
-  } finally { busy.value = false; }
+  const body = { approve, comment: approve ? '' : decisionComment.value, expectedRevision: session.revision };
+  await mutate(session, () => improvementPlansApi.decideFinal(session.id, body),
+    approve ? '改进计划已审核完成' : '已退回当前直属上级重新评价');
 }
 function openDecisionDialog(action: DecisionDialogAction) {
+  if (busy.value || writesBlocked.value || (action.startsWith('goals-') ? !canDecideGoals.value : !canDecideFinal.value)) return;
   delete errors.decision;
   decisionDialogAction.value = action;
   decisionDialogOpen.value = true;
@@ -293,6 +357,12 @@ function goalName(goalId: string): string {
 
 <template>
   <div v-loading="loading" class="improvement-detail page-stack">
+    <el-alert v-if="loadError" data-testid="pip-detail-error" type="error" :closable="false" :title="loadError">
+      <el-button link type="primary" @click="load">重试</el-button>
+    </el-alert>
+    <el-alert v-if="mutationError && !decisionDialogOpen" data-testid="pip-mutation-error" :type="mutationUncertain ? 'warning' : 'error'" :closable="false" :title="mutationError">
+      <el-button link type="primary" :disabled="busy" @click="load">重新加载</el-button>
+    </el-alert>
     <template v-if="plan">
       <ChartCard class="plan-overview-card">
         <template #title><div class="title-row"><el-button v-if="!embedded" link @click="router.push('/improvement-plans')">返回列表</el-button><strong>绩效改进计划</strong></div></template>
@@ -300,23 +370,25 @@ function goalName(goalId: string): string {
           <div class="header-actions">
             <el-tag :type="IMPROVEMENT_PLAN_STATUS_META[plan.status]?.type as any">{{ IMPROVEMENT_PLAN_STATUS_META[plan.status]?.label }}</el-tag>
             <template v-if="canDecideGoals">
-              <el-button type="danger" plain :loading="busy" @click="openDecisionDialog('goals-reject')">退回发起人修改</el-button>
-              <el-button type="primary" :loading="busy" @click="openDecisionDialog('goals-approve')">确认目标</el-button>
+              <el-button type="danger" plain :loading="busy" :disabled="writesBlocked" @click="openDecisionDialog('goals-reject')">退回修改</el-button>
+              <el-button type="primary" :loading="busy" :disabled="writesBlocked" @click="openDecisionDialog('goals-approve')">确认目标</el-button>
             </template>
             <template v-else-if="canDecideFinal">
-              <el-button type="danger" plain :loading="busy" @click="openDecisionDialog('final-reject')">退回直属上级重评</el-button>
-              <el-button type="primary" :loading="busy" @click="openDecisionDialog('final-approve')">审核确认</el-button>
+              <el-button type="danger" plain :loading="busy" :disabled="writesBlocked" @click="openDecisionDialog('final-reject')">退回重评</el-button>
+              <el-button type="primary" :loading="busy" :disabled="writesBlocked" @click="openDecisionDialog('final-approve')">确认结果</el-button>
             </template>
           </div>
         </template>
-        <el-descriptions :column="2" border size="small" class="plan-info">
+        <el-descriptions :column="isMobile ? 1 : 2" :label-width="isMobile ? 84 : undefined" border size="small" class="plan-info">
           <el-descriptions-item label="员工">{{ plan.employeeName }}（{{ plan.employeeNo || '-' }}）</el-descriptions-item>
           <el-descriptions-item label="部门">{{ plan.deptName || '-' }}</el-descriptions-item>
           <el-descriptions-item label="关联周期">{{ plan.cycleName || '未关联' }}</el-descriptions-item>
           <el-descriptions-item label="发起人">{{ plan.creatorName || '-' }}</el-descriptions-item>
           <el-descriptions-item label="预计完成">{{ plan.targetDate ? formatDate(plan.targetDate) : '未设定' }}</el-descriptions-item>
           <el-descriptions-item label="开始执行">{{ plan.startedAt ? formatDateTime(plan.startedAt) : '待目标确认' }}</el-descriptions-item>
+          <el-descriptions-item v-if="plan.workflowVersion === 3 && plan.status === 'goal_hr_review'" label="当前办理人">HR共享待办</el-descriptions-item>
         </el-descriptions>
+        <el-alert v-if="plan.workflowIssue" type="warning" :closable="false" :title="plan.workflowIssue" />
         <el-alert v-if="plan.workflowVersion === 1" type="info" :closable="false" title="历史改进计划记录，仅供查看" />
         <el-alert v-else-if="deadlineHint" type="warning" :closable="false" :title="deadlineHint" />
       </ChartCard>
@@ -335,6 +407,7 @@ function goalName(goalId: string): string {
                 <el-select v-model="form.cycleId" aria-label="关联绩效周期计划" clearable placeholder="不关联">
                   <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
                 </el-select>
+                <small v-if="cyclesError" class="field-error">{{ cyclesError }} <el-button link type="primary" @click="loadCycles()">重试</el-button></small>
               </el-form-item>
               <el-form-item label="预计完成日期（选填）"><el-date-picker v-model="form.targetDate" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
             </div>
@@ -373,7 +446,7 @@ function goalName(goalId: string): string {
             </div>
           </template>
         </div>
-        <div v-if="canEdit" class="form-actions"><el-button :loading="busy" @click="saveTargets(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveTargets(true)">提交目标</el-button></div>
+        <div v-if="canEdit || canSubmitGoals" class="form-actions"><el-button v-if="canEdit" :loading="busy" :disabled="writesBlocked" @click="saveTargets(false)">保存草稿</el-button><el-button v-if="canSubmitGoals" type="primary" :loading="busy" :disabled="writesBlocked" @click="saveTargets(true)">提交目标</el-button></div>
         <div v-if="showEvaluation && priorEvaluations.length" class="evaluation-overview">
           <div class="section-heading"><strong>评价汇总</strong></div>
           <div v-for="item in priorEvaluations" :key="item.label" class="prior-overall">{{ item.summary }}</div>
@@ -382,7 +455,7 @@ function goalName(goalId: string): string {
           <div class="evaluation-summary">
             <p class="weighted-total">加权综合分：{{ draftTotal ?? '待填写全部评分' }}</p>
             <el-form label-position="top"><el-form-item label="总体评价内容" required><el-input v-model="evaluation.overallComment" aria-label="总体评价内容" type="textarea" :rows="3" maxlength="4000" /><small v-if="errors.overall" class="field-error">{{ errors.overall }}</small></el-form-item></el-form>
-            <div class="form-actions"><el-button :loading="busy" @click="saveEvaluation(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveEvaluation(true)">{{ evaluationSubmitLabel }}</el-button></div>
+            <div class="form-actions"><el-button :loading="busy" :disabled="writesBlocked" @click="saveEvaluation(false)">保存草稿</el-button><el-button type="primary" :loading="busy" :disabled="writesBlocked" @click="saveEvaluation(true)">{{ evaluationSubmitLabel }}</el-button></div>
           </div>
         </template>
         <template v-else-if="plan.status === 'completed'"><p class="weighted-total">最终综合分：{{ plan.finalScore ?? '-' }}</p></template>
@@ -432,10 +505,13 @@ function goalName(goalId: string): string {
 
       <el-dialog v-model="decisionDialogOpen" :title="decisionDialogTitle" width="min(560px, calc(100vw - 32px))"
         :close-on-click-modal="false" destroy-on-close>
+        <el-alert v-if="mutationError" data-testid="pip-mutation-error" :type="mutationUncertain ? 'warning' : 'error'" :closable="false" :title="mutationError">
+          <el-button link type="primary" :disabled="busy" @click="load">重新加载</el-button>
+        </el-alert>
         <template v-if="decisionDialogForGoals">
-          <p v-if="!decisionDialogReject">{{ employeeGoalConfirmation ? '确认后将进入员工自评，无需填写意见。' : '确认后将进入员工确认，无需填写意见。' }}</p>
+          <p v-if="!decisionDialogReject">确认后将进入{{ nextGoalStage }}，无需填写意见。</p>
           <template v-else>
-            <p>{{ employeeGoalConfirmation ? '请填写需要调整的具体目标建议或整体意见。' : '请填写退回原因。' }}</p>
+            <p>{{ employeeGoalConfirmation ? '请填写调整建议，退回发起人修改。' : '请填写原因，退回发起人修改。' }}</p>
             <div v-if="employeeGoalConfirmation" class="dialog-suggestions">
               <label v-for="(goal, index) in plan.goals" :key="goal.id">
                 <span>{{ index + 1 }}. {{ goal.name }}的修改建议（选填）</span>
@@ -461,13 +537,13 @@ function goalName(goalId: string): string {
         <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
         <template #footer>
           <el-button :disabled="busy" @click="decisionDialogOpen = false">取消</el-button>
-          <el-button :type="decisionDialogReject ? 'danger' : 'primary'" :loading="busy" @click="submitDecisionDialog">
-            {{ decisionDialogReject ? '确认退回' : decisionDialogForGoals ? '确认目标' : '确认审核' }}
+          <el-button :type="decisionDialogReject ? 'danger' : 'primary'" :loading="busy" :disabled="writesBlocked" @click="submitDecisionDialog">
+            {{ decisionDialogReject ? '确认退回' : decisionDialogForGoals ? '确认目标' : '确认结果' }}
           </el-button>
         </template>
       </el-dialog>
     </template>
-    <EmptyState v-else-if="!loading" description="改进计划不存在或无权查看" />
+    <EmptyState v-else-if="!loading && !loadError" description="改进计划不存在或无权查看" />
   </div>
 </template>
 

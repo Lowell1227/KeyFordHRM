@@ -188,7 +188,7 @@ export class IndicatorVisibilityService {
       });
     }
 
-    return { OR: clauses };
+    return { retiredAt: null, OR: clauses };
   }
 
   async findVisibleReferences(

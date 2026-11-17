@@ -387,7 +387,7 @@ export class ObjectivesService {
     };
 
     const indicators = await this.prisma.indicatorInstance.findMany({
-      where: { AND: [{ task: { cycleId } }, visibilityWhere] },
+      where: { retiredAt: null, AND: [{ task: { cycleId } }, visibilityWhere] },
       orderBy: [{ task: { employeeId: 'asc' } }, { sortOrder: 'asc' }, { id: 'asc' }],
       include: {
         task: {
@@ -690,7 +690,7 @@ export class ObjectivesService {
           },
         },
         indicatorInstances: {
-          ...(indicatorWhere ? { where: indicatorWhere } : {}),
+          where: { retiredAt: null, ...indicatorWhere },
           orderBy: { sortOrder: 'asc' },
           include: {
             visibilityRules: {
@@ -932,6 +932,7 @@ export class ObjectivesService {
       );
     }
     return {
+      retiredAt: null,
       AND: [
         { task: { cycleId: task.cycleId, employeeId: task.managerId! } },
         { OR: visibility },
@@ -1026,6 +1027,9 @@ export class ObjectivesService {
         message: '只能更新本人的考核指标进展',
       });
     }
+    if (indicator.retiredAt) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '已移除的目标不能更新进展' });
+    }
     const currentPeriod = currentGoalTrackingPeriod(indicator.task.periods);
     const selectedPeriod = input.periodId
       ? indicator.task.periods.find(period => period.id === input.periodId)
@@ -1074,23 +1078,27 @@ export class ObjectivesService {
           WHERE "id" = ${indicatorId}::uuid
           FOR UPDATE
         `;
-        let currentIndicator = indicator;
+        const currentIndicator = await tx.indicatorInstance.findUnique(indicatorQuery);
+        if (!currentIndicator) {
+          throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '指标已变更，请刷新后重试' });
+        }
+        if (currentIndicator.retiredAt) {
+          throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '已移除的目标不能更新进展' });
+        }
         if (options) {
           const existing = await tx.indicatorProgressUpdate.findUnique({
             where: { aiDraftId: options.aiDraftId },
             include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
           });
           if (existing) return this.aiDraftResult(existing, viewer.id, indicatorId);
-          const fresh = await tx.indicatorInstance.findUnique(indicatorQuery);
           const freshSelectedPeriod = assessmentPeriodId
-            ? fresh?.task.periods.find(period => period.id === assessmentPeriodId) ?? null
-            : currentGoalTrackingPeriod(fresh?.task.periods);
-          if (!fresh || (assessmentPeriodId && !freshSelectedPeriod)
+            ? currentIndicator.task.periods.find(period => period.id === assessmentPeriodId) ?? null
+            : currentGoalTrackingPeriod(currentIndicator.task.periods);
+          if ((assessmentPeriodId && !freshSelectedPeriod)
             || (!progressPeriodId && freshSelectedPeriod && isMonthlyProgressPeriod(freshSelectedPeriod))
-            || !this.canSubmitActiveProgress(fresh.task, viewer, freshSelectedPeriod, indicatorId)) {
+            || !this.canSubmitActiveProgress(currentIndicator.task, viewer, freshSelectedPeriod, indicatorId)) {
             throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '目标或考核月份已不可更新，请刷新后重试' });
           }
-          currentIndicator = fresh;
         }
         let progress = options?.aiAssisted || input.actualValue !== undefined ? null : input.progress;
         let actualValue: Prisma.Decimal | null = null;
@@ -1101,10 +1109,7 @@ export class ObjectivesService {
             throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '实际值须为非负数，最多8位整数和2位小数' });
           }
           actualValue = new Prisma.Decimal(input.actualValue);
-          const baseline = options ? currentIndicator : await tx.indicatorInstance.findUnique({
-            where: { id: indicatorId }, select: { targetValue: true, unit: true },
-          });
-          if (!baseline) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '指标已变更，请刷新后重试' });
+          const baseline = currentIndicator;
           if (baseline.targetValue?.gt(0)) {
             targetValueSnapshot = baseline.targetValue;
             unitSnapshot = baseline.unit;
@@ -1224,7 +1229,7 @@ export class ObjectivesService {
 
   async findTrackingIndicator(indicatorId: string, viewer: AuthUser) {
     const identity = await this.prisma.indicatorInstance.findUnique({
-      where: { id: indicatorId },
+      where: { id: indicatorId, retiredAt: null },
       select: {
         task: { select: { employeeId: true, cycleId: true } },
       },
@@ -1281,7 +1286,7 @@ export class ObjectivesService {
       }
     }
     const indicator = await this.prisma.indicatorInstance.findFirst({
-      where: { AND: [{ id: indicatorId }, { OR: ownerVisibility }] },
+      where: { retiredAt: null, AND: [{ id: indicatorId }, { OR: ownerVisibility }] },
       include: {
         visibilityRules: {
           orderBy: { scope: 'asc' },
@@ -1463,6 +1468,7 @@ export class ObjectivesService {
           },
         },
         indicatorInstances: {
+          where: { retiredAt: null },
           orderBy: { sortOrder: 'asc' },
           select: { id: true, name: true, targetValue: true, unit: true },
         },

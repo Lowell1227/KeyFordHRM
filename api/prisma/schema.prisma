@@ -311,6 +311,8 @@ enum ImprovementPlanStatus {
   draft
   goal_dept_review
   goal_employee_confirm
+  goal_hr_review
+  goal_vp_review
   goal_revision
   self_eval
   manager_review
@@ -614,6 +616,8 @@ model User {
   archives                                  PerformanceArchive[]
   improvementPlans                          ImprovementPlan[]                @relation("ImprovementPlanEmployee")
   createdImprovementPlans                   ImprovementPlan[]                @relation("ImprovementPlanCreator")
+  grantedGoalChanges                        GoalChangeGrant[]
+  createdGoalChanges                        GoalChangeRequest[]
   auditLogs                                 AuditLog[]
   signatures                                Signature[]
   interviewedAsEmployee                     PerformanceInterview[]           @relation("InterviewEmployee")
@@ -1249,6 +1253,8 @@ model AssessmentTask {
   notifications        NotificationLog[]
   periods              AssessmentPeriod[]
   indicatorVersions    IndicatorVersion[]
+  goalChangeGrant      GoalChangeGrant?
+  goalChangeRequests   GoalChangeRequest[]
 
   @@unique([cycleId, employeeId])
   @@index([cycleId])
@@ -1259,6 +1265,42 @@ model AssessmentTask {
   @@index([status])
   @@index([cycleId, status])
   @@map("assessment_tasks")
+}
+
+model GoalChangeGrant {
+  taskId      String   @id @map("task_id") @db.Uuid
+  grantedById String   @map("granted_by_id") @db.Uuid
+  state       String   @default("open") @db.VarChar(20)
+  revision    Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  task AssessmentTask @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  grantedBy User @relation(fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@map("goal_change_grants")
+}
+
+model GoalChangeRequest {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId             String   @map("task_id") @db.Uuid
+  creatorId          String   @map("creator_id") @db.Uuid
+  status             String   @default("draft") @db.VarChar(40)
+  revision           Int      @default(0)
+  reason             String?  @db.Text
+  beforeGoals        Json     @map("before_goals") @db.JsonB
+  goals              Json     @db.JsonB
+  baselineVersionId  String?  @map("baseline_version_id") @db.Uuid
+  effectiveVersionId String?  @map("effective_version_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  task AssessmentTask @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  creator User @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  baselineVersion IndicatorVersion? @relation("GoalChangeBaseline", fields: [baselineVersionId], references: [id], onDelete: Restrict)
+  effectiveVersion IndicatorVersion? @relation("GoalChangeEffective", fields: [effectiveVersionId], references: [id], onDelete: Restrict)
+
+  @@index([taskId, createdAt])
+  @@index([status])
+  @@map("goal_change_requests")
 }
 
 model CyclePeriodSchedule {
@@ -1340,6 +1382,8 @@ model IndicatorVersion {
   createdBy User?                  @relation("IndicatorVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
   items     IndicatorVersionItem[]
   periods   AssessmentPeriod[]     @relation("PeriodIndicatorVersion")
+  baselineChangeRequests GoalChangeRequest[] @relation("GoalChangeBaseline")
+  effectiveChangeRequests GoalChangeRequest[] @relation("GoalChangeEffective")
 
   @@unique([taskId, version])
   @@index([taskId, status])
@@ -1440,6 +1484,7 @@ model IndicatorInstance {
   extraScores         Json                     @default("[]") @map("extra_scores") @db.JsonB
   finalScore          Decimal?                 @map("final_score") @db.Decimal(6, 2)
   sortOrder           Int                      @default(0) @map("sort_order")
+  retiredAt           DateTime?                @map("retired_at") @db.Timestamptz(6)
   createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -1755,6 +1800,7 @@ model ImprovementPlan {
   finalScore           Float?                @map("final_score")
   status               ImprovementPlanStatus @default(draft)
   workflowVersion      Int                   @default(1) @map("workflow_version")
+  revision             Int                   @default(0)
   goals                Json                  @default("[]") @db.JsonB
   selfEvaluation       Json?                 @map("self_evaluation") @db.JsonB
   managerEvaluation    Json?                 @map("manager_evaluation") @db.JsonB

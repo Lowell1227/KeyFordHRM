@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsNumber, IsOptional, IsString, IsUUID, Max, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsDateString, IsNumber, IsOptional, IsString, IsUUID, Max, Min, ValidateNested } from 'class-validator';
 
 /** 单条指标自评项。 */
 export class SelfEvalIndicatorItemDto {
@@ -46,6 +46,10 @@ export class SelfEvalSummaryDto {
 
 /** POST /tasks/:id/self-eval 请求体。 */
 export class SubmitSelfEvalDto {
+  @IsOptional()
+  @IsDateString()
+  expectedUpdatedAt?: string;
+
   @ValidateNested({ each: true })
   @Type(() => SelfEvalIndicatorItemDto)
   indicators!: SelfEvalIndicatorItemDto[];

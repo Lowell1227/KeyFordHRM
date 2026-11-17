@@ -5,12 +5,12 @@ const viewer = (id: string, role = 'employee') => ({
   id, name: id, sysRole: role, deptId: 'dept', isAssessorOnly: false, canViewAll: false, hrCapabilities: [],
 }) as any;
 
-const employee = { id: 'emp', name: '员工', employeeNo: 'E01', deptId: 'dept', directManagerId: 'manager', status: 'active', deletedAt: null,
+const employee = { id: 'emp', name: '员工', employeeNo: 'E01', deptId: 'dept', directManagerId: 'manager', status: 'active', deletedAt: null, archivedAt: null,
   dept: { id: 'dept', name: '业务部' } };
 const departments = [{ id: 'dept', name: '业务部', parentId: null, leaderId: 'head', approverId: 'vp',
   leader: { name: '部门负责人', directManagerId: null, directManager: null }, approver: { name: '分管总' } }];
 const plan = (overrides: Record<string, unknown> = {}) => ({
-  id: 'plan', employeeId: 'emp', cycleId: null, taskId: null, creatorId: 'manager', workflowVersion: 2,
+  id: 'plan', employeeId: 'emp', cycleId: null, taskId: null, creatorId: 'manager', workflowVersion: 2, revision: 0,
   improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
   goals: [{ id: 'g1', name: '质量', description: '降低返工', weight: 100 }],
   selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
@@ -26,7 +26,10 @@ describe('ImprovementWorkflowService', () => {
 
   beforeEach(() => {
     prisma = {
-      user: { findUnique: jest.fn().mockResolvedValue(employee), findMany: jest.fn().mockResolvedValue([]) },
+      user: { findUnique: jest.fn().mockResolvedValue(employee), findMany: jest.fn().mockResolvedValue(
+        ['manager', 'director', 'head', 'upper-head', 'vp', 'new-manager', 'hr'].map((id) => ({
+          id, status: 'active', deletedAt: null, archivedAt: null, sysRole: id === 'hr' ? 'hr' : 'employee', hrCapabilities: [],
+        }))) },
       department: { findMany: jest.fn().mockResolvedValue(departments) },
       assessmentCycle: { findUnique: jest.fn() },
       improvementPlan: { create: jest.fn().mockResolvedValue(plan()), findUnique: jest.fn().mockResolvedValue(plan()),
@@ -39,10 +42,10 @@ describe('ImprovementWorkflowService', () => {
     service = new ImprovementWorkflowService(prisma, scope, notifications);
   });
 
-  it('allows an upper manager to create a plan without cycle or task', async () => {
-    await service.create({ employeeId: 'emp', improvementNeed: '需要提升交付质量', goals: plan().goals }, viewer('director'));
+  it('allows the direct manager to create a V3 plan without cycle or task', async () => {
+    await service.create({ employeeId: 'emp', improvementNeed: '需要提升交付质量', goals: plan().goals }, viewer('manager'));
     expect(prisma.improvementPlan.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
-      employeeId: 'emp', cycleId: null, taskId: null, creatorId: 'director', workflowVersion: 2,
+      employeeId: 'emp', cycleId: null, taskId: null, creatorId: 'manager', workflowVersion: 3,
     }) }));
   });
 
@@ -53,7 +56,7 @@ describe('ImprovementWorkflowService', () => {
 
   it('bypasses department goal confirmation when the creator is department head', async () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ creatorId: 'head' }));
-    await service.submitGoals('plan', viewer('head'));
+    await service.submitGoals('plan', viewer('head'), 0);
     expect(prisma.improvementPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: 'goal_employee_confirm' }),
     }));
@@ -63,7 +66,7 @@ describe('ImprovementWorkflowService', () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'vp_review', departmentEvaluation: {
       items: [{ goalId: 'g1', score: 88, comment: '已改进' }], overallComment: '达到要求', weightedScore: 88,
     } }));
-    await service.decideFinal('plan', { approve: false, comment: '请再核实' }, viewer('vp'));
+    await service.decideFinal('plan', { approve: false, comment: '请再核实', expectedRevision: 0 }, viewer('vp'));
     expect(prisma.improvementPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: 'manager_review', finalScore: null }),
     }));
@@ -97,9 +100,9 @@ describe('ImprovementWorkflowService', () => {
     scope.getManagerChainIds.mockResolvedValue(['new-manager', 'director']);
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'manager_review' }));
     await expect(service.evaluate('plan', { items: [{ goalId: 'g1', score: 82, comment: '进步' }],
-      overallComment: '继续保持' }, viewer('manager'))).rejects.toThrow(ForbiddenException);
+      overallComment: '继续保持', expectedRevision: 0 }, viewer('manager'))).rejects.toThrow(ForbiddenException);
     await service.evaluate('plan', { items: [{ goalId: 'g1', score: 82, comment: '进步' }],
-      overallComment: '继续保持' }, viewer('new-manager'));
+      overallComment: '继续保持', expectedRevision: 0 }, viewer('new-manager'));
     expect(prisma.improvementPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: 'dept_review' }),
     }));
@@ -107,15 +110,16 @@ describe('ImprovementWorkflowService', () => {
 
   it('does not send a second new-plan copy when goals are resubmitted', async () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_revision' }));
-    prisma.user.findMany.mockResolvedValue([{ id: 'specialist' }]);
-    await service.submitGoals('plan', viewer('manager'));
+    prisma.user.findMany.mockResolvedValue([...await prisma.user.findMany(), { id: 'specialist', status: 'active',
+      deletedAt: null, archivedAt: null, sysRole: 'hr_user', hrCapabilities: ['cycle_plan_edit', 'performance_publish'] }]);
+    await service.submitGoals('plan', viewer('manager'), 0);
     expect(notifications.create).not.toHaveBeenCalledWith(expect.objectContaining({ userId: 'specialist' }));
   });
 
   it('keeps a partial employee evaluation as draft without advancing the plan', async () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'self_eval' }));
     await service.saveEvaluation('plan', { items: [{ goalId: 'g1', score: null, comment: '正在收集材料' }],
-      overallComment: '' }, viewer('emp'));
+      overallComment: '', expectedRevision: 0 }, viewer('emp'));
     expect(prisma.improvementPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: 'self_eval', selfEvaluation: expect.objectContaining({ draft: true }) }),
     }));
@@ -135,11 +139,11 @@ describe('ImprovementWorkflowService', () => {
 
   it('accepts a specific employee suggestion as the rejection reason and snapshots its goal name', async () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_employee_confirm' }));
-    await service.decideGoals('plan', { approve: false, suggestions: [
+    await service.decideGoals('plan', { approve: false, expectedRevision: 0, suggestions: [
       { goalId: 'g1', comment: '建议把交付质量要求写得更具体' },
     ] }, viewer('emp'));
     expect(prisma.improvementPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      data: { status: 'goal_revision' },
+      data: expect.objectContaining({ status: 'goal_revision', revision: { increment: 1 } }),
     }));
     expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
       action: 'reject_goals', newValue: expect.objectContaining({ suggestions: [
@@ -150,7 +154,7 @@ describe('ImprovementWorkflowService', () => {
 
   it('rejects suggestions for another goal and does not change the plan', async () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_employee_confirm' }));
-    await expect(service.decideGoals('plan', { approve: false, suggestions: [
+    await expect(service.decideGoals('plan', { approve: false, expectedRevision: 0, suggestions: [
       { goalId: 'other', comment: '无关目标' },
     ] }, viewer('emp'))).rejects.toThrow(BadRequestException);
     expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
@@ -158,7 +162,7 @@ describe('ImprovementWorkflowService', () => {
 
   it('does not silently discard suggestions when the employee approves', async () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_employee_confirm' }));
-    await expect(service.decideGoals('plan', { approve: true, suggestions: [
+    await expect(service.decideGoals('plan', { approve: true, expectedRevision: 0, suggestions: [
       { goalId: 'g1', comment: '请修改' },
     ] }, viewer('emp'))).rejects.toThrow(BadRequestException);
     expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
@@ -166,14 +170,14 @@ describe('ImprovementWorkflowService', () => {
 
   it('keeps the department head on the existing overall-reason rule', async () => {
     prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_dept_review' }));
-    await expect(service.decideGoals('plan', { approve: false, suggestions: [
+    await expect(service.decideGoals('plan', { approve: false, expectedRevision: 0, suggestions: [
       { goalId: 'g1', comment: '请修改' },
     ] }, viewer('head'))).rejects.toThrow(BadRequestException);
-    await expect(service.decideGoals('plan', { approve: false }, viewer('head'))).rejects.toThrow(BadRequestException);
+    await expect(service.decideGoals('plan', { approve: false, expectedRevision: 0 }, viewer('head'))).rejects.toThrow(BadRequestException);
     expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
   });
 
-  it('shows only current and lower management scope in the creation employee picker', async () => {
+  it('shows only direct reports in the V3 creation employee picker', async () => {
     prisma.user.findMany.mockResolvedValue([
       { id: 'manager', name: '主管', employeeNo: 'M', deptId: 'child', directManagerId: 'director', dept: { name: '团队' } },
       { id: 'direct', name: '直属员工', employeeNo: 'E1', deptId: 'child', directManagerId: 'manager', dept: { name: '团队' } },
@@ -187,6 +191,6 @@ describe('ImprovementWorkflowService', () => {
       { id: 'other', parentId: null, leaderId: 'other-leader' },
     ]);
     const choices = await service.eligibleEmployees(viewer('manager'));
-    expect(choices.map((choice) => choice.id)).toEqual(['direct', 'lower']);
+    expect(choices.map((choice) => choice.id)).toEqual(['direct']);
   });
 });

@@ -1160,6 +1160,7 @@ export interface SetIndicatorBody {
 }
 
 export interface UpdateActualValueBody {
+  expectedUpdatedAt?: string;
   indicators: {
     id: string;
     actualValue?: string;
@@ -1195,6 +1196,7 @@ export interface SubmitIndicatorProposalResult {
 }
 
 export interface SubmitSelfEvalBody {
+  expectedUpdatedAt?: string;
   indicators: {
     id: string;
     selfScore: number;
@@ -1870,6 +1872,8 @@ export interface ImprovementPlanRecord {
 
 export interface ImprovementPlan {
   id: string;
+  revision: number;
+  workflowIssue: string | null;
   employeeId: string;
   employeeName?: string;
   employeeNo?: string;
@@ -1918,10 +1922,11 @@ export interface CreateImprovementPlanBody {
   goals: ImprovementGoal[];
 }
 
-export type UpdateImprovementPlanBody = Omit<CreateImprovementPlanBody, 'employeeId'>;
-export interface ImprovementDecisionBody { approve: boolean; comment?: string }
+export interface ImprovementRevisionBody { expectedRevision: number }
+export type UpdateImprovementPlanBody = Omit<CreateImprovementPlanBody, 'employeeId'> & ImprovementRevisionBody;
+export interface ImprovementDecisionBody extends ImprovementRevisionBody { approve: boolean; comment?: string }
 export interface ImprovementGoalDecisionBody extends ImprovementDecisionBody { suggestions?: ImprovementGoalSuggestion[] }
-export interface ImprovementEvaluationBody { items: ImprovementEvaluation['items']; overallComment: string }
+export interface ImprovementEvaluationBody extends ImprovementRevisionBody { items: ImprovementEvaluation['items']; overallComment: string }
 
 export interface ConsecutiveDWarning {
   hasWarning: boolean;

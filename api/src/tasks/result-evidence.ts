@@ -2,22 +2,22 @@ import { PerfGrade, Prisma } from '@prisma/client';
 
 /** Read-only evidence selection shared by each workflow's already-authorized detail query. */
 export const RESULT_PERIOD_SELECT = {
-  periodKey: true, status: true, selfGrade: true, managerGrade: true,
+  periodKey: true, indicatorVersionId: true, status: true, selfGrade: true, managerGrade: true,
   selfScoreTotal: true, managerScoreTotal: true,
   indicatorReviews: { select: {
     selfScore: true, managerScore: true,
-    indicatorVersionItem: { select: { id: true, sourceInstanceId: true, name: true, weight: true, indicatorType: true } },
+    indicatorVersionItem: { select: { id: true, indicatorVersionId: true, sourceInstanceId: true, name: true, weight: true, indicatorType: true } },
   } },
 } satisfies Prisma.AssessmentPeriodSelect;
 
 type Numeric = number | Prisma.Decimal;
 interface EvidencePeriod {
-  periodKey: string; status: string;
+  periodKey: string; indicatorVersionId: string | null; status: string;
   selfGrade?: string | null; managerGrade?: string | null;
   selfScoreTotal?: Numeric | null; managerScoreTotal?: Numeric | null;
   indicatorReviews?: Array<{
     selfScore: Numeric | null; managerScore: Numeric | null;
-    indicatorVersionItem: { id: string; sourceInstanceId: string | null; name: string; weight: Numeric; indicatorType: string };
+    indicatorVersionItem: { id: string; indicatorVersionId: string; sourceInstanceId: string | null; name: string; weight: Numeric; indicatorType: string };
   }>;
 }
 export interface ResultEvidence {
@@ -33,6 +33,7 @@ export function buildResultEvidence(periods: EvidencePeriod[] = []): ResultEvide
   for (const period of ordered) {
     for (const review of period.indicatorReviews ?? []) {
       const item = review.indicatorVersionItem;
+      if (item.indicatorVersionId !== period.indicatorVersionId) continue;
       // A missing source is kept as its own version item, never guessed from a display name.
       const id = item.sourceInstanceId ?? item.id;
       const entry = indicators.get(id) ?? { id, name: item.name, weight: Number(item.weight), type: item.indicatorType, self: [], manager: [] };

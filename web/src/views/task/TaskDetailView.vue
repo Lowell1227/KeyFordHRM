@@ -448,6 +448,7 @@ async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: Actu
   const currentTask = task.value;
   if (!currentTask || actionLoading.value) return;
   const id = currentTask.id;
+  let expectedUpdatedAt = currentTask.updatedAt;
   const session = detailSession;
   const form = indicatorSnapshotRef.value;
   const isCurrent = () => session === detailSession && task.value === currentTask
@@ -456,11 +457,13 @@ async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: Actu
   let actualValuesSaved = false;
   try {
     if (actualValues.length > 0) {
-      await tasksApi.updateActualValues(id, { indicators: actualValues }, { skipErrorMessage: true });
+      const saved = await tasksApi.updateActualValues(id, { indicators: actualValues, expectedUpdatedAt }, { skipErrorMessage: true });
       if (!isCurrent()) return;
+      if (saved.updatedAt) currentTask.updatedAt = saved.updatedAt;
+      expectedUpdatedAt = saved.updatedAt ?? expectedUpdatedAt;
       actualValuesSaved = true;
     }
-    await tasksApi.submitSelfEval(id, body, { skipErrorMessage: true });
+    await tasksApi.submitSelfEval(id, { ...body, expectedUpdatedAt }, { skipErrorMessage: true });
     if (!isCurrent()) return;
     form?.clearSelfEvalDraft();
     ElMessage.success('自评提交成功');

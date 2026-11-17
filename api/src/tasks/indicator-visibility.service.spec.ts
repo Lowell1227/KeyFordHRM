@@ -275,7 +275,7 @@ describe('IndicatorVisibilityService', () => {
       expect.objectContaining({
         where: {
           AND: expect.arrayContaining([
-            expect.objectContaining({ OR: expect.any(Array) }),
+            expect.objectContaining({ retiredAt: null, OR: expect.any(Array) }),
             { task: { cycleId: 'cycle-1' } },
             { task: { employeeId: 'owner-1' } },
             {

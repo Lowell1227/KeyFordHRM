@@ -146,7 +146,7 @@ export class ScoringService {
   /** 根据任务 ID 拉取指标实例，计算总分、raw_grade。 */
   async calculateTaskScore(taskId: string): Promise<TaskScoreResult> {
     const [indicators, gradeConfig] = await Promise.all([
-      this.prisma.indicatorInstance.findMany({ where: { taskId } }),
+      this.prisma.indicatorInstance.findMany({ where: { taskId, retiredAt: null } }),
       this.prisma.systemConfig.findUnique({ where: { key: 'grade_score_mapping' } }),
     ]);
 

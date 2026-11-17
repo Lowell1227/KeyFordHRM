@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
+import { IsDateString, IsNotEmpty, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
 
 /** 单条指标实际值更新项。 */
 export class ActualValueItemDto {
@@ -18,6 +18,10 @@ export class ActualValueItemDto {
 
 /** PUT /tasks/:id/actual-value 请求体。 */
 export class UpdateActualValueDto {
+  @IsOptional()
+  @IsDateString()
+  expectedUpdatedAt?: string;
+
   @ValidateNested({ each: true })
   @Type(() => ActualValueItemDto)
   indicators!: ActualValueItemDto[];

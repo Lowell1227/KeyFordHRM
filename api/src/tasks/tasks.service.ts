@@ -34,7 +34,7 @@ import {
   normalizeIndicatorVisibilityScopes,
 } from './indicator-visibility.rules';
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
-import { assertTaskVersion, claimTaskVersion } from './task-version';
+import { assertTaskVersion, claimTaskVersion, taskVersionConflict } from './task-version';
 import { IndicatorVersionService } from './indicator-version.service';
 import { getManagerStageState, TeamStageState } from './team-task-stage';
 import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
@@ -464,6 +464,7 @@ export class TasksService {
         deptHead: { select: { id: true, name: true } },
         approver: { select: { id: true, name: true } },
         indicatorInstances: {
+          where: { retiredAt: null },
           orderBy: { sortOrder: 'asc' },
           include: {
             visibleDepartments: { select: { departmentId: true } },
@@ -676,7 +677,7 @@ export class TasksService {
       );
       if (action !== 'reject') {
         const indicators = await tx.indicatorInstance.findMany({
-          where: { taskId: task.id },
+          where: { taskId: task.id, retiredAt: null },
           select: { weight: true },
         });
         if (
@@ -812,7 +813,7 @@ export class TasksService {
       });
     if (final) {
       const indicators = await tx.indicatorInstance.findMany({
-        where: { taskId: task.id },
+        where: { taskId: task.id, retiredAt: null },
         include: {
           visibleDepartments: { select: { departmentId: true } },
           visibleUsers: { select: { userId: true } },
@@ -912,7 +913,7 @@ export class TasksService {
       }
 
       const indicators = await tx.indicatorInstance.findMany({
-        where: { taskId: task.id },
+        where: { taskId: task.id, retiredAt: null },
         orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
         include: {
           visibleDepartments: {
@@ -1404,8 +1405,10 @@ export class TasksService {
     id: string,
     dto: UpdateActualValueDto,
     viewer: AuthUser,
-  ): Promise<{ id: string; updatedCount: number }> {
-    const task = await this.getTaskOrThrow(id);
+  ): Promise<{ id: string; updatedCount: number; updatedAt: string }> {
+    const task = (await this.getTaskOrThrow(id, {
+      goalChangeRequests: { where: { status: 'active' }, select: { id: true }, take: 1 },
+    })) as AssessmentTask & { goalChangeRequests: Array<{ id: string }> };
     this.assertCanEditActualValue(task, viewer);
     if (await this.isNewGoalWorkflow(task.cycleId) && !task.goalApprovedAt) throw new ConflictException('目标尚未终审生效');
 
@@ -1416,24 +1419,38 @@ export class TasksService {
       });
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    if (task.goalChangeRequests?.length && !dto.expectedUpdatedAt) throw taskVersionConflict();
+    const expectedUpdatedAt = dto.expectedUpdatedAt ?? task.updatedAt.toISOString();
+    assertTaskVersion(task.updatedAt, expectedUpdatedAt);
+
+    const claimedUpdatedAt = await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, expectedUpdatedAt, task.status);
       for (const item of dto.indicators) {
         await tx.indicatorInstance.update({
-          where: { id: item.id, taskId: id },
+          where: { id: item.id, taskId: id, retiredAt: null },
           data: {
             actualValue: item.actualValue ?? null,
             actualNote: item.actualNote ?? null,
           },
         });
       }
+      return claimedUpdatedAt;
     });
 
-    return { id: task.id, updatedCount: dto.indicators.length };
+    return { id: task.id, updatedCount: dto.indicators.length, updatedAt: claimedUpdatedAt.toISOString() };
   }
 
   /** POST /tasks/:id/self-eval */
   async submitSelfEval(id: string, dto: SubmitSelfEvalDto, viewer: AuthUser): Promise<{ id: string; status: TaskStatus }> {
-    const task = await this.getTaskOrThrow(id, { snapshot: { select: { snapshotData: true } } });
+    const task = (await this.getTaskOrThrow(id, {
+      snapshot: { select: { snapshotData: true } },
+      indicatorInstances: { where: { retiredAt: null }, select: { id: true } },
+      goalChangeRequests: { where: { status: 'active' }, select: { id: true }, take: 1 },
+    })) as AssessmentTask & {
+      snapshot?: { snapshotData: Prisma.JsonValue };
+      indicatorInstances: Array<{ id: string }>;
+      goalChangeRequests: Array<{ id: string }>;
+    };
     this.assertEmployee(task, viewer);
     if (await this.isNewGoalWorkflow(task.cycleId) && !task.goalApprovedAt) throw new ConflictException('目标尚未终审生效');
     if (task.status !== 'self_eval') {
@@ -1445,7 +1462,18 @@ export class TasksService {
       });
     }
 
+    if (task.goalChangeRequests?.length && !dto.expectedUpdatedAt) throw taskVersionConflict();
+    const expectedUpdatedAt = dto.expectedUpdatedAt ?? task.updatedAt.toISOString();
+    assertTaskVersion(task.updatedAt, expectedUpdatedAt);
+
     await this.taskAttachments.assertCanAttach(id, 'self', dto.summary.attachments, viewer);
+    const submittedIds = (dto.indicators ?? []).map(item => item.id);
+    const submittedIdSet = new Set(submittedIds);
+    if (submittedIds.length !== submittedIdSet.size
+      || submittedIds.length !== task.indicatorInstances.length
+      || !task.indicatorInstances.every(item => submittedIdSet.has(item.id))) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '请刷新目标后，为每一项当前考核指标填写自评' });
+    }
     const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
     const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
 
@@ -1455,9 +1483,10 @@ export class TasksService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, expectedUpdatedAt, task.status);
       for (const item of dto.indicators) {
         await tx.indicatorInstance.update({
-          where: { id: item.id, taskId: id },
+          where: { id: item.id, taskId: id, retiredAt: null },
           data: {
             selfScore: item.selfScore,
             selfComment: item.selfComment ?? null,
@@ -1494,7 +1523,7 @@ export class TasksService {
         action: 'submit',
         targetStatus,
         actorId: viewer.id,
-        taskUpdate: { selfEvalSubmittedAt: new Date() },
+        taskUpdate: { selfEvalSubmittedAt: new Date(), updatedAt: claimedUpdatedAt },
       });
     });
 
@@ -1555,7 +1584,7 @@ export class TasksService {
         }
         if (Object.keys(data).length > 0) {
           await tx.indicatorInstance.update({
-            where: { id: item.id, taskId: task.id },
+            where: { id: item.id, taskId: task.id, retiredAt: null },
             data,
           });
         }
@@ -1616,7 +1645,7 @@ export class TasksService {
   ): Promise<{ id: string; status: TaskStatus }> {
     const task = (await this.getTaskOrThrow(id, {
       snapshot: { select: { snapshotData: true } },
-      indicatorInstances: { select: { id: true, indicatorType: true } },
+      indicatorInstances: { where: { retiredAt: null }, select: { id: true, indicatorType: true } },
       cycle: { select: { workflowVersion: true } },
       periods: { select: { id: true, status: true }, take: 1 },
     })) as AssessmentTask & {
@@ -1662,7 +1691,7 @@ export class TasksService {
         const extraSum = item.extraScores?.reduce((sum, e) => sum + e.value, 0) ?? 0;
         const finalScore = Math.max(0, Math.min(maxScore, item.managerScore + extraSum));
         await tx.indicatorInstance.update({
-          where: { id: item.id, taskId: id },
+          where: { id: item.id, taskId: id, retiredAt: null },
           data: {
             managerScore: item.managerScore,
             managerComment: item.managerComment ?? null,
@@ -1692,7 +1721,7 @@ export class TasksService {
       });
 
       const [instances, gradeConfig] = await Promise.all([
-        tx.indicatorInstance.findMany({ where: { taskId: id } }),
+        tx.indicatorInstance.findMany({ where: { taskId: id, retiredAt: null } }),
         tx.systemConfig.findUnique({ where: { key: 'grade_score_mapping' } }),
       ]);
       const scorable = instances.map((ind) => this.scoringService.toScorableIndicator(ind));
@@ -2208,7 +2237,7 @@ export class TasksService {
     taskId: string,
     items: SetIndicatorItemDto[],
   ): Promise<void> {
-    await tx.indicatorInstance.deleteMany({ where: { taskId } });
+    await tx.indicatorInstance.deleteMany({ where: { taskId, retiredAt: null } });
     if (!items.length) return;
     for (const [index, item] of items.entries()) {
       const alignedParentIndicatorIds = item.alignedParentIndicatorIds ?? [];

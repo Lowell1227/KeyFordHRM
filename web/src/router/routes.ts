@@ -333,6 +333,18 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: '整周期结果评定', activeNavigationPath: '/tasks' },
   },
   {
+    path: '/goal-changes',
+    name: 'GoalChanges',
+    component: () => import('@/views/goal-changes/GoalChangeListView.vue'),
+    meta: { requiresAuth: true, title: '目标变更', activeNavigationPath: '/tasks' },
+    children: [{
+      path: ':id',
+      name: 'GoalChangeDetail',
+      component: () => import('@/views/goal-changes/GoalChangeDetailView.vue'),
+      meta: { requiresAuth: true, title: '目标变更详情', activeNavigationPath: '/tasks' },
+    }],
+  },
+  {
     path: '/improvement-plans',
     name: 'ImprovementPlans',
     component: () => import('@/views/improvement-plans/ImprovementPlanListView.vue'),

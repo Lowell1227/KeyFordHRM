@@ -216,12 +216,13 @@ const teamCountTabs = computed<Array<{
   { key: 'completed', label: '已完成', count: teamPage.value.counts.completed, testId: 'completed' },
   { key: 'exempted', label: '已豁免', count: teamPage.value.counts.exempted, testId: 'exempted' },
 ]);
-const allowedPerformanceSections = computed(() =>
-  auth.user?.sysRole === 'employee'
+const allowedPerformanceSections = computed(() => {
+  const sections = auth.user?.sysRole === 'employee'
     && !auth.user?.businessCapabilities?.canManageObjectives
     ? (['tracking', 'tasks'] as const)
-    : (['tracking', 'map', 'tasks'] as const),
-);
+    : (['tracking', 'map', 'tasks'] as const);
+  return auth.user?.isAssessorOnly ? sections : [...sections, 'changes'] as const;
+});
 const selectedCycleName = computed(() => selectedCycle.value?.name ?? '暂无考核周期');
 
 const personalTask = computed(() => list.value[0] ?? null);
@@ -1090,6 +1091,7 @@ watch(
     </el-button>
     <el-button v-if="canMonitor" :type="goalView === 'monitor' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
     <el-button v-if="goalView" @click="router.push('/tasks')">绩效待办</el-button>
+    <el-button v-if="!auth.user?.isAssessorOnly && (isTeamTaskWorkspace || goalView)" @click="router.push('/goal-changes')">目标变更</el-button>
   </nav>
   <GoalPlanList v-if="goalView" :key="goalView" :scope="goalView" :allowed="goalView !== 'monitor' || canMonitor"/>
   <PerformanceWorkspace v-else

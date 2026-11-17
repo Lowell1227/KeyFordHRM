@@ -34,6 +34,7 @@ describe('TasksService', () => {
       create: jest.Mock;
     };
     managerEvalSummary: { upsert: jest.Mock; update: jest.Mock };
+    selfEvalSummary: { upsert: jest.Mock };
     gradeResult: { upsert: jest.Mock; findUnique: jest.Mock };
     flowRecord: { create: jest.Mock; findFirst: jest.Mock };
     auditLog: { createMany: jest.Mock };
@@ -70,6 +71,7 @@ describe('TasksService', () => {
       create: jest.Mock;
     };
     managerEvalSummary: { upsert: jest.Mock; update: jest.Mock };
+    selfEvalSummary: { upsert: jest.Mock };
     gradeResult: { upsert: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     flowRecord: { create: jest.Mock; findFirst: jest.Mock };
@@ -89,6 +91,7 @@ describe('TasksService', () => {
         create: jest.fn(),
       },
       managerEvalSummary: { upsert: jest.fn(), update: jest.fn() },
+      selfEvalSummary: { upsert: jest.fn() },
       gradeResult: { upsert: jest.fn(), findUnique: jest.fn().mockResolvedValue(null) },
       systemConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       flowRecord: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
@@ -108,6 +111,7 @@ describe('TasksService', () => {
         create: jest.fn(),
       },
       managerEvalSummary: transactionClient.managerEvalSummary,
+      selfEvalSummary: transactionClient.selfEvalSummary,
       gradeResult: transactionClient.gradeResult,
       flowRecord: transactionClient.flowRecord,
       auditLog: transactionClient.auditLog,
@@ -390,6 +394,33 @@ describe('TasksService', () => {
   });
 
   describe('findOne', () => {
+    it('excludes retired current goals while retaining submitted period evidence', async () => {
+      const task = buildFullTask('published');
+      const active = { ...makeIndicator(), retiredAt: null };
+      const retired = { ...makeIndicator(), id: 'retired', retiredAt: new Date() };
+      const periods = [{
+        id: 'old-month', periodKey: '2026-09', status: 'completed',
+        employeeSubmittedAt: new Date(), managerSubmittedAt: new Date(),
+        selfScoreTotal: new Prisma.Decimal(90), managerScoreTotal: new Prisma.Decimal(85),
+        indicatorReviews: [{
+          selfScore: new Prisma.Decimal(90), managerScore: new Prisma.Decimal(85),
+          indicatorVersionItem: { id: 'old-item', sourceInstanceId: 'retired', name: 'Old goal', weight: new Prisma.Decimal(1), indicatorType: 'kpi' },
+        }],
+      }];
+      prisma.assessmentTask.findUnique.mockImplementation(async (query) => ({
+        ...task, periods,
+        indicatorInstances: [active, retired].filter(indicator =>
+          query.include?.indicatorInstances?.where?.retiredAt === null ? indicator.retiredAt === null : true),
+      }));
+
+      const result = await service.findOne('task-1', makeViewer({ id: 'mgr-1' }));
+
+      expect(result.indicatorInstances.map(indicator => indicator.id)).toEqual([active.id]);
+      expect(result.resultEvidence?.indicators).toEqual([expect.objectContaining({ id: 'retired', avgManagerScore: 85 })]);
+      expect(transactionClient.indicatorInstance.deleteMany).not.toHaveBeenCalled();
+      expect(transactionClient.gradeResult.upsert).not.toHaveBeenCalled();
+    });
+
     it('does not return HR interview records in an employee result', async () => {
       const task: any = buildFullTask('published', null);
       task.performanceInterview = { achievements: 'HR-only interview notes' };
@@ -1004,6 +1035,9 @@ describe('TasksService', () => {
       expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
         transactionClient.indicatorInstance.deleteMany.mock.invocationCallOrder[0],
       );
+      expect(transactionClient.indicatorInstance.deleteMany).toHaveBeenCalledWith({
+        where: { taskId: 'task-1', retiredAt: null },
+      });
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
@@ -1091,6 +1125,122 @@ describe('TasksService', () => {
     });
   });
 
+  describe('legacy self-evaluation goal amendment guards', () => {
+    const updatedAt = new Date('2026-11-17T08:00:01.000Z');
+    const staleVersion = '2026-11-17T08:00:00.000Z';
+    const indicators = [
+      { id: 'retained', indicatorType: 'kpi' },
+      { id: 'new', indicatorType: 'kpi' },
+      { id: 'bonus', indicatorType: 'bonus' },
+      { id: 'veto', indicatorType: 'veto' },
+    ];
+    const body = (expectedUpdatedAt: string | undefined = updatedAt.toISOString(), ids = indicators.map(item => item.id)) => ({
+      expectedUpdatedAt: expectedUpdatedAt as string | undefined, indicators: ids.map(id => ({ id, selfScore: 80 })), summary: {},
+    });
+    function loadTask(amended = true) {
+      const task = {
+        ...makeTask('self_eval'), updatedAt, periods: [], indicatorInstances: indicators,
+        goalChangeRequests: amended ? [{ id: 'applied-amendment' }] : [],
+      };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      return task;
+    }
+    function expectNoSubmissionWrites() {
+      expect(transactionClient.indicatorInstance.update).not.toHaveBeenCalled();
+      expect(transactionClient.selfEvalSummary.upsert).not.toHaveBeenCalled();
+      expect(flowService.transitionTx).not.toHaveBeenCalled();
+      expect(notificationsService.create).not.toHaveBeenCalled();
+    }
+
+    it.each([undefined, staleVersion, 'invalid-date'])('rejects an old amended-task page with revision %s before saving retained scores', async expected => {
+      loadTask();
+      const input = body(expected, ['retained']);
+      input.expectedUpdatedAt = expected;
+      await expect(service.submitSelfEval('task-1', input, makeViewer({ id: 'emp-1' })))
+        .rejects.toBeInstanceOf(ConflictException);
+      expectNoSubmissionWrites();
+    });
+
+    it.each([
+      ['retained'], ['retained', 'new', 'bonus', 'bonus'],
+      ['retained', 'new', 'bonus', 'retired'], ['retained', 'new', 'bonus', 'veto', 'foreign'],
+      ['retained', 'new', 'veto'], [],
+    ])('rejects an incomplete, duplicate, or foreign current set %j even with a fresh revision', async (...ids) => {
+      loadTask();
+      await expect(service.submitSelfEval('task-1', body(updatedAt.toISOString(), ids), makeViewer({ id: 'emp-1' })))
+        .rejects.toBeInstanceOf(ConflictException);
+      expectNoSubmissionWrites();
+    });
+
+    it.each([true, false])('rejects activation between task read and submission claim (amended: %s)', async amended => {
+      loadTask(amended);
+      transactionClient.assessmentTask.updateMany.mockResolvedValue({ count: 0 });
+      const input = body();
+      if (!amended) input.expectedUpdatedAt = undefined;
+      await expect(service.submitSelfEval('task-1', input, makeViewer({ id: 'emp-1' })))
+        .rejects.toBeInstanceOf(ConflictException);
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', updatedAt, status: 'self_eval' }, data: { updatedAt: expect.any(Date) },
+      });
+      expectNoSubmissionWrites();
+    });
+
+    it.each([true, false])('accepts the complete current form set including bonus/veto (amended: %s)', async amended => {
+      loadTask(amended);
+      const input = body();
+      if (!amended) input.expectedUpdatedAt = undefined;
+      await expect(service.submitSelfEval('task-1', input, makeViewer({ id: 'emp-1' })))
+        .resolves.toEqual({ id: 'task-1', status: 'manager_scoring' });
+      expect(prisma.assessmentTask.findUnique).toHaveBeenCalledWith(expect.objectContaining({ include: expect.objectContaining({
+        indicatorInstances: { where: { retiredAt: null }, select: { id: true } },
+        goalChangeRequests: { where: { status: 'active' }, select: { id: true }, take: 1 },
+      }) }));
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', updatedAt, status: 'self_eval' }, data: { updatedAt: expect.any(Date) },
+      });
+      expect(transactionClient.indicatorInstance.update).toHaveBeenCalledTimes(indicators.length);
+      expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0])
+        .toBeLessThan(transactionClient.indicatorInstance.update.mock.invocationCallOrder[0]);
+      expect(flowService.transitionTx).toHaveBeenCalledWith(transactionClient, expect.objectContaining({
+        taskUpdate: { selfEvalSubmittedAt: expect.any(Date), updatedAt: transactionClient.assessmentTask.updateMany.mock.calls[0][0].data.updatedAt },
+      }));
+    });
+
+    it.each([undefined, staleVersion, 'invalid-date'])('rejects stale or missing revision %s before the preliminary actual-value write', async expectedUpdatedAt => {
+      loadTask();
+      await expect(service.updateActualValues('task-1', {
+        expectedUpdatedAt, indicators: [{ id: 'retained', actualValue: '999' }],
+      }, makeViewer({ id: 'emp-1' }))).rejects.toBeInstanceOf(ConflictException);
+      expectNoSubmissionWrites();
+    });
+
+    it('rejects an actual-value write when activation wins its version claim', async () => {
+      loadTask(false);
+      transactionClient.assessmentTask.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.updateActualValues('task-1', {
+        indicators: [{ id: 'retained', actualValue: '999' }],
+      }, makeViewer({ id: 'emp-1' }))).rejects.toBeInstanceOf(ConflictException);
+      expectNoSubmissionWrites();
+    });
+
+    it.each([true, false])('returns an actual-write revision the self-evaluation can reuse (amended: %s)', async amended => {
+      const task = loadTask(amended);
+      transactionClient.assessmentTask.updateMany.mockImplementation(async ({ where, data }) => {
+        if (where.updatedAt.getTime() !== task.updatedAt.getTime()) return { count: 0 };
+        task.updatedAt = data.updatedAt;
+        return { count: 1 };
+      });
+      const actualInput = { expectedUpdatedAt: amended ? updatedAt.toISOString() : undefined, indicators: [{ id: 'retained', actualValue: '12' }] };
+      const actual = await service.updateActualValues('task-1', actualInput, makeViewer({ id: 'emp-1' }));
+      expect(actual).toEqual({ id: 'task-1', updatedCount: 1, updatedAt: task.updatedAt.toISOString() });
+      const next = actual.updatedAt;
+      expect(next).not.toBe(updatedAt.toISOString());
+      await expect(service.submitSelfEval('task-1', body(next), makeViewer({ id: 'emp-1' })))
+        .resolves.toEqual({ id: 'task-1', status: 'manager_scoring' });
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('manager evaluation draft', () => {
     const updatedAt = new Date('2026-08-08T08:00:00.000Z');
 
@@ -1154,11 +1304,11 @@ describe('TasksService', () => {
         data: { updatedAt: expect.any(Date) },
       });
       expect(transactionClient.indicatorInstance.update).toHaveBeenNthCalledWith(1, {
-        where: { id: 'ind-1', taskId: 'task-1' },
+        where: { id: 'ind-1', taskId: 'task-1', retiredAt: null },
         data: { managerScore: 88 },
       });
       expect(transactionClient.indicatorInstance.update).toHaveBeenNthCalledWith(2, {
-        where: { id: 'ind-2', taskId: 'task-1' },
+        where: { id: 'ind-2', taskId: 'task-1', retiredAt: null },
         data: { managerComment: 'Needs stronger follow-through' },
       });
       expect(transactionClient.managerEvalSummary.upsert).toHaveBeenCalledWith(
@@ -1215,7 +1365,7 @@ describe('TasksService', () => {
       });
       expect(scoringService.validateScore).not.toHaveBeenCalled();
       expect(transactionClient.indicatorInstance.update).toHaveBeenCalledWith({
-        where: { id: 'ind-1', taskId: 'task-1' },
+        where: { id: 'ind-1', taskId: 'task-1', retiredAt: null },
         data: { managerScore: null, managerComment: '' },
       });
       expect(transactionClient.managerEvalSummary.upsert).toHaveBeenCalledWith(expect.objectContaining({
@@ -1943,7 +2093,7 @@ describe('TasksService', () => {
         data: { indicatorConfirmedAt: confirmedAt },
       });
       expect(transactionClient.indicatorInstance.findMany).toHaveBeenCalledWith({
-        where: { taskId: 'task-1' },
+        where: { taskId: 'task-1', retiredAt: null },
         orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
         include: {
           visibleDepartments: {

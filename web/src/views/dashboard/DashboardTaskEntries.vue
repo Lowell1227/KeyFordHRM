@@ -168,6 +168,7 @@ function improvementAction(status: ImprovementPlan['status']): string {
   const labels: Record<string, string> = {
     draft: '提交目标', goal_revision: '修改目标', goal_dept_review: '确认目标',
     goal_employee_confirm: '确认目标', self_eval: '员工自评', manager_review: '直属上级评价',
+    goal_hr_review: 'HR确认', goal_vp_review: '分管领导确认目标',
     dept_review: '部门负责人评价', vp_review: '最终审核',
   };
   return labels[status] ?? '查看计划';
