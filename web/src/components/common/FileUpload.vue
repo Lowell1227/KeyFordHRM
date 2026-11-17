@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { UploadFilled } from '@element-plus/icons-vue';
+import { downloadTaskAttachment } from '@/utils/task-attachment-download';
 import type { Attachment } from '@/types/api.types';
 import type { UploadFile, UploadRawFile } from 'element-plus';
 
@@ -28,7 +29,7 @@ const emit = defineEmits<{
   (e: 'upload', files: File[]): void;
 }>();
 
-const fileList = ref<Attachment[]>(props.modelValue ?? []);
+const fileList = computed(() => props.modelValue ?? []);
 
 function onFileChange(files: File[]) {
   const valid = files.filter((file) => {
@@ -49,15 +50,8 @@ function onFileChange(files: File[]) {
 function onRemove(index: number) {
   const next = [...fileList.value];
   next.splice(index, 1);
-  fileList.value = next;
   emit('update:modelValue', next);
   emit('change', next);
-}
-
-function updateAttachments(attachments: Attachment[]) {
-  fileList.value = attachments;
-  emit('update:modelValue', attachments);
-  emit('change', attachments);
 }
 
 function handleUpload(rawFile: UploadRawFile) {
@@ -88,7 +82,7 @@ function handleUpload(rawFile: UploadRawFile) {
 
     <ul v-if="fileList.length" class="file-upload__list">
       <li v-for="(file, idx) in fileList" :key="file.url" class="file-upload__item">
-        <a :href="file.url" target="_blank" rel="noopener" class="file-upload__name">{{ file.name }}</a>
+        <a href="#" class="file-upload__name" @click.prevent="downloadTaskAttachment(file)">{{ file.name }}</a>
         <el-button
           v-if="!disabled"
           link

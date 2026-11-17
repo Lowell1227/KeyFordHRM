@@ -163,7 +163,7 @@ export class ScoringService {
   /** 将 Prisma IndicatorInstance 转为可计算对象。 */
   toScorableIndicator(ind: IndicatorInstance): ScorableIndicator {
     const dimensionTypes: DimensionType[] = ['kpi', 'attitude', 'bonus', 'penalty'];
-    const indicatorType = this.resolveIndicatorType(ind.name, ind.indicatorType);
+    const indicatorType = ind.indicatorType;
     return {
       id: ind.id,
       name: ind.name,
@@ -177,13 +177,6 @@ export class ScoringService {
       managerScore: ind.managerScore?.toNumber() ?? 0,
       finalScore: ind.finalScore?.toNumber() ?? 0,
     };
-  }
-
-  private resolveIndicatorType(name: string, type: IndicatorType): IndicatorType {
-    if (name.includes('否决') || name.includes('鍚﹀喅') || name.toLowerCase().includes('veto')) return 'veto';
-    if (name.includes('减') || name.includes('扣') || name.includes('鍑') || name.toLowerCase().includes('penalty')) return 'penalty';
-    if (name.includes('加') || name.includes('鍔犲') || name.toLowerCase().includes('bonus')) return 'bonus';
-    return type;
   }
 
   private groupByDimension(indicators: ScorableIndicator[]): ScorableIndicator[][] {

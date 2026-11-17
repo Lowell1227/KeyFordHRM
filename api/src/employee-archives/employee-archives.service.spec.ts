@@ -3,14 +3,16 @@ import { ConflictException } from '@nestjs/common';
 import { EmployeeArchivesService } from './employee-archives.service';
 
 describe('EmployeeArchivesService', () => {
-  it('D01 retains the approved same-ID family snapshot after a directory change', async () => {
+  it.each([null, 'Override'])('D01 compares the persisted same-ID approval snapshot after a directory change (family=%s)', async family => {
     const service = new EmployeeArchivesService({} as any);
-    const position = { id: 'position', name: 'Catalog', jobFamily: null };
-    const tx = { position: { findUnique: jest.fn(async () => position) } };
+    const employment = { positionId: 'position', position: 'Catalog', jobFamily: family, jobFamilyId: null };
+    const tx = { position: { findUnique: jest.fn(async () => ({ id: 'position', name: 'Renamed', jobFamily: 'New family' })) } };
     const result = await (service as any).appliedEmployeeReviewData(tx,
       { positionId: 'position', position: 'Catalog', jobFamily: 'Override' },
-      { positionId: 'position', position: 'Catalog', jobFamily: 'Historical' }, {});
-    expect(result.jobFamily).toBe('Override');
+      { positionId: 'position', position: 'Catalog', jobFamily: 'Historical' }, {}, employment);
+    expect(result.jobFamily).toBe(family);
+    expect(result.jobFamilyId).toBeNull();
+    expect(result.position).toBe('Catalog');
     expect(tx.position.findUnique).not.toHaveBeenCalled();
   });
   it('F09 snapshots the actual base and rejection reason for each submitted revision', () => {

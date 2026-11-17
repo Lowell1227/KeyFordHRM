@@ -318,6 +318,8 @@ test('new onboarding selects all eight page-created options and preserves them t
   await page.getByRole('option', { name: f.onboardingSubject!.name, exact: true }).click();
   await field(create, 'employee.deptId').getByRole('combobox').click();
   await page.getByRole('treeitem').filter({ hasText: '预览业务部' }).click();
+  await field(create, 'employee.positionId').getByRole('combobox').click();
+  await page.getByRole('option', { name: /^预览岗位(?:（.*）)?$/ }).click();
   await field(create, 'employee.employeeStatus').locator('.el-select__wrapper').click();
   await page.getByRole('option', { name: '在职', exact: true }).click();
   for (const key of ['employee.entryDate', 'employee.effectiveFrom']) {
@@ -397,6 +399,10 @@ test('new onboarding selects all eight page-created options and preserves them t
   await page.evaluate(token => localStorage.setItem('token', token), f.token);
   const onboarded = { ...f, employee: { id: approved.userId, employeeNo: formal.employeeNo, name }, contractId: contract.id };
   const reopened = await openEditor(page, onboarded);
+  const contractToggle = reopened.locator('.contract-card').filter({ hasText: optionName(f, options[7]) }).locator('.contract-expand');
+  await expect(contractToggle).toHaveAttribute('aria-expanded', 'false');
+  await contractToggle.click();
+  await expect(contractToggle).toHaveAttribute('aria-expanded', 'true');
   for (const option of options) await expect(selected(field(reopened, option.field), optionName(f, option))).toBeVisible();
   await snapshot(page, info, 'onboarding-options-arrived-and-reopened');
   await exportFromPage(page, onboarded, info, Object.fromEntries(options.map(o => [o.header, optionName(f, o)])), 'onboarding-options-export');

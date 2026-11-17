@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client';
 import { EmployeeArchivesService } from './employee-archives.service';
+import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 
 const operator = { id: 'hr', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true };
 const updatedAt = new Date('2026-11-01T00:00:00Z');
@@ -204,7 +205,8 @@ describe('employee draft optimistic concurrency', () => {
     const employee = { name: 'Approved name', positionId: 'position-1', position: 'Supplied label', jobFamily: 'Supplied family' };
     f.user.positionId = 'position-1';
     f.user.position = changed ? 'External position' : 'Directory position';
-    f.user.employmentHistory = [{ sourceRequestId: 'draft', positionId: 'position-1', position: 'Directory position', jobFamily: 'Directory family' }];
+    f.user.employmentHistory = [{ userId: f.user.id, sourceRequestId: f.draft.id,
+      positionId: 'position-1', position: 'Directory position', jobFamily: 'Directory family' }];
     f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Renamed directory position', jobFamily: 'Renamed directory family' })) };
     f.draft.proposedValue.employee = employee;
     f.input.employee = employee;
@@ -218,20 +220,37 @@ describe('employee draft optimistic concurrency', () => {
     expect(f.tx.position.findUnique).not.toHaveBeenCalled();
   });
 
-  it('keeps existing employment facts when approval only changed the employee projection', async () => {
+  it.each([false, true])('keeps existing employment facts when approval only changed the employee projection (external change=%s)', async externalChange => {
     const f = partialApproval('profile');
-    Object.assign(f.user, { name: 'Synthetic', positionId: 'position-1', position: 'Original position' });
+    Object.assign(f.user, { name: 'Synthetic', positionId: 'position-1', position: 'Original position',
+      deptId: null, entryDate: null, employmentType: EmploymentType.full_time });
     f.user.employmentHistory = [{ jobFamily: 'Original family', jobGrade: ' P1 ' }];
+    const originalEmployment = structuredClone(f.user.employmentHistory);
     const originalEmployee = (f.service as any).employeeReviewData(f.user, f.user.employmentHistory[0]);
     f.draft.baseValue.employee = originalEmployee;
     const approvedEmployee = { ...originalEmployee, name: 'Approved name ' };
     f.draft.proposedValue.employee = approvedEmployee;
     f.input.employee = { ...approvedEmployee };
-    Object.assign(f.user, { name: 'Approved name' });
     f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Directory position', jobFamily: 'New directory family' })) };
-    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
-    if (!result) throw new Error('expected review request');
-    expect(result.performanceReviewStatus).toBe('pending');
+    f.tx.user.update.mockImplementation(async ({ data }: any) => Object.assign(f.user, data));
+    f.tx.employmentRecord = { create: jest.fn(), update: jest.fn() };
+    f.tx.employeeContract = { findMany: jest.fn(async () => []) };
+    await (new EmployeeDataReviewsService(f.db as any) as any).applyProfile(f.tx,
+      { ...f.draft, intakeType: null, sourceBatchId: null }, operator);
+    expect(f.user).toMatchObject({ name: 'Approved name', position: 'Original position' });
+    expect(f.user.employmentHistory).toEqual(originalEmployment);
+    expect(f.tx.employmentRecord.create).not.toHaveBeenCalled();
+    expect(f.tx.employmentRecord.update).not.toHaveBeenCalled();
+
+    if (externalChange) {
+      f.user.position = 'External position';
+      await expect(f.service.saveArchiveDraft('employee', f.input, operator)).rejects.toBeInstanceOf(ConflictException);
+      expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    } else {
+      const result = await f.service.saveArchiveDraft('employee', f.input, operator);
+      if (!result) throw new Error('expected review request');
+      expect(result.performanceReviewStatus).toBe('pending');
+    }
     expect(f.draft.proposedValue.employee).toEqual(approvedEmployee);
   });
 

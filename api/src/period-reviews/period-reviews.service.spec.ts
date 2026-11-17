@@ -196,6 +196,89 @@ describe('PeriodReviewsService', () => {
     });
   });
 
+  describe('idempotent review submissions', () => {
+    const key = '56565656-5656-4565-8565-565656565656';
+    const employeeDto = {
+      expectedVersion: 2, idempotencyKey: key, selfGrade: 'B' as const,
+      indicators: [{ indicatorVersionItemId: period.indicatorVersion.items[0].id,
+        progress: 80, healthStatus: 'on_track' as const, employeeComment: 'Audit review', selfScore: 80 }],
+    };
+    const managerDto = { expectedVersion: 2, idempotencyKey: key, managerGrade: 'B' as const,
+      indicators: [{ indicatorVersionItemId: period.indicatorVersion.items[0].id,
+        managerScore: 80, managerComment: 'Audit manager review' }] };
+    const returnDto = { expectedVersion: 2, idempotencyKey: key, reason: 'Please revise' };
+    const cases = [
+      { method: 'submitEmployeeReview', stage: 'employee', action: undefined, actor: employee,
+        dto: employeeDto, status: 'manager_scoring' },
+      { method: 'submitManagerReview', stage: 'manager', action: 'submit', actor: manager,
+        dto: managerDto, status: 'completed' },
+      { method: 'returnManagerReview', stage: 'manager', action: 'return', actor: manager,
+        dto: returnDto, status: 'self_eval' },
+    ] as const;
+
+    describe.each(cases)('$method', ({ method, stage, action, actor, dto, status }) => {
+      const replay = (body = dto, viewer = actor, id = period.id) =>
+        (service[method] as Function).call(service, id, body, viewer);
+      const revision = () => ({ periodId: period.id, stage, createdById: actor.id,
+        snapshot: { ...dto, action, periodId: period.id, status, draftVersion: 3,
+          submittedAt: '2027-02-04T08:00:00.000Z' } });
+      beforeEach(() => {
+        prisma.assessmentPeriodReviewRevision.findUnique.mockResolvedValue(revision());
+        prisma.assessmentPeriod.findUnique.mockResolvedValue({ ...period, status,
+          draftVersion: 3, employeeSubmittedAt: new Date(), managerSubmittedAt: new Date() });
+      });
+      it('replays the same request after the state advanced, without writes', async () => {
+        await expect(replay()).resolves.toMatchObject({ periodId: period.id, status, draftVersion: 3 });
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+        expect(notifications.create).not.toHaveBeenCalled();
+      });
+      it('returns a conflict, not an internal error, when a concurrent request claims the key', async () => {
+        prisma.assessmentPeriodReviewRevision.findUnique.mockResolvedValue(null);
+        prisma.assessmentPeriod.findUnique.mockResolvedValue(stage === 'employee' ? period : {
+          ...period, status: 'manager_scoring', employeeSubmittedAt: new Date(),
+        });
+        tx.assessmentPeriodReviewRevision.create.mockRejectedValueOnce(
+          new Prisma.PrismaClientKnownRequestError('Duplicate key', { code: 'P2002', clientVersion: 'test' }),
+        );
+        await expect(replay()).rejects.toBeInstanceOf(ConflictException);
+        expect(tx.auditLog.create).not.toHaveBeenCalled();
+        expect(notifications.create).not.toHaveBeenCalled();
+      });
+      it('rejects the same key for another period', async () => {
+        await expect(replay(dto, actor, 'another-period')).rejects.toBeInstanceOf(ConflictException);
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+      it('rejects replay by a different actor, including an administrator', async () => {
+        await expect(replay(dto, hrAdmin)).rejects.toBeInstanceOf(ForbiddenException);
+      });
+      it('rejects a key from another stage or action', async () => {
+        const previous = revision();
+        prisma.assessmentPeriodReviewRevision.findUnique.mockResolvedValue({ ...previous,
+          stage: stage === 'employee' ? 'manager' : 'employee' });
+        await expect(replay()).rejects.toBeInstanceOf(ConflictException);
+        prisma.assessmentPeriodReviewRevision.findUnique.mockResolvedValue({ ...previous,
+          snapshot: { ...previous.snapshot, action: action === 'return' ? 'submit' : 'return' } });
+        await expect(replay()).rejects.toBeInstanceOf(ConflictException);
+      });
+      it('rejects changed submitted content and version', async () => {
+        const changed = method === 'returnManagerReview' ? { ...dto, reason: 'Different reason' }
+          : method === 'submitEmployeeReview' ? { ...employeeDto, selfGrade: 'A' }
+          : { ...managerDto, indicators: [{ ...managerDto.indicators[0], managerScore: 90 }] };
+        await expect(replay(changed as typeof dto)).rejects.toBeInstanceOf(ConflictException);
+        await expect(replay({ ...dto, expectedVersion: 3 })).rejects.toBeInstanceOf(ConflictException);
+      });
+      it('rejects malformed saved results instead of inventing success', async () => {
+        prisma.assessmentPeriodReviewRevision.findUnique.mockResolvedValue({ ...revision(), snapshot: {} });
+        await expect(replay()).rejects.toBeInstanceOf(ConflictException);
+      });
+      it('rechecks the current frozen actor before replay', async () => {
+        prisma.assessmentPeriod.findUnique.mockResolvedValue({ ...period,
+          managerId: outsider.id, task: { ...period.task, employeeId: outsider.id } });
+        await expect(replay()).rejects.toBeInstanceOf(ForbiddenException);
+      });
+    });
+  });
+
   it.each([employee, manager])('preserves quantitative and qualitative daily references for $name without changing review scores', async viewer => {
     prisma.indicatorInstance.findMany.mockResolvedValue([{
       id: '12121212-1212-4212-8212-121212121212', objectiveAlignments: [],
@@ -999,7 +1082,7 @@ describe('PeriodReviewsService', () => {
         deptReviewedAt: new Date('2027-02-05T08:00:00.000Z'),
         hrCalibratedAt: null,
         approvedAt: null,
-        cycle: { ...period.task.cycle, publishedAt: null },
+        cycle: { ...period.task.cycle, publishedAt: null, hrOwnerId: capableHr.id },
         gradeResult: {
           isPublished: false,
           publishedAt: null,
@@ -1027,8 +1110,72 @@ describe('PeriodReviewsService', () => {
           status: 'self_eval',
           draftVersion: 6,
         });
+        expect(tx.assessmentPeriod.findUnique).toHaveBeenCalledWith({
+          where: { id: period.id },
+          include: expect.objectContaining({
+            task: expect.objectContaining({
+              include: expect.objectContaining({
+                cycle: { select: expect.objectContaining({ hrOwnerId: true }) },
+              }),
+            }),
+          }),
+        });
+        expect(prisma.assessmentPeriod.findUnique).not.toHaveBeenCalled();
+        expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
       },
     );
+
+    it.each([
+      { scope: 'another operator', hrOwnerId: outsider.id },
+      { scope: 'no assigned operator', hrOwnerId: null },
+    ])('rejects capable HR for a persisted cycle with $scope before any writes', async ({ hrOwnerId }) => {
+      prisma.assessmentPeriod.findUnique.mockResolvedValue(lockedPeriod);
+      tx.assessmentPeriod.findUnique.mockResolvedValue({
+        ...lockedPeriod,
+        task: {
+          ...lockedPeriod.task,
+          cycle: { ...lockedPeriod.task.cycle, hrOwnerId, createdBy: capableHr.id },
+        },
+      });
+
+      await expect(service.reopenPeriodReview(period.id, {
+        expectedVersion: 5,
+        reason: 'Correct the monthly self-evaluation',
+      }, { ...capableHr, canViewAll: true })).rejects.toBeInstanceOf(ForbiddenException);
+
+      expect(tx.assessmentPeriod.findUnique).toHaveBeenCalledTimes(1);
+      expect(prisma.assessmentPeriod.findUnique).not.toHaveBeenCalled();
+      expect(tx.assessmentPeriod.updateMany).not.toHaveBeenCalled();
+      expect(tx.assessmentPeriod.update).not.toHaveBeenCalled();
+      expect(tx.assessmentPeriodIndicatorReview.updateMany).not.toHaveBeenCalled();
+      expect(tx.gradeResult.updateMany).not.toHaveBeenCalled();
+      expect(flow.reopenPeriodTx).not.toHaveBeenCalled();
+      expect(tx.auditLog.create).not.toHaveBeenCalled();
+      expect(notifications.create).not.toHaveBeenCalled();
+    });
+
+    it.each([SysRole.hr, SysRole.system_admin])('allows %s to reopen an unassigned cycle', async (sysRole) => {
+      tx.assessmentPeriod.findUnique.mockResolvedValue({
+        ...lockedPeriod,
+        task: {
+          ...lockedPeriod.task,
+          cycle: { ...lockedPeriod.task.cycle, hrOwnerId: null },
+        },
+      });
+
+      await expect(service.reopenPeriodReview(period.id, {
+        expectedVersion: 5,
+        reason: 'Correct the monthly self-evaluation',
+      }, { ...hrAdmin, sysRole, hrCapabilities: [] })).resolves.toMatchObject({
+        periodId: period.id,
+        status: 'self_eval',
+        draftVersion: 6,
+      });
+      expect(flow.reopenPeriodTx).toHaveBeenCalledWith(tx, expect.objectContaining({ actorId: hrAdmin.id }));
+      expect(notifications.create).toHaveBeenCalledTimes(1);
+    });
 
     it('拒绝无周期管理编辑权限的HR和普通员工', async () => {
       const reviewOnly = { ...capableHr, hrCapabilities: ['cycle_plan_review'] };

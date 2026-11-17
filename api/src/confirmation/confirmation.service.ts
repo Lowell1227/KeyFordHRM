@@ -196,7 +196,7 @@ export class ConfirmationService {
     const attachment = await this.prisma.confirmationMeetingAttachment.findUnique({
       where: { id: attachmentId },
       include: { application: { select: { id: true, workflowVersion: true, submissionVersion: true,
-        status: true, employeeId: true, hrId: true, companyApproverId: true } } },
+        status: true, employeeId: true, companyApproverId: true } } },
     });
     if (!attachment || attachment.applicationId !== id || attachment.application.workflowVersion !== 2) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '评议附件不存在' });
@@ -204,8 +204,7 @@ export class ConfirmationService {
     if (attachment.application.status === ConfirmationStatus.draft || attachment.submissionVersion !== attachment.application.submissionVersion) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '评议附件不属于当前办理轮次' });
     }
-    if (attachment.application.hrId !== viewer.id
-      && !(await this.canViewAsHr(attachment.application.employeeId, viewer))
+    if (!(await this.canViewAsHr(attachment.application.employeeId, viewer))
       && attachment.application.companyApproverId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权下载内部评议附件' });
     }

@@ -37,10 +37,11 @@ function buildPrisma() {
     auditLog: { create: jest.fn() },
     talentInterview: { findMany: jest.fn().mockResolvedValue([]) },
     employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
-    // 数组形式默认按 Promise.all 语义返回（各操作返回值需用例自行 mock）
-    $transaction: jest.fn().mockImplementation((ops: unknown[]) => Promise.all(ops as Promise<unknown>[])),
+    $transaction: jest.fn(),
     $queryRaw: jest.fn().mockResolvedValue([]),
   };
+  prisma.$transaction.mockImplementation((ops: unknown[] | ((tx: unknown) => unknown)) =>
+    typeof ops === 'function' ? ops(prisma) : Promise.all(ops as Promise<unknown>[]));
   return prisma;
 }
 
@@ -243,7 +244,7 @@ describe('TalentsService 手动标记已入职禁用', () => {
       .rejects.toThrow('请通过入离职办理并确认到岗');
   });
 
-  it('已入职候选人重复 convert → 400；已入职回退其他状态 → 400（终态）', async () => {
+  it('已入职候选人重复 convert → 400；已入职回退其他状态 → 409（终态）', async () => {
     const prisma = buildPrisma();
     prisma.talentCandidate.findFirst.mockResolvedValue(baseCandidate({ status: 'hired' }));
     const sut = service(prisma);

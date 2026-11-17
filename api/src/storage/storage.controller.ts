@@ -16,10 +16,14 @@ import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import type { AuthUser } from '@/common/types/auth.types';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { SysRole } from '@prisma/client';
+import { LegacyTaskAttachmentsService } from './legacy-task-attachments.service';
 
 @Controller('storage')
 export class StorageController {
-  constructor(private readonly storageService: StorageService) {}
+  constructor(
+    private readonly storageService: StorageService,
+    private readonly taskAttachments: LegacyTaskAttachmentsService,
+  ) {}
 
   /** POST /storage/upload — 通用单文件上传，返回可持久访问的下载 URL。 */
   @Post('upload')
@@ -38,7 +42,7 @@ export class StorageController {
     if (purpose === 'talent-resume' && !this.canAccessTalentPool(operator)) {
       throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限管理人才库简历' });
     }
-    return this.storageService.uploadFile(file, purpose);
+    return this.storageService.uploadFile(file, purpose, operator.id);
   }
 
   /** GET /storage/download?key=... — 代理下载 MinIO 对象。 */
@@ -68,6 +72,9 @@ export class StorageController {
       if (!this.canAccessTalentPool(operator)) {
         throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限访问人才库简历' });
       }
+    }
+    if (!objectName.startsWith('employee-contracts/') && !objectName.startsWith('talent-resume/')) {
+      await this.taskAttachments.assertDownload(objectName, operator);
     }
     await this.storageService.pipeDownload(objectName, res);
   }

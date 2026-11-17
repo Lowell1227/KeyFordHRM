@@ -1,17 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
-import { DimensionType, IndicatorType, PerfGrade } from '@prisma/client';
+import { DimensionType, IndicatorInstance, IndicatorType, PerfGrade, Prisma } from '@prisma/client';
 import { ScoringService, ScorableIndicator } from './scoring.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 
 describe('ScoringService', () => {
   let service: ScoringService;
-  let prisma: { systemConfig: { findUnique: jest.Mock } };
+  let prisma: { systemConfig: { findUnique: jest.Mock }; indicatorInstance: { findMany: jest.Mock } };
 
   beforeEach(async () => {
     prisma = {
       systemConfig: { findUnique: jest.fn() },
+      indicatorInstance: { findMany: jest.fn() },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -157,6 +158,38 @@ describe('ScoringService', () => {
       ]);
       expect(zero.totalScore).toBeCloseTo(0, 5);
       expect(zero.rawGrade).toBe('D');
+    });
+  });
+
+  describe('persisted indicator types', () => {
+    function stored(name: string, indicatorType: IndicatorType = 'kpi', weight = 1): IndicatorInstance {
+      return {
+        id: 'stored-indicator', name, indicatorType, dimensionName: '工作业绩',
+        dimensionWeight: new Prisma.Decimal(1), weight: new Prisma.Decimal(weight),
+        managerScore: new Prisma.Decimal(80), finalScore: new Prisma.Decimal(80),
+      } as IndicatorInstance;
+    }
+
+    it.each(['减少客户投诉', '增加有效客户', '扣件质量检查', '否决方案评审', 'bonus analysis', 'penalty prevention', 'veto analysis'])(
+      'does not infer a special type from the KPI name %s', (name) => {
+        expect(service.toScorableIndicator(stored(name))).toMatchObject({ indicatorType: 'kpi', dimensionType: 'kpi' });
+      },
+    );
+
+    it.each([
+      ['bonus', '减少投诉'], ['penalty', '增加产能'], ['veto', '工作质量'], ['attitude', '加班协作'],
+    ] as [IndicatorType, string][])('keeps explicit %s despite conflicting display text', (type, name) => {
+      expect(service.toScorableIndicator(stored(name, type)).indicatorType).toBe(type);
+    });
+
+    it('calculates ordinary saved KPIs as 80, not minus 40, without writing historical results', async () => {
+      prisma.indicatorInstance.findMany.mockResolvedValue([
+        stored('减少客户投诉', 'kpi', 0.5), stored('服务质量', 'kpi', 0.5),
+      ]);
+      prisma.systemConfig.findUnique.mockResolvedValue(null);
+      const result = await service.calculateTaskScore('fictional-task');
+      expect(result.totalScore).toBe(80);
+      expect(result.rawGrade).toBe('B');
     });
   });
 

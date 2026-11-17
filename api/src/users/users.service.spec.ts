@@ -1,4 +1,5 @@
 import { EmploymentType, SysRole, UserStatus } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
 import { toSystemPermission, UsersService } from './users.service';
 
 const noBusinessIdentities = {
@@ -325,6 +326,100 @@ describe('UsersService', () => {
       ]);
       requests[0].user.employmentHistory[0].directManagerId = 'roster-manager';
       expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', []);
+    });
+  });
+
+  describe('setPassword', () => {
+    function setup(targetRole: SysRole, roleAtWrite: SysRole = targetRole, deletedAtWrite: Date | null = null) {
+      let currentRole = targetRole;
+      let currentDeletedAt: Date | null = null;
+      const update = jest.fn().mockResolvedValue({ id: 'target-user' });
+      const updateMany = jest.fn(async ({ where }: { where: { id: string; deletedAt?: null; sysRole?: { not: SysRole } } }) => ({
+        count: where.sysRole?.not === currentRole || (where.deletedAt === null && currentDeletedAt !== null) ? 0 : 1,
+      }));
+      const audit = jest.fn().mockResolvedValue({});
+      const transaction = jest.fn(async (callback: (tx: unknown) => unknown) => {
+        currentRole = roleAtWrite;
+        currentDeletedAt = deletedAtWrite;
+        return callback({ user: { update, updateMany }, auditLog: { create: audit } });
+      });
+      const service = new UsersService({
+        user: { findUnique: jest.fn().mockResolvedValue({ id: 'target-user', sysRole: targetRole, deletedAt: null }) },
+        $transaction: transaction,
+      } as any, {} as any, noBusinessIdentities as any);
+      return { service, transaction, update, updateMany, audit };
+    }
+
+    it('rejects HR resetting a system administrator before any write', async () => {
+      const { service, transaction, update, updateMany, audit } = setup(SysRole.system_admin);
+
+      await expect(service.setPassword('target-user', {}, {
+        id: 'hr-admin', sysRole: SysRole.hr,
+      } as any)).rejects.toBeInstanceOf(ForbiddenException);
+
+      expect(transaction).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+      expect(updateMany).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    it('rejects HR when the employee becomes a system administrator before the write without auditing success', async () => {
+      const { service, update, updateMany, audit } = setup(SysRole.employee, SysRole.system_admin);
+
+      await expect(service.setPassword('target-user', {}, {
+        id: 'hr-admin', sysRole: SysRole.hr,
+      } as any)).rejects.toBeInstanceOf(ForbiddenException);
+
+      expect(updateMany).toHaveBeenCalledTimes(1);
+      expect(updateMany.mock.calls[0][0].where).toEqual({
+        id: 'target-user', deletedAt: null, sysRole: { not: SysRole.system_admin },
+      });
+      expect(update.mock.calls.length).toBe(0);
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    it.each([SysRole.hr, SysRole.system_admin])('rejects %s when the target is soft-deleted before the write without auditing success', async (sysRole) => {
+      const { service, update, updateMany, audit } = setup(
+        SysRole.employee, SysRole.employee, new Date('2026-11-16T00:00:00.000Z'),
+      );
+
+      await expect(service.setPassword('target-user', {}, {
+        id: 'operator', sysRole,
+      } as any)).rejects.toBeInstanceOf(ForbiddenException);
+
+      expect(updateMany).toHaveBeenCalledTimes(1);
+      expect(updateMany.mock.calls[0][0].where).toEqual(expect.objectContaining({
+        id: 'target-user', deletedAt: null,
+      }));
+      expect(update.mock.calls.length).toBe(0);
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { operatorRole: SysRole.system_admin, targetRole: SysRole.system_admin, roleAtWrite: SysRole.system_admin },
+      { operatorRole: SysRole.system_admin, targetRole: SysRole.employee, roleAtWrite: SysRole.system_admin },
+      { operatorRole: SysRole.hr, targetRole: SysRole.employee, roleAtWrite: SysRole.employee },
+      { operatorRole: SysRole.hr, targetRole: SysRole.hr_user, roleAtWrite: SysRole.hr_user },
+      { operatorRole: SysRole.hr, targetRole: SysRole.hr, roleAtWrite: SysRole.hr },
+    ])('preserves $operatorRole resetting $targetRole becoming $roleAtWrite with an audit and forced change', async ({ operatorRole, targetRole, roleAtWrite }) => {
+      const { service, update, updateMany, audit } = setup(targetRole, roleAtWrite);
+
+      await expect(service.setPassword('target-user', {}, {
+        id: 'operator', sysRole: operatorRole,
+      } as any)).resolves.toEqual({ success: true });
+
+      expect(update.mock.calls.length).toBe(0);
+      expect(updateMany).toHaveBeenCalledTimes(1);
+      expect(updateMany.mock.calls[0][0].where).toEqual(operatorRole === SysRole.system_admin
+        ? { id: 'target-user', deletedAt: null }
+        : { id: 'target-user', deletedAt: null, sysRole: { not: SysRole.system_admin } });
+      const data = (updateMany.mock.calls[0][0] as any).data;
+      expect(data.mustChangePassword).toBe(true);
+      expect(typeof data.passwordHash === 'string').toBe(true);
+      expect(audit).toHaveBeenCalledWith({ data: {
+        userId: 'operator', action: 'reset_password', entityType: 'user', entityId: 'target-user',
+        oldValue: { userId: 'target-user' }, newValue: { resetAt: expect.any(Number) },
+      } });
     });
   });
 

@@ -4,9 +4,19 @@ import { StorageController } from './storage.controller';
 describe('StorageController contract material access', () => {
   const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });
 
+  it('requires task or upload ownership before downloading a general attachment', async () => {
+    const storage = { pipeDownload: jest.fn() };
+    const access = { assertDownload: jest.fn().mockRejectedValue(new Error('forbidden')) };
+    const controller = new (StorageController as any)(storage, access);
+    await expect(controller.download('uploads/2026/11/16/private.pdf', response(), {
+      id: 'unrelated', sysRole: SysRole.employee,
+    })).rejects.toThrow('forbidden');
+    expect(storage.pipeDownload).not.toHaveBeenCalled();
+  });
+
   it('普通员工不能通过对象 key 下载合同材料', async () => {
     const storage = { pipeDownload: jest.fn() };
-    const controller = new StorageController(storage as any);
+    const controller = new StorageController(storage as any, {} as any);
 
     await expect((controller as any).download(
       'employee-contracts%2Fattachments%2F2026%2F08%2F28%2Fcontract.pdf',
@@ -18,7 +28,7 @@ describe('StorageController contract material access', () => {
 
   it('具备员工档案编辑能力的 HR 可以下载合同材料', async () => {
     const storage = { pipeDownload: jest.fn().mockResolvedValue(undefined) };
-    const controller = new StorageController(storage as any);
+    const controller = new StorageController(storage as any, {} as any);
     const res = response();
 
     await (controller as any).download(
@@ -35,7 +45,7 @@ describe('StorageController contract material access', () => {
 
   it('普通员工不能上传合同材料', async () => {
     const storage = { uploadFile: jest.fn() };
-    const controller = new StorageController(storage as any);
+    const controller = new StorageController(storage as any, {} as any);
 
     await expect((controller as any).upload(
       { originalname: '合同.pdf' },
@@ -47,7 +57,7 @@ describe('StorageController contract material access', () => {
 
   it('does not expose internal confirmation meeting files through generic download', async () => {
     const storage = { pipeDownload: jest.fn() };
-    const controller = new StorageController(storage as any);
+    const controller = new StorageController(storage as any, {} as any);
 
     await expect((controller as any).download(
       'confirmation-internal%2F2026%2F09%2F14%2Fminutes.pdf',
@@ -59,7 +69,7 @@ describe('StorageController contract material access', () => {
 
   it('does not expose monthly review evidence through generic download', async () => {
     const storage = { pipeDownload: jest.fn() };
-    const controller = new StorageController(storage as any);
+    const controller = new StorageController(storage as any, {} as any);
 
     await expect((controller as any).download(
       'performance-evidence%2F2027%2F02%2Fevidence.png',

@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, IsString, IsUUID, Max, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsNumber, IsOptional, IsString, IsUUID, Max, Min, ValidateNested } from 'class-validator';
 
 /** 单条指标自评项。 */
 export class SelfEvalIndicatorItemDto {
@@ -39,6 +39,8 @@ export class SelfEvalSummaryDto {
   supportNeeded?: string;
 
   @IsOptional()
+  @IsArray()
+  @Type(() => Object)
   attachments?: unknown[];
 }
 

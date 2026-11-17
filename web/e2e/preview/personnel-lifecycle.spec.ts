@@ -122,6 +122,8 @@ async function fillEmployment(page: Page, drawer: Locator) {
   await page.getByRole('option', { name: previewCompany, exact: true }).click();
   await drawer.locator('[data-archive-field="employee.deptId"] .el-select').click();
   await page.getByRole('treeitem').filter({ hasText: '预览业务部' }).click();
+  await drawer.locator('[data-archive-field="employee.positionId"] .el-select').click();
+  await page.getByRole('option', { name: /^预览岗位(?:（.*）)?$/ }).click();
   for (const field of ['entryDate', 'effectiveFrom']) {
     await fillDate(drawer.locator(`[data-archive-field="employee.${field}"] input`), day(-3));
   }

@@ -9,6 +9,7 @@ import { createCipheriv, createHash, createHmac, randomBytes } from 'crypto';
 import {
   AccountType,
   CompanyCode,
+  EmploymentRecord,
   EmploymentType,
   ExternalIdentityProvider,
   ExternalIdentityStatus,
@@ -1269,8 +1270,9 @@ export class EmployeeArchivesService {
     const originalContracts = Array.isArray(savedBase.contracts) ? savedBase.contracts.map(item => this.record(item)) : [];
     if (existing) {
       const profileBase = profileApproved ? savedProposal : savedBase;
+      const appliedEmployment = user.employmentHistory.find(item => item.userId === userId && item.sourceRequestId === existing!.id);
       const savedEmployee = profileApproved
-        ? await this.appliedEmployeeReviewData(client as Prisma.TransactionClient, this.record(profileBase.employee), this.record(savedBase.employee), this.record(savedProposal.performance))
+        ? await this.appliedEmployeeReviewData(client as Prisma.TransactionClient, this.record(profileBase.employee), this.record(savedBase.employee), this.record(savedProposal.performance), appliedEmployment)
         : this.record(profileBase.employee);
       const sourceEmployment = profileApproved ? user.employmentHistory.find(item => item.sourceRequestId === existing!.id) : undefined;
       if (sourceEmployment && sourceEmployment.positionId === savedEmployee.positionId) {
@@ -2033,11 +2035,12 @@ export class EmployeeArchivesService {
   }
 
   private async appliedEmployeeReviewData(client: Prisma.TransactionClient, employee: Record<string, unknown>,
-    previous: Record<string, unknown>, performance: Record<string, unknown>, reviewedEmployee = employee): Promise<Record<string, unknown>> {
+    previous: Record<string, unknown>, performance: Record<string, unknown>,
+    appliedEmployment?: Pick<EmploymentRecord, 'positionId' | 'position' | 'jobFamily' | 'jobFamilyId'>): Promise<Record<string, unknown>> {
     const comparable = (value: unknown) => value == null || value === '' ? 'null' : value instanceof Date ? value.toISOString() : String(value);
     const writesEmployment = ['company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId',
       'managerId', 'managerName', 'workLocation', 'workLocationId', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths']
-      .some(key => comparable(previous[key]) !== comparable(reviewedEmployee[key]));
+      .some(key => comparable(previous[key]) !== comparable(employee[key]));
     const employmentOnly = new Set(['company', 'companyText', 'contractSubjectId', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId', 'managerId', 'workLocation', 'workLocationId', 'probationMonths']);
     const applied = { ...employee };
     for (const key of ['name', 'employeeNo', 'phone', 'deptId', 'positionId', 'position', 'jobGrade', 'jobGradeId', 'jobFamily', 'jobFamilyId', 'managerId', 'workLocation', 'workLocationId', 'companyText', 'contractSubjectId']) {
@@ -2053,6 +2056,22 @@ export class EmployeeArchivesService {
       if (key in applied) applied[key] = this.nullableAppliedDate(applied[key]);
     }
     if (writesEmployment && 'probationMonths' in applied && typeof applied.probationMonths !== 'number') applied.probationMonths = null;
+    if (applied.positionId) {
+      // Only this request's persisted employment proves what approval actually applied.
+      const changedPosition = ['positionId', 'position', 'jobFamily', 'jobFamilyId']
+        .some(key => this.nullableString(employee[key]) !== this.nullableString(previous[key]));
+      if ((writesEmployment && changedPosition && !appliedEmployment)
+        || (appliedEmployment && appliedEmployment.positionId !== applied.positionId)) {
+        throw new ConflictException('已通过档案的岗位已变化，请重新核对最新档案');
+      }
+      if (appliedEmployment) {
+        applied.position = appliedEmployment.position;
+        if (writesEmployment) {
+          applied.jobFamily = appliedEmployment.jobFamily;
+          applied.jobFamilyId = appliedEmployment.jobFamilyId ?? null;
+        }
+      }
+    }
     if (writesEmployment && employee.contractSubjectId === undefined && 'contractSubjectId' in previous) applied.contractSubjectId = previous.contractSubjectId;
     if (writesEmployment && (employee.companyText === undefined || (employee.contractSubjectId === undefined && previous.contractSubjectId))) {
       applied.companyText = this.nullableString(previous.companyText);

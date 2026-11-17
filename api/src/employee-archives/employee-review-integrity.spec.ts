@@ -39,10 +39,27 @@ function archiveReview(positionChanged: boolean, directoryFamily: string | null,
     auditLog: { create: jest.fn(async () => ({})) },
   };
   const service = new EmployeeDataReviewsService({ $transaction: async (run: any) => run(tx) } as any);
-  return { written, current, approve: () => service.approveBatch({ requestIds: [review.id], scopes: ['profile'] }, operator) };
+  return { written, current, review, tx, approve: () => service.approveBatch({ requestIds: [review.id], scopes: ['profile'] }, operator) };
 }
 
 describe('employee review preserves family outside a requested position change', () => {
+  it('preserves the position snapshot through unrelated review after a catalog rename', async () => {
+    const f = archiveReview(false, 'Renamed family');
+    f.tx.position.findUnique.mockResolvedValue({ id: 'original-position', name: 'Renamed position', jobFamily: 'Renamed family', isActive: true });
+    expect((await f.approve()).failed).toEqual([]);
+    expect(f.written[0]).toMatchObject({ position: '目录岗位名称', jobFamily: '档案职系' });
+    expect(f.current.position).toBe('目录岗位名称');
+  });
+
+  it('uses the catalog for an explicit same-position name change', async () => {
+    const f = archiveReview(false, 'Catalog family');
+    f.review.proposedValue.employee.position = 'Explicit override';
+    f.tx.position.findUnique.mockResolvedValue({ id: 'original-position', name: 'Renamed position', jobFamily: 'Catalog family', isActive: true });
+    expect((await f.approve()).failed).toEqual([]);
+    expect(f.written[0].position).toBe('Renamed position');
+    expect(f.current.position).toBe('Renamed position');
+  });
+
   it.each([null, '目录其他职系'])('keeps the archive family when only location changes (directory family=%s)', async family => {
     const f = archiveReview(false, family);
     expect((await f.approve()).failed).toEqual([]);

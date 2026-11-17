@@ -38,6 +38,7 @@ export class ManagerEvalSummaryDto {
 
   @IsOptional()
   @IsArray()
+  @Type(() => Object)
   attachments?: unknown[];
 }
 

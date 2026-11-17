@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue';
+import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import {
@@ -57,7 +57,10 @@ const emit = defineEmits<{
 
 const visible = computed({
   get: () => props.modelValue,
-  set: (value: boolean) => emit('update:modelValue', value),
+  set: (value: boolean) => {
+    if (!value) invalidateLoad();
+    emit('update:modelValue', value);
+  },
 });
 const isEdit = computed(() => Boolean(props.candidateId));
 
@@ -74,6 +77,13 @@ const conflict = ref<PhoneConflict | null>(null);
 const pendingFiles = ref<File[]>([]);
 const editFiles = ref<TalentResumeFile[]>([]);
 const pendingUploading = ref(false);
+const loadError = ref('');
+const loadedCandidateId = ref<string | null>(null);
+let loadGeneration = 0;
+const formReady = computed(() => props.modelValue && !loading.value && !loadError.value
+  && (!props.candidateId || loadedCandidateId.value === props.candidateId));
+const saveDisabled = computed(() => !formReady.value || !canEdit.value || Boolean(conflict.value)
+  || saving.value || pendingUploading.value);
 
 const form = reactive({
   name: '',
@@ -109,9 +119,10 @@ const rules: FormRules = {
 
 const editableStatuses = TALENT_STATUSES.filter((status) => status !== 'hired');
 
-watch(() => props.modelValue, (open) => {
-  if (open) void onOpen();
-});
+watch(() => [props.modelValue, props.candidateId], () => {
+  void onOpen();
+}, { immediate: true, flush: 'sync' });
+onBeforeUnmount(invalidateLoad);
 
 watch(() => form.salaryNegotiable, (negotiable) => {
   if (negotiable) {
@@ -120,22 +131,41 @@ watch(() => form.salaryNegotiable, (negotiable) => {
   }
 });
 
+function invalidateLoad() {
+  loadGeneration += 1;
+  loadedCandidateId.value = null;
+  loading.value = false;
+  loadError.value = '';
+}
+
+function isCurrentLoad(generation: number, candidateId: string | null | undefined) {
+  return generation === loadGeneration && props.modelValue && props.candidateId === candidateId;
+}
+
 async function onOpen() {
+  invalidateLoad();
+  const generation = loadGeneration;
+  const candidateId = props.candidateId;
+  resetForm();
   conflict.value = null;
   pendingFiles.value = [];
   editFiles.value = [];
   formRef.value?.clearValidate();
-  if (props.candidateId) {
+  if (!props.modelValue) return;
+  if (candidateId) {
     loading.value = true;
     try {
-      const detail = await talentPoolApi.detail(props.candidateId);
+      const detail = await talentPoolApi.detail(candidateId);
+      if (!isCurrentLoad(generation, candidateId)) return;
+      if (detail.id !== candidateId) throw new Error('Candidate detail mismatch');
       fillForm(detail);
       editFiles.value = detail.files;
+      loadedCandidateId.value = candidateId;
+    } catch {
+      if (isCurrentLoad(generation, candidateId)) loadError.value = '人才资料加载失败，请重试后再保存。';
     } finally {
-      loading.value = false;
+      if (isCurrentLoad(generation, candidateId)) loading.value = false;
     }
-  } else {
-    resetForm();
   }
 }
 
@@ -177,17 +207,24 @@ function fillForm(detail: TalentCandidateDetail) {
 
 /** 编辑态上传/删除附件后刷新本地列表。 */
 async function refreshEditFiles() {
-  if (!props.candidateId) return;
-  const detail = await talentPoolApi.detail(props.candidateId);
-  editFiles.value = detail.files;
+  const candidateId = props.candidateId;
+  const generation = loadGeneration;
+  if (!candidateId || !formReady.value) return;
+  const detail = await talentPoolApi.detail(candidateId);
+  if (isCurrentLoad(generation, candidateId) && detail.id === candidateId) editFiles.value = detail.files;
 }
 
 /** 手机号失焦查重（需求 §5.2：命中显示姓名+状态，可打开已有记录）。 */
 async function checkPhoneDuplicate() {
   conflict.value = null;
+  const generation = loadGeneration;
+  const candidateId = props.candidateId;
+  const phone = form.phone;
+  if (!formReady.value) return;
   if (!/^1\d{10}$/.test(form.phone)) return;
   try {
-    const result = await talentPoolApi.checkPhone(form.phone);
+    const result = await talentPoolApi.checkPhone(phone);
+    if (!isCurrentLoad(generation, candidateId) || form.phone !== phone) return;
     if (result.exists && result.candidate && result.candidate.id !== props.candidateId) {
       conflict.value = {
         existingId: result.candidate.id,
@@ -252,10 +289,11 @@ function captureConflict(error: unknown) {
 }
 
 async function submit() {
-  if (!canEdit.value) return;
-  if (conflict.value) return;
+  if (saveDisabled.value) return;
+  const generation = loadGeneration;
+  const targetId = props.candidateId;
   const valid = await formRef.value?.validate().catch(() => false);
-  if (!valid) return;
+  if (!valid || !isCurrentLoad(generation, targetId) || saveDisabled.value) return;
   saving.value = true;
   try {
     const body = {
@@ -279,13 +317,14 @@ async function submit() {
       note: form.note.trim() || null,
       ...(isEdit.value && form.status !== 'hired' ? { status: form.status } : {}),
     };
-    let candidateId = props.candidateId ?? '';
+    let candidateId = targetId ?? '';
     if (isEdit.value && candidateId) {
       await talentPoolApi.update(candidateId, body);
     } else {
       const created = await talentPoolApi.create(body);
       candidateId = created.id;
     }
+    if (!isCurrentLoad(generation, targetId)) return;
     if (pendingFiles.value.length > 0) {
       pendingUploading.value = true;
       for (const file of pendingFiles.value) {
@@ -293,11 +332,12 @@ async function submit() {
       }
       pendingFiles.value = [];
     }
+    if (!isCurrentLoad(generation, targetId)) return;
     ElMessage.success(isEdit.value ? '已保存修改' : '已加入人才库');
     emit('saved', candidateId);
     visible.value = false;
   } catch (error) {
-    captureConflict(error);
+    if (isCurrentLoad(generation, targetId)) captureConflict(error);
   } finally {
     saving.value = false;
     pendingUploading.value = false;
@@ -308,11 +348,15 @@ async function submit() {
 <template>
   <BusinessDetailDrawer v-model="visible" :title="isEdit ? '编辑人才' : '新增人才'"
     :loading="loading" :saving="saving || pendingUploading" variant="standard" class="talent-form-drawer">
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon>
+      <el-button link type="primary" @click="onOpen">重新加载</el-button>
+    </el-alert>
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="talent-form"
+      :disabled="!formReady || saving || pendingUploading"
       @submit.prevent="submit">
       <h4 class="talent-form__group-title">{{ isEdit ? '简历文件' : '简历文件（选填，创建成功后自动上传）' }}</h4>
       <template v-if="isEdit && candidateId">
-        <TalentFileList :candidate-id="candidateId" :files="editFiles" editable @changed="refreshEditFiles" />
+        <TalentFileList v-if="formReady" :key="candidateId" :candidate-id="candidateId" :files="editFiles" editable @changed="refreshEditFiles" />
       </template>
       <template v-else>
         <div v-for="file in pendingFiles" :key="file.name + file.size" class="talent-form__pending">
@@ -425,8 +469,8 @@ async function submit() {
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving || pendingUploading" :disabled="Boolean(conflict)" @click="submit">
+      <el-button :disabled="saving || pendingUploading" @click="visible = false">取消</el-button>
+      <el-button type="primary" :loading="saving || pendingUploading" :disabled="saveDisabled" @click="submit">
         {{ isEdit ? '保存修改' : '加入人才库' }}
       </el-button>
     </template>

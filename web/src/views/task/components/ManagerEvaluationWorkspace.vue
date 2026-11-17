@@ -5,6 +5,7 @@ import { Check, Delete, Plus, Refresh, RefreshLeft, Select } from '@element-plus
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { tasksApi, type TaskActionResult } from '@/api/tasks.api';
 import { uploadApi } from '@/api/upload.api';
+import { downloadTaskAttachment } from '@/utils/task-attachment-download';
 import FileUpload from '@/components/common/FileUpload.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
 import StatusBadge from '@/components/common/StatusBadge.vue';
@@ -852,9 +853,8 @@ defineExpose<ManagerEvaluationWorkspaceHandle>({ reload: () => loadTask(false) }
                 <a
                   v-for="attachment in task.selfEvalSummary.attachments"
                   :key="attachment.url"
-                  :href="attachment.url"
-                  target="_blank"
-                  rel="noopener"
+                  href="#"
+                  @click.prevent="downloadTaskAttachment(attachment)"
                 >
                   {{ attachment.name }}
                 </a>

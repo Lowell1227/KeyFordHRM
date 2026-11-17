@@ -708,6 +708,80 @@ describe('manual archive changes apply at submission', () => {
     expect(f.user.employeeContracts.filter((c: any) => c.isActive).map((c: any) => c.id)).toEqual([contractId]);
   });
 
+  it('resumes a partially approved request without re-deriving an unchanged position snapshot', async () => {
+    const f = setup();
+    const id = '40000000-0000-4000-8000-000000000001';
+    Object.assign(f.user, { positionId: id });
+    Object.assign(f.user.employmentHistory[0], { positionId: id });
+    f.tx.position = { findUnique: jest.fn(async () => ({ id, name: 'Renamed catalog', jobFamily: 'Operations', isActive: true })) };
+    await f.service.submitDraft('employee', f.input({ workLocation: 'New office' }), editor);
+    const original = f.requests[0];
+    Object.assign(original, { performanceReviewStatus: 'rejected', appliedAt: null });
+    original.proposedValue.performance = { managerId: 'manager' };
+    expect(f.user.position).toBe('Analyst');
+
+    const revision: any = await f.service.saveArchiveDraft('employee', { ...f.input({}, {}, { managerId: 'manager' }),
+      draftId: original.id, expectedVersion: original.requestVersion }, editor);
+    expect(revision.id).not.toBe(original.id);
+    expect(revision.baseValue.employee.position).toBe('Analyst');
+    expect(f.user.employmentHistory[0]).toMatchObject({ position: 'Analyst', sourceRequestId: original.id });
+  });
+
+  it.each(['none', 'projection', 'newer-employment', 'replaced-source', 'employment-snapshot', 'foreign-source', 'foreign-user'])(
+    'resumes an applied position change from its own snapshot after catalog rename (external change=%s)', async change => {
+      const f = setup();
+      const oldId = '40000000-0000-4000-8000-000000000001';
+      const catalog = { id: '40000000-0000-4000-8000-000000000002', name: 'Selected position',
+        jobFamily: 'Selected family', isActive: true };
+      Object.assign(f.user, { positionId: oldId });
+      Object.assign(f.user.employmentHistory[0], { userId: f.user.id, positionId: oldId });
+      f.tx.position = { findUnique: jest.fn(async () => ({ ...catalog })) };
+      const draft: any = await f.service.saveArchiveDraft('employee', f.input({ positionId: catalog.id,
+        position: 'Submitted label', jobFamily: 'Submitted family' }, {}, { managerId: 'manager' }), editor);
+      const original = f.requests[0];
+      original.recordStatus = 'submitted';
+      const reviewer = { ...editor, id: 'reviewer', hrCapabilities: ['employee_archive_review'] };
+      const approved = await new EmployeeDataReviewsService(f.db).approveBatch({ requestIds: [draft.id], scopes: ['profile'] }, reviewer);
+      expect(approved.failed).toEqual([]);
+      const appliedEmployment = f.user.employmentHistory[0];
+      expect(appliedEmployment).toMatchObject({ userId: f.user.id, sourceRequestId: original.id,
+        positionId: catalog.id, position: 'Selected position', jobFamily: 'Selected family' });
+      expect(f.user.position).toBe('Selected position');
+      // Continue the supported legacy state where profile passed but performance was returned.
+      original.performanceReviewStatus = 'rejected';
+      catalog.name = 'Renamed catalog'; catalog.jobFamily = 'Renamed family';
+      if (change === 'projection') f.user.position = 'External position';
+      if (change === 'employment-snapshot') appliedEmployment.position = 'External position';
+      if (change === 'foreign-source') appliedEmployment.sourceRequestId = 'another-request';
+      if (change === 'foreign-user') appliedEmployment.userId = 'another-employee';
+      if (change === 'newer-employment') {
+        f.user.position = catalog.name;
+        f.user.employmentHistory.unshift({ ...appliedEmployment, id: 'external-employment',
+          sourceRequestId: 'another-request', position: catalog.name, jobFamily: catalog.jobFamily });
+      }
+      if (change === 'replaced-source') {
+        f.user.position = catalog.name;
+        Object.assign(appliedEmployment, { sourceRequestId: 'another-request', position: catalog.name, jobFamily: catalog.jobFamily });
+      }
+      const before = structuredClone({ user: f.user, original });
+      const input = { ...f.input({}, {}, { managerId: 'manager' }), draftId: original.id, expectedVersion: original.requestVersion };
+      if (change !== 'none') {
+        await expect(f.service.saveArchiveDraft('employee', input, editor)).rejects.toBeInstanceOf(ConflictException);
+        expect(f.user).toEqual(before.user);
+        expect(f.requests).toHaveLength(1);
+        expect(f.requests[0]).toEqual(before.original);
+      } else {
+        const revision: any = await f.service.saveArchiveDraft('employee', input, editor);
+        expect(revision.id).not.toBe(original.id);
+        expect(revision).toMatchObject({ profileReviewStatus: 'not_required', performanceReviewStatus: 'pending',
+          baseValue: { employee: { positionId: catalog.id, position: 'Selected position', jobFamily: 'Selected family' } } });
+        expect(f.user).toEqual(before.user);
+        expect(original).toMatchObject({ profileReviewStatus: 'approved', profileReviewedById: reviewer.id });
+        expect(appliedEmployment.sourceRequestId).toBe(original.id);
+      }
+    },
+  );
+
   it('rolls back profile, contracts and request when a performance relation is invalid', async () => {
     const f = setup();
     await expect(f.service.submitDraft('employee', f.input({ name: 'Do not apply' }, { education: 'Master' },
@@ -777,7 +851,8 @@ describe('manual archive changes apply at submission', () => {
     Object.assign(previous, { recordStatus: 'submitted', profileReviewStatus: 'approved', performanceReviewStatus: 'pending' });
     previous.proposedValue.performance = { managerId: 'manager' }; previous.baseValue.employee.positionId = 'position-1';
     Object.assign(f.user, { positionId: 'position-2', position: 'Directory label' });
-    Object.assign(f.user.employmentHistory[0], { sourceRequestId: previous.id, positionId: 'position-2', position: 'Directory label', jobFamily: 'Approved family' });
+    Object.assign(f.user.employmentHistory[0], { userId: f.user.id, sourceRequestId: previous.id,
+      positionId: 'position-2', position: 'Directory label', jobFamily: 'Approved family' });
     f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-2', name: 'Directory label', jobFamily: 'Approved family' })) };
     const revision = await f.service.saveArchiveDraft('employee', { ...f.input({ jobFamily: 'Explicit correction', positionId: 'position-2' }), draftId: draft.id, expectedVersion: draft.requestVersion }, editor);
     expect(revision).toMatchObject({ profileReviewStatus: 'pending', proposedValue: { employee: { jobFamily: 'Explicit correction' } } });

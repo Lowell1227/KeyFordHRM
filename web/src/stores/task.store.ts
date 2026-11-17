@@ -9,6 +9,7 @@ export const useTaskStore = defineStore('task', {
     detail: null as TaskDetail | null,
     loading: false,
     error: null as string | null,
+    detailRequestGeneration: 0,
   }),
 
   getters: {
@@ -54,23 +55,33 @@ export const useTaskStore = defineStore('task', {
 
   actions: {
     async fetchDetail(id: string) {
+      const generation = ++this.detailRequestGeneration;
+      this.detail = null;
       this.loading = true;
       this.error = null;
       try {
-        this.detail = await tasksApi.findOne(id);
+        const detail = await tasksApi.findOne(id);
+        if (generation !== this.detailRequestGeneration) return null;
+        if (detail.id !== id) throw new Error('获取任务详情不匹配，请重新加载');
+        this.detail = detail;
+        return this.detail;
       } catch (e) {
+        if (generation !== this.detailRequestGeneration) return null;
         this.error = e instanceof Error ? e.message : '获取任务详情失败';
         this.detail = null;
+        return null;
       } finally {
-        this.loading = false;
+        if (generation === this.detailRequestGeneration) this.loading = false;
       }
     },
 
     setDetail(detail: TaskDetail | null) {
+      this.clear();
       this.detail = detail;
     },
 
     clear() {
+      this.detailRequestGeneration += 1;
       this.detail = null;
       this.error = null;
       this.loading = false;

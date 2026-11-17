@@ -47,7 +47,7 @@ describe('department review task records', () => {
           .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, include.flowRecords.take) : undefined,
       }))),
     } };
-    const service = new TasksService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const service = new TasksService(prisma as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
     return { service, prisma, rows };
   }
 

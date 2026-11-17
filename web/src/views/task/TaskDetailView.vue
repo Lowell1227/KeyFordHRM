@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue';
+import { ref, computed, nextTick, onBeforeUnmount, watch } from 'vue';
 import { isAxiosError } from 'axios';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -24,6 +24,7 @@ import PerformanceResultEvidence from '@/components/common/PerformanceResultEvid
 import { resultStage } from '@/utils/performance-result-presentation';
 import { useAuthStore } from '@/stores/auth.store';
 import { formatScore } from '@/utils/score';
+import { downloadTaskAttachment } from '@/utils/task-attachment-download';
 import type { AssessmentCycle, TaskDetail, SetIndicatorBody, SubmitSelfEvalBody } from '@/types/api.types';
 import { TASK_STATUS_META } from '@/types/enums';
 import {
@@ -40,6 +41,8 @@ const taskStore = useTaskStore();
 const authStore = useAuthStore();
 const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
+let cycleRequestGeneration = 0;
+let detailSession = 0;
 const actionLoading = ref(false);
 const reminding = ref(false);
 type GoalSettingMode = 'simple' | 'complete';
@@ -57,7 +60,8 @@ const isGoalMonitor = computed(() => route.query.goalView === 'monitor');
 const goalVersion = computed(() => task.value?.goalWorkflowVersion ?? cycle.value?.goalWorkflowVersion ?? 1);
 const goalReviewerId = computed(() => task.value?.status === 'indicator_dept_reviewing' ? task.value.deptHeadId : task.value?.status === 'indicator_approving' ? task.value.approverId : task.value?.status === 'indicator_reviewing' ? task.value.managerId : null);
 const canApproveGoal = computed(() => Boolean(task.value && !task.value.isExempt && goalVersion.value >= 2 && goalReviewerId.value === authStore.user?.id && task.value.employeeId !== authStore.user?.id));
-const task = computed(() => taskStore.detail);
+const task = computed(() => route.name === 'TaskDetail' && !isGoalMonitor.value && !taskStore.loading
+  && taskStore.detail?.id === route.params.id ? taskStore.detail : null);
 const loading = computed(() => taskStore.loading || cycleLoading.value);
 const workflowContext = computed(() => {
   const current = task.value;
@@ -286,40 +290,53 @@ const reminderOnCooldown = computed(() => {
 
 async function loadCycle(taskDetail?: TaskDetail | null) {
   const t = taskDetail ?? task.value;
-  if (!t?.cycleId) return;
+  if (!t?.cycleId || task.value !== t) return;
+  const generation = ++cycleRequestGeneration;
+  const isCurrent = () => generation === cycleRequestGeneration && task.value === t;
+  cycle.value = null;
   cycleLoading.value = true;
   try {
-    cycle.value = await cyclesApi.findOne(t.cycleId);
+    const result = await cyclesApi.findOne(t.cycleId);
+    if (isCurrent()) cycle.value = result.id === t.cycleId ? result : null;
   } catch {
-    cycle.value = null;
+    if (isCurrent()) cycle.value = null;
   } finally {
-    cycleLoading.value = false;
+    if (generation === cycleRequestGeneration) cycleLoading.value = false;
   }
 }
 
 async function loadDetail() {
-  if (isGoalMonitor.value) return;
+  detailSession += 1;
+  actionLoading.value = false;
+  cycleRequestGeneration += 1;
+  cycle.value = null;
+  cycleLoading.value = false;
+  if (route.name !== 'TaskDetail' || isGoalMonitor.value) {
+    taskStore.clear();
+    return;
+  }
   const id = route.params.id as string;
-  await taskStore.fetchDetail(id);
-  if (taskStore.detail) {
-    await loadCycle(taskStore.detail);
+  const detail = await taskStore.fetchDetail(id);
+  if (detail && task.value === detail) {
+    await loadCycle(detail);
   }
 }
 
-onMounted(() => {
-  loadDetail();
+onBeforeUnmount(() => {
+  detailSession += 1;
+  cycleRequestGeneration += 1;
+  taskStore.clear();
 });
 
 watch(
-  () => [route.params.id, route.query.goalView],
+  () => [route.name, route.params.id, route.query.goalView],
   () => {
     objectionVisible.value = false;
     objectionError.value = '';
     objectionReason.value = '';
-    if (route.name === 'TaskDetail') {
-      loadDetail();
-    }
+    void loadDetail();
   },
+  { immediate: true },
 );
 
 function goBack() {
@@ -417,6 +434,7 @@ async function handleWithdrawIndicators() {
   } catch {
     return;
   }
+  if (task.value !== currentTask) return;
   actionLoading.value = true;
   try {
     await tasksApi.withdrawIndicators(currentTask.id, { expectedUpdatedAt: currentTask.updatedAt });
@@ -427,27 +445,35 @@ async function handleWithdrawIndicators() {
   }
 }
 async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: ActualValueItem[]) {
-  const id = task.value?.id;
-  if (!id) return;
+  const currentTask = task.value;
+  if (!currentTask || actionLoading.value) return;
+  const id = currentTask.id;
+  const session = detailSession;
+  const form = indicatorSnapshotRef.value;
+  const isCurrent = () => session === detailSession && task.value === currentTask
+    && indicatorSnapshotRef.value === form;
   actionLoading.value = true;
   let actualValuesSaved = false;
   try {
     if (actualValues.length > 0) {
       await tasksApi.updateActualValues(id, { indicators: actualValues }, { skipErrorMessage: true });
+      if (!isCurrent()) return;
       actualValuesSaved = true;
     }
     await tasksApi.submitSelfEval(id, body, { skipErrorMessage: true });
-    indicatorSnapshotRef.value?.clearSelfEvalDraft();
+    if (!isCurrent()) return;
+    form?.clearSelfEvalDraft();
     ElMessage.success('自评提交成功');
     await loadDetail();
   } catch {
+    if (!isCurrent()) return;
     ElMessage.error(
       actualValuesSaved
         ? '自评尚未提交，实际完成信息已保存，请稍后重试'
         : '自评尚未提交，当前设备草稿仍保留，请稍后重试',
     );
   } finally {
-    actionLoading.value = false;
+    if (isCurrent()) actionLoading.value = false;
   }
 }
 
@@ -738,7 +764,7 @@ async function handleRemind() {
                       <div class="manager-summary__label">附件</div>
                       <ul class="manager-summary__attachments">
                         <li v-for="att in task.managerEvalSummary.attachments" :key="att.url">
-                          <a :href="att.url" target="_blank" rel="noopener">{{ att.name }}</a>
+                          <a href="#" @click.prevent="downloadTaskAttachment(att)">{{ att.name }}</a>
                         </li>
                       </ul>
                     </div>

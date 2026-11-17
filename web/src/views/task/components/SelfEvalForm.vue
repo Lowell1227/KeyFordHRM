@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, computed, watch } from 'vue';
+import { reactive, computed, onBeforeUnmount, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import ScoreInput from '@/components/common/ScoreInput.vue';
 import FileUpload from '@/components/common/FileUpload.vue';
@@ -44,6 +44,7 @@ const form = reactive({
   supportNeeded: '',
   attachments: [] as Attachment[],
 });
+let uploadSession = 0;
 
 const isDirty = computed(() => {
   return (
@@ -64,6 +65,7 @@ const isDirty = computed(() => {
 });
 
 function initForm() {
+  uploadSession += 1;
   form.instances = (props.instances ?? []).map((inst) => ({
     id: inst.id,
     name: inst.name,
@@ -81,10 +83,12 @@ function initForm() {
 }
 
 watch(
-  () => [props.instances, props.summary],
+  () => [props.task.id, props.instances, props.summary],
   () => initForm(),
   { immediate: true, deep: true },
 );
+
+onBeforeUnmount(() => { uploadSession += 1; });
 
 function validate(): boolean {
   for (const inst of form.instances) {
@@ -130,12 +134,18 @@ function handleSubmit() {
 }
 
 async function handleUpload(files: File[]) {
+  const session = uploadSession;
+  const taskId = props.task.id;
+  const isCurrent = () => session === uploadSession && taskId === props.task.id && !props.readonly;
   for (const file of files) {
+    if (!isCurrent()) return;
     try {
       const attachment = await uploadApi.upload(file);
+      if (!isCurrent()) return;
       form.attachments.push(attachment);
       ElMessage.success(`「${file.name}」上传成功`);
     } catch {
+      if (!isCurrent()) return;
       ElMessage.error(`「${file.name}」上传失败`);
     }
   }

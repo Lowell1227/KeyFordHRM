@@ -683,13 +683,30 @@ export class UsersService {
       });
     }
 
+    if (targetUser.sysRole === SysRole.system_admin && operator.sysRole !== SysRole.system_admin) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '仅系统管理员可以重置系统管理员密码',
+      });
+    }
+
     const passwordHash = await bcrypt.hash('0000', 10);
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id },
+      const updated = await tx.user.updateMany({
+        where: {
+          id,
+          deletedAt: null,
+          ...(operator.sysRole !== SysRole.system_admin ? { sysRole: { not: SysRole.system_admin } } : {}),
+        },
         data: { passwordHash, mustChangePassword: true },
       });
+      if (updated.count !== 1) {
+        throw new ForbiddenException({
+          code: ERROR_CODE.FORBIDDEN,
+          message: '无权重置该用户密码',
+        });
+      }
 
       await tx.auditLog.create({
         data: {

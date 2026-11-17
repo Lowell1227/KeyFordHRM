@@ -76,8 +76,8 @@ export class StorageService implements OnModuleInit {
   }
 
   /** 上传单个文件到 MinIO，返回可供前端下载的代理 URL。 */
-  async uploadFile(file: Express.Multer.File, purpose: UploadPurpose = 'general'): Promise<UploadedFileMeta> {
-    const { objectKey: _objectKey, ...uploaded } = await this.uploadStoredFile(file, purpose);
+  async uploadFile(file: Express.Multer.File, purpose: UploadPurpose = 'general', uploaderId?: string): Promise<UploadedFileMeta> {
+    const { objectKey: _objectKey, ...uploaded } = await this.uploadStoredFile(file, purpose, uploaderId);
     return uploaded;
   }
 
@@ -85,7 +85,7 @@ export class StorageService implements OnModuleInit {
     return this.uploadStoredFile(file, 'performance-review-evidence');
   }
 
-  private async uploadStoredFile(file: Express.Multer.File, purpose: UploadPurpose): Promise<StoredFileMeta> {
+  private async uploadStoredFile(file: Express.Multer.File, purpose: UploadPurpose, uploaderId?: string): Promise<StoredFileMeta> {
     const safeMimeType = await this.assertFileValid(file, purpose);
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
@@ -105,6 +105,7 @@ export class StorageService implements OnModuleInit {
 
     await this.client.putObject(this.bucket, objectName, file.buffer, file.size, {
       'Content-Type': safeMimeType,
+      ...(purpose === 'general' && uploaderId ? { 'X-Amz-Meta-Hrm-Uploader': uploaderId } : {}),
     });
 
     return {

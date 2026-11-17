@@ -7,9 +7,10 @@ import { TeamTasksService } from './team-tasks.service';
 import { ObjectivesModule } from '@/objectives/objectives.module';
 import { IndicatorVisibilityService } from './indicator-visibility.service';
 import { IndicatorVersionService } from './indicator-version.service';
+import { StorageModule } from '@/storage/storage.module';
 
 @Module({
-  imports: [ObjectivesModule],
+  imports: [ObjectivesModule, StorageModule],
   controllers: [TasksController],
   providers: [TasksService, FlowService, ScoringService, TeamTasksService, IndicatorVisibilityService, IndicatorVersionService],
   exports: [TasksService, FlowService, ScoringService, TeamTasksService, IndicatorVisibilityService, IndicatorVersionService],

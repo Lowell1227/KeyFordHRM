@@ -182,34 +182,38 @@ export class TalentsService {
   }
 
   async update(id: string, input: UpdateTalentDto, operator: AuthUser) {
-    const before = await this.prisma.talentCandidate.findFirst({ where: { id, deletedAt: null } });
-    if (!before) throw new NotFoundException('候选人不存在或已删除');
-    if (input.status !== undefined) this.assertStatusTransition(before.status, input.status);
-    if (input.userId !== undefined || (input.status === 'hired' && before.status !== 'hired')) {
-      throw new BadRequestException('请通过入离职办理并确认到岗，不支持手动关联员工');
-    }
-    const min = input.expectSalaryMin !== undefined ? input.expectSalaryMin : before.expectSalaryMin;
-    const max = input.expectSalaryMax !== undefined ? input.expectSalaryMax : before.expectSalaryMax;
-    this.assertSalaryRange(min, max);
-    const nextPhone = input.phone ?? before.phone;
-    if (nextPhone !== before.phone) {
-      const duplicate = await this.findByPhone(nextPhone);
-      if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
-    }
-    const { status, userId: _ignoredUserId, ...rest } = input;
-    const data: Prisma.TalentCandidateUpdateInput = {
-      ...this.buildUpdateData(rest, operator),
-      ...(status !== undefined ? { status } : {}),
-    };
     try {
-      return await this.prisma.talentCandidate.update({
-        where: { id },
-        data,
-        include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] }, followUps: { orderBy: { occurredAt: 'desc' } } },
+      return await this.prisma.$transaction(async (tx) => {
+        // Share the arrival/deletion row lock before reading any validation inputs.
+        await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${id}::uuid FOR UPDATE`;
+        const before = await tx.talentCandidate.findFirst({ where: { id, deletedAt: null } });
+        if (!before) throw new NotFoundException('候选人不存在或已删除');
+        if (input.status !== undefined) this.assertStatusTransition(before.status, input.status);
+        if (input.userId !== undefined || (input.status === 'hired' && before.status !== 'hired')) {
+          throw new BadRequestException('请通过入离职办理并确认到岗，不支持手动关联员工');
+        }
+        const min = input.expectSalaryMin !== undefined ? input.expectSalaryMin : before.expectSalaryMin;
+        const max = input.expectSalaryMax !== undefined ? input.expectSalaryMax : before.expectSalaryMax;
+        this.assertSalaryRange(min, max);
+        const nextPhone = input.phone ?? before.phone;
+        if (nextPhone !== before.phone) {
+          const duplicate = await this.findByPhone(nextPhone, tx);
+          if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
+        }
+        const { status, userId: _ignoredUserId, ...rest } = input;
+        const data: Prisma.TalentCandidateUpdateInput = {
+          ...this.buildUpdateData(rest, operator),
+          ...(status !== undefined ? { status } : {}),
+        };
+        return tx.talentCandidate.update({
+          where: { id },
+          data,
+          include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] }, followUps: { orderBy: { occurredAt: 'desc' } } },
+        });
       });
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        const existing = await this.findByPhone(nextPhone);
+      if (this.isUniqueViolation(error) && input.phone !== undefined) {
+        const existing = await this.findByPhone(input.phone);
         if (existing) this.throwPhoneExists(existing.id, existing.name);
       }
       throw error;
@@ -266,10 +270,10 @@ export class TalentsService {
 
   // ── 状态流转与转员工（T4） ─────────────────────────────────────────────────
 
-  /** 已入职为终态（需求 §8）：不允许回退，如需更正请删除后重新入库。 */
+  /** 已入职为终态（需求 §8）：只允许维护其他资料，不允许回退状态。 */
   private assertStatusTransition(from: string, to: string) {
     if (from === 'hired' && to !== 'hired') {
-      throw new BadRequestException('已入职为终态，如需更正请删除记录后重新入库');
+      throw new ConflictException('已入职为终态，不能回退状态；请保留当前输入，刷新后修改其他资料');
     }
   }
 
@@ -343,8 +347,8 @@ export class TalentsService {
     }
   }
 
-  private async findByPhone(phone: string) {
-    return this.prisma.talentCandidate.findFirst({
+  private async findByPhone(phone: string, client: Prisma.TransactionClient = this.prisma) {
+    return client.talentCandidate.findFirst({
       where: { phone: phone.trim(), deletedAt: null },
       select: { id: true, name: true },
     });

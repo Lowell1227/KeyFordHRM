@@ -454,13 +454,26 @@ export class EmployeeDataReviewsService {
         let progressed = false;
         for (const requestId of queue) {
           try {
-            const applied = await this.prisma.$transaction(async (tx) => {
-              const appliedScopes: EmployeeReviewScope[] = [];
-              for (const scope of ['profile', 'performance'] as EmployeeReviewScope[]) {
-                if (scopes.includes(scope) && await approveScope(tx, requestId, scope)) appliedScopes.push(scope);
+            let applied: EmployeeReviewScope[];
+            for (let attempt = 1; ; attempt++) {
+              try {
+                applied = await this.prisma.$transaction(async (tx) => {
+                  if (!hasHrCapability(operator, 'employee_archive_review')) {
+                    throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权限审核人事变更' });
+                  }
+                  const appliedScopes: EmployeeReviewScope[] = [];
+                  for (const scope of ['profile', 'performance'] as EmployeeReviewScope[]) {
+                    if (scopes.includes(scope) && await approveScope(tx, requestId, scope)) appliedScopes.push(scope);
+                  }
+                  return appliedScopes;
+                }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+                break;
+              } catch (error) {
+                // P2034 guarantees rollback; replay all scopes and guards, never an uncertain commit.
+                if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034') throw error;
+                if (attempt >= 3) throw new ConflictException('资料正在被其他操作更新，请刷新后重试审核');
               }
-              return appliedScopes;
-            }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+            }
             for (const scope of applied) addSucceeded(requestId, scope);
             if (applied.length) progressed = true;
           } catch (error) {
@@ -1412,13 +1425,14 @@ export class EmployeeDataReviewsService {
   }
 
   private errorMessage(error: unknown): string {
-    if (error && typeof error === 'object' && 'getResponse' in error) {
-      const response = (error as { getResponse(): unknown }).getResponse();
+    if (error instanceof BadRequestException || error instanceof ConflictException
+      || error instanceof ForbiddenException || error instanceof NotFoundException) {
+      const response = error.getResponse();
       if (response && typeof response === 'object' && 'message' in response) {
         const message = (response as { message?: unknown }).message;
         if (typeof message === 'string') return message;
       }
     }
-    return error instanceof Error ? error.message : '审核失败';
+    return '审核失败，请稍后重试或联系管理员';
   }
 }

@@ -13,6 +13,7 @@ import {
   SysRole,
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { PrismaService } from '@/prisma/prisma.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import type { AuthUser } from '@/common/types/auth.types';
@@ -25,6 +26,7 @@ import type { SubmitManagerPeriodReviewDto } from './dto/submit-manager-period-r
 import { PeriodAggregationService } from './period-aggregation.service';
 import { FlowService } from '@/tasks/flow.service';
 import { hasHrCapability } from '@/auth/hr-capabilities';
+import { assertCycleOperator } from '@/cycles/cycle-operator-scope';
 import { progressValues, shanghaiMonthKey } from '@/objectives/goal-tracking-progress';
 import type { ReopenPeriodReviewDto } from './dto/reopen-period-review.dto';
 import { managerPeriodReviewTitle, periodReviewNoun, periodReviewTitle } from './period-review-labels';
@@ -45,7 +47,7 @@ const periodInclude = {
       employee: { select: { id: true, name: true, employeeNo: true } },
       manager: { select: { id: true, name: true } },
       dept: { select: { id: true, name: true } },
-      cycle: { select: { id: true, name: true, notificationMode: true, publishedAt: true, goalWorkflowVersion: true } },
+      cycle: { select: { id: true, name: true, notificationMode: true, publishedAt: true, goalWorkflowVersion: true, hrOwnerId: true } },
       gradeResult: {
         select: {
           isPublished: true,
@@ -366,10 +368,8 @@ export class PeriodReviewsService {
     dto: SubmitEmployeePeriodReviewDto,
     viewer: AuthUser,
   ): Promise<PeriodReviewActionResult> {
-    const previous = await this.prisma.assessmentPeriodReviewRevision.findUnique({
-      where: { idempotencyKey: dto.idempotencyKey },
-    });
-    if (previous) return this.actionResultFromRevision(previous.snapshot, periodId);
+    const previous = await this.replayReview(periodId, dto, viewer, 'employee', 'submit');
+    if (previous) return previous;
 
     const period = await this.getPeriod(periodId);
     this.assertEmployeeEditable(period, viewer);
@@ -405,7 +405,7 @@ export class PeriodReviewsService {
           selfScore: item.selfScore,
         })) as Prisma.InputJsonArray,
       };
-      const formalRevision = await tx.assessmentPeriodReviewRevision.create({
+      const formalRevision = await this.createReviewRevision(tx, {
         data: {
           periodId,
           stage: 'employee',
@@ -550,10 +550,8 @@ export class PeriodReviewsService {
     dto: ReturnManagerPeriodReviewDto,
     viewer: AuthUser,
   ): Promise<PeriodReviewActionResult> {
-    const previous = await this.prisma.assessmentPeriodReviewRevision.findUnique({
-      where: { idempotencyKey: dto.idempotencyKey },
-    });
-    if (previous) return this.actionResultFromRevision(previous.snapshot, periodId);
+    const previous = await this.replayReview(periodId, dto, viewer, 'manager', 'return');
+    if (previous) return previous;
 
     const period = await this.getPeriod(periodId);
     this.assertManagerEditable(period, viewer, true);
@@ -573,7 +571,7 @@ export class PeriodReviewsService {
         submittedAt: returnedAt.toISOString(),
         reason,
       };
-      await tx.assessmentPeriodReviewRevision.create({
+      await this.createReviewRevision(tx, {
         data: {
           periodId,
           stage: 'manager',
@@ -649,10 +647,8 @@ export class PeriodReviewsService {
     dto: SubmitManagerPeriodReviewDto,
     viewer: AuthUser,
   ): Promise<PeriodReviewActionResult> {
-    const previous = await this.prisma.assessmentPeriodReviewRevision.findUnique({
-      where: { idempotencyKey: dto.idempotencyKey },
-    });
-    if (previous) return this.actionResultFromRevision(previous.snapshot, periodId);
+    const previous = await this.replayReview(periodId, dto, viewer, 'manager', 'submit');
+    if (previous) return previous;
 
     const period = await this.getPeriod(periodId);
     this.assertManagerEditable(period, viewer, true);
@@ -686,7 +682,7 @@ export class PeriodReviewsService {
           managerComment: this.optionalText(item.managerComment) ?? null,
         })) as Prisma.InputJsonArray,
       };
-      await tx.assessmentPeriodReviewRevision.create({
+      await this.createReviewRevision(tx, {
         data: {
           periodId,
           stage: 'manager',
@@ -775,6 +771,7 @@ export class PeriodReviewsService {
       if (!period) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '月度自评不存在' });
       }
+      assertCycleOperator(viewer, period.task.cycle);
       if (period.periodType !== 'month') {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '仅月度自评支持重新开放' });
       }
@@ -1119,16 +1116,73 @@ export class PeriodReviewsService {
     });
   }
 
-  private actionResultFromRevision(snapshot: Prisma.JsonValue, periodId: string): PeriodReviewActionResult {
-    const value = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
-      ? snapshot as Prisma.JsonObject
-      : {};
+  private async createReviewRevision(tx: Prisma.TransactionClient, args: Prisma.AssessmentPeriodReviewRevisionCreateArgs) {
+    try {
+      return await tx.assessmentPeriodReviewRevision.create(args);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '提交正在被其他请求处理，请刷新后重试' });
+      }
+      throw error;
+    }
+  }
+
+  private async replayReview(
+    periodId: string,
+    dto: SubmitEmployeePeriodReviewDto | SubmitManagerPeriodReviewDto | ReturnManagerPeriodReviewDto,
+    viewer: AuthUser,
+    stage: 'employee' | 'manager',
+    action: 'submit' | 'return',
+  ): Promise<PeriodReviewActionResult | null> {
+    const previous = await this.prisma.assessmentPeriodReviewRevision.findUnique({
+      where: { idempotencyKey: dto.idempotencyKey },
+    });
+    if (!previous) return null;
+    if (previous.createdById !== viewer.id) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权重试他人的提交' });
+    }
+    const value = previous.snapshot && typeof previous.snapshot === 'object' && !Array.isArray(previous.snapshot)
+      ? previous.snapshot as Prisma.JsonObject : {};
+    // Older employee revisions did not persist an action; they only represented submission.
+    const savedAction = value.action ?? (previous.stage === 'employee' ? 'submit' : null);
+    const expectedStatus = action === 'return' ? AssessmentPeriodStatus.self_eval
+      : stage === 'employee' ? AssessmentPeriodStatus.manager_scoring : AssessmentPeriodStatus.completed;
+    const savedAt = typeof value.submittedAt === 'string' ? new Date(value.submittedAt) : new Date(NaN);
+    if (previous.periodId !== periodId || previous.stage !== stage || savedAction !== action
+      || value.periodId !== periodId || value.status !== expectedStatus
+      || !Number.isInteger(value.draftVersion) || value.draftVersion !== dto.expectedVersion + 1
+      || !Number.isFinite(savedAt.getTime())
+      || !isDeepStrictEqual(this.reviewContent(stage, action, value), this.reviewContent(stage, action, { ...dto }))) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '提交编号已用于其他内容，请刷新后重新提交' });
+    }
+    const period = await this.getPeriod(periodId);
+    const currentActorId = stage === 'employee' ? period.task.employeeId : period.managerId;
+    if (currentActorId !== viewer.id) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '当前已无权处理本期复盘' });
+    }
     return {
       periodId,
-      status: (value.status as AssessmentPeriodStatus | undefined) ?? AssessmentPeriodStatus.manager_scoring,
-      draftVersion: Number(value.draftVersion ?? 0),
-      savedAt: new Date(String(value.submittedAt ?? new Date().toISOString())),
+      status: expectedStatus,
+      draftVersion: value.draftVersion as number,
+      savedAt,
     };
+  }
+
+  private reviewContent(stage: 'employee' | 'manager', action: 'submit' | 'return', value: Record<string, unknown>) {
+    const text = (input: unknown) => typeof input === 'string' ? this.optionalText(input) ?? null : null;
+    if (action === 'return') return { reason: text(value.reason) };
+    const indicators = Array.isArray(value.indicators) ? value.indicators.map(item => {
+      if (!item || typeof item !== 'object' || typeof item.indicatorVersionItemId !== 'string') return null;
+      return stage === 'employee' ? {
+        indicatorVersionItemId: item.indicatorVersionItemId,
+        progress: item.progress ?? null, healthStatus: item.healthStatus ?? null,
+        employeeComment: text(item.employeeComment), selfScore: item.selfScore ?? null,
+      } : {
+        indicatorVersionItemId: item.indicatorVersionItemId,
+        managerScore: item.managerScore ?? null, managerComment: text(item.managerComment),
+      };
+    }).sort((a, b) => (a?.indicatorVersionItemId ?? '').localeCompare(b?.indicatorVersionItemId ?? '')) : null;
+    return { grade: stage === 'employee' ? value.selfGrade : value.managerGrade, indicators };
   }
 
   private statusLabel(status: AssessmentPeriodStatus): string {

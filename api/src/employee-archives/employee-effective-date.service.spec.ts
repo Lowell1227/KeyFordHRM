@@ -1,6 +1,28 @@
 import { EmployeeEffectiveDateService } from './employee-effective-date.service';
 
 describe('EmployeeEffectiveDateService', () => {
+  it.each(['batch', 'single'])('keeps the assignment snapshot after a catalog rename during %s refresh', async mode => {
+    const employment = { id: 'employment', userId: 'u1', effectiveFrom: new Date('2026-01-01'), effectiveTo: null,
+      deptId: 'd1', positionId: 'p1', position: 'Assigned position', entryDate: new Date('2026-01-01'),
+      plannedRegularDate: null, actualRegularDate: null, leaveDate: null,
+      employmentType: 'full_time', employeeStatus: 'active' };
+    const user = { id: 'u1', accountType: 'employee', status: 'active', position: 'Stale projection' };
+    const tx: any = {
+      employeeDataChangeRequest: { findMany: async () => [], findFirst: async () => null },
+      user: { findMany: async () => [user], findUnique: async () => user,
+        update: jest.fn(async ({ data }) => Object.assign(user, data)) },
+      employmentRecord: { findMany: async () => [employment] },
+      position: { findMany: async () => [{ id: 'p1', name: 'Renamed catalog' }],
+        findUnique: async () => ({ id: 'p1', name: 'Renamed catalog' }) },
+    };
+    const db = { ...tx, $transaction: async (run: any) => typeof run === 'function' ? run(tx) : Promise.all(run) };
+    const service = new EmployeeEffectiveDateService(db as any);
+    if (mode === 'batch') await service.refreshEffectiveProjections(new Date('2026-11-12'));
+    else await service.refreshUserProjection('u1', new Date('2026-11-12'));
+    expect(user).toMatchObject({ positionId: 'p1', position: 'Assigned position' });
+    expect(employment.position).toBe('Assigned position');
+  });
+
   it('projects the latest reviewed employment covering the effective date', async () => {
     const prisma = {
       employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null) },

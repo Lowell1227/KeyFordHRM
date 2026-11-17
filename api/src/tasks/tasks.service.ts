@@ -38,6 +38,8 @@ import { assertTaskVersion, claimTaskVersion } from './task-version';
 import { IndicatorVersionService } from './indicator-version.service';
 import { getManagerStageState, TeamStageState } from './team-task-stage';
 import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
+import { canViewTask } from './task-access-policy';
+import { LegacyTaskAttachmentsService } from '@/storage/legacy-task-attachments.service';
 
 type IndicatorBaselineSource = IndicatorInstance & {
   visibleDepartments: Array<{ departmentId: string }>;
@@ -236,6 +238,7 @@ export class TasksService {
     private readonly indicatorVisibility: IndicatorVisibilityService,
     private readonly objectivesService: ObjectivesService,
     private readonly indicatorVersionService: IndicatorVersionService,
+    private readonly taskAttachments: LegacyTaskAttachmentsService,
   ) {}
 
   /** GET /tasks — 角色过滤 + 分页。 */
@@ -1442,6 +1445,7 @@ export class TasksService {
       });
     }
 
+    await this.taskAttachments.assertCanAttach(id, 'self', dto.summary.attachments, viewer);
     const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
     const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
 
@@ -1528,6 +1532,8 @@ export class TasksService {
     this.assertLegacyManagerEvaluationAllowed(task);
     this.assertManagerScoring(task);
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
+
+    await this.taskAttachments.assertCanAttach(id, 'manager', dto.evalSummary.attachments, viewer);
 
     const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
     const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
@@ -1624,6 +1630,8 @@ export class TasksService {
     this.assertManagerScoring(task);
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
     this.assertCompleteManagerScores(task.indicatorInstances, dto);
+
+    await this.taskAttachments.assertCanAttach(id, 'manager', dto.evalSummary.attachments, viewer);
 
     const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
     const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
@@ -2101,15 +2109,7 @@ export class TasksService {
   }
 
   private assertCanView(task: AssessmentTask, viewer: AuthUser): void {
-    const canView =
-      task.employeeId === viewer.id ||
-      task.managerId === viewer.id ||
-      task.deptHeadId === viewer.id ||
-      task.approverId === viewer.id ||
-      viewer.sysRole === SysRole.hr ||
-      viewer.sysRole === SysRole.system_admin ||
-      viewer.canViewAll;
-    if (!canView) {
+    if (!canViewTask(task, viewer)) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权限查看该考核任务' });
     }
   }

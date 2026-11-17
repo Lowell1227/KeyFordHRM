@@ -41,6 +41,14 @@ describe('StorageService contract material policies', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
+  it('records authenticated general-upload ownership in private object metadata', async () => {
+    const service = new StorageService(config as any);
+    await service.uploadFile(file('evidence.txt', 'text/plain', 4, Buffer.from('test')), 'general', 'uploader-1');
+    const client = (Minio.Client as unknown as jest.Mock).mock.results[0].value;
+    expect(client.putObject).toHaveBeenCalledWith('test-bucket', expect.stringMatching(/^uploads\//),
+      expect.any(Buffer), 4, expect.objectContaining({ 'X-Amz-Meta-Hrm-Uploader': 'uploader-1' }));
+  });
+
   it('合同图片上传限制为 JPG/PNG/WEBP 且单张不超过 2MB', async () => {
     const service = new StorageService(config as any);
 

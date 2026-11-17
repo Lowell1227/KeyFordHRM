@@ -501,19 +501,91 @@ describe('employee confirmation draft', () => {
     expect(storage.uploadFile).not.toHaveBeenCalled();
   });
 
-  it('lets only the assigned HR and company approver resolve the internal attachment key', async () => {
+  it('lets only current scoped HR and the designated company approver resolve the internal attachment key', async () => {
     const applicationId = '33333333-3333-4333-8333-333333333333';
     const attachmentId = '66666666-6666-4666-8666-666666666666';
     const hrId = '44444444-4444-4444-8444-444444444444';
     const companyApproverId = '55555555-5555-4555-8555-555555555555';
     prisma.confirmationMeetingAttachment.findUnique.mockResolvedValue({
-      id: attachmentId, applicationId, objectKey: 'confirmation-internal/2026/09/14/file.pdf',
-      application: { id: applicationId, workflowVersion: 2, hrId, companyApproverId },
+      id: attachmentId, applicationId, objectKey: 'confirmation-internal/2026/09/14/file.pdf', submissionVersion: 1,
+      application: { id: applicationId, workflowVersion: 2, submissionVersion: 1,
+        status: ConfirmationStatus.hr_approved, employeeId, hrId, companyApproverId },
     });
     await expect(service.meetingAttachmentKey(applicationId, attachmentId, viewer)).rejects.toThrow('无权下载内部评议附件');
     await expect(service.meetingAttachmentKey(applicationId, attachmentId, { ...viewer, sysRole: SysRole.system_admin })).rejects.toThrow('无权下载内部评议附件');
     await expect(service.meetingAttachmentKey(applicationId, attachmentId, { ...viewer, id: hrId, sysRole: SysRole.hr })).resolves.toBe('confirmation-internal/2026/09/14/file.pdf');
     await expect(service.meetingAttachmentKey(applicationId, attachmentId, { ...viewer, id: companyApproverId })).resolves.toBe('confirmation-internal/2026/09/14/file.pdf');
+  });
+
+  describe('meeting attachment current authorization', () => {
+    const applicationId = 'test-application';
+    const attachmentId = 'test-attachment';
+    const hrId = 'historical-hr';
+    const companyApproverId = 'company-approver';
+    const companyScope = { dept: { is: { company: 'fuede' } } };
+    const attachment = {
+      id: attachmentId, applicationId, objectKey: 'confirmation-internal/test.pdf', submissionVersion: 2,
+      application: { id: applicationId, workflowVersion: 2, submissionVersion: 2,
+        status: ConfirmationStatus.hr_approved, employeeId, hrId, companyApproverId },
+    };
+
+    beforeEach(() => {
+      prisma.confirmationMeetingAttachment.findUnique.mockResolvedValue(attachment);
+    });
+
+    it.each([
+      { label: 'revoked HR role', sysRole: SysRole.employee, hrCapabilities: [], inScope: 1 },
+      { label: 'revoked HR capability', sysRole: SysRole.hr_user, hrCapabilities: [], inScope: 1 },
+      { label: 'revoked company scope', sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'], inScope: 0 },
+    ])('denies the historical HR handler with $label', async ({ sysRole, hrCapabilities, inScope }) => {
+      prisma.user.count.mockResolvedValue(inScope);
+
+      await expect(service.meetingAttachmentKey(applicationId, attachmentId, {
+        ...viewer, id: hrId, sysRole, hrCapabilities,
+      })).rejects.toThrow('无权下载内部评议附件');
+    });
+
+    it.each([SysRole.hr, SysRole.hr_user])('allows current scoped %s without historical assignment', async (sysRole) => {
+      const currentHr = { ...viewer, id: 'current-hr', sysRole, hrCapabilities: ['confirmation_manage'] };
+      dataScope.getConfirmationEmployeeFilter.mockResolvedValueOnce(companyScope);
+
+      await expect(service.meetingAttachmentKey(applicationId, attachmentId, currentHr))
+        .resolves.toBe('confirmation-internal/test.pdf');
+      expect(dataScope.getConfirmationEmployeeFilter).toHaveBeenCalledWith(currentHr);
+      expect(prisma.user.count).toHaveBeenCalledWith({ where: { AND: [companyScope, { id: employeeId }] } });
+    });
+
+    it('preserves designated company approval access outside HR scope', async () => {
+      prisma.user.count.mockResolvedValue(0);
+
+      await expect(service.meetingAttachmentKey(applicationId, attachmentId, {
+        ...viewer, id: companyApproverId, sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'],
+      })).resolves.toBe('confirmation-internal/test.pdf');
+    });
+
+    it.each([
+      { label: 'returned draft', application: { status: ConfirmationStatus.draft } },
+      { label: 'previous submission', application: { submissionVersion: 3 } },
+      { label: 'legacy workflow', application: { workflowVersion: 1 } },
+    ])('still denies $label attachments to authorized HR and the company approver', async ({ application }) => {
+      prisma.confirmationMeetingAttachment.findUnique.mockResolvedValue({
+        ...attachment, application: { ...attachment.application, ...application },
+      });
+
+      for (const authorizedViewer of [
+        { ...viewer, id: hrId, sysRole: SysRole.hr },
+        { ...viewer, id: companyApproverId },
+      ]) {
+        await expect(service.meetingAttachmentKey(applicationId, attachmentId, authorizedViewer))
+          .rejects.toMatchObject({ status: 404 });
+      }
+    });
+
+    it('does not resolve attachments belonging to another application', async () => {
+      await expect(service.meetingAttachmentKey('other-application', attachmentId, {
+        ...viewer, id: companyApproverId,
+      })).rejects.toMatchObject({ status: 404 });
+    });
   });
 
   it('lets scoped HR record an attachment-backed conclusion and saves the actual actor', async () => {

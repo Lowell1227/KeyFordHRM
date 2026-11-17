@@ -59,6 +59,68 @@ describe('explicit arrival confirmation', () => {
   beforeEach(() => jest.useFakeTimers().setSystemTime(new Date('2026-11-12T03:00:00Z')));
   afterEach(() => jest.useRealTimers());
 
+  it.each([null, '2026-11-12', '2026-12-01'])('restores the arrival gate when historical reentry is revised to current employment ending %s', async effectiveTo => {
+    const { service, effective, tx, request, user } = setup({ intakeType: 'reentry', onboardingStatus: 'submitted',
+      profileReviewStatus: 'pending', requiresArrivalConfirmation: false, employmentRecords: [],
+      proposedValue: { employee: { effectiveDate: '2025-01-01', effectiveTo: '2025-12-31' } } });
+    user.status = 'resigned';
+    tx.employmentRecord.findUnique.mockResolvedValue(null);
+    tx.employmentRecord.create = jest.fn(async ({ data }) => {
+      const employment = { id: 'reentry-employment', ...data };
+      request.employmentRecords.push(employment);
+      return employment;
+    });
+
+    await service.reviseReentry('r1', { company: 'fuede', effectiveDate: new Date('2026-11-10'),
+      effectiveTo: effectiveTo ? new Date(effectiveTo) : undefined,
+      employeeStatus: 'active', employmentType: 'full_time' } as any, editor.id);
+    request.profileReviewStatus = 'approved';
+
+    await expect(service.applyApprovedReentry(tx, 'r1', reviewer.id)).resolves.toBe('pending_entry');
+    expect(request).toMatchObject({ requiresArrivalConfirmation: true, userId: 'u1', employeeNo: '358',
+      requestVersion: 3, arrivalConfirmedAt: null });
+    expect(request.revisionHistory[0]).toMatchObject({ version: 2,
+      proposedValue: { employee: { effectiveDate: '2025-01-01', effectiveTo: '2025-12-31' } } });
+    await effective.refreshUserProjection('u1');
+    expect(user.status).toBe('pending_entry');
+    expect(tx.employeeNumberAssignment.update).not.toHaveBeenCalled();
+    await expect(service.confirmArrival('r1', { arrivalDate: '2026-11-10', requestVersion: 3 }, editor))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    await service.confirmArrival('r1', { arrivalDate: '2026-11-10', requestVersion: 3 }, reviewer);
+    expect(user).toMatchObject({ id: 'u1', status: 'active' });
+    expect(request).toMatchObject({ onboardingStatus: 'effective', arrivalConfirmedById: reviewer.id });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      action: 'revise_employee_reentry', userId: editor.id, entityId: 'r1',
+    }) }));
+  });
+
+  it.each([false, true])('keeps historical revision exempt from arrival (previous gate=%s)', async requiresArrivalConfirmation => {
+    const { service, tx, request, user } = setup({ intakeType: 'reentry', onboardingStatus: 'submitted',
+      profileReviewStatus: 'pending', requiresArrivalConfirmation });
+    user.status = 'resigned';
+    tx.employmentRecord.findUnique.mockResolvedValue(null);
+    tx.employmentRecord.create = jest.fn();
+    await service.reviseReentry('r1', { company: 'fuede', effectiveDate: new Date('2025-01-01'),
+      effectiveTo: new Date('2025-12-31'), employeeStatus: 'active', employmentType: 'full_time' } as any, editor.id);
+    await expect(service.applyApprovedReentry(tx, 'r1', reviewer.id)).resolves.toBe('historical');
+    expect(request.requiresArrivalConfirmation).toBe(false);
+    expect(user.status).toBe('resigned');
+    expect(tx.user.update).not.toHaveBeenCalled();
+    expect(tx.employeeNumberAssignment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'historical' }),
+    }));
+  });
+
+  it.each([false, true])('does not change the arrival gate on performance-only revision (%s)', async requiresArrivalConfirmation => {
+    const { service, request } = setup({ intakeType: 'reentry', requiresArrivalConfirmation,
+      performanceReviewStatus: 'rejected' });
+    const employee = structuredClone(request.proposedValue.employee);
+    await service.reviseReentry('r1', { performanceOnly: true, performanceManagerId: 'manager' } as any, editor.id);
+    expect(request.requiresArrivalConfirmation).toBe(requiresArrivalConfirmation);
+    expect(request.proposedValue.employee).toEqual(employee);
+    expect(request.profileReviewStatus).toBe('approved');
+  });
+
   it.each(['new_hire', 'reentry'])('does not activate an overdue %s from the activation path', async intakeType => {
     const { effective, tx } = setup({ intakeType });
     await expect(effective.activateApprovedOnboarding(tx, 'r1', new Date())).resolves.toEqual({ activated: false, historicalOnly: false });

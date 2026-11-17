@@ -16,6 +16,7 @@ import { validate } from 'class-validator';
 import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
 import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-draft.dto';
 import { IndicatorVersionService } from './indicator-version.service';
+import { LegacyTaskAttachmentsService } from '@/storage/legacy-task-attachments.service';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -52,6 +53,7 @@ describe('TasksService', () => {
     findIndicatorAlignmentCandidates: jest.Mock;
   };
   let indicatorVersionService: { activateConfirmedV1: jest.Mock };
+  let taskAttachments: { assertCanAttach: jest.Mock };
   let scoringService: {
     validateScore: jest.Mock;
     toScorableIndicator: jest.Mock;
@@ -130,6 +132,7 @@ describe('TasksService', () => {
       findIndicatorAlignmentCandidates: jest.fn().mockResolvedValue({ items: [], reason: null }),
     };
     indicatorVersionService = { activateConfirmedV1: jest.fn().mockResolvedValue('version-1') };
+    taskAttachments = { assertCanAttach: jest.fn().mockResolvedValue(undefined) };
     scoringService = {
       validateScore: jest.fn(),
       toScorableIndicator: jest.fn((indicator) => indicator),
@@ -149,6 +152,7 @@ describe('TasksService', () => {
         { provide: IndicatorVisibilityService, useValue: indicatorVisibility },
         { provide: ObjectivesService, useValue: objectivesService },
         { provide: IndicatorVersionService, useValue: indicatorVersionService },
+        { provide: LegacyTaskAttachmentsService, useValue: taskAttachments },
       ],
     }).compile();
 
@@ -1089,6 +1093,37 @@ describe('TasksService', () => {
 
   describe('manager evaluation draft', () => {
     const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+
+    it('rejects unauthorized attachments before a draft transaction', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('manager_scoring'), updatedAt });
+      taskAttachments.assertCanAttach.mockRejectedValue(new ForbiddenException());
+      await expect(service.saveManagerEvaluationDraft('task-1', {
+        expectedUpdatedAt: updatedAt.toISOString(),
+        indicators: [],
+        evalSummary: { attachments: [{ url: '/storage/download?key=uploads/stolen' }] },
+      }, makeViewer({ id: 'mgr-1' }))).rejects.toBeInstanceOf(ForbiddenException);
+      expect(taskAttachments.assertCanAttach).toHaveBeenCalledWith('task-1', 'manager', expect.any(Array), expect.objectContaining({ id: 'mgr-1' }));
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects unauthorized attachments before employee submission writes', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('self_eval'));
+      taskAttachments.assertCanAttach.mockRejectedValue(new ForbiddenException());
+      await expect(service.submitSelfEval('task-1', {
+        indicators: [], summary: { attachments: [{ url: '/storage/download?key=uploads/stolen' }] },
+      }, makeViewer({ id: 'emp-1' }))).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects unauthorized attachments before manager submission writes', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('manager_scoring'), updatedAt, indicatorInstances: [] });
+      taskAttachments.assertCanAttach.mockRejectedValue(new ForbiddenException());
+      await expect(service.submitManagerScore('task-1', {
+        expectedUpdatedAt: updatedAt.toISOString(), indicators: [],
+        evalSummary: { attachments: [{ url: '/storage/download?key=uploads/stolen' }] },
+      }, makeViewer({ id: 'mgr-1' }))).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
 
     it('saves only supplied indicator fields and summary text without grading or transitioning', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue({

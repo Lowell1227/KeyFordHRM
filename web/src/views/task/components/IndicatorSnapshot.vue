@@ -144,6 +144,7 @@ const selfEvalForm = reactive({
   supportNeeded: '',
   attachments: [] as Attachment[],
 });
+let selfEvalUploadSession = 0;
 const activeSelfEvalId = ref('');
 const selfEvalValidationIds = ref<string[]>([]);
 const selfEvalDraftState = ref<'idle' | 'saved' | 'restored'>('idle');
@@ -297,7 +298,7 @@ const readonlyDisclosureRows = computed<PerformanceIndicatorRow[]>(() => props.i
 })));
 
 watch(
-  () => [props.instances, props.selfEvalSummary],
+  () => [props.taskId, props.selfEvalUserId, props.instances, props.selfEvalSummary],
   () => initSelfEvalForm(),
   { immediate: true, deep: true },
 );
@@ -325,6 +326,7 @@ watch(
 );
 
 function initSelfEvalForm() {
+  selfEvalUploadSession += 1;
   selfEvalDraftReady.value = false;
   selfEvalRows.splice(
     0,
@@ -476,6 +478,7 @@ function scheduleSelfEvalDraftSave() {
 }
 
 function clearSelfEvalDraft() {
+  selfEvalUploadSession += 1;
   if (selfEvalDraftTimer.value != null) {
     window.clearTimeout(selfEvalDraftTimer.value);
     selfEvalDraftTimer.value = null;
@@ -946,6 +949,7 @@ function trimItem(item: SetIndicatorBody['instances'][number], index: number): S
 }
 
 onBeforeUnmount(() => {
+  selfEvalUploadSession += 1;
   clearWeightHold();
   if (selfEvalDraftTimer.value != null) {
     window.clearTimeout(selfEvalDraftTimer.value);
@@ -1146,12 +1150,21 @@ function handleSaveSelfEvalForLater() {
 defineExpose({ clearSelfEvalDraft, addGoal: addItem });
 
 async function handleUpload(files: File[]) {
+  const session = selfEvalUploadSession;
+  const taskId = props.taskId;
+  const userId = props.selfEvalUserId;
+  const isCurrent = () => session === selfEvalUploadSession
+    && taskId === props.taskId && userId === props.selfEvalUserId
+    && props.selfEvalMode && !props.selfEvalReadonly;
   for (const file of files) {
+    if (!isCurrent()) return;
     try {
       const attachment = await uploadApi.upload(file);
+      if (!isCurrent()) return;
       selfEvalForm.attachments.push(attachment);
       ElMessage.success(`「${file.name}」上传成功`);
     } catch {
+      if (!isCurrent()) return;
       ElMessage.error(`「${file.name}」上传失败`);
     }
   }

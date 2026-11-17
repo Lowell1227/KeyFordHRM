@@ -156,7 +156,7 @@ export class ProbationService {
     dto: ProbationReviewQueryDto,
     baseWhere: Prisma.ProbationReviewWhereInput,
   ): Promise<Paginated<ProbationReviewListItem>> {
-    const where: Prisma.ProbationReviewWhereInput = { ...baseWhere };
+    const where: Prisma.ProbationReviewWhereInput = { AND: [baseWhere] };
 
     if (dto.employeeId) where.employeeId = dto.employeeId;
     if (dto.managerId) where.managerId = dto.managerId;
