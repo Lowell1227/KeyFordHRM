@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue';
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import {
   TALENT_STATUSES,
@@ -79,11 +79,13 @@ const editFiles = ref<TalentResumeFile[]>([]);
 const pendingUploading = ref(false);
 const loadError = ref('');
 const loadedCandidateId = ref<string | null>(null);
+const loadedEditVersion = ref('');
+const editConflict = ref(false);
 let loadGeneration = 0;
 const formReady = computed(() => props.modelValue && !loading.value && !loadError.value
   && (!props.candidateId || loadedCandidateId.value === props.candidateId));
 const saveDisabled = computed(() => !formReady.value || !canEdit.value || Boolean(conflict.value)
-  || saving.value || pendingUploading.value);
+  || editConflict.value || saving.value || pendingUploading.value);
 
 const form = reactive({
   name: '',
@@ -134,6 +136,8 @@ watch(() => form.salaryNegotiable, (negotiable) => {
 function invalidateLoad() {
   loadGeneration += 1;
   loadedCandidateId.value = null;
+  loadedEditVersion.value = '';
+  editConflict.value = false;
   loading.value = false;
   loadError.value = '';
 }
@@ -159,6 +163,7 @@ async function onOpen() {
       if (!isCurrentLoad(generation, candidateId)) return;
       if (detail.id !== candidateId) throw new Error('Candidate detail mismatch');
       fillForm(detail);
+      loadedEditVersion.value = detail.editVersion;
       editFiles.value = detail.files;
       loadedCandidateId.value = candidateId;
     } catch {
@@ -286,6 +291,16 @@ function captureConflict(error: unknown) {
   if (data?.reason === TALENT_PHONE_EXISTS && data.existingId) {
     conflict.value = { existingId: data.existingId, existingName: data.existingName ?? '', statusLabel: '' };
   }
+  if (data?.reason === 'TALENT_EDIT_CONFLICT') editConflict.value = true;
+}
+
+async function reloadAfterConflict() {
+  const generation = loadGeneration, candidateId = props.candidateId;
+  try {
+    await ElMessageBox.confirm('重新加载会替换当前未保存的内容。请先保留需要的输入。', '重新加载最新资料',
+      { confirmButtonText: '重新加载', cancelButtonText: '继续保留输入', type: 'warning' });
+  } catch { return; }
+  if (isCurrentLoad(generation, candidateId)) await onOpen();
 }
 
 async function submit() {
@@ -319,7 +334,7 @@ async function submit() {
     };
     let candidateId = targetId ?? '';
     if (isEdit.value && candidateId) {
-      await talentPoolApi.update(candidateId, body);
+      await talentPoolApi.update(candidateId, { ...body, editVersion: loadedEditVersion.value });
     } else {
       const created = await talentPoolApi.create(body);
       candidateId = created.id;
@@ -350,6 +365,9 @@ async function submit() {
     :loading="loading" :saving="saving || pendingUploading" variant="standard" class="talent-form-drawer">
     <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon>
       <el-button link type="primary" @click="onOpen">重新加载</el-button>
+    </el-alert>
+    <el-alert v-if="editConflict" title="资料已更新，当前输入已保留。请核对最新资料后再保存。" type="warning" :closable="false" show-icon>
+      <el-button link type="primary" @click="reloadAfterConflict">重新加载最新资料</el-button>
     </el-alert>
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="talent-form"
       :disabled="!formReady || saving || pendingUploading"

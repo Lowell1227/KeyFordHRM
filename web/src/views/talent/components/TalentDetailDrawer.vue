@@ -104,12 +104,16 @@ function startEdit() {
 
 async function markRejected() {
   if (!detail.value || !canEdit.value) return;
-  await ElMessageBox.confirm(
-    `把「${detail.value.name}」标记为已淘汰？如需说明原因，建议先在编辑页写好备注。`,
+  const target = detail.value;
+  const generation = requestId;
+  try { await ElMessageBox.confirm(
+    `把「${target.name}」标记为已淘汰？如需说明原因，建议先在编辑页写好备注。`,
     '标记淘汰',
     { confirmButtonText: '标记淘汰', cancelButtonText: '取消', type: 'warning' },
-  );
-  await talentPoolApi.update(detail.value.id, { status: 'rejected' });
+  ); } catch { return; }
+  if (!props.modelValue || props.candidateId !== target.id || generation !== requestId) return;
+  await talentPoolApi.update(target.id, { status: 'rejected', editVersion: target.editVersion });
+  if (!props.modelValue || props.candidateId !== target.id || generation !== requestId) return;
   ElMessage.success('已标记为已淘汰');
   await loadDetail();
 }

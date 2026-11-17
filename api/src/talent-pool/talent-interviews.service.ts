@@ -1,9 +1,8 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import type { AuthUser } from '@/common/types/auth.types';
-import { NotificationsService } from '@/notifications/notifications.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
 
@@ -24,8 +23,7 @@ export function safeTencentMeetingUrl(input?: string | null): string | null {
 
 @Injectable()
 export class TalentInterviewsService {
-  private readonly logger = new Logger(TalentInterviewsService.name);
-  constructor(private readonly prisma: PrismaService, private readonly notifications: NotificationsService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   private canReadTalent(user: AuthUser) {
     return hasHrCapability(user, 'employee_archive_edit') || hasHrCapability(user, 'employee_archive_review');
@@ -124,7 +122,6 @@ export class TalentInterviewsService {
       await this.intent(tx, created, user, 'create');
       return created;
     });
-    await this.notify(row, user);
     return this.view(row, user);
   }
 
@@ -176,7 +173,6 @@ export class TalentInterviewsService {
       await this.intent(tx, updated, user, action, before);
       return updated;
     });
-    if (action !== 'retry') await this.notify(row, user);
     return this.view(row, user);
   }
 
@@ -188,24 +184,15 @@ export class TalentInterviewsService {
     await tx.auditLog.create({ data: { userId: user.id, action: `${action}_talent_interview`, entityType: 'talent_interview', entityId: row.id,
       oldValue: before ? { version: before.version, status: before.status, startsAt: before.startsAt.toISOString(), endsAt: before.endsAt.toISOString(), participantIds: before.participants.map((p) => p.userId) } : undefined,
       newValue: { version: row.version, status: row.status, startsAt: row.startsAt.toISOString(), endsAt: row.endsAt.toISOString(), participantIds: row.participants.map((p) => p.userId) } } });
-  }
-
-  private async notify(row: Interview, user: AuthUser) {
-    for (const participant of row.participants) {
-      try {
-        // A preceding delivery may have awaited while HR changed this invitation.
-        const current = await this.prisma.talentInterview.findFirst({
-          where: { id: row.id, version: row.version, participants: { some: { userId: participant.userId } } },
-          select: { id: true },
-        });
-        if (!current) continue;
-        await this.notifications.create({ userId: participant.userId, senderId: user.id, type: 'talent_interview',
-          dedupeKey: `talent_interview:${row.id}:${row.version}:${participant.userId}`,
-          title: row.status === 'cancelled' ? '面试邀约已取消' : row.status === 'completed' ? '面试已完成' : '面试邀约已更新',
-          content: '请查看面试邀约的最新安排。', extraData: { invitationId: row.id, version: row.version } });
-      } catch {
-        this.logger.warn(`Interview notification creation failed: ${row.id}`);
-      }
+    if (action !== 'retry') {
+      const sentAt = new Date();
+      await tx.notificationLog.createMany({ data: row.participants.map((participant) => ({
+        userId: participant.userId, senderId: user.id, type: 'talent_interview',
+        dedupeKey: `talent_interview:${row.id}:${row.version}:${participant.userId}`,
+        title: row.status === 'cancelled' ? '面试邀约已取消' : row.status === 'completed' ? '面试已完成' : '面试邀约已更新',
+        content: '请查看面试邀约的最新安排。', extraData: { invitationId: row.id, version: row.version },
+        status: 'sent', channel: 'system', isRead: false, readAt: null, sentAt,
+      })) });
     }
   }
 }

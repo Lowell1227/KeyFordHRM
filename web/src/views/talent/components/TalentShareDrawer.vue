@@ -2,14 +2,11 @@
 import { ref, computed, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
-import { usersApi } from '@/api/users.api';
-import type { User } from '@/types/api.types';
-import type { SysRole } from '@/types/enums';
 import type { TalentShareRecord } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
 
 /**
- * 转发分享抽屉（需求 §5.4）：选择接收人（部门负责人/经理/HR/VP，最多 5 人）、
+ * 转发分享抽屉：选择接收人（HR、实际主管、部门负责人，最多 5 人）、
  * 有效期 7/30 天、可选附简历原件、留言 ≤100 字；创建后展示链接可一键复制；
  * 下方列出历史分享并支持撤销。
  */
@@ -31,12 +28,11 @@ const visible = computed({
   set: (value: boolean) => emit('update:modelValue', value),
 });
 
-/** 接收人可选角色（与后端 RECIPIENT_ROLES 一致，前端先过滤一层）。 */
-const RECIPIENT_ROLES: SysRole[] = ['dept_head', 'manager', 'hr', 'vp', 'system_admin'];
+type ShareRecipient = Awaited<ReturnType<typeof talentPoolApi.searchShareRecipients>>['items'][number];
 const MAX_RECIPIENTS = 5;
 
 const recipientIds = ref<string[]>([]);
-const recipientOptions = ref<User[]>([]);
+const recipientOptions = ref<ShareRecipient[]>([]);
 const searching = ref(false);
 const expiresInDays = ref<7 | 30>(7);
 const includeResume = ref(false);
@@ -62,15 +58,16 @@ function resetForm() {
 async function searchRecipients(keyword: string) {
   searching.value = true;
   try {
-    const res = await usersApi.findAll({ keyword, page: 1, pageSize: 20, includeResigned: false });
-    recipientOptions.value = res.items.filter((user) => RECIPIENT_ROLES.includes(user.sysRole));
+    const res = await talentPoolApi.searchShareRecipients({ keyword, page: 1, pageSize: 20 });
+    recipientOptions.value = res.items;
   } finally {
     searching.value = false;
   }
 }
 
-function recipientLabel(user: User): string {
+function recipientLabel(user: ShareRecipient): string {
   const parts = [user.name];
+  if (user.employeeNo) parts.push(user.employeeNo);
   if (user.deptName) parts.push(user.deptName);
   return parts.join(' · ');
 }
@@ -145,9 +142,9 @@ function shareUrl(share: TalentShareRecord): string {
     <div class="talent-share">
       <h4 class="talent-share__section-title">新建分享</h4>
       <el-form label-position="top" size="default" @submit.prevent>
-        <el-form-item label="接收人（部门负责人 / 经理 / HR / VP，最多 5 人）" required>
+        <el-form-item label="接收人（HR / 实际主管 / 部门负责人，最多 5 人）" required>
           <el-select v-model="recipientIds" data-testid="talent-share-recipients" multiple filterable remote :remote-method="searchRecipients"
-            :loading="searching" placeholder="输入姓名搜索" :multiple-limit="MAX_RECIPIENTS" class="talent-share__recipients">
+            :loading="searching" placeholder="输入姓名或工号搜索" :multiple-limit="MAX_RECIPIENTS" class="talent-share__recipients">
             <el-option v-for="user in recipientOptions" :key="user.id" :label="recipientLabel(user)" :value="user.id" />
           </el-select>
         </el-form-item>

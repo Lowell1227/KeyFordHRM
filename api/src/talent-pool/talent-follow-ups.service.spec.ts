@@ -73,7 +73,7 @@ describe('TalentFollowUpsService', () => {
     const rows = await sut.list('cand-1');
     expect(prisma.talentFollowUp.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { candidateId: 'cand-1' },
-      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     }));
     expect(rows[0]).toMatchObject({ createdByName: '姚瑶' });
     expect(rows[1]).toMatchObject({ createdByName: '郑冠宇' });

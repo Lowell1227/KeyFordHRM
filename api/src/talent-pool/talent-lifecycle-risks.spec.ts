@@ -29,7 +29,7 @@ describe('talent lifecycle narrow risks', () => {
   });
   it('rejects missing-object binds even when client supplies size', async () => {
     const talents = { findActive: jest.fn(), countFiles: jest.fn().mockResolvedValue(0), createFileRecord: jest.fn() };
-    const sut = new TalentFilesService(talents as never, { statObject: jest.fn().mockRejectedValue(new Error('not found')) } as never);
+    const sut = new TalentFilesService(talents as never, { statObject: jest.fn().mockRejectedValue(new Error('not found')) } as never, {} as never);
     await expect(sut.bind('candidate', { objectKey: 'talent-resume/missing.pdf', fileName: 'cv.pdf', fileSize: 123, mimeType: 'application/pdf' }, hr)).rejects.toThrow(BadRequestException);
     expect(talents.createFileRecord).not.toHaveBeenCalled();
   });

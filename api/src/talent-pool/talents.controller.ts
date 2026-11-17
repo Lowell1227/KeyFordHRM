@@ -16,6 +16,7 @@ import { UpdateTalentDto } from './dto/update-talent.dto';
 import { BindTalentFileDto } from './dto/bind-talent-file.dto';
 import { ConvertTalentDto, CreateFollowUpDto } from './dto/create-follow-up.dto';
 import { CreateShareDto } from './dto/create-share.dto';
+import { ShareRecipientQueryDto } from './dto/share-recipient-query.dto';
 import { DeleteTalentDto } from './dto/talent-interview.dto';
 
 /**
@@ -42,6 +43,12 @@ export class TalentsController {
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   checkPhone(@Query('phone') phone: string) {
     return this.talents.checkPhone(phone ?? '');
+  }
+
+  @Get('share-recipients')
+  @HrCapabilities('employee_archive_edit')
+  shareRecipients(@Query() query: ShareRecipientQueryDto) {
+    return this.shares.searchRecipients(query);
   }
 
   @Post()

@@ -136,13 +136,20 @@ async function runInPreview() {
       new EmployeeIdentityMatchService(arrivalDb, new ConfigService()), new EmployeeEffectiveDateService(arrivalDb));
     const confirm = (f: any) => arrival.confirmArrival(f.request, { requestVersion: 1, arrivalDate: date.toISOString().slice(0, 10) }, actor);
     const read = (f: any) => observer.talentCandidate.findUniqueOrThrow({ where: { id: f.talent } });
+    const reload = (f: any) => editor.detail(f.talent);
+    function assertEditConflict(error: any) {
+      assert.equal(error?.getStatus(), 409);
+      assert.equal(error.getResponse().data.reason, 'TALENT_EDIT_CONFLICT');
+    }
 
     phase = 'arrival-first';
     const first = await createCase();
+    const firstSnapshot = await reload(first);
+    assert.match(firstSnapshot.editVersion, /^[a-f0-9]{64}$/);
     const arrivalGate = hold(first.talent); holdArrival = arrivalGate;
     const arrivalResult = track(confirm(first));
     await waitEntered(arrivalGate.entered.promise, arrivalResult);
-    const stale = track(editor.update(first.talent, { status: 'contacted', note: 'Stale edit' }, actor));
+    const stale = track(editor.update(first.talent, { editVersion: firstSnapshot.editVersion, status: 'contacted', note: 'Stale edit' }, actor));
     await waitForLock(`${prefix}_editor`);
     arrivalGate.resume.release();
     assert.equal((await arrivalResult).error, undefined);
@@ -151,8 +158,10 @@ async function runInPreview() {
     assert.equal(hired.status, 'hired'); assert.equal(hired.convertedUserId, first.user);
     assert.equal(hired.note, 'Original'); assert.ok(hired.convertedAt);
     assert.equal((await observer.user.findUniqueOrThrow({ where: { id: first.user } })).status, 'active');
-    await editor.update(first.talent, { status: 'hired', note: 'Reloaded edit' }, actor);
-    await editor.update(first.talent, { appliedPosition: 'Synthetic position' }, actor);
+    const hiredSnapshot = await reload(first);
+    assert.notEqual(hiredSnapshot.editVersion, firstSnapshot.editVersion);
+    const noteEdit = await editor.update(first.talent, { editVersion: hiredSnapshot.editVersion, status: 'hired', note: 'Reloaded edit' }, actor);
+    await editor.update(first.talent, { editVersion: noteEdit.editVersion, appliedPosition: 'Synthetic position' }, actor);
     const reloaded = await read(first);
     assert.equal(reloaded.note, 'Reloaded edit'); assert.equal(reloaded.status, 'hired');
     assert.equal(reloaded.convertedUserId, first.user);
@@ -166,21 +175,36 @@ async function runInPreview() {
     const endpoint = `http://127.0.0.1:3000/api/v1/talents/${first.talent}`;
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
     const rejected = await fetch(endpoint, { method: 'PATCH', headers,
-      body: JSON.stringify({ status: 'contacted', note: 'Stale HTTP edit' }), signal: AbortSignal.timeout(5000) });
+      body: JSON.stringify({ editVersion: firstSnapshot.editVersion, status: 'contacted', note: 'Stale HTTP edit' }), signal: AbortSignal.timeout(5000) });
     evidence.http.staleEdit = rejected.status;
     assert.equal(rejected.status, 409);
-    const rejection = await rejected.json() as { message: string };
-    assert.ok(rejection.message.includes('\u5237\u65b0'));
+    const rejection = await rejected.json() as { data: { reason: string } };
+    assert.equal(rejection.data.reason, 'TALENT_EDIT_CONFLICT');
+    for (const [name, version] of [['missingVersion', undefined], ['staleVersion', firstSnapshot.editVersion]]) {
+      const response = await fetch(endpoint, { method: 'PATCH', headers,
+        body: JSON.stringify({ editVersion: version, note: 'Must not overwrite current note' }), signal: AbortSignal.timeout(5000) });
+      evidence.http[name] = response.status;
+      assert.equal(response.status, 409);
+      const body = await response.json() as { data: { reason: string } };
+      assert.equal(body.data.reason, 'TALENT_EDIT_CONFLICT');
+    }
     const afterRejection = await read(first);
     assert.equal(afterRejection.note, 'Reloaded edit'); assert.equal(afterRejection.status, 'hired');
     const detail = await fetch(endpoint, { headers, signal: AbortSignal.timeout(5000) });
     evidence.http.reload = detail.status; assert.equal(detail.status, 200);
-    const current = await detail.json() as { data: { status: string } };
+    const current = await detail.json() as { data: { status: string; editVersion: string } };
     assert.equal(current.data.status, 'hired');
+    assert.match(current.data.editVersion, /^[a-f0-9]{64}$/);
+    assert.notEqual(current.data.editVersion, firstSnapshot.editVersion);
     const saved = await fetch(endpoint, { method: 'PATCH', headers,
-      body: JSON.stringify({ status: current.data.status, note: 'Reloaded HTTP edit' }), signal: AbortSignal.timeout(5000) });
+      body: JSON.stringify({ editVersion: current.data.editVersion, status: current.data.status, note: 'Reloaded HTTP edit' }), signal: AbortSignal.timeout(5000) });
     evidence.http.allowedEdit = saved.status; assert.equal(saved.status, 200);
-    await saved.json();
+    const savedBody = await saved.json() as { data: { editVersion: string } };
+    assert.notEqual(savedBody.data.editVersion, current.data.editVersion);
+    const replayed = await fetch(endpoint, { method: 'PATCH', headers,
+      body: JSON.stringify({ editVersion: current.data.editVersion, note: 'Replay must not win' }), signal: AbortSignal.timeout(5000) });
+    evidence.http.replayedVersion = replayed.status; assert.equal(replayed.status, 409);
+    assert.equal((await replayed.json() as { data: { reason: string } }).data.reason, 'TALENT_EDIT_CONFLICT');
     const afterHttp = await read(first);
     assert.equal(afterHttp.note, 'Reloaded HTTP edit'); assert.equal(afterHttp.status, 'hired');
     assert.equal(afterHttp.convertedUserId, first.user);
@@ -188,8 +212,9 @@ async function runInPreview() {
 
     phase = 'editor-first';
     const second = await createCase();
+    const secondSnapshot = await reload(second);
     const editGate = hold(second.talent); holdEdit = editGate;
-    const editResult = track(editor.update(second.talent, { status: 'contacted', note: 'Earlier edit' }, actor));
+    const editResult = track(editor.update(second.talent, { editVersion: secondSnapshot.editVersion, status: 'contacted', note: 'Earlier edit' }, actor));
     await waitEntered(editGate.entered.promise, editResult);
     const followingArrival = track(confirm(second));
     await waitForLock(`${prefix}_arrival`);
@@ -209,20 +234,31 @@ async function runInPreview() {
     phase = 'same-talent-partial-edits';
     const third = await createCase();
     const independent = await createCase();
+    const salarySnapshot = await reload(third);
+    const independentSnapshot = await reload(independent);
     const salaryGate = hold(third.talent); holdEdit = salaryGate;
-    const lowerMax = track(editor.update(third.talent, { expectSalaryMax: 15 }, actor));
+    const lowerMax = track(editor.update(third.talent, { editVersion: salarySnapshot.editVersion, expectSalaryMax: 15 }, actor));
     await waitEntered(salaryGate.entered.promise, lowerMax);
     // A different talent remains writable while the first row is locked.
-    await other.update(independent.talent, { note: 'Independent edit' }, actor);
-    const raiseMin = track(other.update(third.talent, { expectSalaryMin: 18 }, actor));
+    await other.update(independent.talent, { editVersion: independentSnapshot.editVersion, note: 'Independent edit' }, actor);
+    const raiseMin = track(other.update(third.talent, { editVersion: salarySnapshot.editVersion, expectSalaryMin: 18 }, actor));
     await waitForLock(`${prefix}_other`);
     salaryGate.resume.release();
     assert.equal((await lowerMax).error, undefined);
-    assert.equal((await raiseMin).error?.getStatus(), 400);
+    assertEditConflict((await raiseMin).error);
     const salary = await read(third);
     assert.equal(salary.expectSalaryMin, 10); assert.equal(salary.expectSalaryMax, 15);
+    assert.equal(await observer.auditLog.count({ where: { entityId: third.talent, action: 'update_talent_candidate' } }), 1);
+    phase = 'reloaded-salary-validation';
+    const salaryReload = await other.detail(third.talent);
+    assert.notEqual(salaryReload.editVersion, salarySnapshot.editVersion);
+    const invalidSalary = await track(other.update(third.talent, { editVersion: salaryReload.editVersion, expectSalaryMin: 18 }, actor));
+    assert.equal(invalidSalary.error?.getStatus(), 400);
+    assert.ok(invalidSalary.error.message.includes('\u671f\u671b\u85aa\u8d44\u4e0b\u9650\u4e0d\u80fd\u9ad8\u4e8e\u4e0a\u9650'));
+    assert.deepEqual(await read(third), salary);
+    assert.equal(await observer.auditLog.count({ where: { entityId: third.talent, action: 'update_talent_candidate' } }), 1);
     return { ok: true, evidence,
-      cases: ['arrival-first-reload', 'editor-first-retry', 'same-talent-partial-edits', 'independent-talent', 'http-stale-edit-reload'] };
+      cases: ['arrival-first-reload', 'editor-first-retry', 'same-talent-stale-conflict', 'reloaded-salary-validation', 'independent-talent', 'http-stale-edit-reload'] };
   } catch (error) {
     return { ok: false, phase, evidence, errorKind: error instanceof Error ? error.name : 'unknown',
       businessMessage: typeof error?.getStatus === 'function' ? error.message : undefined };
@@ -240,6 +276,7 @@ async function runInPreview() {
           assert.ok(owned.every((user: any) => user.name.startsWith(`${prefix} `)));
           const deleted = evidence.cleanup.deleted;
           deleted.auditLogs = (await tx.auditLog.deleteMany({ where: { userId: actor.id, entityId: { in: requests } } })).count;
+          deleted.talentEditAudits = (await tx.auditLog.deleteMany({ where: { userId: actor.id, entityId: { in: talents } } })).count;
           deleted.numberAssignments = (await tx.employeeNumberAssignment.deleteMany({ where: { sourceRequestId: { in: requests }, userId: { in: users } } })).count;
           deleted.employments = (await tx.employmentRecord.deleteMany({ where: { sourceRequestId: { in: requests }, userId: { in: users } } })).count;
           deleted.requests = (await tx.employeeDataChangeRequest.deleteMany({ where: { id: { in: requests }, sourceSystem: prefix } })).count;
@@ -251,7 +288,7 @@ async function runInPreview() {
             requests: await tx.employeeDataChangeRequest.count({ where: { id: { in: requests } } }),
             employments: await tx.employmentRecord.count({ where: { sourceRequestId: { in: requests } } }),
             numberAssignments: await tx.employeeNumberAssignment.count({ where: { sourceRequestId: { in: requests } } }),
-            auditLogs: await tx.auditLog.count({ where: { entityId: { in: requests } } }),
+            auditLogs: await tx.auditLog.count({ where: { entityId: { in: [...requests, ...talents] } } }),
           };
           assert.ok(Object.values(evidence.cleanup.remaining).every(count => count === 0));
         });
@@ -284,11 +321,11 @@ describe('Audit #13: real preview database concurrency', () => {
     const result = JSON.parse(output);
     console.info('Audit talent concurrency evidence:', JSON.stringify(result));
     expect(result).toMatchObject({ ok: true,
-      cases: ['arrival-first-reload', 'editor-first-retry', 'same-talent-partial-edits', 'independent-talent', 'http-stale-edit-reload'],
+      cases: ['arrival-first-reload', 'editor-first-retry', 'same-talent-stale-conflict', 'reloaded-salary-validation', 'independent-talent', 'http-stale-edit-reload'],
       evidence: { database: 'hrm_preview', role: 'hrm_preview',
         lockWaits: ['arrival-first', 'editor-first', 'same-talent-partial-edits'],
-        http: { staleEdit: 409, reload: 200, allowedEdit: 200 },
-        cleanup: { deleted: { users: 5, talents: 4, requests: 4, employments: 4, numberAssignments: 4, auditLogs: 4 },
+        http: { staleEdit: 409, missingVersion: 409, staleVersion: 409, reload: 200, allowedEdit: 200, replayedVersion: 409 },
+        cleanup: { deleted: { users: 5, talents: 4, requests: 4, employments: 4, numberAssignments: 4, auditLogs: 4, talentEditAudits: 6 },
           remaining: { users: 0, talents: 0, requests: 0, employments: 0, numberAssignments: 0, auditLogs: 0 } } },
     });
   });

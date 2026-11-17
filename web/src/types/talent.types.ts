@@ -88,6 +88,7 @@ export const TALENT_GENDER_LABELS: Record<TalentGender, string> = {
 /** GET /talents 列表项（含附件计数与最新下次跟进日期）。 */
 export interface TalentCandidateListItem {
   id: string;
+  editVersion: string;
   name: string;
   phone: string;
   email: string | null;
@@ -203,9 +204,11 @@ export interface TalentCandidateInput {
   status?: TalentStatus;
   tags?: TalentTag[];
   note?: string | null;
-  /** 仅在标记「已入职」时提供（PATCH /talents/:id 或 POST /talents/:id/convert）。 */
+  /** 旧客户端兼容字段；服务端拒绝手动关联，须办理入职并确认到岗。 */
   userId?: string;
 }
+
+export type UpdateTalentInput = TalentCandidateInput & { editVersion: string };
 
 /** GET /talents/check-phone 响应。 */
 export interface TalentPhoneCheckResult {

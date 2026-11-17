@@ -3,8 +3,12 @@ import { Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
+import { paginated } from '@/common/dto/pagination.dto';
+import { CURRENT_WORKER_STATUSES, currentWorkerWhere } from '@/common/personnel/current-worker';
+import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 import { TALENT_GENDER_LABELS, TALENT_STATUS_LABELS } from './talent.constants';
 import { CreateShareDto } from './dto/create-share.dto';
+import { ShareRecipientQueryDto } from './dto/share-recipient-query.dto';
 import { TalentsService } from './talents.service';
 
 /** 被分享人视图（严格脱敏，需求 §5.4）：禁止手机号/邮箱/期望薪资/来源/备注/跟进记录。 */
@@ -38,8 +42,6 @@ export interface ShareView {
 
 /** 统一失效文案（前后端共用断言；不暴露候选人是否存在）。 */
 export const SHARE_FORBIDDEN_MESSAGE = '链接已失效或无权查看';
-/** 接收人可选角色范围（需求 §5.4）。 */
-const RECIPIENT_ROLES = new Set(['dept_head', 'manager', 'hr', 'vp', 'system_admin']);
 
 @Injectable()
 export class TalentSharesService {
@@ -48,19 +50,77 @@ export class TalentSharesService {
     private readonly talents: TalentsService,
   ) {}
 
+  private async recipientWhere(): Promise<Prisma.UserWhereInput> {
+    const today = shanghaiBusinessDate();
+    const records = await this.prisma.employmentRecord.findMany({
+      where: {
+        user: currentWorkerWhere,
+        AND: [approvedEmploymentSourceWhere, { effectiveFrom: { lte: today } },
+          { OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] }],
+      },
+      select: { id: true, userId: true, directManagerId: true, employeeStatus: true, effectiveFrom: true, effectiveTo: true, createdAt: true },
+    });
+    const byEmployee = new Map<string, typeof records>();
+    for (const record of records) {
+      const history = byEmployee.get(record.userId) ?? [];
+      history.push(record);
+      byEmployee.set(record.userId, history);
+    }
+    const rosterManagerIds = new Set<string>();
+    for (const history of byEmployee.values()) {
+      // User.directManagerId is the performance manager; roster authority is the selected employment.
+      const current = selectEmploymentAt(history, today).current;
+      if (current?.directManagerId && CURRENT_WORKER_STATUSES.includes(current.employeeStatus)) {
+        rosterManagerIds.add(current.directManagerId);
+      }
+    }
+    return {
+      ...currentWorkerWhere,
+      OR: [
+        { sysRole: { in: ['hr', 'hr_user', 'system_admin'] } },
+        { id: { in: [...rosterManagerIds].sort() } },
+        { ledDepartments: { some: { isActive: true } } },
+      ],
+    };
+  }
+
+  async searchRecipients(query: ShareRecipientQueryDto) {
+    const where = await this.recipientWhere();
+    const keyword = query.keyword?.trim();
+    if (keyword) {
+      where.AND = [{ OR: [
+        { name: { contains: keyword, mode: 'insensitive' } },
+        { employeeNo: { contains: keyword, mode: 'insensitive' } },
+      ] }];
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        select: { id: true, name: true, employeeNo: true, dept: { select: { name: true } } },
+        orderBy: [{ name: 'asc' }, { employeeNo: 'asc' }, { id: 'asc' }],
+        skip: (query.page - 1) * query.pageSize, take: query.pageSize,
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+    return paginated(rows.map(row => ({ id: row.id, name: row.name, employeeNo: row.employeeNo, deptName: row.dept?.name ?? null })), total, query);
+  }
+
+  private async currentRecipients(ids: string[]) {
+    return this.prisma.user.findMany({
+      where: { ...await this.recipientWhere(), id: { in: ids } },
+      select: { id: true },
+    });
+  }
+
   /** HR 创建单条只读分享：指定接收人 + 有效期 + 可选附简历原件。 */
   async create(candidateId: string, input: CreateShareDto, operator: AuthUser) {
-    const candidate = await this.talents.findActive(candidateId);
-    const recipients = await this.prisma.user.findMany({
-      where: { id: { in: input.recipientIds }, deletedAt: null },
-      select: { id: true, name: true, sysRole: true },
-    });
-    if (recipients.length !== input.recipientIds.length) {
-      throw new BadRequestException('部分接收人不存在或已删除，请重新选择');
+    if (new Set(input.recipientIds).size !== input.recipientIds.length) {
+      throw new BadRequestException('接收人不能重复选择');
     }
-    const invalid = recipients.filter((user) => !RECIPIENT_ROLES.has(user.sysRole));
-    if (invalid.length > 0) {
-      throw new BadRequestException(`接收人须为部门负责人、经理、HR 或 VP：${invalid.map((user) => user.name).join('、')}`);
+    const candidate = await this.talents.findActive(candidateId);
+    const recipients = await this.currentRecipients(input.recipientIds);
+    if (recipients.length !== input.recipientIds.length) {
+      throw new BadRequestException('接收人资格已变化，请重新选择在职的 HR、实际主管或部门负责人');
     }
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
@@ -123,6 +183,7 @@ export class TalentSharesService {
   async resolve(token: string, user: AuthUser): Promise<ShareView> {
     const share = await this.findUsableShare(token);
     if (!share.recipientIds.includes(user.id)) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
+    if ((await this.currentRecipients([user.id])).length !== 1) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
     await this.prisma.talentShare.update({
       where: { id: share.id },
       data: { viewCount: { increment: 1 }, lastViewedAt: new Date(), lastViewedById: user.id },
@@ -162,6 +223,7 @@ export class TalentSharesService {
   async resolveFile(token: string, fileId: string, user: AuthUser) {
     const share = await this.findUsableShare(token);
     if (!share.recipientIds.includes(user.id)) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
+    if ((await this.currentRecipients([user.id])).length !== 1) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
     if (!share.includeResume) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
     const file = share.candidate.files.find((item) => item.id === fileId);
     if (!file) throw new NotFoundException('简历文件不存在');

@@ -9,12 +9,15 @@ import { CreateTalentDto } from './dto/create-talent.dto';
 import { UpdateTalentDto } from './dto/update-talent.dto';
 import { createHash } from 'crypto';
 import { DeleteTalentDto } from './dto/talent-interview.dto';
+import { talentEditVersion } from './talent-edit-version';
+import { shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 
 /** 列表查询行（含附件计数）。 */
 type CandidateRow = Prisma.TalentCandidateGetPayload<{ include: { _count: { select: { files: true } } } }>;
 
 /** 列表项：候选人 + 最新一条非空「下次跟进日期」+ 附件数（需求 §4.3 / §5.1）。 */
 export type TalentListItem = Omit<CandidateRow, '_count'> & {
+  editVersion: string;
   nextFollowUpAt: Date | null;
   fileCount: number;
 };
@@ -39,6 +42,7 @@ export class TalentsService {
     ]);
     const withDue = await this.attachNextFollowUp(items.map(({ _count, ...item }) => ({
       ...item,
+      editVersion: talentEditVersion(item),
       fileCount: _count.files,
     })));
     return paginated(withDue as TalentListItem[], total, query);
@@ -68,11 +72,11 @@ export class TalentsService {
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
       SELECT candidate_id AS id FROM (
         SELECT candidate_id, next_follow_up_at,
-               ROW_NUMBER() OVER (PARTITION BY candidate_id ORDER BY occurred_at DESC) AS rn
+               ROW_NUMBER() OVER (PARTITION BY candidate_id ORDER BY occurred_at DESC, created_at DESC, id DESC) AS rn
         FROM talent_follow_ups
         WHERE next_follow_up_at IS NOT NULL
       ) latest
-      WHERE rn = 1 AND next_follow_up_at <= CURRENT_DATE
+      WHERE rn = 1 AND next_follow_up_at <= ${shanghaiBusinessDate().toISOString().slice(0, 10)}::date
     `;
     return rows.map((row) => row.id);
   }
@@ -96,7 +100,7 @@ export class TalentsService {
       SELECT DISTINCT ON (candidate_id) candidate_id, next_follow_up_at
       FROM talent_follow_ups
       WHERE next_follow_up_at IS NOT NULL AND candidate_id::text IN (${Prisma.join(items.map((item) => item.id))})
-      ORDER BY candidate_id, occurred_at DESC
+      ORDER BY candidate_id, occurred_at DESC, created_at DESC, id DESC
     `;
     const byId = new Map(rows.map((row) => [row.candidate_id, row.next_follow_up_at]));
     return items.map((item) => ({ ...item, nextFollowUpAt: byId.get(item.id) ?? null }));
@@ -107,7 +111,7 @@ export class TalentsService {
       where: { id, deletedAt: null },
       include: {
         files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
-        followUps: { orderBy: { occurredAt: 'desc' } },
+        followUps: { orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] },
         shares: { orderBy: { createdAt: 'desc' } },
       },
     });
@@ -119,6 +123,7 @@ export class TalentsService {
     const nameById = new Map(recipients.map((user) => [user.id, user.name]));
     return {
       ...candidate,
+      editVersion: talentEditVersion(candidate),
       shares: candidate.shares.map((share) => ({
         ...share,
         recipientNames: share.recipientIds.map((recipientId) => nameById.get(recipientId) ?? '已删除用户'),
@@ -148,7 +153,7 @@ export class TalentsService {
     const duplicate = await this.findByPhone(input.phone);
     if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
     try {
-      return await this.prisma.talentCandidate.create({
+      const candidate = await this.prisma.talentCandidate.create({
         data: {
           name: input.name,
           phone: input.phone,
@@ -172,6 +177,7 @@ export class TalentsService {
           createdById: operator.id,
         },
       });
+      return { ...candidate, editVersion: talentEditVersion(candidate) };
     } catch (error) {
       if (this.isUniqueViolation(error)) {
         const existing = await this.findByPhone(input.phone);
@@ -186,8 +192,14 @@ export class TalentsService {
       return await this.prisma.$transaction(async (tx) => {
         // Share the arrival/deletion row lock before reading any validation inputs.
         await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${id}::uuid FOR UPDATE`;
-        const before = await tx.talentCandidate.findFirst({ where: { id, deletedAt: null } });
+        const before = await tx.talentCandidate.findFirst({ where: { id, deletedAt: null },
+          include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
+            followUps: { orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] } } });
         if (!before) throw new NotFoundException('候选人不存在或已删除');
+        if (!input.editVersion || input.editVersion !== talentEditVersion(before)) {
+          throw new ConflictException({ message: '人才资料已更新，请保留当前输入，重新加载最新资料后再修改',
+            data: { reason: 'TALENT_EDIT_CONFLICT' } });
+        }
         if (input.status !== undefined) this.assertStatusTransition(before.status, input.status);
         if (input.userId !== undefined || (input.status === 'hired' && before.status !== 'hired')) {
           throw new BadRequestException('请通过入离职办理并确认到岗，不支持手动关联员工');
@@ -200,16 +212,23 @@ export class TalentsService {
           const duplicate = await this.findByPhone(nextPhone, tx);
           if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
         }
-        const { status, userId: _ignoredUserId, ...rest } = input;
+        const { status, userId: _ignoredUserId, editVersion: _editVersion, ...rest } = input;
         const data: Prisma.TalentCandidateUpdateInput = {
           ...this.buildUpdateData(rest, operator),
           ...(status !== undefined ? { status } : {}),
         };
-        return tx.talentCandidate.update({
+        const changedFields = Object.keys(data).filter(field => field !== 'updatedById'
+          && JSON.stringify(data[field] ?? null) !== JSON.stringify(before[field] ?? null)).sort();
+        if (!changedFields.length) return { ...before, editVersion: talentEditVersion(before) };
+        const candidate = await tx.talentCandidate.update({
           where: { id },
-          data,
-          include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] }, followUps: { orderBy: { occurredAt: 'desc' } } },
+          data: { ...data, updatedAt: new Date(Math.max(Date.now(), (before.updatedAt?.getTime() ?? 0) + 1)) },
+          include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
+            followUps: { orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] } },
         });
+        await tx.auditLog.create({ data: { userId: operator.id, action: 'update_talent_candidate',
+          entityType: 'talent_candidate', entityId: id, newValue: { changedFields } } });
+        return { ...candidate, editVersion: talentEditVersion(candidate) };
       });
     } catch (error) {
       if (this.isUniqueViolation(error) && input.phone !== undefined) {

@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { StorageService } from '@/storage/storage.service';
+import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
 import { TALENT_FILE_LIMIT } from './talent.constants';
 import { BindTalentFileDto } from './dto/bind-talent-file.dto';
@@ -12,6 +13,7 @@ export class TalentFilesService {
   constructor(
     private readonly talents: TalentsService,
     private readonly storage: StorageService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /** 把已上传的 MinIO 对象绑定为候选人简历文件。每候选人最多 3 个，超限 409。 */
@@ -41,20 +43,23 @@ export class TalentFilesService {
     if (!Number.isInteger(fileSize) || fileSize <= 0 || fileSize > 10 * 1024 * 1024) {
       throw new BadRequestException('简历文件大小无效，单个文件不能超过10MB');
     }
-    const count = await this.prismaFileCount(candidateId);
-    if (count >= 3) {
-      throw new ConflictException({
-        message: '简历文件最多 3 个，请先移除不需要的文件',
-        data: { reason: TALENT_FILE_LIMIT },
+    return this.prisma.$transaction(async (tx) => {
+      // Serialize binding with other uploads and candidate soft deletion.
+      await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${candidateId}::uuid FOR UPDATE`;
+      const candidate = await tx.talentCandidate.findFirst({ where: { id: candidateId, deletedAt: null } });
+      if (!candidate) throw new NotFoundException('候选人不存在或已删除');
+      const existing = await tx.talentResumeFile.findFirst({ where: { candidateId, objectKey } });
+      if (existing) return existing;
+      const count = await tx.talentResumeFile.count({ where: { candidateId } });
+      if (count >= 3) {
+        throw new ConflictException({
+          message: '简历文件最多 3 个，请先移除不需要的文件',
+          data: { reason: TALENT_FILE_LIMIT },
+        });
+      }
+      return tx.talentResumeFile.create({
+        data: { candidateId, objectKey, fileName, mimeType, fileSize, sortOrder: count, uploadedById: operator.id },
       });
-    }
-    return this.talents.createFileRecord(candidateId, {
-      objectKey,
-      fileName,
-      mimeType,
-      fileSize,
-      sortOrder: count,
-      uploadedById: operator.id,
     });
   }
 
@@ -65,9 +70,5 @@ export class TalentFilesService {
     if (!file) throw new NotFoundException('简历文件不存在');
     await this.talents.deleteFileRecord(file.id, operator);
     return { id: file.id, removed: true };
-  }
-
-  private prismaFileCount(candidateId: string): Promise<number> {
-    return this.talents.countFiles(candidateId);
   }
 }

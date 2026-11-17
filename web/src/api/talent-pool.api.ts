@@ -9,6 +9,7 @@ import type {
   ShareView,
   TalentCandidateDetail,
   TalentCandidateInput,
+  UpdateTalentInput,
   TalentCandidateListItem,
   TalentFollowUp,
   TalentPhoneCheckResult,
@@ -38,8 +39,8 @@ export const talentPoolApi = {
     return http.post('/talents', body) as unknown as Promise<TalentCandidateDetail>;
   },
 
-  /** PATCH /talents/:id 编辑；标记已入职需带 userId。 */
-  update(id: string, body: TalentCandidateInput): Promise<TalentCandidateDetail> {
+  /** PATCH /talents/:id 编辑；携带读取时的基准，冲突时保留输入。 */
+  update(id: string, body: UpdateTalentInput): Promise<TalentCandidateDetail> {
     return http.patch(`/talents/${id}`, body) as unknown as Promise<TalentCandidateDetail>;
   },
 
@@ -75,6 +76,13 @@ export const talentPoolApi = {
   /** GET /talents/:id/follow-ups 跟进列表（倒序，附记录人姓名）。 */
   listFollowUps(id: string): Promise<TalentFollowUp[]> {
     return http.get(`/talents/${id}/follow-ups`) as unknown as Promise<TalentFollowUp[]>;
+  },
+
+  /** GET /talents/share-recipients，按当前业务资格搜索接收人。 */
+  searchShareRecipients(query: { keyword?: string; page?: number; pageSize?: number }) {
+    return http.get('/talents/share-recipients', { params: query }) as unknown as Promise<Paginated<{
+      id: string; name: string; employeeNo: string | null; deptName: string | null;
+    }>>;
   },
 
   /** POST /talents/:id/shares 创建单条只读分享。 */

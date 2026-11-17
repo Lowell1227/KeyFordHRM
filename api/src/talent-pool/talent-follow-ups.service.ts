@@ -41,7 +41,7 @@ export class TalentFollowUpsService {
     await this.talents.findActive(candidateId);
     const rows = await this.prisma.talentFollowUp.findMany({
       where: { candidateId },
-      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     });
     const creatorIds = [...new Set(rows.map((row) => row.createdById))];
     const creators = creatorIds.length

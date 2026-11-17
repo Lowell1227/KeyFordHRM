@@ -72,10 +72,16 @@ const capabilities: CapabilityItem[] = [
     note: '尚未提供面向业务管理员的运行状态和异常总览。',
   },
   {
-    name: '招聘候选人、面试与 Offer 全流程',
+    name: '人才库与简单面试邀约',
+    status: 'available',
+    statusLabel: '可用',
+    note: '候选人资料、跟进、定向分享及简单面试邀约可用；钉钉面试日程尚未启用。',
+  },
+  {
+    name: '招聘职位发布、面试评价与 Offer',
     status: 'paused',
     statusLabel: '已暂缓',
-    note: '招聘模块当前仅保留规划入口，未建设候选人、面试评价和 Offer 流程。',
+    note: '职位发布、面试评价和 Offer 流程尚未建设。',
   },
   {
     name: '薪酬指定 HR 主管权限',
@@ -92,7 +98,7 @@ const capabilities: CapabilityItem[] = [
       <div>
         <p class="eyebrow">全局基础能力</p>
         <p class="header-copy">
-          系统能力与建设状态
+          系统能力建设清单，非实时运行健康监测。
         </p>
       </div>
       <span class="read-only-tag">版本 {{ productVersion }}</span>

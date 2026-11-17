@@ -1,14 +1,15 @@
 import { Transform } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const toNumber = ({ value }: { value: unknown }) => (value === undefined || value === null || value === '' ? value : Number(value));
 
 export class CreateShareDto {
-  /** 接收人（1–5 人），须为在职且角色为 dept_head / manager / hr / vp / system_admin。 */
+  /** 接收人（1–5 人），须为当前在职/试用的 HR、实际主管或部门负责人。 */
   @IsArray()
   @ArrayMinSize(1, { message: '请选择至少 1 位接收人' })
   @ArrayMaxSize(5, { message: '一次最多分享给 5 人' })
+  @ArrayUnique({ message: '接收人不能重复选择' })
   /** 接受任何版本的 UUID（种子/历史账号存在 v1–v5）。 */
   @IsUUID('all', { each: true, message: '接收人无效' })
   recipientIds!: string[];

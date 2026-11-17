@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { Prisma } from '@prisma/client';
 import type { AuthUser } from '@/common/types/auth.types';
 import { TalentsService } from './talents.service';
+import { talentEditVersion } from './talent-edit-version';
 
 const operator = { id: 'hr-editor' } as AuthUser;
 
@@ -22,6 +23,7 @@ function fixture() {
   const tx = {
     $queryRaw: jest.fn(async (..._args: any[]) => { trace.push('lock'); return [{ id: row.id }]; }),
     talentCandidate: { findFirst: read, update: write },
+    auditLog: { create: jest.fn() },
   };
   const prisma = {
     // An outside read misses the writer that finishes while the row lock is acquired.
@@ -36,14 +38,14 @@ describe('TalentsService concurrent editing boundary', () => {
     const f = fixture();
     Object.assign(f.row, { status: 'hired', convertedUserId: 'employee', convertedAt: new Date() });
     await expect(f.service.update(f.row.id, { status: 'contacted', note: 'Stale edit' }, operator))
-      .rejects.toMatchObject({ status: 409, response: expect.objectContaining({ message: expect.stringContaining('刷新') }) });
+      .rejects.toMatchObject({ status: 409, response: expect.objectContaining({ data: { reason: 'TALENT_EDIT_CONFLICT' } }) });
     expect(f.row).toMatchObject({ status: 'hired', convertedUserId: 'employee', note: 'Original' });
     expect(f.tx.talentCandidate.update).not.toHaveBeenCalled();
   });
 
   it('locks before reading and validates/writes using the same transaction', async () => {
     const f = fixture();
-    await expect(f.service.update(f.row.id, { note: 'Current edit' }, operator))
+    await expect(f.service.update(f.row.id, { note: 'Current edit', editVersion: talentEditVersion(f.row as never) }, operator))
       .resolves.toMatchObject({ note: 'Current edit', files: [], followUps: [] });
     expect(f.trace).toEqual(['lock', 'read', 'write']);
     expect(f.prisma.talentCandidate.findFirst).not.toHaveBeenCalled();
@@ -61,7 +63,7 @@ describe('TalentsService concurrent editing boundary', () => {
   it('validates partial salary changes against the latest same-talent edit', async () => {
     const f = fixture();
     f.row.expectSalaryMax = 15;
-    await expect(f.service.update(f.row.id, { expectSalaryMin: 18 }, operator)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(f.service.update(f.row.id, { expectSalaryMin: 18, editVersion: talentEditVersion(f.row as never) }, operator)).rejects.toBeInstanceOf(BadRequestException);
     expect(f.row).toMatchObject({ expectSalaryMin: 10, expectSalaryMax: 15 });
   });
 
@@ -69,17 +71,17 @@ describe('TalentsService concurrent editing boundary', () => {
     const f = fixture();
     Object.assign(f.row, { status: 'hired', convertedUserId: 'employee', convertedAt: new Date() });
     const convertedAt = f.row.convertedAt;
-    await expect(f.service.update(f.row.id, { note: 'Current edit', ...(status ? { status } : {}) }, operator))
+    await expect(f.service.update(f.row.id, { note: 'Current edit', editVersion: talentEditVersion(f.row as never), ...(status ? { status } : {}) }, operator))
       .resolves.toMatchObject({ status: 'hired', convertedUserId: 'employee', convertedAt,
         note: 'Current edit', files: [], followUps: [] });
-    await expect(f.service.update(f.row.id, { status: 'contacted' }, operator)).rejects.toBeInstanceOf(ConflictException);
+    await expect(f.service.update(f.row.id, { status: 'contacted', editVersion: talentEditVersion(f.row as never) }, operator)).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('keeps manual hire/link restrictions and ordinary status transitions', async () => {
     const f = fixture();
-    await expect(f.service.update(f.row.id, { status: 'hired' }, operator)).rejects.toBeInstanceOf(BadRequestException);
-    await expect(f.service.update(f.row.id, { userId: 'employee' }, operator)).rejects.toBeInstanceOf(BadRequestException);
-    await expect(f.service.update(f.row.id, { status: 'contacted' }, operator)).resolves.toMatchObject({ status: 'contacted' });
+    await expect(f.service.update(f.row.id, { status: 'hired', editVersion: talentEditVersion(f.row as never) }, operator)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(f.service.update(f.row.id, { userId: 'employee', editVersion: talentEditVersion(f.row as never) }, operator)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(f.service.update(f.row.id, { status: 'contacted', editVersion: talentEditVersion(f.row as never) }, operator)).resolves.toMatchObject({ status: 'contacted' });
   });
 
   it('retains phone-conflict handling after a transaction loses the unique-index race', async () => {
@@ -89,7 +91,7 @@ describe('TalentsService concurrent editing boundary', () => {
       code: 'P2002', clientVersion: '5.20.0',
     }));
     f.prisma.talentCandidate.findFirst.mockResolvedValue({ ...f.row, id: 'other' });
-    await expect(f.service.update(f.row.id, { phone: '17000000001' }, operator)).rejects.toMatchObject({
+    await expect(f.service.update(f.row.id, { phone: '17000000001', editVersion: talentEditVersion(f.row as never) }, operator)).rejects.toMatchObject({
       status: 409, response: expect.objectContaining({ data: expect.objectContaining({ reason: 'TALENT_PHONE_EXISTS' }) }),
     });
   });
@@ -98,6 +100,6 @@ describe('TalentsService concurrent editing boundary', () => {
     const f = fixture();
     const failure = new Error('Synthetic database failure');
     f.tx.talentCandidate.update.mockRejectedValueOnce(failure);
-    await expect(f.service.update(f.row.id, { note: 'Attempt' }, operator)).rejects.toBe(failure);
+    await expect(f.service.update(f.row.id, { note: 'Attempt', editVersion: talentEditVersion(f.row as never) }, operator)).rejects.toBe(failure);
   });
 });

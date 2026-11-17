@@ -12,18 +12,18 @@ function setup(overrides = {}) {
   const prisma = {
     talentCandidate: { findUnique: jest.fn().mockResolvedValue({ id: 'candidate', name: row.candidateNameSnapshot, deletedAt: null }) },
     user: { findMany: jest.fn().mockResolvedValue([{ id: 'participant', name: 'Synthetic Participant' }]) },
-    talentInterview: { findUnique: jest.fn().mockResolvedValue(row), findFirst: jest.fn().mockImplementation(({ where }) => Promise.resolve(
-      where.version === row.version && row.participants.some((p) => p.userId === where.participants.some.userId) ? { id: row.id } : null)),
+    talentInterview: { findUnique: jest.fn().mockResolvedValue(row),
       findMany: jest.fn().mockResolvedValue([row]), create: jest.fn().mockResolvedValue(row), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     talentInterviewParticipant: { deleteMany: jest.fn(), createMany: jest.fn() },
     talentInterviewSync: { create: jest.fn(), updateMany: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
     auditLog: { create: jest.fn() },
+    notificationLog: { createMany: jest.fn() },
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'candidate' }]),
     $transaction: jest.fn(),
   };
-  prisma.$transaction.mockImplementation((fn) => fn(prisma));
-  const notifications = { create: jest.fn().mockResolvedValue('notification') };
-  return { row, prisma, notifications, sut: new TalentInterviewsService(prisma as never, notifications as never) };
+  const tx = { ...prisma, notificationLog: { createMany: jest.fn().mockImplementation(({ data }) => Promise.resolve({ count: data.length })) } };
+  prisma.$transaction.mockImplementation((fn) => fn(tx));
+  return { row, prisma, tx, sut: new TalentInterviewsService(prisma as never) };
 }
 
 describe('talent interview safety and access', () => {
@@ -64,15 +64,55 @@ describe('talent interview safety and access', () => {
     await expect(sut.list({ scope: 'created' } as any, employee)).rejects.toThrow(ForbiddenException);
   });
   it('create persists participants and unconfigured sync intent, with safe audit and notification IDs', async () => {
-    const { sut, prisma, notifications } = setup();
+    const { sut, prisma, tx } = setup();
     await sut.create(draft, hr);
     expect(prisma.talentInterview.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ candidateNameSnapshot: 'Synthetic Candidate', participants: { create: [{ userId: 'participant', userNameSnapshot: 'Synthetic Participant' }] } }) }));
     expect(prisma.talentInterviewSync.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ version: 1, status: 'unconfigured', participantIds: ['participant'], operation: 'upsert' }) }));
-    expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'talent_interview', extraData: { invitationId: 'invite', version: 1 } }));
+    expect(tx.notificationLog.createMany).toHaveBeenCalledWith({ data: [{
+      userId: 'participant', senderId: hr.id, type: 'talent_interview',
+      dedupeKey: 'talent_interview:invite:1:participant', title: '面试邀约已更新',
+      content: '请查看面试邀约的最新安排。', extraData: { invitationId: 'invite', version: 1 },
+      status: 'sent', channel: 'system', isRead: false, readAt: null, sentAt: expect.any(Date),
+    }] });
+    expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
     const audit = JSON.stringify(prisma.auditLog.create.mock.calls);
     expect(audit).not.toContain(draft.invitationText);
     expect(audit).not.toContain(draft.meetingUrl);
     expect(audit).not.toContain(draft.note);
+    const notification = JSON.stringify(tx.notificationLog.createMany.mock.calls);
+    expect(notification).not.toContain(draft.invitationText);
+    expect(notification).not.toContain(draft.meetingUrl);
+    expect(notification).not.toContain(draft.note);
+  });
+  it.each(['create', 'update', 'cancel', 'complete'] as const)('%s rejects the whole transaction if system notification insertion fails', async (action) => {
+    const { sut, prisma, tx } = setup();
+    const failure = new Error('Synthetic notification insert failure');
+    tx.notificationLog.createMany.mockRejectedValueOnce(failure);
+    const saving = action === 'create' ? sut.create(draft, hr) : sut[action]('invite', { version: 1 }, hr);
+    await expect(saving).rejects.toBe(failure);
+    await expect(prisma.$transaction.mock.results[0].value).rejects.toBe(failure);
+    expect(tx.notificationLog.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['update', 'scheduled', '面试邀约已更新'],
+    ['cancel', 'cancelled', '面试邀约已取消'],
+    ['complete', 'completed', '面试已完成'],
+  ] as const)('%s persists the new version notification with the business change', async (action, status, title) => {
+    const { sut, prisma, tx } = setup();
+    await expect(sut[action]('invite', { version: 1 }, hr)).resolves.toMatchObject({ version: 2, status });
+    expect(tx.notificationLog.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({
+      userId: 'participant', dedupeKey: 'talent_interview:invite:2:participant', title,
+      extraData: { invitationId: 'invite', version: 2 }, status: 'sent', channel: 'system',
+    })] });
+    expect(prisma.talentInterviewSync.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ version: 2 }) }));
+  });
+  it('retry only persists the new calendar intent without another business notification', async () => {
+    const { sut, prisma, tx } = setup();
+    await expect(sut.retrySync('invite', { version: 1 }, hr)).resolves.toMatchObject({ version: 2 });
+    expect(prisma.talentInterviewSync.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ version: 2 }) }));
+    expect(tx.notificationLog.createMany).not.toHaveBeenCalled();
+    expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
   });
   it('rejects deleted candidate, duplicate participants, and reversed dates', async () => {
     const { sut, prisma } = setup();
@@ -125,12 +165,27 @@ describe('talent interview safety and access', () => {
     expect(prisma.talentInterviewSync.create).not.toHaveBeenCalled();
   });
   it('same create request ID is idempotent and cannot overwrite another creator', async () => {
-    const { sut, prisma, row } = setup({ createdById: 'hr' });
+    const { sut, prisma, tx, row } = setup({ createdById: 'hr' });
     await sut.create({ ...draft, requestId: 'invite' } as any, hr);
     expect(prisma.talentInterview.create).not.toHaveBeenCalled();
+    expect(tx.notificationLog.createMany).not.toHaveBeenCalled();
+    expect(prisma.talentInterviewSync.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
     (row as any).createdById = 'other';
     await expect(sut.create({ ...draft, requestId: 'invite' } as any, hr)).rejects.toThrow(ConflictException);
     expect(prisma.talentInterview.create).not.toHaveBeenCalled();
+  });
+  it('a successful create followed by request replay writes one stable notification only', async () => {
+    const { sut, prisma, tx } = setup({ createdById: 'hr' });
+    prisma.talentInterview.findUnique.mockResolvedValueOnce(null as never);
+    const input = { ...draft, requestId: 'invite' };
+    await sut.create(input, hr);
+    await sut.create(input, hr);
+    expect(prisma.talentInterview.create).toHaveBeenCalledTimes(1);
+    expect(prisma.talentInterviewSync.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(tx.notificationLog.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.notificationLog.createMany.mock.calls[0][0].data[0].dedupeKey).toBe('talent_interview:invite:1:participant');
   });
   it('reschedule audit keeps previous and next dates without invitation credentials', async () => {
     const { sut, prisma } = setup();
@@ -140,25 +195,53 @@ describe('talent interview safety and access', () => {
       newValue: expect.objectContaining({ startsAt: '2026-12-02T02:00:00.000Z' }),
     }) }));
   });
-  it('stops obsolete notification fanout after a new version removes a participant', async () => {
-    const { sut, prisma, notifications, row } = setup({ participants: [
+  it('commits the entire recipient set before returning, then notifies only current participants and reauthorizes old links', async () => {
+    const { sut, prisma, tx, row } = setup({ participants: [
       { userId: 'participant', userNameSnapshot: 'First' }, { userId: 'removed', userNameSnapshot: 'Second' },
     ] });
     prisma.user.findMany.mockResolvedValue([{ id: 'participant', name: 'First' }, { id: 'removed', name: 'Second' }]);
     prisma.talentInterview.create.mockResolvedValue({ ...row, participants: [...row.participants] });
-    let finishFirst!: (value: string) => void;
-    let firstStarted!: () => void;
-    const started = new Promise<void>((resolve) => { firstStarted = resolve; });
-    notifications.create.mockImplementationOnce(() => {
-      firstStarted(); return new Promise<string>((resolve) => { finishFirst = resolve; });
+    let finishInsert!: () => void;
+    let insertStarted!: () => void;
+    const inserting = new Promise<void>((resolve) => { insertStarted = resolve; });
+    const resume = new Promise<void>((resolve) => { finishInsert = resolve; });
+    let commits = 0;
+    prisma.$transaction.mockImplementation(async (fn) => {
+      const result = await fn(tx);
+      commits++;
+      return result;
+    });
+    tx.notificationLog.createMany.mockImplementationOnce(async ({ data }) => {
+      insertStarted();
+      await resume;
+      return { count: data.length };
     });
     const pending = sut.create({ ...draft, participantIds: ['participant', 'removed'] }, hr);
-    await started;
-    row.version = 2;
+    try {
+      await Promise.race([inserting, pending.then(() => { throw new Error('Saved without transactional notifications'); })]);
+      expect(commits).toBe(0);
+      expect(tx.notificationLog.createMany.mock.calls[0][0].data.map((log) => [log.userId, log.extraData.version])).toEqual([
+        ['participant', 1], ['removed', 1],
+      ]);
+      expect(prisma.$queryRaw.mock.calls[0][0].join('?')).toContain('talent_candidates');
+      expect(prisma.$queryRaw.mock.calls[0][0].join('?')).toContain('FOR UPDATE');
+    } finally {
+      finishInsert();
+      await pending;
+    }
+    expect(commits).toBe(1);
+    prisma.user.findMany.mockResolvedValue([{ id: 'participant', name: 'First' }]);
+    const updated = await sut.update('invite', { version: 1, participantIds: ['participant'] }, hr);
+    expect(commits).toBe(2);
+    expect(prisma.$queryRaw.mock.calls.slice(1).map(([sql]) => sql.join('?'))).toEqual([
+      expect.stringContaining('talent_candidates'), expect.stringContaining('talent_interviews'),
+    ]);
+    expect(tx.notificationLog.createMany).toHaveBeenCalledTimes(2);
+    expect(tx.notificationLog.createMany.mock.calls[1][0].data.map((log) => [log.userId, log.extraData.version])).toEqual([['participant', 2]]);
+    expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
+    row.version = updated.version;
     row.participants = [{ userId: 'participant', userNameSnapshot: 'First' }];
-    finishFirst('notification');
-    await pending;
-    expect(notifications.create).toHaveBeenCalledTimes(1);
-    expect(notifications.create).not.toHaveBeenCalledWith(expect.objectContaining({ userId: 'removed' }));
+    await expect(sut.detail('invite', { ...employee, id: 'removed' })).rejects.toThrow(NotFoundException);
+    await expect(sut.detail('invite', employee)).resolves.toMatchObject({ version: 2 });
   });
 });

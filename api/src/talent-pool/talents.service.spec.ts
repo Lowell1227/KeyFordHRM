@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { TalentsService } from './talents.service';
 import { TALENT_PHONE_EXISTS } from './talent.constants';
+import { talentEditVersion } from './talent-edit-version';
 import type { AuthUser } from '@/common/types/auth.types';
 
 /**
@@ -172,7 +173,7 @@ describe('TalentsService 更新与软删除', () => {
       .mockResolvedValueOnce(baseCandidate())          // findActive
       .mockResolvedValueOnce({ id: 'other-1', name: '测试丙' }); // 查重
     const sut = service(prisma);
-    await expect(sut.update('cand-1', { phone: '17011113333' } as never, HR))
+    await expect(sut.update('cand-1', { phone: '17011113333', editVersion: talentEditVersion(baseCandidate() as never) } as never, HR))
       .rejects.toMatchObject({
         response: expect.objectContaining({
           data: { reason: TALENT_PHONE_EXISTS, existingId: 'other-1', existingName: '测试丙' },
@@ -210,7 +211,7 @@ describe('TalentsService 手动标记已入职禁用', () => {
     const prisma = buildPrisma();
     prisma.talentCandidate.findFirst.mockResolvedValue(baseCandidate());
     const sut = service(prisma);
-    await expect(sut.update('cand-1', { status: 'hired' } as never, HR))
+    await expect(sut.update('cand-1', { status: 'hired', editVersion: talentEditVersion(baseCandidate() as never) } as never, HR))
       .rejects.toThrow('请通过入离职办理并确认到岗');
   });
 
@@ -249,7 +250,7 @@ describe('TalentsService 手动标记已入职禁用', () => {
     prisma.talentCandidate.findFirst.mockResolvedValue(baseCandidate({ status: 'hired' }));
     const sut = service(prisma);
     await expect(sut.convert('cand-1', 'user-9', HR)).rejects.toThrow('请通过入离职办理并确认到岗');
-    await expect(sut.update('cand-1', { status: 'contacted' } as never, HR))
+    await expect(sut.update('cand-1', { status: 'contacted', editVersion: talentEditVersion(baseCandidate({ status: 'hired' }) as never) } as never, HR))
       .rejects.toThrow('已入职为终态');
   });
 
