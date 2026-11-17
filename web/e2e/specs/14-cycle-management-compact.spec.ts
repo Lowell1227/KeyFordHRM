@@ -573,7 +573,9 @@ test.describe('compact cycle management list', () => {
     );
   });
 
-  test('shows the launched participant record without duplicating cycle concepts', async ({ page }) => {
+  for (const participantRecordWidth of [1440, 390]) {
+    test(`shows the launched participant record without duplicating cycle concepts at ${participantRecordWidth}px`, async ({ page }) => {
+      await page.setViewportSize({ width: participantRecordWidth, height: 960 });
     const participantRecordRequests: string[] = [];
     const launchedCycle: AssessmentCycle = {
       ...draftCycle,
@@ -648,7 +650,9 @@ test.describe('compact cycle management list', () => {
     await expect(record).toContainText('人事组');
     await expect(record).toContainText('HR 按部门设置为本周期豁免');
     await expect(record).not.toContainText('陈晨');
-  });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    });
+  }
 
   test('keeps an empty participant search result compact and stable', async ({ page }) => {
     const launchedCycle: AssessmentCycle = {
