@@ -64,10 +64,10 @@
 
 - [x] Verify fixed preview environment isolation before writes; use fictional fixtures only. Preserve unrelated main-checkout work.
 - [x] Run final API regression/build, Web type-check/build, focused Playwright and real-backend contract flow covering create/renew/transfer/materials/correct/delete/draft/permissions/concurrency at desktop/mobile sizes.
-- [ ] Review diffs, stage only task files, commit and push main; compare full remote hash.
-- [ ] Snapshot production containers/config/migrations, make verified backup and rollback image tags; build fixed source once.
-- [ ] Deploy only API/Web; external health/assets and read-only affected-page smoke. Record technical proof and remaining human acceptance separately.
+- [x] Review diffs, stage only task files, commit and push main; compare full remote hash.
+- [x] Snapshot production containers/config/migrations, make verified backup and rollback image tags; build fixed source once.
+- [x] Deploy only API/Web; external health/assets and read-only affected-page smoke. Record technical proof and remaining human acceptance separately.
 
 ## Progress
 
-- 2026-11-17: Approved scope recorded; current main clean, prior production b0d5abb0 baseline identified. Implementation completed and independently reviewed; strict validation completed with traceable targeted reruns. Fixed-source production build and release pending.
+- 2026-11-17: Approved scope implemented and independently reviewed; strict validation completed with traceable targeted reruns. Fixed functional commit c0d988e1 pushed and deployed at 09:50 Shanghai time; external health/assets and read-only 1440/1024/390px smoke passed. Human HR business acceptance remains separate. See docs/acceptance/2026-11-17-contract-usability-release.md.
