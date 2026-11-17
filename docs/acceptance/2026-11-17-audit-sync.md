@@ -56,8 +56,27 @@
 ## 当前交付状态
 
 - 已实现：集成及冲突处理完成，上述合并验证完成。
-- 已提交：尚未提交；完成集成门槛后固定提交并推送。
-- 已上线：尚未发布；生产保持原基线，待备份、固定镜像和发布后验证。
+- 已提交：功能提交 `f71898cb11f5c0223a85a3cdad2cfad75d298a12` 已推送，发布前HEAD、origin/main及实时远端一致；后续仅发布记录和项目记忆提交不重新构建镜像。
+- 已上线：2026-11-17 10:36:40（北京时间）仅替换正式API/Web，运行修订和镜像摘要已核对。
 - 业务已验收：否。
 
-发布将只替换 API/Web，保留 PostgreSQL、Redis、MinIO容器和数据卷；执行新备份、摘要及可读性校验并标记本次回退镜像。复用既有离线固定依赖构建方案；发布保护脚本的生产比较基线改为本次实际 `c0d988e1`，不沿用过时的 `b0d5abb0` 基线。
+## 正式发布证据
+
+- 固定源码和产物目录：`D:/HRM-releases/f71898cb-contract-usability`。目录名沿用已验证构建配方，不表示本轮只发布合同功能。归档校验1216个API/Web源码文件，API镜像编译和Web正式类型/生产构建通过，保留原有三方注解及大包警告；没有新增依赖或迁移。
+- API镜像：`sha256:26ddd0b09817957d0f19a063790b2f698683600b62b3e07202addbe6fdc8a614`。
+- Web镜像：`sha256:4825a7b0f4f37d36a77d6bdf005374dde04a1d2412966e04765863e28bdf808a`。
+- 生产备份：`D:/CodexTaskBackups/contract-usability-f71898cb/hrm-before-f71898cb.dump`，3,894,748字节；容器内外SHA256相同，`pg_restore --list`可读且包含档案/任职表。摘要 `1e9dad066b9dc9709f69f0eddcc645d520be5659b4eea30db181a13e646c0f13`。这不是本轮真实整库恢复证明；本轮无迁移，不重复此前隔离恢复演练，不把可读性冒充恢复验收。
+- 回退标签：`kayford-deploy-api:rollback-before-f71898cb`、`kayford-deploy-web:rollback-before-f71898cb`，指向本轮前的 `c0d988e1` 镜像；原四文件Compose配置链及私有设置保留。回退只替换API/Web，不恢复整个数据库覆盖后续业务。
+- 实际发布复用既有离线固定依赖构建配方，发布保护脚本副本的生产比较基线改为现场核对的 `c0d988e1`，未沿用过时的 `b0d5abb0`。未使用缺失私有`.env`的工作区直接运行通用发布脚本；私有发布文件不入库。
+- PostgreSQL、Redis、MinIO容器ID和卷均未变化；API运行配置摘要不变，正式快捷登录关闭。67项迁移完成、0失败、启动无待执行迁移；主要业务表数量与发布前完全一致，未再次初始化人员数据。
+- 外网健康JSON为HTTP200、`status=ok/db=ok`，首页和6个关键资源SHA256与正式构建相符。API启动日志379行未发现ERROR/致命错误标记。
+- 正式只读页面：1440/1024/390px均能打开档案、合同分组和单份编辑，没有页面错误、失败API读取或横向溢出；没有保存、上传或业务写请求，未保存含正式个人信息的截图。
+- 真实已有普通HR和员工的8项GET授权检查通过，包含非空管理列表和待办、同公司范围、指定审批关系、普通员工HR接口403；前后相关身份投影、申请及来源快照不变。不冒充真实业务办理验收。
+- 匿名附件下载、档案详情、转正接口均401；误测不存在的`GET /employee-archives`根路由返回404，改为实际详情路由后401，没有为测试创建路由。
+- 机器证据：发布目录内 `build.json`、`baseline.json`、`backup.json`、`deployment.json`、`postflight.json`、`contract-production-smoke.json`、`company-role-readonly-smoke-1794883035825.json`。仅保存在私有目录，不提交环境值或令牌。
+
+原根工作区仍在 `codex/preserve-main-wip-20261116`，未覆盖、回退或清理它的其他改动；最新main工作区为 `C:/Users/lwei/.codex/worktrees/unified-company-directory/HRM`。不要直接将旧根目录整包再次提交或部署。
+
+## 试用
+
+正式入口：`https://1260cw31az927.vicp.fun/users`。可继续按原账号验收合同操作；本轮权限拒绝、晚到响应和并发场景已在隔离预览验证，不要求业务人员手工制造。固定预览仍为 `http://localhost:5173`，仅使用虚构资料。生产写入、真实钉钉和实体Safari未代替用户验收。
