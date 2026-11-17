@@ -7,8 +7,8 @@ export const ROSTER_EXPORT_GROUPS = [
   { key: 'contact', label: '身份与联系' },
   { key: 'insurance', label: '社保公积金' },
   { key: 'bank', label: '银行信息' },
-  { key: 'contract', label: '当前合同' },
-  { key: 'history', label: '合同历史' },
+  { key: 'contract', label: '最新合同' },
+  { key: 'history', label: '其他合同记录' },
   { key: 'system', label: '系统信息' },
 ] as const;
 
@@ -78,7 +78,7 @@ export const ROSTER_EXPORT_COLUMNS = [
   { key: 'latestConfidentialityAgreement', header: '保密协议', group: 'contract', width: 14 },
   { key: 'latestNonCompeteAgreement', header: '竞业协议', group: 'contract', width: 14 },
   { key: 'latestPortraitAgreement', header: '肖像协议', group: 'contract', width: 14 },
-  { key: 'contractHistory', header: '历史合同明细', group: 'history', width: 20 },
+  { key: 'contractHistory', header: '其他合同明细', group: 'history', width: 20 },
   { key: 'systemPermission', header: '系统权限', group: 'system', width: 18 },
   { key: 'directReportCount', header: '直属下属', group: 'system', width: 12 },
   { key: 'dingtalkBindingState', header: '钉钉登录', group: 'system', width: 16 },

@@ -17,7 +17,7 @@ function loadTs(filename, source = fs.readFileSync(filename, 'utf8'), dependenci
   }).outputText, filename);
   return loaded.exports;
 }
-const { contractTitle, sortContractsLatestFirst, selectEmployeeContracts } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-presentation.ts'));
+const { contractTitle, sortContractsLatestFirst, selectEmployeeContracts, groupEmployeeContracts, overlappingContractIds } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-presentation.ts'));
 const { employeeContractStatus } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-status.ts'));
 
 test('contract titles retain their name and signing day when list order changes', () => {
@@ -62,7 +62,7 @@ test('an undated legacy signature cannot displace a transfer with a known effect
   const transfer = { id: 'transfer', contractType: 'transfer', effectiveFrom: '2026-11-01' };
   assert.equal(selectEmployeeContracts([old, transfer]).current, transfer);
   assert.equal(selectEmployeeContracts([old]).current, old);
-  assert.equal(employeeContractStatus(old).label, '期限待补');
+  assert.equal(employeeContractStatus(old).label, '待核实');
 });
 
 test('a backdated signature does not put an earlier first contract ahead of its transfer', () => {
@@ -81,9 +81,86 @@ test('a pending current contract stays in the same group while only its business
   const contract = { id: 'future', contractType: 'renewal', effectiveFrom: '2026-12-01', expiresAt: '2029-11-30' };
   assert.equal(selectEmployeeContracts([contract]).current, contract);
   assert.equal(employeeContractStatus(contract, new Date('2026-11-30T15:59:59Z')).label, '待生效');
-  assert.equal(employeeContractStatus(contract, new Date('2026-11-30T16:00:00Z')).label, '正常');
+  assert.equal(employeeContractStatus(contract, new Date('2026-11-30T16:00:00Z')).label, '期限内');
   assert.equal(employeeContractStatus(contract, new Date('2029-11-30T16:00:00Z')).label, '已到期');
-  assert.equal(employeeContractStatus({ ...contract, isActive: false }).label, '旧版本/已移除');
+  assert.equal(employeeContractStatus({ ...contract, isActive: false }).label, '历史保留记录');
+});
+
+const auditDay = new Date('2026-11-17T04:00:00Z');
+test('date groups keep today and future contracts visible and separate retained records', () => {
+  const input = Object.freeze([
+    Object.freeze({ id: 'today', contractType: 'contract', effectiveFrom: '2026-01-01', expiresAt: '2026-12-31' }),
+    Object.freeze({ id: 'future', contractType: 'renewal', effectiveFrom: '2027-01-01', expiresAt: '2029-12-31' }),
+    Object.freeze({ id: 'expired', contractType: 'contract', effectiveFrom: '2024-01-01', expiresAt: '2025-12-31' }),
+    Object.freeze({ id: 'unknown', contractType: 'contract', signedAt: '2026-11-17' }),
+    Object.freeze({ id: 'removed', contractType: 'renewal', effectiveFrom: '2026-01-01', expiresAt: '2028-12-31', isActive: false, recordState: 'removed' }),
+  ]);
+  const groups = groupEmployeeContracts(input, auditDay);
+  assert.deepEqual(Object.fromEntries(Object.entries(groups).map(([key, rows]) => [key, rows.map(row => row.id)])), {
+    withinTerm: ['today'], upcoming: ['future'], needsReview: ['unknown'], history: ['expired'], retained: ['removed'],
+  });
+  assert.equal(input[0].expiresAt, '2026-12-31');
+});
+
+test('open-ended term is a term type and can be within term or upcoming', () => {
+  const contract = { effectiveFrom: '2026-01-01', termType: '无固定期限' };
+  assert.equal(employeeContractStatus(contract, auditDay).key, 'within_term');
+  assert.equal(employeeContractStatus({ ...contract, effectiveFrom: '2027-01-01' }, auditDay).key, 'upcoming');
+  assert.equal(employeeContractStatus({ ...contract, effectiveFrom: null }, auditDay).key, 'needs_review');
+});
+
+test('missing and contradictory dates explain what must be checked without guessing', () => {
+  for (const [contract, reason] of [
+    [{ expiresAt: '2025-01-01' }, '生效日期'],
+    [{ effectiveFrom: '2026-01-01' }, '到期日期'],
+    [{ effectiveFrom: '2026-02-30', expiresAt: '2027-01-01' }, '日期格式'],
+    [{ effectiveFrom: '0000-01-01', expiresAt: '2027-01-01' }, '日期格式'],
+    [{ effectiveFrom: '2027-01-01', expiresAt: '2026-01-01' }, '早于'],
+    [{ effectiveFrom: '2026-01-01', expiresAt: '2027-01-01', termType: '无固定期限' }, '无固定期限'],
+  ]) {
+    const status = employeeContractStatus(contract, auditDay);
+    assert.equal(status.key, 'needs_review');
+    assert.ok(status.reason.includes(reason), status.reason);
+  }
+});
+
+test('contract date status respects inclusive end date and Shanghai midnight', () => {
+  const contract = { effectiveFrom: '2026-11-17', expiresAt: '2026-11-17' };
+  assert.equal(employeeContractStatus(contract, new Date('2026-11-16T15:59:59Z')).key, 'upcoming');
+  assert.equal(employeeContractStatus(contract, new Date('2026-11-16T16:00:00Z')).key, 'within_term');
+  assert.equal(employeeContractStatus(contract, new Date('2026-11-17T15:59:59Z')).key, 'within_term');
+  assert.equal(employeeContractStatus(contract, new Date('2026-11-17T16:00:00Z')).key, 'expired');
+});
+
+test('inactive records distinguish evidenced removal from unknown retained history', () => {
+  assert.equal(employeeContractStatus({ isActive: false, recordState: 'removed' }, auditDay).label, '已删除');
+  assert.equal(employeeContractStatus({ isActive: false, recordState: 'retained' }, auditDay).label, '历史保留记录');
+  assert.equal(employeeContractStatus({ isActive: false, endedAt: '2026-11-17' }, auditDay).label, '历史保留记录');
+});
+
+test('overlapping dates flag every included contract without choosing a winner', () => {
+  const rows = [
+    { id: 'a', effectiveFrom: '2026-01-01', expiresAt: '2026-12-31' },
+    { id: 'b', effectiveFrom: '2026-12-01', expiresAt: '2027-12-31' },
+    { id: 'next', effectiveFrom: '2028-01-01', expiresAt: '2028-12-31' },
+    { id: 'removed', effectiveFrom: '2026-01-01', termType: '无固定期限', isActive: false },
+    { id: 'unknown', effectiveFrom: '2026-02-30', expiresAt: '2029-01-01' },
+  ];
+  assert.deepEqual([...overlappingContractIds(rows)].sort(), ['a', 'b']);
+  assert.deepEqual([...overlappingContractIds([...rows].reverse())].sort(), ['a', 'b']);
+  assert.equal(rows[0].expiresAt, '2026-12-31');
+});
+
+test('open-ended intervals overlap, consecutive terms do not, supporting agreements do not compete', () => {
+  assert.deepEqual([...overlappingContractIds([
+    { id: 'open', contractType: 'contract', effectiveFrom: '2026-01-01', termType: '无固定期限' },
+    { id: 'new', contractType: 'renewal', effectiveFrom: '2027-01-01', expiresAt: '2028-12-31' },
+  ])].sort(), ['new', 'open']);
+  assert.equal(overlappingContractIds([
+    { id: 'a', effectiveFrom: '2026-01-01', expiresAt: '2026-12-31' },
+    { id: 'b', effectiveFrom: '2027-01-01', expiresAt: '2027-12-31' },
+    { id: 'agreement', contractType: 'confidentiality', effectiveFrom: '2026-01-01', expiresAt: '2027-12-31' },
+  ]).size, 0);
 });
 
 test('same-day records have a deterministic created-at and id order', () => {

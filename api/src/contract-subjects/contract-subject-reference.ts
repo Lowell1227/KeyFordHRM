@@ -6,6 +6,10 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 type RecordValue = Record<string, unknown>;
 type Client = Pick<Prisma.TransactionClient, 'contractSubject'>;
 
+const subjectError = (message: string, field?: string) => new BadRequestException(field
+  ? { code: ERROR_CODE.PARAM_INVALID, message, data: { fieldErrors: { [field]: message } } }
+  : message);
+
 /** New intake requires a selected company; draft text alone is not an established company. */
 export function assertSubmittedEmployeeCompany(
   value: RecordValue, formalBase: RecordValue = {}, field = 'employee.contractSubjectId',
@@ -22,6 +26,7 @@ export function assertSubmittedEmployeeCompany(
 export async function normalizeContractSubject(
   client: Client, value: RecordValue, previous: RecordValue, nameField: string,
   companyBase: RecordValue = previous,
+  field?: string,
 ): Promise<void> {
   if (nameField === 'companyText') {
     if (value.company === undefined && 'company' in companyBase) value.company = companyBase.company;
@@ -52,7 +57,7 @@ export async function normalizeContractSubject(
     return;
   }
   if (typeof value.contractSubjectId !== 'string' || !isUUID(value.contractSubjectId)) {
-    throw new BadRequestException('合同主体信息无效，请重新选择');
+    throw subjectError('合同主体信息无效，请重新选择', field);
   }
   const samePrevious = value.contractSubjectId === previous.contractSubjectId;
   if (samePrevious && nameField !== 'companyText') {
@@ -60,7 +65,7 @@ export async function normalizeContractSubject(
     return;
   }
   const subject = await client.contractSubject.findUnique({ where: { id: value.contractSubjectId } });
-  if (!subject?.isActive) throw new BadRequestException('合同主体不存在或已停用，请重新选择');
+  if (!subject?.isActive) throw subjectError('合同主体不存在或已停用，请重新选择', field);
   value[nameField] = samePrevious ? previous[nameField] ?? null : subject.name;
   // The directory reference is authoritative. Legacy organization codes are never inferred.
   if (nameField === 'companyText') value.company = null;
@@ -70,6 +75,7 @@ export async function normalizeContractSubject(
 export async function validateContractSubject(
   client: Client, value: RecordValue, base: RecordValue,
   nameField: 'companyText' | 'signingCompany' = 'signingCompany',
+  field?: string,
 ): Promise<void> {
   if (nameField === 'companyText' && value.company != null
     && !Object.values(CompanyCode).includes(value.company as CompanyCode)) {
@@ -90,7 +96,7 @@ export async function validateContractSubject(
     }
     return;
   }
-  if (typeof id !== 'string' || !isUUID(id)) throw new BadRequestException('合同主体信息无效，请重新选择');
+  if (typeof id !== 'string' || !isUUID(id)) throw subjectError('合同主体信息无效，请重新选择', field);
   const subject = await client.contractSubject.findUnique({ where: { id } });
-  if (!subject?.isActive) throw new BadRequestException('合同主体不存在或已停用，请重新选择');
+  if (!subject?.isActive) throw subjectError('合同主体不存在或已停用，请重新选择', field);
 }

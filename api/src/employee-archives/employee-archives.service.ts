@@ -466,16 +466,18 @@ export class EmployeeArchivesService {
       const old = contract.id ? baseContracts.find((c) => c.id === contract.id) : baseContracts.every((c) => !c.id) ? baseContracts[index] : undefined;
       const stored = contract.id ? savedContracts.find((c) => c.id === contract.id) : savedContracts[index];
       await normalizeContractSubject(tx, contract,
-        contract.contractSubjectId && contract.contractSubjectId === stored?.contractSubjectId ? stored : old ?? {}, 'signingCompany');
+        contract.contractSubjectId && contract.contractSubjectId === stored?.contractSubjectId ? stored : old ?? {},
+        'signingCompany', undefined, `contracts.${index}.contractSubjectId`);
     }
   }
 
   private async validateSubjectPayload(tx: Prisma.TransactionClient, value: Record<string, unknown>, base: Record<string, unknown>) {
     await validateContractSubject(tx, this.record(value.employee), this.record(base.employee), 'companyText');
     const contracts = Array.isArray(base.contracts) ? base.contracts.map((item) => this.record(item)) : [];
-    for (const item of Array.isArray(value.contracts) ? value.contracts : []) {
+    for (const [index, item] of (Array.isArray(value.contracts) ? value.contracts : []).entries()) {
       const contract = this.record(item);
-      await validateContractSubject(tx, contract, contracts.find((c) => c.id && c.id === contract.id) ?? {});
+      await validateContractSubject(tx, contract, contracts.find((c) => c.id && c.id === contract.id) ?? {},
+        'signingCompany', `contracts.${index}.contractSubjectId`);
     }
   }
 

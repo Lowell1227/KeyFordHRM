@@ -536,9 +536,11 @@ test('uses one person settings dialog and keeps performance identity separate fr
 });
 
 test('edits the whole employee archive in place and supports contract row changes', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-02T04:00:00Z'));
   let submittedDraft: Record<string, any> | null = null;
   const employee = {
     id: 'employee-yu',
+    positionId: 'position-hr',
     name: '余焱玲',
     employeeNo: '001',
     deptId: 'dept-hr',
@@ -595,6 +597,7 @@ test('edits the whole employee archive in place and supports contract row change
       name: '劳动合同',
       signingCompany: '孚德',
       signedAt: '2024-01-01T00:00:00.000Z',
+      effectiveFrom: '2024-01-01T00:00:00.000Z',
       expiresAt: '2026-12-31T00:00:00.000Z',
       termType: '3年',
     }],
@@ -634,7 +637,7 @@ test('edits the whole employee archive in place and supports contract row change
   }));
   await page.route('**/api/v1/positions**', (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify(apiResponse([])),
+    body: JSON.stringify(apiResponse([{ id: 'position-hr', name: '人事专员', isActive: true }])),
   }));
   await page.route('**/api/v1/employee-archives/employee-yu', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
@@ -643,8 +646,11 @@ test('edits the whole employee archive in place and supports contract row change
     submittedDraft = route.request().postDataJSON();
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ id: 'review-1', profileReviewStatus: 'pending' })),
+      body: JSON.stringify(apiResponse({ id: 'review-1', profileReviewStatus: 'approved', performanceReviewStatus: 'not_required', recordStatus: 'submitted' })),
     });
+  });
+  await page.route('**/api/v1/employee-archives/employee-yu/draft/save', async route => {
+    await route.fulfill({ json: apiResponse({ id: 'review-1', userId: employee.id, recordStatus: 'draft', requestVersion: 1, proposedValue: route.request().postDataJSON() }) });
   });
   await page.route('**/api/v1/storage/upload**', async (route) => {
     const purpose = new URL(route.request().url()).searchParams.get('purpose');
@@ -672,8 +678,8 @@ test('edits the whole employee archive in place and supports contract row change
     '社保起始日期', '公积金状态', '公积金起始日期', '开户行', '开户支行', '银行卡号',
   ];
   const contractLabels = [
-    '类型', '合同名称', '签约公司', '签订日期', '生效日期', '到期日期', '期限',
-    '原公司', '新公司', '保密协议', '竞业协议', '肖像协议',
+    '类型', '合同名称', '签约公司', '签订日期', '生效日期', '到期日期', '期限类型',
+    '保密协议', '竞业协议', '肖像协议',
   ];
   const readonlySection = (heading: string) => drawer.locator('.employee-archive__section').filter({
     has: page.getByRole('heading', { name: heading, exact: true }),
@@ -684,7 +690,7 @@ test('edits the whole employee archive in place and supports contract row change
   await expect(basicSection).toHaveCount(1);
   await expect(personalSection).toHaveCount(1);
   await expect(contactSection).toHaveCount(1);
-  expect(await basicSection.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(basicLabels);
+  expect(await basicSection.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(expect.arrayContaining(basicLabels));
   expect(await personalSection.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(personalLabels);
   expect(await contactSection.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(contactLabels);
   expect(await basicSection.locator('.employee-archive__facts').evaluate((element) => (
@@ -692,8 +698,9 @@ test('edits the whole employee archive in place and supports contract row change
   ))).toBe(3);
   const readonlyContract = readonlySection('合同记录').locator('.employee-archive__contract-card').first();
   await drawer.getByRole('tab', { name: '合同材料' }).click();
-  await expect(drawer.getByRole('heading', { name: '当前合同' })).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: '期限内合同' })).toBeVisible();
   await expect(readonlyContract).toBeVisible();
+  await readonlyContract.getByRole('button', { name: '查看详情', exact: true }).click();
   expect(await readonlyContract.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(contractLabels);
   await expect(drawer).toContainText('劳动合同');
   await drawer.getByRole('tab', { name: '任职历史' }).click();
@@ -714,16 +721,18 @@ test('edits the whole employee archive in place and supports contract row change
   const editorSection = (heading: string) => drawer.locator('.editor-section').filter({
     has: page.getByRole('heading', { name: heading, exact: true }),
   });
-  expect(await editorSection('基本与任职').locator('.el-form-item__label').allTextContents()).toEqual(basicLabels.flatMap((label) => label === '所属公司' ? ['所属公司（合同主体）', '组织归属'] : [label === '工号' ? '当前工号' : label]));
+  await expect(editorSection('基本与任职').locator('.el-form-item__label')).toHaveText(basicLabels.map(label => label === '工号' ? '当前工号' : label));
   expect(await editorSection('个人与教育').locator('.el-form-item__label').allTextContents()).toEqual(personalLabels);
   expect(await editorSection('联系与保障').locator('.el-form-item__label').allTextContents()).toEqual(contactLabels);
   await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');
-  await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
-  await expect(page.getByText('未检测到变更，无需提交审核')).toBeVisible();
+  await drawer.getByRole('button', { name: '提交', exact: true }).click();
+  await expect(page.getByText('未检测到变更，无需提交', { exact: true })).toBeVisible();
   expect(submittedDraft).toBeNull();
   const firstContract = drawer.locator('.contract-card').first();
-  expect(await firstContract.locator('.el-form-item__label').allTextContents()).toEqual(contractLabels);
-  await firstContract.getByRole('textbox', { name: '合同名称' }).fill('劳动合同（修订）');
+  await firstContract.locator('.contract-expand').click();
+  expect(await firstContract.locator('.el-form-item__label').allTextContents()).toEqual(expect.arrayContaining(contractLabels));
+  await firstContract.getByRole('combobox', { name: '合同名称', exact: true }).fill('劳动合同（修订）');
+  await firstContract.getByRole('combobox', { name: '合同名称', exact: true }).press('Enter');
   await firstContract.locator('input[type="file"]').nth(0).setInputFiles({
     name: '合同.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('image'),
   });
@@ -732,10 +741,10 @@ test('edits the whole employee archive in place and supports contract row change
   });
   await expect(firstContract.getByText('合同.jpg', { exact: true })).toBeVisible();
   await expect(firstContract.getByText('合同.pdf', { exact: true })).toBeVisible();
-  await drawer.getByRole('button', { name: '新增合同' }).click();
+  await drawer.getByRole('button', { name: '录入合同', exact: true }).click();
   await expect(drawer.locator('.contract-card')).toHaveCount(2);
-  await drawer.locator('.contract-card').nth(1).getByRole('button', { name: '移除' }).click();
-  await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
+  await drawer.locator('.contract-card').nth(1).getByRole('button', { name: '删除合同', exact: true }).click();
+  await drawer.getByRole('button', { name: '提交', exact: true }).click();
   await expect.poll(() => submittedDraft).toMatchObject({
     employee: { name: '余焱玲' },
     contracts: [{

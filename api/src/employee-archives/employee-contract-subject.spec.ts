@@ -36,6 +36,24 @@ describe('archive contract subject references', () => {
     prisma.contractSubject.findUnique.mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', name: '停用主体', isActive: false });
     await expect(service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111' }, profile: {} }, operator)).rejects.toThrow('合同主体不存在或已停用');
   });
+  it.each(['saveArchiveDraft', 'submitDraft'] as const)('locates an inactive contract subject on its row during %s', async method => {
+    const { service, prisma, baseVersion } = fixture();
+    prisma.contractSubject.findUnique.mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', name: '停用主体', isActive: false });
+    await expect(service[method]('user', { baseVersion, employee: {}, profile: {}, contracts: [
+      { contractType: 'contract', name: 'Synthetic first contract', sequence: 0 },
+      { contractType: 'renewal', name: 'Synthetic renewal', sequence: 1, contractSubjectId: '11111111-1111-4111-8111-111111111111' },
+    ] }, operator)).rejects.toMatchObject({ response: { code: 4001,
+      data: { fieldErrors: { 'contracts.1.contractSubjectId': '合同主体不存在或已停用，请重新选择' } } } });
+  });
+  it('locates a contract subject disabled between normalization and final validation', async () => {
+    const { service, prisma, baseVersion } = fixture();
+    prisma.contractSubject.findUnique.mockResolvedValueOnce({ id: '11111111-1111-4111-8111-111111111111', name: '刚停用主体', isActive: true })
+      .mockResolvedValueOnce({ id: '11111111-1111-4111-8111-111111111111', name: '刚停用主体', isActive: false });
+    await expect(service.submitDraft('user', { baseVersion, employee: {}, profile: {}, contracts: [
+      { contractType: 'renewal', name: 'Synthetic renewal', sequence: 0, contractSubjectId: '11111111-1111-4111-8111-111111111111' },
+    ] }, operator)).rejects.toMatchObject({ response: { code: 4001,
+      data: { fieldErrors: { 'contracts.0.contractSubjectId': '合同主体不存在或已停用，请重新选择' } } } });
+  });
   it('explicit null clears reference and snapshot', async () => {
     const { service, baseVersion } = fixture('11111111-1111-4111-8111-111111111111');
     const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: null }, profile: {} }, operator);

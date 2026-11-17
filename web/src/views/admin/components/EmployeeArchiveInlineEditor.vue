@@ -6,14 +6,13 @@ import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
 import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
-import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
-import ContractDateInput from '@/components/common/ContractDateInput.vue';
+import EmployeeContractFields from './EmployeeContractFields.vue';
 import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
 import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { archiveFieldPath } from '@/utils/employee-archive-fields';
-import { contractTitle } from '@/utils/employee-contract-presentation';
+import { contractTitle, overlappingContractIds } from '@/utils/employee-contract-presentation';
 import { validateContractDates } from '@/utils/employee-contract-validation';
 import { useContractUploads } from '@/utils/employee-contract-uploads';
 
@@ -24,6 +23,7 @@ const props = defineProps<{
   departments: Department[];
   busy?: boolean;
   focusField?: string;
+  contractOnly?: boolean;
 }>();
 
 type ArchiveChangePayload = {
@@ -43,6 +43,7 @@ const emit = defineEmits<{
   state: [value: 'idle' | 'saving' | 'saved' | 'error'];
   blocked: [value: boolean];
   reload: [];
+  'whole-archive': [];
 }>();
 const positions = ref<PositionRecord[]>([]);
 const fallbackEmployment = computed(() => props.archive && !props.archive.currentEmployment && !props.archive.pendingEmployment
@@ -53,6 +54,17 @@ const saveError = ref('');
 const saveBlocked = ref(false);
 const failedAction = ref<'save' | 'submit'>('save');
 const companyError = ref('');
+const expandedContractKey = ref('');
+const contractAction = ref<ContractAction>('edit');
+const draftHasOtherChanges = ref(false);
+const pendingSensitiveFields = computed(() => props.draft?.profileReviewStatus === 'approved' ? []
+  : [['profile.idNumber', '身份证号'], ['profile.bankAccount', '银行卡号']]
+    .filter(([path]) => props.draft?.changedFields?.includes(path!)).map(([, label]) => label!));
+type ContractAction = 'create' | 'renew' | 'transfer' | 'historical' | 'materials' | 'edit' | 'remove';
+const contractActionLabels: Record<ContractAction, string> = {
+  create: '录入合同', renew: '续签合同', transfer: '转签合同', historical: '补录合同',
+  materials: '补充材料', edit: '修改合同信息', remove: '删除合同',
+};
 const serverContractErrors = reactive<Record<string, string>>({});
 const serverFieldErrors = reactive<Record<string, string>>({});
 const serverFieldSnapshots: Record<string, string | undefined> = {};
@@ -106,6 +118,20 @@ const contractErrors = computed(() => ({ ...serverContractErrors, ...Object.from
 })) }));
 let initialSnapshot = '';
 
+function comparableContract(record: Record<string, any>) {
+  return JSON.stringify(Object.keys(record).filter(key => !key.startsWith('__') && !['id', 'sequence', 'isActive', 'endedAt', 'createdAt', 'updatedAt', 'recordState', 'recordStateLabel', 'recordStateAt'].includes(key))
+    .sort().map(key => [key, record[key] == null || record[key] === '' ? null
+      : ['signedAt', 'effectiveFrom', 'expiresAt'].includes(key) ? dateValue(record[key]) : record[key]]));
+}
+const changedContracts = computed(() => form.contracts.filter(contract => {
+  if (contract.__removed || !contract.id) return true;
+  const stored = props.archive?.employeeContracts.find(item => item.id === contract.id);
+  if (!stored) return true;
+  const previous = Object.fromEntries(Object.keys(contract).filter(key => !key.startsWith('__')).map(key => [key, (stored as Record<string, unknown>)[key]]));
+  return comparableContract(contract) !== comparableContract(previous);
+}));
+const overlappingContracts = computed(() => overlappingContractIds(form.contracts));
+
 function formSnapshot() {
   return JSON.stringify(form);
 }
@@ -136,6 +162,9 @@ function reset() {
   saveError.value = '';
   saveBlocked.value = false;
   companyError.value = '';
+  expandedContractKey.value = '';
+  contractAction.value = 'edit';
+  draftHasOtherChanges.value = false;
   const employment = archive.pendingEmployment ?? archive.currentEmployment ?? archive.employmentHistory[0];
   replaceRecord(form.employee, {
     name: archive.name,
@@ -215,6 +244,17 @@ function reset() {
     }));
   if (props.draft?.userId === archive.id && (props.draft.recordStatus === 'draft' || props.draft.canResume)) {
     const proposed = props.draft.proposedValue ?? {};
+    draftHasOtherChanges.value = pendingSensitiveFields.value.length > 0 || (['employee', 'profile', 'performance'] as const).some(scope =>
+      (scope === 'performance' ? props.draft?.performanceReviewStatus !== 'approved' : props.draft?.profileReviewStatus !== 'approved') &&
+      Object.entries(proposed[scope] ?? {}).some(([key, value]) => {
+        // Compare the draft's matching server snapshots, including normalized/derived fields.
+        // Comparing a server snapshot with the smaller editing form mistakes unchanged fields for edits.
+        const baseline = props.draft?.baseValue?.[scope] ?? form[scope];
+        const original = baseline[key];
+        const normalize = (item: unknown) => item == null || item === '' ? null
+          : typeof item === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(item) ? item.slice(0, 10) : item;
+        return JSON.stringify(normalize(value)) !== JSON.stringify(normalize(original));
+      }));
     // A partially applied legacy request contains an old snapshot of the applied scope.
     // Keep the current formal values (and persisted contract IDs) for that scope.
     const restoreProfile = props.draft.profileReviewStatus !== 'approved';
@@ -234,12 +274,15 @@ function reset() {
     }
     if (props.draft.performanceReviewStatus !== 'approved') replaceRecord(form.performance, { ...form.performance, ...(proposed.performance ?? {}) });
     if (restoreProfile && Array.isArray(proposed.contracts)) {
+      const originalContracts = form.contracts;
       form.contracts = proposed.contracts.map((item: Record<string, any>, index: number) => ({
         ...item,
         ...(!('contractSubjectId' in item) && item.id ? { contractSubjectId: archive.employeeContracts.find(contract => contract.id === item.id)?.contractSubjectId ?? undefined } : {}),
         ...(item.contractSubjectId == null && !archive.employeeContracts.find(contract => contract.id === item.id)?.contractSubjectId ? { contractSubjectId: undefined } : {}),
         __key: item.id || `draft-${index}`,
       }));
+      form.contracts.push(...originalContracts.filter(item => !form.contracts.some(current => current.id === item.id))
+        .map(item => ({ ...item, __removed: true })));
     }
   }
   initialSnapshot = '';
@@ -271,18 +314,20 @@ watch(form, () => {
 onBeforeUnmount(() => { generation++; contractUploads.clear(); clearTimeout(autosaveTimer); });
 onMounted(async () => { positions.value = await positionsApi.findAll({ includeInactive: true }); });
 
-function addContract() {
+function addContract(kind: ContractAction = 'create', source?: Record<string, any>) {
   form.contracts.push({
     __key: `new-${Date.now()}-${form.contracts.length}`,
-    contractType: 'contract',
+    contractType: kind === 'renew' ? 'renewal' : kind === 'transfer' ? 'transfer' : 'contract',
     sequence: form.contracts.length,
-    name: '',
-    signingCompany: '',
+    name: source?.name || '劳动合同',
+    signingCompany: kind === 'transfer' ? '' : source?.signingCompany || form.employee.companyText || '',
+    contractSubjectId: kind === 'transfer' ? undefined : source?.signingCompany
+      ? source.contractSubjectId || undefined : form.employee.contractSubjectId || undefined,
     signedAt: null,
     effectiveFrom: null,
     expiresAt: null,
     termType: '',
-    originalCompany: '',
+    originalCompany: kind === 'transfer' ? source?.signingCompany || form.employee.companyText || '' : '',
     newCompany: '',
     confidentialityAgreement: '',
     nonCompeteAgreement: '',
@@ -290,6 +335,33 @@ function addContract() {
     images: [],
     attachments: [],
   });
+  const added = form.contracts[form.contracts.length - 1]!;
+  expandedContractKey.value = added.__key;
+  contractAction.value = kind;
+  void focusField(`contracts.${form.contracts.length - 1}.name`);
+}
+
+async function beginContractAction(kind: ContractAction, contractId?: string) {
+  await nextTick();
+  const source = contractId ? form.contracts.find(contract => contract.id === contractId) : undefined;
+  if (draftHasOtherChanges.value) emit('whole-archive');
+  contractAction.value = kind;
+  if (['create', 'historical', 'renew', 'transfer'].includes(kind)) {
+    if (['renew', 'transfer'].includes(kind) && (!source || source.__removed)) {
+      ElMessage.info('该合同已在草稿中删除，请先核对已有修改');
+      if (source) expandedContractKey.value = source.__key;
+      return;
+    }
+    addContract(kind, source);
+  } else if (source) {
+    expandedContractKey.value = source.__key;
+    if (kind === 'remove') removeContract(source);
+  } else {
+    expandedContractKey.value = changedContracts.value[0]?.__key || form.contracts[0]?.__key || '';
+  }
+  await nextTick();
+  const index = form.contracts.findIndex(contract => contract.__key === expandedContractKey.value);
+  await focusField(index >= 0 ? `contracts.${index}${kind === 'materials' ? '.materials' : ''}` : 'contracts');
 }
 
 function removeContract(contract: typeof form.contracts[number]) {
@@ -479,12 +551,18 @@ function showReloadError() {
 }
 
 async function focusField(field?: string) {
+  const matched = /^contracts\.(\d+)/.exec(field || '');
+  if (matched && form.contracts[Number(matched[1])]) {
+    expandedContractKey.value = form.contracts[Number(matched[1])]!.__key;
+    if (!field?.endsWith('.materials') && contractAction.value === 'materials') contractAction.value = 'edit';
+  }
   await nextTick();
   const root = editorElement.value;
   if (!root || !field) return;
   root.querySelectorAll('.archive-field--focused').forEach(item => item.classList.remove('archive-field--focused'));
   const path = archiveFieldPath(field);
-  const normalized = ['employee.company', 'employee.contractSubjectId'].includes(path) ? 'employee.companyText' : path;
+  const normalized = ['employee.company', 'employee.contractSubjectId'].includes(path) ? 'employee.companyText'
+    : path.replace(/^(contracts\.\d+)\.(contractSubjectId|newCompany)$/, '$1.signingCompany');
   const target = root.querySelector<HTMLElement>(`[data-archive-field="${CSS.escape(normalized)}"]`)
     ?? (normalized.startsWith('contracts') ? root.querySelector<HTMLElement>('[data-archive-section="contracts"]') : null);
   if (!target) return;
@@ -499,7 +577,7 @@ function isDirty() {
   return Boolean(initialSnapshot) && formSnapshot() !== initialSnapshot;
 }
 
-defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, showReloadError,
+defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, showReloadError, beginContractAction,
   pauseAutosave: () => clearTimeout(autosaveTimer), resumeAutosave: scheduleAutosave });
 </script>
 
@@ -511,8 +589,11 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
       <el-button v-else-if="failedAction === 'submit'" link type="primary" @click="submit">重试提交</el-button>
       <el-button v-else link type="primary" @click="saveDraft">重试保存</el-button>
     </div>
-    <nav class="archive-editor-nav" aria-label="档案分区"><el-button v-for="section in [{ id: 'employment', label: '基本与任职' }, { id: 'personal', label: '个人与教育' }, { id: 'contact', label: '联系与保障' }, { id: 'contracts', label: '合同记录' }]" :key="section.id" link @click="editorElement?.querySelector(`[data-archive-section='${section.id}']`)?.scrollIntoView({ block: 'start' })">{{ section.label }}</el-button></nav>
-    <section class="editor-section" data-archive-section="employment">
+    <p v-if="draftHasOtherChanges" class="draft-scope-note" role="status">已恢复未完成的档案草稿，请核对后保存。</p>
+    <p v-if="pendingSensitiveFields.length" class="draft-scope-note" role="status">{{ pendingSensitiveFields.join('、') }}有待提交修改，本次保存会一并生效。</p>
+    <div v-if="contractOnly" class="contract-edit-heading"><h3>{{ contractActionLabels[contractAction] }}</h3><el-button link @click="emit('whole-archive')">查看全部档案修改</el-button></div>
+    <nav v-if="!contractOnly" class="archive-editor-nav" aria-label="档案分区"><el-button v-for="section in [{ id: 'employment', label: '基本与任职' }, { id: 'personal', label: '个人与教育' }, { id: 'contact', label: '联系与保障' }, { id: 'contracts', label: '合同记录' }]" :key="section.id" link @click="editorElement?.querySelector(`[data-archive-section='${section.id}']`)?.scrollIntoView({ block: 'start' })">{{ section.label }}</el-button></nav>
+    <section v-if="!contractOnly" class="editor-section" data-archive-section="employment">
       <div class="editor-section__head">
         <div><h3>基本与任职</h3><span>员工身份、当前组织和绩效关系</span></div>
       </div>
@@ -547,7 +628,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
       </el-form>
     </section>
 
-    <section class="editor-section" data-archive-section="personal">
+    <section v-if="!contractOnly" class="editor-section" data-archive-section="personal">
       <div class="editor-section__head"><div><h3>个人与教育</h3><span>基础身份和教育经历</span></div></div>
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="手机号" data-archive-field="profile.phone" :error="serverFieldErrors['profile.phone']"><el-input v-model="form.profile.phone" /></el-form-item>
@@ -568,7 +649,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
       </el-form>
     </section>
 
-    <section class="editor-section" data-archive-section="contact">
+    <section v-if="!contractOnly" class="editor-section" data-archive-section="contact">
       <div class="editor-section__head"><div><h3>联系与保障</h3><span>敏感号码留空表示保持原值</span></div></div>
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="身份证地址" data-archive-field="profile.idAddress" :error="serverFieldErrors['profile.idAddress']" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
@@ -588,65 +669,34 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
     </section>
 
     <section class="editor-section" data-archive-section="contracts">
-      <div class="editor-section__head contract-toolbar">
-        <div><h3>合同记录</h3><span>支持新增、修改和移除；提交后生效</span></div>
-        <el-button :icon="Plus" @click="addContract">新增合同</el-button>
+      <div v-if="!contractOnly" class="editor-section__head contract-toolbar">
+        <div><h3>合同记录</h3><span>选择一份合同编辑，保存后生效</span></div>
+        <el-button :icon="Plus" @click="addContract()">录入合同</el-button>
       </div>
+      <div v-if="changedContracts.length" class="contract-change-scope" role="status"><strong>本次将保存 {{ changedContracts.length }} 份合同的修改</strong><div><el-button v-for="item in changedContracts" :key="item.__key" link @click="expandedContractKey = item.__key; contractAction = 'edit'">{{ item.__removed ? '删除：' : '' }}{{ contractTitle(item) }}</el-button></div></div>
       <p v-if="uploadBlocked" class="contract-upload-error" role="status">{{ contractUploads.message.value }}</p>
-      <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">
+      <div v-for="(contract, index) in form.contracts" v-show="!contractOnly || expandedContractKey === contract.__key" :key="contract.__key" class="contract-card" :data-contract-key="contract.__key" :data-archive-field="`contracts.${index}`">
         <div class="contract-card__head">
-          <strong>{{ contractTitle(contract) }}</strong>
-          <span v-if="contract.__removed" class="contract-removal"><el-tag type="warning" size="small">待移除</el-tag><el-button link :icon="RefreshLeft" @click="restoreContract(contract)">撤销移除</el-button></span>
-          <el-button v-else link type="danger" :icon="Delete" @click="removeContract(contract)">移除</el-button>
+          <el-button class="contract-expand" link :aria-expanded="expandedContractKey === contract.__key" @click="expandedContractKey = expandedContractKey === contract.__key && !contractOnly ? '' : contract.__key"><strong>{{ contractTitle(contract) }}</strong><span v-if="!contractOnly">{{ expandedContractKey === contract.__key ? '收起' : '编辑' }}</span></el-button>
+          <span v-if="contract.__removed" class="contract-removal"><el-tag type="warning" size="small">待删除</el-tag><el-button link :icon="RefreshLeft" @click="restoreContract(contract)">撤销删除</el-button></span>
+          <el-button v-else link type="danger" :icon="Delete" @click="removeContract(contract)">删除合同</el-button>
         </div>
+        <p v-if="contract.__removed" class="field-help">保存后从可用合同中移除，记录仍会保留；不代表解除劳动合同。</p>
         <p v-if="contractErrors[`contracts.${index}`]" :data-archive-field="`contracts.${index}`" class="contract-upload-error" role="alert">{{ contractErrors[`contracts.${index}`] }}</p>
-        <el-form v-if="!contract.__removed" label-position="top" class="archive-editor-grid">
-          <el-form-item label="类型" :data-archive-field="`contracts.${index}.contractType`" :error="contractErrors[`contracts.${index}.contractType`]"><el-select v-model="contract.contractType"><el-option label="首签" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /><el-option v-if="contract.contractType && !['contract', 'renewal', 'transfer'].includes(contract.contractType)" :label="contract.contractType" :value="contract.contractType" /></el-select></el-form-item>
-          <el-form-item label="合同名称" :data-archive-field="`contracts.${index}.name`" :error="contractErrors[`contracts.${index}.name`]"><PersonnelReferenceSelect v-model="contract.name" kind="contract_name" /></el-form-item>
-          <el-form-item label="签约公司" :data-archive-field="`contracts.${index}.signingCompany`"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
-          <el-form-item label="签订日期" :data-archive-field="`contracts.${index}.signedAt`" :error="contractErrors[`contracts.${index}.signedAt`]"><ContractDateInput v-model="contract.signedAt" /></el-form-item>
-          <el-form-item label="生效日期" :data-archive-field="`contracts.${index}.effectiveFrom`" :error="contractErrors[`contracts.${index}.effectiveFrom`]"><ContractDateInput v-model="contract.effectiveFrom" /></el-form-item>
-          <el-form-item label="到期日期" :data-archive-field="`contracts.${index}.expiresAt`" :error="contractErrors[`contracts.${index}.expiresAt`]"><ContractDateInput v-model="contract.expiresAt" /></el-form-item>
-          <el-form-item label="期限" :data-archive-field="`contracts.${index}.termType`"><el-input v-model="contract.termType" /></el-form-item>
-          <el-form-item v-if="contract.contractType === 'transfer' || contract.originalCompany" label="原公司" :data-archive-field="`contracts.${index}.originalCompany`"><ContractSubjectSelect v-model:snapshot-name="contract.originalCompany" name-only /></el-form-item>
-          <el-form-item v-if="contract.contractType === 'transfer' || contract.newCompany" label="新公司" :data-archive-field="`contracts.${index}.newCompany`"><ContractSubjectSelect v-model:snapshot-name="contract.newCompany" name-only /></el-form-item>
-          <el-form-item label="保密协议" :data-archive-field="`contracts.${index}.confidentialityAgreement`"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
-          <el-form-item label="竞业协议" :data-archive-field="`contracts.${index}.nonCompeteAgreement`"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
-          <el-form-item label="肖像协议" :data-archive-field="`contracts.${index}.portraitAgreement`"><el-input v-model="contract.portraitAgreement" /></el-form-item>
-        </el-form>
-        <div v-if="!contract.__removed" class="contract-materials">
-          <div class="contract-materials__group">
-            <div><strong>合同图片</strong><span>最多 5 张，JPG/PNG/WEBP，单张不超过 2MB</span></div>
-            <el-upload :disabled="contractUploads.count(contract, 'images') >= 5" :show-file-list="false" accept="image/jpeg,image/png,image/webp" :http-request="(options: UploadRequestOptions) => uploadContractImage(contract, options)">
-              <el-button :disabled="contractUploads.count(contract, 'images') >= 5">上传图片</el-button>
-            </el-upload>
-            <div v-if="contract.images?.length" class="material-list">
-              <div v-for="(item, itemIndex) in contract.images" :key="`${item.url}-${itemIndex}`" class="material-item">
-                <el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><small>{{ Math.ceil(item.size / 1024) }}KB</small>
-                <el-button link type="danger" @click="contract.images.splice(itemIndex, 1)">移除</el-button>
-              </div>
-            </div>
-          </div>
-          <div class="contract-materials__group">
-            <div><strong>合同附件</strong><span>最多 10 个，PDF/Word/Excel，单个不超过 10MB</span></div>
-            <el-upload :disabled="contractUploads.count(contract, 'attachments') >= 10" :show-file-list="false" accept=".pdf,.doc,.docx,.xls,.xlsx" :http-request="(options: UploadRequestOptions) => uploadContractAttachment(contract, options)">
-              <el-button :disabled="contractUploads.count(contract, 'attachments') >= 10">上传附件</el-button>
-            </el-upload>
-            <div v-if="contract.attachments?.length" class="material-list">
-              <div v-for="(item, itemIndex) in contract.attachments" :key="`${item.url}-${itemIndex}`" class="material-item">
-                <el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><small>{{ Math.ceil(item.size / 1024) }}KB</small>
-                <el-button link type="danger" @click="contract.attachments.splice(itemIndex, 1)">移除</el-button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <p v-if="expandedContractKey === contract.__key && overlappingContracts.has(contract.id || contract.__key) && !contract.__removed" class="contract-advisory" role="status">与其他合同的期限有重叠，请核对；不影响保存。</p>
+        <EmployeeContractFields v-if="!contract.__removed && expandedContractKey === contract.__key"
+          :contract="contract" :index="index" :errors="contractErrors" :materials-only="contractOnly && contractAction === 'materials'"
+          :image-count="contractUploads.count(contract, 'images')" :attachment-count="contractUploads.count(contract, 'attachments')"
+          :upload-image="(options: UploadRequestOptions) => uploadContractImage(contract, options)"
+          :upload-attachment="(options: UploadRequestOptions) => uploadContractAttachment(contract, options)"
+          :open-material="openUploadedMaterial" />
         <div v-for="task in contractUploads.forContract(contract)" :key="task.id" class="contract-upload-task" role="status">
           <span>{{ task.file.name }}</span><small :class="{ 'contract-upload-error': task.status === 'failed' }">{{ task.status === 'uploading' ? '上传中' : task.error }}</small>
           <el-button v-if="task.status === 'failed'" link type="primary" :icon="RefreshRight" @click="contractUploads.retry(task)">重试</el-button>
           <el-button link type="danger" :icon="Delete" @click="contractUploads.remove(task)">移除</el-button>
         </div>
       </div>
-      <el-empty v-if="!form.contracts.length" description="暂无合同，可点击新增合同" :image-size="72" />
+      <el-empty v-if="!form.contracts.length" description="暂无合同，可点击录入合同" :image-size="72" />
     </section>
   </div>
 </template>
@@ -659,6 +709,15 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
 .archive-field--focused { outline: 2px solid var(--el-color-primary-light-5); outline-offset: 5px; border-radius: 4px; }
 
 .archive-inline-editor { display: grid; gap: 18px; }
+.archive-inline-editor, .editor-section, .contract-card, .contract-change-scope { min-width: 0; }
+.contract-edit-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.contract-edit-heading h3 { margin: 0; font-size: 16px; }
+.draft-scope-note, .contract-advisory { margin: 0 0 12px; color: #8a6116; font-size: 13px; line-height: 1.6; }
+.contract-change-scope { display: grid; gap: 4px; margin-bottom: 12px; font-size: 13px; }
+.contract-change-scope > div { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.contract-change-scope :deep(.el-button) { white-space: normal; height: auto; overflow-wrap: anywhere; margin-left: 0; }
+.contract-expand { min-width: 0; max-width: 100%; height: auto; white-space: normal; text-align: left; }
+.contract-expand :deep(span) { display: flex; gap: 8px; flex-wrap: wrap; }
 .editor-section { padding: 18px; border: 1px solid #e5eaf2; border-radius: 14px; background: #fff; }
 .editor-section__head, .contract-card__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .editor-section__head { margin-bottom: 14px; }
@@ -673,6 +732,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
 .contract-card__head { margin-bottom: 8px; }
 .contract-card__head strong { min-width: 0; overflow-wrap: anywhere; }
 .contract-card__head > .el-button, .contract-removal { flex-shrink: 0; }
+.contract-card__head > .contract-expand { flex: 1; flex-shrink: 1; min-width: 0; }
 .contract-removal, .contract-upload-task { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .contract-upload-task { margin-top: 8px; font-size: 13px; }
 .contract-upload-task > span { min-width: 0; overflow-wrap: anywhere; }
@@ -693,5 +753,6 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
   .contract-materials { grid-template-columns: 1fr; }
   .span-2 { grid-column: auto; }
   .editor-section__head { align-items: flex-start; flex-direction: column; }
+  .contract-card__head { flex-wrap: wrap; gap: 8px; }
 }
 </style>

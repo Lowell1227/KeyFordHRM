@@ -93,7 +93,7 @@ async function editContracts(drawer: Locator) {
   await drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
   await expect(drawer.locator('.archive-inline-editor')).toBeVisible();
   await drawer.getByRole('navigation', { name: '档案分区' }).getByRole('button', { name: '合同记录', exact: true }).click();
-  await expect(drawer.getByRole('button', { name: '新增合同', exact: true })).toBeVisible();
+  await expect(drawer.getByRole('button', { name: '录入合同', exact: true })).toBeVisible();
 }
 
 function contractField(card: Locator, field: string) {
@@ -124,15 +124,21 @@ async function fillDate(card: Locator, field: string, value: string) {
 async function addContract(page: Page, drawer: Locator, value: ContractInput) {
   const cards = drawer.locator('.contract-card');
   const count = await cards.count();
-  await drawer.getByRole('button', { name: '新增合同', exact: true }).click();
+  await drawer.getByRole('button', { name: '录入合同', exact: true }).click();
   await expect(cards).toHaveCount(count + 1);
   const card = cards.nth(count);
   await selectOption(page, contractField(card, 'contractType'), value.type);
-  await contractField(card, 'name').locator('input').fill(value.name);
+  const nameField = contractField(card, 'name');
+  const nameInput = nameField.getByRole('combobox');
+  await nameField.locator('.el-select__wrapper').click();
+  await nameInput.fill(value.name);
+  const nameList = await nameInput.getAttribute('aria-controls');
+  await page.locator(`[id="${nameList}"]`).getByRole('option', { name: value.name, exact: true }).click();
+  await expect(nameField.locator('.el-select')).toContainText(value.name);
   await selectOption(page, contractField(card, 'signingCompany'), value.company);
   for (const key of ['signedAt', 'effectiveFrom', 'expiresAt'] as const) await fillDate(card, key, value[key]);
   if (value.originalCompany) await selectOption(page, contractField(card, 'originalCompany'), value.originalCompany);
-  if (value.newCompany) await selectOption(page, contractField(card, 'newCompany'), value.newCompany);
+  // The new signing company is selected once; transfer keeps its matching name automatically.
   return card;
 }
 
@@ -164,12 +170,16 @@ async function submitContracts(page: Page, drawer: Locator, f: ContractFixture, 
 async function contractDetails(drawer: Locator) {
   await drawer.getByRole('tab', { name: '合同材料', exact: true }).click();
   await expect(drawer.getByRole('heading', { name: '合同记录', exact: true })).toBeVisible();
+  const cards = drawer.locator('.employee-archive__contract-card');
+  await expect(cards.first()).toBeVisible();
+  for (const card of await cards.all()) {
+    const button = card.getByRole('button', { name: '查看详情', exact: true });
+    if (await button.count()) await button.click();
+  }
 }
 
-function currentCard(drawer: Locator) {
-  return drawer.locator('.contract-history-group').filter({
-    has: drawer.page().getByRole('heading', { name: '当前合同', exact: true }),
-  }).locator('.employee-archive__contract-card');
+function currentCard(drawer: Locator, group = '期限内合同') {
+  return drawer.locator(`[data-contract-group="${group}"] .employee-archive__contract-card`);
 }
 
 function detailValue(card: Locator, label: string) {
@@ -201,12 +211,12 @@ async function exportWorkbook(page: Page, info: TestInfo, history: boolean) {
   await page.getByRole('button', { name: '导出花名册', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '导出花名册', exact: true });
   await expect(dialog.getByText('预计导出 1 条记录', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('checkbox', { name: '选择当前合同模块', exact: true })).toBeChecked();
+  await expect(dialog.getByRole('checkbox', { name: '选择最新合同模块', exact: true })).toBeChecked();
   await expect(dialog.getByRole('checkbox', { name: '合同状态', exact: true })).toBeChecked();
-  const historyField = dialog.getByRole('checkbox', { name: '历史合同明细', exact: true });
+  const historyField = dialog.getByRole('checkbox', { name: '其他合同明细', exact: true });
   await expect(historyField).not.toBeChecked();
   if (history) {
-    await dialog.getByText('历史合同明细', { exact: true }).click();
+    await dialog.getByText('其他合同明细', { exact: true }).click();
     await expect(historyField).toBeChecked();
   }
   const button = dialog.getByRole('button', { name: '导出 Excel', exact: true });
@@ -247,7 +257,7 @@ function fictionalPdf(prefix: string) {
   return Buffer.from(pdf, 'ascii');
 }
 
-test('real first signing and transfer use effective date, collapsed history and opt-in historical Excel', async ({ page, contractFixture: f }, info) => {
+test('first signing and future transfer remain visible by date and other contract Excel is opt-in', async ({ page, contractFixture: f }, info) => {
   const first = firstContract(f);
   const transfer: ContractInput = { name: `${f.prefix}_虚构转签劳动合同`, type: '转签', company: f.subjects[1].name,
     signedAt: businessDay(-30), effectiveFrom: businessDay(60), expiresAt: businessDay(790),
@@ -259,7 +269,7 @@ test('real first signing and transfer use effective date, collapsed history and 
   await submitContracts(page, drawer, f);
   await contractDetails(drawer);
   await expect(detailValue(currentCard(drawer), '类型')).toHaveText('首签');
-  await expect(currentCard(drawer).locator('.el-tag')).toHaveText('正常');
+  await expect(currentCard(drawer).locator('.el-tag')).toHaveText('期限内');
   await editContracts(drawer);
   await addContract(page, drawer, transfer);
   await submitContracts(page, drawer, f);
@@ -267,7 +277,7 @@ test('real first signing and transfer use effective date, collapsed history and 
   // Re-select the employee through the actual list, proving persistence beyond editor state.
   drawer = await findEmployee(page, f);
   await contractDetails(drawer);
-  const current = currentCard(drawer);
+  const current = currentCard(drawer, '待生效合同');
   await expect(current).toHaveCount(1);
   await expect(detailValue(current, '合同名称')).toHaveText(transfer.name);
   await expect(detailValue(current, '类型')).toHaveText('转签');
@@ -275,16 +285,10 @@ test('real first signing and transfer use effective date, collapsed history and 
   await expect(detailValue(current, '新公司')).toHaveText(f.subjects[1].name);
   await expect(current.locator('.el-tag')).toHaveText('待生效');
   await expect(drawer.locator('.contract-history-group')).toHaveCount(2);
-  await expect(drawer.getByRole('heading', { name: /待生效合同|未来合同/ })).toHaveCount(0);
-  const toggle = drawer.getByRole('button', { name: /^历史合同/ });
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(drawer.locator('.employee-archive__contract-card')).toHaveCount(1);
-  await snapshot(page, info, 'current-transfer-history-collapsed');
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  const history = drawer.locator('.contract-history-group').filter({
-    has: page.getByRole('button', { name: /^历史合同/ }),
-  }).locator('.employee-archive__contract-card');
+  await expect(drawer.getByRole('heading', { name: /待生效合同/ })).toHaveCount(1);
+  await expect(drawer.locator('.employee-archive__contract-card')).toHaveCount(2);
+  await snapshot(page, info, 'within-term-and-upcoming-contracts');
+  const history = currentCard(drawer);
   await expect(history).toHaveCount(1);
   await expect(detailValue(history, '合同名称')).toHaveText(first.name);
   await expect(detailValue(history, '类型')).toHaveText('首签');
@@ -292,8 +296,7 @@ test('real first signing and transfer use effective date, collapsed history and 
   await expect(detailValue(history, '到期日期')).toHaveText(first.expiresAt);
   await history.scrollIntoViewIfNeeded();
   await snapshot(page, info, 'history-retains-original-dates');
-  await toggle.click();
-  await expect(drawer.locator('.employee-archive__contract-card')).toHaveCount(1);
+  await expect(drawer.locator('.employee-archive__contract-card')).toHaveCount(2);
   const state = readContractState(f);
   expect(state.contracts).toHaveLength(2);
   expect(state.contracts.every(contract => contract.isActive)).toBe(true);
@@ -310,10 +313,10 @@ test('real first signing and transfer use effective date, collapsed history and 
     '签订日期': new Date(`${transfer.signedAt}T00:00:00Z`),
     '生效日期': new Date(`${transfer.effectiveFrom}T00:00:00Z`),
     '到期日期': new Date(`${transfer.expiresAt}T00:00:00Z`) });
-  expect(defaults.getWorksheet('历史合同')).toBeUndefined();
+  expect(defaults.getWorksheet('其他合同记录')).toBeUndefined();
   const withHistory = await exportWorkbook(page, info, true);
   expect(sheetRows(withHistory.getWorksheet('花名册'))).toEqual(rows);
-  const historicalRows = sheetRows(withHistory.getWorksheet('历史合同'));
+  const historicalRows = sheetRows(withHistory.getWorksheet('其他合同记录'));
   expect(historicalRows).toHaveLength(1);
   expect(historicalRows[0]).toMatchObject({ '工号': f.employee.employeeNo, '合同类型': '首签', '合同名称': first.name,
     '签订日期': new Date(`${first.signedAt}T00:00:00Z`), '生效日期': new Date(`${first.effectiveFrom}T00:00:00Z`),
@@ -333,7 +336,7 @@ test('new inverted dates need correction while unchanged legacy date errors do n
   const card = await addContract(page, drawer, input);
   await drawer.getByRole('button', { name: '提交', exact: true }).click();
   await expect(contractField(card, 'expiresAt').locator('.el-form-item__error')).toContainText(/到期.*不能早于.*生效/);
-  await expect(contractField(card, 'name').locator('input')).toHaveValue(input.name);
+  await expect(contractField(card, 'name').locator('.el-select')).toContainText(input.name);
   await expect(contractField(card, 'expiresAt').locator('input')).toHaveValue(input.expiresAt);
   expect(readContractState(f)).toEqual(legacy);
   await snapshot(page, info, 'invalid-contract-dates');
@@ -359,8 +362,11 @@ test('new inverted dates need correction while unchanged legacy date errors do n
   expect(state.appliedRequests).toBe(1);
   drawer = await findEmployee(page, f);
   await contractDetails(drawer);
-  await expect(currentCard(drawer).locator('.el-tag')).toHaveText('已到期');
-  await expect(drawer.getByRole('button', { name: /^历史合同/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(currentCard(drawer, '待核实合同').locator('.el-tag')).toHaveText('待核实');
+  const expired = drawer.getByRole('button', { name: /^已到期合同/ });
+  await expect(expired).toHaveAttribute('aria-expanded', 'false');
+  await expired.click();
+  await expect(currentCard(drawer, '已到期合同').locator('.el-tag')).toHaveText('已到期');
   await snapshot(page, info, 'corrected-expired-contract');
 });
 
@@ -386,7 +392,7 @@ test('double submit creates one contract and a second identical contract is reje
   expect((await response.json()).data.fieldErrors['contracts.1.name']).toMatch(/重复/);
   await expect(contractField(duplicate, 'name').locator('.el-form-item__error')).toContainText(/重复|相同/);
   await expect(duplicate).toBeVisible();
-  await expect(contractField(duplicate, 'name').locator('input')).toHaveValue(input.name);
+  await expect(contractField(duplicate, 'name').locator('.el-select')).toContainText(input.name);
   expect(readContractState(f)).toEqual(original);
   await snapshot(page, info, 'duplicate-contract-rejected');
 });

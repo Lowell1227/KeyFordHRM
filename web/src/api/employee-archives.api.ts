@@ -350,6 +350,9 @@ export interface EmployeeArchive {
     portraitAgreement: string | null;
     isActive: boolean;
     endedAt: string | null;
+    recordState?: 'active' | 'removed' | 'retained';
+    recordStateLabel?: string;
+    recordStateAt?: string | null;
     images: Array<{ name: string; url: string; size: number; mimeType: string }>;
     attachments: Array<{ name: string; url: string; size: number; mimeType: string }>;
   }>;

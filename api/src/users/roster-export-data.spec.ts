@@ -73,17 +73,30 @@ describe('roster archive export', () => {
     expect(selectRosterContracts([{ id: 'future', contractType: 'renewal', effectiveFrom: day('2099-01-01') }]).latest?.id).toBe('future');
   });
 
-  it('keeps pending current contracts in one group and exports their Shanghai-day status', async () => {
+  it('labels the latest record separately from its Shanghai-day status', async () => {
     const contract = { id: 'pending', contractType: 'renewal', effectiveFrom: day('2026-12-01'), expiresAt: day('2029-11-30') };
     expect(rosterContractDateStatus(contract, new Date('2026-11-30T15:59:59Z'))).toBe('待生效');
-    expect(rosterContractDateStatus(contract, new Date('2026-11-30T16:00:00Z'))).toBe('正常');
+    expect(rosterContractDateStatus(contract, new Date('2026-11-30T16:00:00Z'))).toBe('期限内');
     expect(rosterContractDateStatus(contract, new Date('2029-11-30T16:00:00Z'))).toBe('已到期');
     const built = await buildRosterWorkbook([employee({ contracts: [{ ...contract, effectiveFrom: day('2099-01-01'), expiresAt: day('2100-01-01') }] })],
       ['latestContractType', 'latestContractStatus']);
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(await built.xlsx.writeBuffer() as any);
     expect(book.getWorksheet('花名册')!.getRow(3).values).toEqual([undefined, '续签', '待生效']);
-    expect(book.getWorksheet('历史合同')).toBeUndefined();
+    expect(book.getWorksheet('其他合同记录')).toBeUndefined();
+  });
+
+  it('uses the same clear date states for open terms, missing dates and retained records as archive display', () => {
+    const base = { id: 'fixture', contractType: 'contract', effectiveFrom: day('2026-01-01') };
+    const at = new Date('2026-11-17T04:00:00Z');
+    expect(rosterContractDateStatus({ ...base, termType: '无固定期限' }, at)).toBe('期限内');
+    expect(rosterContractDateStatus({ ...base, termType: '无固定期限', effectiveFrom: day('2027-01-01') }, at)).toBe('待生效');
+    expect(rosterContractDateStatus({ ...base, expiresAt: day('2026-01-01'), effectiveFrom: null }, at)).toBe('待核实');
+    expect(rosterContractDateStatus({ ...base, termType: '无固定期限', expiresAt: day('2027-01-01') }, at)).toBe('待核实');
+    expect(rosterContractDateStatus({ ...base, expiresAt: new Date('invalid') }, at)).toBe('待核实');
+    expect(rosterContractDateStatus({ ...base, effectiveFrom: day('0000-01-01'), expiresAt: day('2027-01-01') }, at)).toBe('待核实');
+    expect(rosterContractDateStatus({ ...base, contractType: 'unclassified', expiresAt: day('2027-01-01') }, at)).toBe('待核实');
+    expect(rosterContractDateStatus({ ...base, isActive: false }, at)).toBe('历史保留记录');
   });
 
   it('does not let an undated legacy signature displace a dated current transfer in the workbook', async () => {
@@ -149,7 +162,7 @@ describe('roster archive export', () => {
     const workbook = await buildRosterWorkbook([employee({ contracts })], ['name', 'latestContractName', 'latestEffectiveFrom', 'contractHistory']);
     const main = workbook.getWorksheet('花名册')!;
     expect((main.getRow(3).values as unknown[]).slice(1)).toEqual(['=SUM(1,2)', '最新合同', day('2026-10-01')]);
-    const history = workbook.getWorksheet('历史合同')!;
+    const history = workbook.getWorksheet('其他合同记录')!;
     expect(history.getCell('C2').value).toBe('原记录序号');
     expect(history.getCell('C3').value).toBe(10);
     expect(history.getCell('P3').value).toBe('已停用');
@@ -161,7 +174,7 @@ describe('roster archive export', () => {
 
   it('supports a history-only selection and empty results without blank data rows or an unused main sheet', async () => {
     const historyOnly = await buildRosterWorkbook([], ['contractHistory']);
-    expect(historyOnly.worksheets.map(sheet => sheet.name)).toEqual(['历史合同']);
+    expect(historyOnly.worksheets.map(sheet => sheet.name)).toEqual(['其他合同记录']);
     expect(historyOnly.worksheets[0].rowCount).toBe(2);
     const oneColumn = await buildRosterWorkbook([], ['name']);
     expect(oneColumn.worksheets[0].rowCount).toBe(2);

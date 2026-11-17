@@ -180,7 +180,7 @@ test('real roster export preserves field permissions, filtered scope, typed date
   expect(roster.getCell('A1').fill.type).toBe('pattern');
   expect(roster.getCell('A1').alignment.wrapText).toBe(true);
   expect(roster.autoFilter).toBeTruthy();
-  const history = book.getWorksheet('历史合同');
+  const history = book.getWorksheet('其他合同记录');
   expect(history).toBeDefined();
   const historyValues: string[] = [];
   history.eachRow((row: any) => row.eachCell((cell: any) => historyValues.push(String(cell.value ?? ''))));
@@ -228,8 +228,8 @@ for (const width of [1440, 1024, 390]) {
     await expect(basic).toBeChecked({ indeterminate: true });
     await dialog.getByText('基本与任职', { exact: true }).click();
     await expect(dialog.getByRole('checkbox', { name: '姓名', exact: true })).toBeChecked();
-    await dialog.getByText('当前合同', { exact: true }).click();
-    await dialog.getByText('合同历史', { exact: true }).click();
+    await dialog.getByText('最新合同', { exact: true }).click();
+    await dialog.getByText('其他合同记录', { exact: true }).click();
     await expect(exportButton).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await page.screenshot({ path: info.outputPath(`roster-module-${width}.png`), fullPage: true, animations: 'disabled', scale: 'css' });
@@ -246,7 +246,7 @@ for (const width of [1440, 1024, 390]) {
     expect(rows).toHaveLength(21);
     expect(rows.every(row => String(row['姓名']).startsWith(f.keyword))).toBe(true);
     expect(rows.find(row => row['工号'] === f.employee.employeeNo)!['合同名称']).toBe('虚构最新合同');
-    expect(book.getWorksheet('历史合同')).toBeDefined();
+    expect(book.getWorksheet('其他合同记录')).toBeDefined();
     await expect(dialog).not.toBeVisible();
   });
 }

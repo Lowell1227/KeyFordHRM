@@ -255,7 +255,7 @@ async function exportFromPage(page: Page, f: Fixture, info: TestInfo, expected: 
   await download.saveAs(path);
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(path);
   const sheet = workbook.getWorksheet('花名册');
-  expect(sheet.rowCount).toBe(3); expect(workbook.getWorksheet('历史合同')).toBeUndefined();
+  expect(sheet.rowCount).toBe(3); expect(workbook.getWorksheet('其他合同记录')).toBeUndefined();
   const headers = sheet.getRow(2).values.slice(1) as string[];
   const row = Object.fromEntries(headers.map((header, i) => [header, sheet.getRow(3).getCell(i + 1).value]));
   expect(row).toEqual({ '姓名': f.employee.name, '工号': f.employee.employeeNo, ...expected });

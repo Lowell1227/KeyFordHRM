@@ -162,7 +162,7 @@ export async function buildRosterWorkbook(items: RosterWorkbookItem[], columns: 
     const rows = items.flatMap(item => selectRosterContracts(item.contracts).history.map(contract => ({
       ...rosterContractCells(contract), employeeName: item.name, employeeNo: item.employeeNo ?? '',
     })));
-    addRosterSheet(workbook, '历史合同', HISTORY_COLUMNS, rows);
+    addRosterSheet(workbook, '其他合同记录', HISTORY_COLUMNS, rows);
   }
   return workbook;
 }

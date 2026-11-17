@@ -32,6 +32,7 @@ import {
   SubmitDepartmentAssignmentsDto,
 } from './dto/employee-archive.dto';
 import { EmployeeArchivesService } from './employee-archives.service';
+import { withContractRecordStates } from './employee-contract-record-state';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 import { EmployeeRosterImportService } from './employee-roster-import.service';
 import { EmployeeRosterImportClosedGuard } from './employee-roster-import-closed.guard';
@@ -272,7 +273,10 @@ export class EmployeeArchivesController {
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     const archive = await this.archives.findOne(id);
-    return { ...archive, ...await this.archives.history(id) };
+    const history = await this.archives.history(id);
+    return { ...archive, ...history,
+      employeeContracts: withContractRecordStates(archive.employeeContracts, history.changeHistory),
+    };
   }
 
   @Patch(':id/profile')

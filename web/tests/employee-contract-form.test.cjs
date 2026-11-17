@@ -50,8 +50,9 @@ async function mount(t, name, input, upload = async () => material(), api = {}) 
   const { descriptor } = parse(fs.readFileSync(filename, 'utf8'));
   const calls = [];
   const component = load(filename, {
+    '@/stores/auth.store': { useAuthStore: () => ({ user: { sysRole: 'hr' } }) },
     '@/api/upload.api': { uploadApi: { upload } },
-    '@/api/positions.api': { positionsApi: { findAll: async () => [] } },
+    '@/api/positions.api': { positionsApi: { findAll: async () => [{ id: 'fixture-position', name: '虚构岗位', isActive: true }] } },
     '@/api/employee-archives.api': { employeeArchivesApi: {
       saveArchiveDraft: async () => ({ id: 'draft', requestVersion: 1 }),
       saveEmployeeCreateDraft: async () => ({ id: 'draft', requestVersion: 1 }),
@@ -77,7 +78,7 @@ async function editor(t, contracts = [], upload) {
 async function drawer(t, upload, api) {
   const context = await mount(t, 'EmployeeCreateDrawer.vue', { modelValue: true, departments: [] }, upload, api);
   Object.assign(context.state.form, {
-    name: '虚构新员工', company: 'fuede', deptId: 'fixture-dept', entryDate: '2026-11-14', effectiveFrom: '2026-11-14',
+    name: '虚构新员工', company: 'fuede', deptId: 'fixture-dept', positionId: 'fixture-position', entryDate: '2026-11-14', effectiveFrom: '2026-11-14',
   });
   context.state.form.employee.companyText = '虚构公司';
   await vue.nextTick();
@@ -238,11 +239,13 @@ test('both templates label contract as first signing and expose local date error
     const filename = path.join(root, 'views/admin/components', name);
     const { descriptor } = parse(fs.readFileSync(filename, 'utf8'));
     assert.deepEqual(compileTemplate({ source: descriptor.template.content, filename, id: name }).errors, []);
-    assert.match(descriptor.template.content, /label="首签" value="contract"/);
+    const fields = name === 'EmployeeArchiveInlineEditor.vue'
+      ? fs.readFileSync(path.join(root, 'views/admin/components/EmployeeContractFields.vue'), 'utf8') : descriptor.template.content;
+    assert.match(fields, name === 'EmployeeArchiveInlineEditor.vue' ? /value: 'contract', label: '首签'/ : /label="首签" value="contract"/);
     assert.match(descriptor.template.content, /contractUploads\.retry/);
     assert.match(descriptor.template.content, /contractUploads\.remove/);
     for (const field of ['signedAt', 'effectiveFrom', 'expiresAt']) {
-      assert.match(descriptor.template.content, new RegExp(':error="[^"\\n]*' + field));
+      assert.match(fields, new RegExp(':error="[^"\\n]*' + field));
     }
   }
 });
@@ -250,11 +253,15 @@ test('both templates label contract as first signing and expose local date error
 test('both contract forms use strict controls only for contract dates and show transfer company fields conditionally', () => {
   for (const name of ['EmployeeArchiveInlineEditor.vue', 'EmployeeCreateDrawer.vue']) {
     const source = fs.readFileSync(path.join(root, 'views/admin/components', name), 'utf8');
+    const fields = name === 'EmployeeArchiveInlineEditor.vue'
+      ? fs.readFileSync(path.join(root, 'views/admin/components/EmployeeContractFields.vue'), 'utf8') : source;
     for (const field of ['signedAt', 'effectiveFrom', 'expiresAt']) {
-      assert.match(source, new RegExp('<ContractDateInput v-model="contract\\.' + field + '"'));
+      assert.match(fields, new RegExp('<ContractDateInput v-model="contract\\.' + field + '"'));
     }
     for (const field of ['originalCompany', 'newCompany']) {
-      assert.ok(source.includes(`v-if="contract.contractType === 'transfer' || contract.${field}"`));
+      assert.ok(fields.includes(field === 'newCompany' && name === 'EmployeeArchiveInlineEditor.vue'
+        ? `v-if="contract.contractType !== 'transfer' && contract.newCompany"`
+        : `v-if="contract.contractType === 'transfer' || contract.${field}"`));
     }
     assert.match(source, /<el-date-picker v-model="form\.(?:employee\.entryDate|entryDate)"/);
   }
@@ -323,4 +330,122 @@ test('removing and restoring an existing contract never accepts a pre-removal up
   pending.resolve(material());
   await upload;
   assert.deepEqual(contract.attachments, []);
+});
+
+test('contract action renewal opens only its new row and preserves the source and employee company', async t => {
+  const { state } = await editor(t, [{ id: 'source', contractType: 'contract', name: '劳动合同',
+    signingCompany: '虚构签约公司', contractSubjectId: 'subject-a', effectiveFrom: '2025-01-01', expiresAt: '2026-12-31' }]);
+  state.form.employee.companyText = '虚构所属公司';
+  const before = JSON.stringify(state.form.contracts[0]);
+  await state.beginContractAction('renew', 'source');
+  const renewal = state.form.contracts[1];
+  assert.equal(renewal.contractType, 'renewal');
+  assert.equal(renewal.name, '劳动合同');
+  assert.equal(renewal.contractSubjectId, 'subject-a');
+  assert.equal(renewal.signingCompany, '虚构签约公司');
+  assert.equal(renewal.id, undefined);
+  assert.equal(renewal.effectiveFrom, null);
+  assert.equal(state.expandedContractKey.value, renewal.__key);
+  assert.equal(JSON.stringify(state.form.contracts[0]), before);
+  assert.equal(state.form.employee.companyText, '虚构所属公司');
+});
+
+test('contract actions resume the whole draft without losing unrelated edits or other contracts', async t => {
+  const existing = { id: 'source', contractType: 'contract', name: '原合同', signingCompany: '虚构公司' };
+  const { state, events } = await mount(t, 'EmployeeArchiveInlineEditor.vue', {
+    editing: true, contractOnly: true, archive: archive([existing]), departments: [],
+    draft: { id: 'draft-existing', userId: 'fictional-employee', recordStatus: 'draft', requestVersion: 3,
+      proposedValue: { profile: { school: '草稿中的学校' }, contracts: [{ ...existing, name: '草稿中的合同名' }] } },
+  });
+  await state.beginContractAction('materials', 'source');
+  assert.equal(events.some(event => event[0] === 'whole-archive'), true);
+  assert.equal(state.form.contracts.length, 1);
+  assert.equal(state.form.contracts[0].name, '草稿中的合同名');
+  assert.equal(state.contractAction.value, 'materials');
+  assert.equal(state.changePayload().profile.school, '草稿中的学校');
+  assert.equal(state.changePayload().draftId, 'draft-existing');
+  assert.equal(state.changePayload().expectedVersion, 3);
+  await state.beginContractAction('transfer', 'source');
+  assert.equal(state.form.contracts[1].originalCompany, '虚构公司');
+  assert.equal(state.form.contracts[1].contractType, 'transfer');
+  assert.equal(state.form.contracts[1].signingCompany, '');
+  assert.equal(state.form.contracts[1].contractSubjectId, undefined);
+});
+
+test('transfer company selection updates the new company and shows exact subject field errors', async t => {
+  const contract = { contractType: 'transfer', originalCompany: '原签约公司', signingCompany: '新签约公司', contractSubjectId: 'subject-b', newCompany: '' };
+  const { state } = await mount(t, 'EmployeeContractFields.vue', { contract, index: 2,
+    errors: { 'contracts.2.contractSubjectId': '该公司已停用，请选择启用公司' }, imageCount: 0, attachmentCount: 0 });
+  assert.equal(state.error('signingCompany'), '该公司已停用，请选择启用公司');
+  state.selectSigningCompany({ id: 'subject-b', name: '新签约公司' });
+  assert.equal(contract.newCompany, '新签约公司');
+  assert.equal(contract.originalCompany, '原签约公司');
+});
+
+test('a direct delete remains reversible and never deletes a different contract', async t => {
+  const { state } = await editor(t, [{ id: 'first', name: '第一份' }, { id: 'second', name: '第二份' }]);
+  await state.beginContractAction('remove', 'first');
+  assert.equal(state.form.contracts[0].__removed, true);
+  assert.deepEqual(state.changePayload().contracts.map(item => item.id), ['second']);
+  state.restoreContract(state.form.contracts[0]);
+  assert.deepEqual(state.changePayload().contracts.map(item => item.id), ['first', 'second']);
+});
+
+test('renewal never combines an unlinked historical company name with the employee current company ID', async t => {
+  const { state } = await editor(t, [{ id: 'legacy-company', contractType: 'contract', signingCompany: '历史原文公司' }]);
+  state.form.employee.companyText = '现在所属公司';
+  state.form.employee.contractSubjectId = 'current-subject';
+  await state.beginContractAction('renew', 'legacy-company');
+  assert.equal(state.form.contracts[1].signingCompany, '历史原文公司');
+  assert.equal(state.form.contracts[1].contractSubjectId, undefined);
+});
+
+test('resuming a pure contract draft keeps its deleted rows visible for undo', async t => {
+  const existing = [{ id: 'first', name: '误录合同' }, { id: 'second', name: '保留合同' }];
+  const { state, events } = await mount(t, 'EmployeeArchiveInlineEditor.vue', {
+    editing: true, contractOnly: true, archive: archive(existing), departments: [],
+    draft: { id: 'delete-draft', userId: 'fictional-employee', recordStatus: 'draft', requestVersion: 2,
+      proposedValue: { contracts: [existing[1]] } },
+  });
+  await state.beginContractAction('edit');
+  const deleted = state.form.contracts.find(item => item.id === 'first');
+  assert.equal(deleted.__removed, true);
+  assert.equal(state.expandedContractKey.value, deleted.__key);
+  assert.equal(events.some(event => event[0] === 'whole-archive'), false);
+  state.restoreContract(deleted);
+  assert.deepEqual(state.changePayload().contracts.map(item => item.id).sort(), ['first', 'second']);
+});
+
+test('unchanged server snapshot fields do not expand a contract draft into unrelated archive editing', async t => {
+  const baseline = { name: '虚构员工', effectiveFrom: '2020-01-01T00:00:00.000Z', deptName: '虚构部门', changeType: 'onboarding' };
+  const { state, events } = await mount(t, 'EmployeeArchiveInlineEditor.vue', {
+    editing: true, contractOnly: true, archive: archive(), departments: [],
+    draft: { id: 'normalized-draft', userId: 'fictional-employee', recordStatus: 'draft', requestVersion: 1,
+      baseValue: { employee: baseline, profile: { phone: null }, performance: { managerId: null } },
+      proposedValue: { employee: { ...baseline, effectiveFrom: '2020-01-01' }, profile: { phone: '' }, performance: { managerId: null },
+        contracts: [{ name: '补录合同', contractType: 'contract' }] } },
+  });
+  await state.beginContractAction('edit');
+  assert.equal(state.draftHasOtherChanges.value, false);
+  assert.equal(events.some(event => event[0] === 'whole-archive'), false);
+});
+
+test('redacted identity and bank replacements restore whole-archive mode and disclose the pending fields', async t => {
+  const profile = { idNumberConfigured: true, bankAccountConfigured: true };
+  const input = {
+    editing: true, contractOnly: true, archive: archive(), departments: [],
+    draft: { id: 'redacted-draft', userId: 'fictional-employee', recordStatus: 'draft', requestVersion: 1,
+      profileReviewStatus: 'pending', changedFields: ['profile.idNumber', 'profile.bankAccount'],
+      baseValue: { profile }, proposedValue: { profile, contracts: [] } },
+  };
+  const { state, events, props } = await mount(t, 'EmployeeArchiveInlineEditor.vue', input);
+  await state.beginContractAction('create');
+  assert.equal(state.draftHasOtherChanges.value, true);
+  assert.deepEqual(state.pendingSensitiveFields.value, ['身份证号', '银行卡号']);
+  assert.equal(events.some(event => event[0] === 'whole-archive'), true);
+  props.draft.profileReviewStatus = 'approved';
+  state.reset();
+  await vue.nextTick();
+  assert.deepEqual(state.pendingSensitiveFields.value, []);
+  assert.equal(state.draftHasOtherChanges.value, false);
 });

@@ -52,7 +52,7 @@ import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 import { employeeContractStatus, formatEmployeeContractDate } from '@/utils/employee-contract-status';
-import { contractTitle, selectEmployeeContracts } from '@/utils/employee-contract-presentation';
+import { contractTitle, groupEmployeeContracts, overlappingContractIds } from '@/utils/employee-contract-presentation';
 
 type PersonnelView = 'org' | 'users' | 'processing';
 
@@ -701,15 +701,21 @@ const archiveCurrentEmployment = computed(() => (
 ));
 const archiveReadOnly = computed(() => Boolean(employeeArchiveDrawer.value.data?.archivedAt));
 const archiveEditing = ref(false);
+const archiveContractOnly = ref(false);
 const archiveSection = ref('current');
 const expandedContractGroups = ref<string[]>([]);
+const expandedContractDetails = ref<string[]>([]);
+const archiveContractOverlaps = computed(() => overlappingContractIds(employeeArchiveDrawer.value.data?.employeeContracts ?? []));
 const contractGroups = computed(() => {
   const contracts = (employeeArchiveDrawer.value.data?.employeeContracts ?? [])
     .map(contract => ({ ...contract, dateStatus: employeeContractStatus(contract) }));
-  const { current, history } = selectEmployeeContracts(contracts);
+  const groups = groupEmployeeContracts(contracts);
   return [
-    { name: '当前合同', contracts: current ? [current] : [] },
-    { name: '历史合同', contracts: history },
+    { name: '期限内合同', contracts: groups.withinTerm, collapsed: false },
+    { name: '待生效合同', contracts: groups.upcoming, collapsed: false },
+    { name: '待核实合同', contracts: groups.needsReview, collapsed: false },
+    { name: '已到期合同', contracts: groups.history, collapsed: true },
+    { name: '历史保留记录', contracts: groups.retained, collapsed: true },
   ].filter((group) => group.contracts.length);
 });
 const employmentGroups = computed(() => {
@@ -800,6 +806,18 @@ async function reloadArchiveEdit() {
     } catch { return; }
   }
   await startArchiveEdit(true);
+  if (archiveContractOnly.value && archiveEditing.value) {
+    await nextTick();
+    await archiveEditorRef.value?.beginContractAction('edit');
+  }
+}
+
+async function startContractAction(action: 'create' | 'renew' | 'transfer' | 'historical' | 'materials' | 'edit' | 'remove', contractId?: string) {
+  archiveContractOnly.value = true;
+  await startArchiveEdit();
+  if (!archiveEditing.value) return;
+  await nextTick();
+  await archiveEditorRef.value?.beginContractAction(action, contractId);
 }
 
 async function openEmployeeArchive(row: ArchiveTarget, keepQueue = false) {
@@ -821,6 +839,8 @@ async function openEmployeeArchive(row: ArchiveTarget, keepQueue = false) {
   archivePendingRequest.value = null;
   archiveSection.value = 'current';
   expandedContractGroups.value = [];
+  expandedContractDetails.value = [];
+  archiveContractOnly.value = false;
   employeeArchiveDrawer.value.visible = true;
   employeeArchiveDrawer.value.dingtalkSaving = false;
   archiveEditing.value = false;
@@ -2620,7 +2640,7 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <div v-if="canEditArchive && !archiveReadOnly && !archiveEditing && !archivePendingRequest" class="employee-archive__global-actions">
-              <el-button type="primary" :loading="archiveEntryLoading" :disabled="archiveEditSaving" @click="startArchiveEdit()">编辑档案</el-button>
+              <el-button type="primary" :loading="archiveEntryLoading" :disabled="archiveEditSaving" @click="archiveContractOnly = false; startArchiveEdit()">编辑档案</el-button>
             </div>
           </div>
           <aside v-if="archiveIssueContext" class="archive-issue-context" role="note" aria-label="正在核实事项">
@@ -2637,6 +2657,7 @@ onBeforeUnmount(() => {
           <EmployeeArchiveInlineEditor
             ref="archiveEditorRef"
             :editing="archiveEditing"
+            :contract-only="archiveContractOnly"
             :archive="employeeArchiveDrawer.data"
             :draft="activeArchiveDraft"
             :departments="departments"
@@ -2648,6 +2669,7 @@ onBeforeUnmount(() => {
             @blocked="archiveSaveBlocked = $event"
             @reload="reloadArchiveEdit"
             @submit="submitArchiveDraft"
+            @whole-archive="archiveContractOnly = false"
           />
 
           <section v-if="!archiveEditing && archiveSection === 'current'" class="employee-archive__section employee-archive__section--card">
@@ -2799,67 +2821,71 @@ onBeforeUnmount(() => {
           </section>
 
           <section v-if="!archiveEditing && archiveSection === 'contracts'" class="employee-archive__section employee-archive__section--card">
-            <div class="section-head">
-              <div>
-                <h3>合同记录</h3>
-                <el-tooltip content="当前合同优先按明确的生效日期选取，未到生效日标记待生效；均缺少生效日期时参考签订日期。" placement="top"><el-icon aria-label="合同排序说明"><QuestionFilled /></el-icon></el-tooltip>
+            <div class="section-head contract-section-heading">
+              <div><h3>合同记录</h3><p>按合同日期展示，历史记录保留；修改后保存即可生效。</p></div>
+              <div v-if="canEditArchive && !archiveReadOnly && !archivePendingRequest" class="contract-business-actions">
+                <el-button type="primary" :disabled="archiveEntryLoading" @click="startContractAction('create')">录入合同</el-button>
+                <el-button :disabled="archiveEntryLoading" @click="startContractAction('historical')">补录合同</el-button>
+                <el-button v-if="activeArchiveDraft" :disabled="archiveEntryLoading" @click="startContractAction('edit')">继续草稿</el-button>
               </div>
             </div>
-            <template v-if="employeeArchiveDrawer.data.employeeContracts.length">
-            <section v-for="group in contractGroups" :key="group.name" class="contract-history-group">
-            <h4 v-if="group.name === '当前合同'">当前合同</h4>
-            <button v-else type="button" class="contract-history-toggle" :aria-expanded="expandedContractGroups.includes(group.name)"
-              @click="expandedContractGroups = expandedContractGroups.includes(group.name) ? [] : [group.name]">
-              历史合同（{{ group.contracts.length }}） · {{ expandedContractGroups.includes(group.name) ? '收起' : '展开' }}
-            </button>
-            <template v-if="group.name === '当前合同' || expandedContractGroups.includes(group.name)">
-            <div
-              v-for="contract in group.contracts"
-              :key="contract.id"
-              class="employee-archive__contract-card"
-            >
-              <div class="employee-archive__contract-head">
-                <strong>{{ contractTitle(contract) }}</strong>
-                <el-tag :type="contract.dateStatus.type" size="small">
-                  {{ contract.dateStatus.label }}
-                </el-tag>
-              </div>
-              <div class="employee-archive__facts">
-                <div><span>类型</span><strong>{{ contractTypeLabels[contract.contractType] || contract.contractType || '未填写' }}</strong></div>
-                <div><span>合同名称</span><strong>{{ contract.name || '未填写' }}</strong></div>
-                <div><span>签约公司</span><strong>{{ contract.signingCompany || '未填写' }}</strong><small v-if="contract.contractSubjectId">已关联合同主体</small><small v-else-if="contract.signingCompany">历史名称，尚未关联主体</small></div>
-                <div><span>签订日期</span><strong>{{ formatEmployeeContractDate(contract.signedAt) }}</strong></div>
-                <div><span>生效日期</span><strong>{{ formatEmployeeContractDate(contract.effectiveFrom) }}</strong></div>
-                <div><span>到期日期</span><strong>{{ formatEmployeeContractDate(contract.expiresAt) }}</strong></div>
-                <div><span>期限</span><strong>{{ contract.termType || '未填写' }}</strong></div>
-                <div v-if="contract.contractType === 'transfer' || contract.originalCompany"><span>原公司</span><strong>{{ contract.originalCompany || '未填写' }}</strong></div>
-                <div v-if="contract.contractType === 'transfer' || contract.newCompany"><span>新公司</span><strong>{{ contract.newCompany || '未填写' }}</strong></div>
-                <div><span>保密协议</span><strong>{{ contract.confidentialityAgreement || '未填写' }}</strong></div>
-                <div><span>竞业协议</span><strong>{{ contract.nonCompeteAgreement || '未填写' }}</strong></div>
-                <div><span>肖像协议</span><strong>{{ contract.portraitAgreement || '未填写' }}</strong></div>
-              </div>
-              <div class="employee-archive__contract-materials">
-                <div>
-                  <strong>合同图片</strong>
-                  <div class="contract-material-links">
-                    <span v-if="!contract.images?.length">无图片</span>
-                    <el-button v-for="item in contract.images ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">{{ item.name }}</el-button>
+            <section v-for="group in contractGroups" :key="group.name" class="contract-history-group" :data-contract-group="group.name">
+              <h4 v-if="!group.collapsed">{{ group.name }} <span class="contract-group-count">{{ group.contracts.length }}</span></h4>
+              <el-button v-else class="contract-history-toggle" link :aria-expanded="expandedContractGroups.includes(group.name)"
+                @click="expandedContractGroups = expandedContractGroups.includes(group.name) ? expandedContractGroups.filter(item => item !== group.name) : [...expandedContractGroups, group.name]">
+                {{ group.name }}（{{ group.contracts.length }}） · {{ expandedContractGroups.includes(group.name) ? '收起' : '展开' }}
+              </el-button>
+              <template v-if="!group.collapsed || expandedContractGroups.includes(group.name)">
+                <div v-for="contract in group.contracts" :key="contract.id" :data-contract-id="contract.id" class="employee-archive__contract-card">
+                  <div class="employee-archive__contract-head">
+                    <strong>{{ contractTitle(contract) }}</strong>
+                    <el-tag :type="contract.dateStatus.type" size="small">{{ contract.dateStatus.label }}</el-tag>
+                    <span v-if="contract.termType" class="contract-term-label">{{ contract.termType }}</span>
+                  </div>
+                  <div class="contract-quick-facts">
+                    <span>{{ contract.signingCompany || '签约公司待补充' }}</span>
+                    <span>{{ formatEmployeeContractDate(contract.effectiveFrom) }} 至 {{ contract.termType?.includes('无固定期限') && !contract.expiresAt ? '无固定期限' : formatEmployeeContractDate(contract.expiresAt) }}</span>
+                    <span>材料 {{ (contract.images?.length || 0) + (contract.attachments?.length || 0) }} 份</span>
+                  </div>
+                  <p v-if="contract.dateStatus.reason" class="contract-advisory">{{ contract.dateStatus.reason }}</p>
+                  <p v-if="archiveContractOverlaps.has(contract.id)" class="contract-advisory">与其他合同的期限有重叠，请核对；不影响维护。</p>
+                  <div class="contract-row-actions">
+                    <el-button link :aria-expanded="expandedContractDetails.includes(contract.id)" @click="expandedContractDetails = expandedContractDetails.includes(contract.id) ? expandedContractDetails.filter(id => id !== contract.id) : [...expandedContractDetails, contract.id]">{{ expandedContractDetails.includes(contract.id) ? '收起详情' : '查看详情' }}</el-button>
+                    <template v-if="canEditArchive && !archiveReadOnly && !archivePendingRequest && contract.isActive !== false">
+                      <el-button v-if="['contract', 'renewal', 'transfer'].includes(contract.contractType)" link type="primary" :disabled="archiveEntryLoading" @click="startContractAction('renew', contract.id)">续签</el-button>
+                      <el-button v-if="['contract', 'renewal', 'transfer'].includes(contract.contractType)" link type="primary" :disabled="archiveEntryLoading" @click="startContractAction('transfer', contract.id)">转签</el-button>
+                      <el-button link type="primary" :disabled="archiveEntryLoading" @click="startContractAction('materials', contract.id)">补充材料</el-button>
+                      <el-button link type="primary" :disabled="archiveEntryLoading" @click="startContractAction('edit', contract.id)">修改信息</el-button>
+                      <el-button link type="danger" :disabled="archiveEntryLoading" @click="startContractAction('remove', contract.id)">删除合同</el-button>
+                    </template>
+                  </div>
+                  <div v-if="expandedContractDetails.includes(contract.id)" class="contract-expanded-detail">
+                    <div class="employee-archive__facts">
+                      <div><span>类型</span><strong>{{ contractTypeLabels[contract.contractType] || contract.contractType || '未填写' }}</strong></div>
+                      <div><span>合同名称</span><strong>{{ contract.name || '未填写' }}</strong></div>
+                      <div><span>签约公司</span><strong>{{ contract.signingCompany || '未填写' }}</strong></div>
+                      <div><span>签订日期</span><strong>{{ formatEmployeeContractDate(contract.signedAt) }}</strong></div>
+                      <div><span>生效日期</span><strong>{{ formatEmployeeContractDate(contract.effectiveFrom) }}</strong></div>
+                      <div><span>到期日期</span><strong>{{ formatEmployeeContractDate(contract.expiresAt) }}</strong></div>
+                      <div><span>期限类型</span><strong>{{ contract.termType || '未填写' }}</strong></div>
+                      <div v-if="contract.contractType === 'transfer' || contract.originalCompany"><span>原公司</span><strong>{{ contract.originalCompany || '未填写' }}</strong></div>
+                      <div v-if="contract.contractType === 'transfer' || contract.newCompany"><span>新公司</span><strong>{{ contract.newCompany || '未填写' }}</strong></div>
+                      <div><span>保密协议</span><strong>{{ contract.confidentialityAgreement || '未填写' }}</strong></div>
+                      <div><span>竞业协议</span><strong>{{ contract.nonCompeteAgreement || '未填写' }}</strong></div>
+                      <div><span>肖像协议</span><strong>{{ contract.portraitAgreement || '未填写' }}</strong></div>
+                    </div>
+                    <div class="employee-archive__contract-materials">
+                      <div><span>合同图片</span><strong v-if="!contract.images?.length">无图片</strong><el-button v-for="item in contract.images" :key="item.url" link type="primary" @click="openContractMaterial(item)">{{ item.name }}</el-button></div>
+                      <div><span>合同附件</span><strong v-if="!contract.attachments?.length">无附件</strong><el-button v-for="item in contract.attachments" :key="item.url" link type="primary" @click="openContractMaterial(item)">{{ item.name }}</el-button></div>
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <strong>合同附件</strong>
-                  <div class="contract-material-links">
-                    <span v-if="!contract.attachments?.length">无附件</span>
-                    <el-button v-for="item in contract.attachments ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">{{ item.name }}</el-button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            </template>
+              </template>
             </section>
-            </template>
-            <el-empty v-else description="暂无合同记录" :image-size="64" />
+            <el-empty v-if="!employeeArchiveDrawer.data.employeeContracts.length" description="暂无合同记录" :image-size="80" />
+            <el-button v-if="employeeArchiveDrawer.data.changeHistory?.length" link type="primary" @click="archiveSection = 'changes'">查看变更记录</el-button>
           </section>
+
           <section v-if="!archiveEditing && archiveSection === 'changes'" class="employee-archive__section">
             <EmployeeChangeHistory :requests="employeeArchiveDrawer.data.changeHistory ?? []" :events="employeeArchiveDrawer.data.archiveEvents ?? []" />
           </section>
@@ -2872,7 +2898,7 @@ onBeforeUnmount(() => {
           <el-button v-else-if="nextArchivePerson" link :disabled="archiveEditSaving || archiveDraftSaving || archiveEntryLoading" @click="openNextArchive">下一位待处理</el-button>
           <template v-if="archiveEditing">
             <el-button :disabled="archiveEditSaving || archiveDraftSaving || archiveEntryLoading" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">关闭</el-button>
-            <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving || archiveSaveBlocked || archiveEntryLoading" @click="archiveEditorRef?.submit()">提交</el-button>
+            <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving || archiveSaveBlocked || archiveEntryLoading" @click="archiveEditorRef?.submit()">{{ archiveContractOnly ? '保存并生效' : '提交' }}</el-button>
           </template>
         </div>
       </template>
@@ -3182,6 +3208,15 @@ onBeforeUnmount(() => {
 }
 
 .employee-archive__contract-head strong { overflow-wrap: anywhere; }
+.contract-section-heading { flex-wrap: wrap; gap: 10px; }
+.contract-section-heading p { color: #667085; font-size: 13px; margin: 5px 0; }
+.contract-business-actions, .contract-row-actions { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.contract-business-actions :deep(.el-button), .contract-row-actions :deep(.el-button) { margin-left: 0; }
+.contract-group-count { color: #667085; font-size: 12px; font-weight: 400; }
+.contract-quick-facts { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 8px 0; font-size: 13px; color: #667085; overflow-wrap: anywhere; }
+.contract-advisory { margin: 6px 0; font-size: 12px; color: #8a6116; line-height: 1.5; }
+.contract-term-label { color: #667085; font-size: 12px; }
+.contract-expanded-detail { border-top: 1px solid #edf0f5; margin-top: 12px; padding-top: 12px; }
 
 .archive-issue-context { position: sticky; top: 0; z-index: 4; max-height: 150px; overflow-y: auto; display: grid; gap: 5px; padding: 12px 14px; background: var(--el-color-warning-light-9); border-left: 3px solid var(--el-color-warning); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .archive-issue-context small { color: var(--el-text-color-secondary); }

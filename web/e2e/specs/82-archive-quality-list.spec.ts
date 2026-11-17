@@ -275,17 +275,18 @@ test('办理中变更不提供与当前内容无关的花名册导出', async ({
   await expect(page.getByRole('button', { name: '导出花名册', exact: true })).toHaveCount(0);
 });
 
-test('当前合同只展开一份，历史可展开，详情不冒用未来任职', async ({ page }) => {
+test('期限内合同直接展示，已到期可展开，详情不冒用未来任职', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-02T04:00:00Z'));
   await mockPage(page);
   await page.getByRole('button', { name: '查看档案', exact: true }).filter({ visible: true }).first().click();
   const drawer = page.getByRole('dialog', { name: '员工档案', exact: true });
   await expect(drawer.getByText('2年10个月', { exact: true })).toBeVisible();
   await expect(drawer.getByText('未来公司不应显示', { exact: true })).toHaveCount(0);
   await drawer.getByRole('tab', { name: '合同材料', exact: true }).click();
-  await expect(drawer.getByText('当前合同', { exact: true })).toBeVisible();
+  await expect(drawer.getByRole('heading', { name: /期限内合同/ })).toBeVisible();
   await expect(drawer.locator('.employee-archive__contract-card').filter({ visible: true })).toHaveCount(1);
   await expect(drawer.locator('.employee-archive__contract-head')).toContainText('续签劳动合同');
-  await drawer.getByRole('button', { name: /历史合同/ }).click();
+  await drawer.getByRole('button', { name: /已到期合同/ }).click();
   await expect(drawer.locator('.employee-archive__contract-card').filter({ visible: true })).toHaveCount(2);
   await expect(drawer.locator('.employee-archive__contract-head').filter({ hasText: '历史劳动合同' })).toBeVisible();
 });

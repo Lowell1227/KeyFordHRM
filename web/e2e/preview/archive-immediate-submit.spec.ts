@@ -160,7 +160,7 @@ async function exportedEmployee(page: Page, f: Fixture, columns: string) {
   expect(response.headers()['content-type']).toContain('spreadsheetml');
   const book = new ExcelJS.Workbook();
   await book.xlsx.load(await response.body());
-  expect(book.getWorksheet('历史合同')).toBeUndefined();
+  expect(book.getWorksheet('其他合同记录')).toBeUndefined();
   const sheet = book.getWorksheet('花名册');
   expect(sheet.rowCount).toBe(3);
   const headers = sheet.getRow(2).values.slice(1) as string[];

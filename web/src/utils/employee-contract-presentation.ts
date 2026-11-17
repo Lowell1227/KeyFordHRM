@@ -1,4 +1,4 @@
-import { formatEmployeeContractDate } from '@/utils/employee-contract-status';
+import { contractCalendarDate, employeeContractStatus, formatEmployeeContractDate } from '@/utils/employee-contract-status';
 
 type ContractPresentation = Record<string, unknown>;
 
@@ -30,4 +30,44 @@ export function selectEmployeeContracts<T extends ContractPresentation>(contract
   const current = sorted.find(contract => contract.isActive !== false
     && ['contract', 'renewal', 'transfer'].includes(text(contract.contractType) || text(contract.kind))) ?? null;
   return { current, history: sorted.filter(contract => contract !== current) };
+}
+
+/** Display every record by its dates; latest-record export selection remains a separate concept. */
+export function groupEmployeeContracts<T extends ContractPresentation>(contracts: readonly T[], now = new Date()) {
+  const groups: { withinTerm: T[]; upcoming: T[]; needsReview: T[]; history: T[]; retained: T[] } = {
+    withinTerm: [], upcoming: [], needsReview: [], history: [], retained: [],
+  };
+  const keys = { within_term: 'withinTerm', upcoming: 'upcoming', needs_review: 'needsReview', expired: 'history', retained: 'retained' } as const;
+  for (const contract of sortContractsLatestFirst(contracts)) {
+    const status = employeeContractStatus({
+      isActive: contract.isActive === false ? false : true,
+      recordState: text(contract.recordState), contractType: text(contract.contractType) || text(contract.kind),
+      effectiveFrom: text(contract.effectiveFrom), expiresAt: text(contract.expiresAt), termType: text(contract.termType),
+    }, now);
+    groups[keys[status.key]].push(contract);
+  }
+  return groups;
+}
+
+/** A date-range overlap is advisory. It never ends or replaces either stored contract. */
+export function overlappingContractIds<T extends ContractPresentation>(contracts: readonly T[]): Set<string> {
+  const intervals = contracts.flatMap(contract => {
+    const id = text(contract.id) || text(contract.__key);
+    const kind = text(contract.contractType) || text(contract.kind);
+    const start = contractCalendarDate(text(contract.effectiveFrom));
+    const end = contractCalendarDate(text(contract.expiresAt));
+    const openEnded = text(contract.termType).includes('无固定期限');
+    if (!id || contract.isActive === false || contract.__removed === true || !start
+      || (kind && !['contract', 'renewal', 'transfer'].includes(kind))
+      || (contract.expiresAt && !end) || (end && (end < start || openEnded)) || (!end && !openEnded)) return [];
+    return [{ id, start, end: end ?? '9999-12-31' }];
+  });
+  const overlapping = new Set<string>();
+  for (let i = 0; i < intervals.length; i++) {
+    for (let j = i + 1; j < intervals.length; j++) {
+      const a = intervals[i]!, b = intervals[j]!;
+      if (a.start <= b.end && b.start <= a.end) { overlapping.add(a.id); overlapping.add(b.id); }
+    }
+  }
+  return overlapping;
 }

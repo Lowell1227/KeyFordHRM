@@ -1232,7 +1232,7 @@ export class EmployeeDataReviewsService {
           !retainedIds.has(item.id) && item.contractType === contractType && item.sequence === sequence
         )) : undefined;
       if (contractId && !activeContract) {
-        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '合同记录已发生变化，请重新提交审核' });
+        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '合同记录已发生变化，请重新加载后提交' });
       }
       const businessKey = this.contractKey(contractType, sequence);
       if (businessKeys.has(businessKey)) {
@@ -1240,7 +1240,7 @@ export class EmployeeDataReviewsService {
       }
       businessKeys.add(businessKey);
       if (activeContract) retainedIds.add(activeContract.id);
-      return [{ contract, contractType, sequence, activeContract }];
+      return [{ contract, contractType, sequence, activeContract, index }];
     });
     if (['manual_archive_change', 'manual_employee_create'].includes(sourceType)) {
       assertValidContractChanges(contracts, currentActive);
@@ -1257,7 +1257,7 @@ export class EmployeeDataReviewsService {
         releasedIds.add(current.id);
       }
     }
-    for (const { contract, contractType, sequence, activeContract } of plans) {
+    for (const { contract, contractType, sequence, activeContract, index } of plans) {
       const contractData = {
         contractType,
         sequence,
@@ -1279,7 +1279,7 @@ export class EmployeeDataReviewsService {
           attachments: this.materials(contract.attachments),
         } : {}),
       };
-      await validateContractSubject(tx, contract, activeContract ?? {});
+      await validateContractSubject(tx, contract, activeContract ?? {}, 'signingCompany', `contracts.${index}.contractSubjectId`);
       if (activeContract?.contractSubjectId && (contract.contractSubjectId === undefined || contract.contractSubjectId === activeContract.contractSubjectId)) {
         contractData.signingCompany = activeContract.signingCompany;
       }

@@ -53,7 +53,7 @@ export const CONTRACT_TYPE_LABELS: Record<string, string> = { contract: '首签'
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const date = (value: unknown): Date | null => value instanceof Date && Number.isFinite(value.getTime()) ? value : null;
 
-/** Same calendar-date ordering as the archive detail, without treating sequence as chronology. */
+/** Select the latest record for the roster's single contract column group; this does not imply validity today. */
 export function selectRosterContracts(contracts: readonly RosterContract[] = []) {
   const businessDate = (contract: RosterContract) => (date(contract.effectiveFrom) ?? date(contract.signedAt))?.toISOString().slice(0, 10) ?? '-';
   const sorted = [...contracts].sort((a, b) => Number(Boolean(date(b.effectiveFrom))) - Number(Boolean(date(a.effectiveFrom)))
@@ -64,15 +64,16 @@ export function selectRosterContracts(contracts: readonly RosterContract[] = [])
 }
 
 export function rosterContractDateStatus(contract: RosterContract, at = new Date()): string {
-  if (contract.isActive === false) return '旧版本/已移除';
+  if (contract.isActive === false) return '历史保留记录';
   const start = date(contract.effectiveFrom), end = date(contract.expiresAt);
-  if ((contract.effectiveFrom && !start) || (contract.expiresAt && !end) || (start && end && start > end)) return '日期待核';
+  if ((contract.effectiveFrom && !start) || (contract.expiresAt && !end) || (start && end && start > end)
+    || (start && start.getUTCFullYear() < 1) || (end && end.getUTCFullYear() < 1)) return '待核实';
+  const openEnded = Boolean(contract.termType?.includes('无固定期限'));
+  if (!start || (!end && !openEnded) || (end && openEnded) || contract.contractType === 'unclassified') return '待核实';
   const today = shanghaiBusinessDate(at);
   if (end && end < today) return '已到期';
   if (start && start > today) return '待生效';
-  if (!start) return '期限待补';
-  if (end) return '正常';
-  return contract.termType?.includes('无固定期限') ? '无固定期限' : '期限待补';
+  return '期限内';
 }
 
 export function rosterContractCells(contract: RosterContract | null): Record<string, RosterCell> {
