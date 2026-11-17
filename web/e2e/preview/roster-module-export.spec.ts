@@ -147,11 +147,12 @@ test('real roster export preserves field permissions, filtered scope, typed date
   const catalog = (await (await request(http, f.hrToken, '/users/export-fields')).json()).data;
   expect(catalog.map((group: any) => group.key)).toEqual(['employment', 'personal', 'contact', 'insurance', 'bank', 'contract', 'history', 'system']);
   const keys = catalog.flatMap((group: any) => group.fields.map((field: any) => field.key));
-  expect(keys).toEqual(expect.arrayContaining(['phone', 'currentAddress', 'entryDate', 'latestContractName', 'contractHistory']));
+  expect(keys).toEqual(expect.arrayContaining(['departmentLevel1', 'departmentLevel2', 'departmentLevel3', 'phone', 'currentAddress', 'entryDate', 'latestContractName', 'contractHistory']));
+  expect(keys).not.toContain('deptName');
   expect(keys).not.toEqual(expect.arrayContaining(['idNumberEncrypted', 'bankAccountEncrypted']));
   const orgCatalog = (await (await request(http, f.organizationToken, '/users/export-fields')).json()).data;
   const orgKeys = orgCatalog.flatMap((group: any) => group.fields.map((field: any) => field.key));
-  expect(orgKeys).toHaveLength(10);
+  expect(orgKeys).toHaveLength(9);
   expect(orgKeys).not.toContain('phone');
   await request(http, f.organizationToken, `/users/export?${query(f, { columns: 'name,phone' })}`, 403);
   await request(http, f.employeeToken, '/users/export-fields', 403);
@@ -217,6 +218,10 @@ for (const width of [1440, 1024, 390]) {
     const dialog = page.getByRole('dialog', { name: '导出花名册', exact: true });
     await expect(dialog.getByText('预计导出 21 条记录', { exact: true })).toBeVisible();
     await expect(dialog.getByText(/全部未归档员工|全部部门.*全部系统权限|包含其他分页/)).toHaveCount(0);
+    await expect(dialog.getByRole('checkbox', { name: '部门', exact: true })).toHaveCount(0);
+    for (const label of ['一级部门', '二级部门', '三级部门']) {
+      await expect(dialog.getByRole('checkbox', { name: label, exact: true })).toBeChecked();
+    }
     await dialog.getByRole('button', { name: '清空', exact: true }).click();
     const exportButton = dialog.getByRole('button', { name: '导出 Excel', exact: true });
     await expect(exportButton).toBeDisabled();
@@ -243,6 +248,9 @@ for (const width of [1440, 1024, 390]) {
     const book = new ExcelJS.Workbook();
     await book.xlsx.readFile(downloadedPath!);
     const rows = dataRows(book.getWorksheet('花名册'));
+    const headers = book.getWorksheet('花名册').getRow(2).values.slice(1);
+    expect(headers).not.toContain('部门');
+    expect(headers).toEqual(expect.arrayContaining(['一级部门', '二级部门', '三级部门']));
     expect(rows).toHaveLength(21);
     expect(rows.every(row => String(row['姓名']).startsWith(f.keyword))).toBe(true);
     expect(rows.find(row => row['工号'] === f.employee.employeeNo)!['合同名称']).toBe('虚构最新合同');

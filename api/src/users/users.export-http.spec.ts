@@ -32,7 +32,7 @@ describe('roster column selection over HTTP', () => {
     actor = { id: 'synthetic-reviewer', sysRole: SysRole.hr_user, hrCapabilities: ['employee_archive_review'] };
   });
 
-  it.each(['', 'idNumber', 'name,passwordHash', 'name,name'])('rejects invalid selection %s without reading personnel', async columns => {
+  it.each(['', 'idNumber', 'name,passwordHash', 'name,name', 'name,deptName'])('rejects invalid selection %s without reading personnel', async columns => {
     await request(app.getHttpServer()).get('/users/export').query({ columns }).expect(400);
     expect(count).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
@@ -68,7 +68,7 @@ describe('roster column selection over HTTP', () => {
     expect(full.body.flatMap((group: any) => group.fields).some((field: any) => field.key === 'phone')).toBe(true);
     actor = { id: 'synthetic-org-only', sysRole: SysRole.hr_user, hrCapabilities: ['organization_edit'] };
     const limited = await request(app.getHttpServer()).get('/users/export-fields').expect(200);
-    expect(limited.body.flatMap((group: any) => group.fields)).toHaveLength(10);
+    expect(limited.body.flatMap((group: any) => group.fields)).toHaveLength(9);
     await request(app.getHttpServer()).get('/users/export').query({ columns: 'name,phone' }).expect(403);
     expect(count).not.toHaveBeenCalled();
   });

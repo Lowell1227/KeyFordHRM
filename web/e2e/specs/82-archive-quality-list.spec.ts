@@ -6,7 +6,9 @@ const rosterModules = [
     { key: 'employeeNo', label: '工号', defaultSelected: true },
     { key: 'companyText', label: '所属公司', defaultSelected: false },
     { key: 'status', label: '任职状态', defaultSelected: true },
-    { key: 'deptName', label: '部门', defaultSelected: true },
+    { key: 'departmentLevel1', label: '一级部门', defaultSelected: true },
+    { key: 'departmentLevel2', label: '二级部门', defaultSelected: true },
+    { key: 'departmentLevel3', label: '三级部门', defaultSelected: true },
     { key: 'position', label: '岗位', defaultSelected: true },
     { key: 'directManagerName', label: '绩效直属上级', defaultSelected: true },
     { key: 'entryDate', label: '入职日期', defaultSelected: false },
@@ -118,6 +120,10 @@ for (const width of [1440, 1024, 390]) {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('预计导出 2 条记录', { exact: true })).toBeVisible();
     await expect(dialog.getByText(/全部未归档员工|全部部门.*全部系统权限|包含其他分页/)).toHaveCount(0);
+    await expect(dialog.getByRole('checkbox', { name: '部门', exact: true })).toHaveCount(0);
+    for (const label of ['一级部门', '二级部门', '三级部门']) {
+      await expect(dialog.getByRole('checkbox', { name: label, exact: true })).toBeChecked();
+    }
     await dialog.getByRole('button', { name: '清空', exact: true }).click();
     await expect(dialog.getByRole('button', { name: '导出 Excel', exact: true })).toBeDisabled();
     const basicModule = dialog.getByRole('checkbox', { name: '选择基本与任职模块', exact: true });
@@ -175,6 +181,39 @@ test('导出字段按模块全选和清空，不遗漏合同历史', async ({ pa
   await dialog.getByText('合同历史', { exact: true }).click();
   await expect(dialog.getByRole('checkbox', { name: '历史合同明细', exact: true })).toBeChecked();
   await expect(dialog.getByRole('button', { name: '导出 Excel', exact: true })).toBeEnabled();
+});
+
+test('重新打开导出时移除历史部门选择，仍可选择一至三级部门', async ({ page }) => {
+  let currentCatalog = false;
+  let exportedColumns = '';
+  await mockPage(page, async (route, url) => {
+    if (url.pathname.endsWith('/users/export-fields')) {
+      await respond(route, currentCatalog ? rosterModules : [{ key: 'basic', label: '基本与任职', fields: [
+        { key: 'deptName', label: '部门', defaultSelected: true },
+      ] }]);
+      return true;
+    }
+    if (url.pathname.endsWith('/users/export')) {
+      exportedColumns = url.searchParams.get('columns') ?? '';
+      await route.fulfill({ contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: 'mock-xlsx' });
+      return true;
+    }
+    return false;
+  });
+  const open = page.getByRole('button', { name: '导出花名册', exact: true });
+  await open.click();
+  const dialog = page.getByRole('dialog', { name: '导出花名册', exact: true });
+  await expect(dialog.getByRole('checkbox', { name: '部门', exact: true })).toBeChecked();
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  currentCatalog = true;
+  await open.click();
+  await expect(dialog.getByRole('checkbox', { name: '部门', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '导出 Excel', exact: true })).toBeDisabled();
+  for (const label of ['一级部门', '二级部门', '三级部门']) await dialog.getByText(label, { exact: true }).click();
+  const download = page.waitForEvent('download');
+  await dialog.getByRole('button', { name: '导出 Excel', exact: true }).click();
+  await download;
+  expect(exportedColumns).toBe('departmentLevel1,departmentLevel2,departmentLevel3');
 });
 
 test('导出字段加载失败可以重试，不能用旧字段继续导出', async ({ page }) => {

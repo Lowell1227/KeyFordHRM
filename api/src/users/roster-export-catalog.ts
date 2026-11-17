@@ -20,7 +20,6 @@ export const ROSTER_EXPORT_COLUMNS = [
   { key: 'departmentLevel1', header: '一级部门', group: 'employment', width: 20 },
   { key: 'departmentLevel2', header: '二级部门', group: 'employment', width: 20 },
   { key: 'departmentLevel3', header: '三级部门', group: 'employment', width: 20 },
-  { key: 'deptName', header: '部门', group: 'employment', width: 20 },
   { key: 'position', header: '岗位', group: 'employment', width: 20 },
   { key: 'jobGrade', header: '职级', group: 'employment', width: 12 },
   { key: 'jobFamily', header: '职系', group: 'employment', width: 16 },
@@ -85,7 +84,7 @@ export const ROSTER_EXPORT_COLUMNS = [
 ] as const;
 
 export type RosterExportColumnKey = typeof ROSTER_EXPORT_COLUMNS[number]['key'];
-const LEGACY_KEYS: ReadonlySet<string> = new Set(['employeeNo', 'name', 'status', 'deptName', 'position',
+const LEGACY_KEYS: ReadonlySet<string> = new Set(['employeeNo', 'name', 'status', 'position',
   'directManagerName', 'systemPermission', 'directReportCount', 'dingtalkBindingState', 'companyTenure']);
 export const DEFAULT_ROSTER_EXPORT_COLUMNS: RosterExportColumnKey[] = ROSTER_EXPORT_COLUMNS
   .filter(column => LEGACY_KEYS.has(column.key) && column.key !== 'companyTenure').map(column => column.key);
@@ -96,7 +95,8 @@ export function canExportArchiveFields(viewer: HrCapabilitySubject): boolean {
 
 function defaultRosterExportColumns(viewer?: HrCapabilitySubject): RosterExportColumnKey[] {
   if (!viewer || !canExportArchiveFields(viewer)) return [...DEFAULT_ROSTER_EXPORT_COLUMNS];
-  return ROSTER_EXPORT_COLUMNS.filter(column => DEFAULT_ROSTER_EXPORT_COLUMNS.includes(column.key) || column.group === 'contract')
+  return ROSTER_EXPORT_COLUMNS.filter(column => DEFAULT_ROSTER_EXPORT_COLUMNS.includes(column.key)
+    || ['departmentLevel1', 'departmentLevel2', 'departmentLevel3'].includes(column.key) || column.group === 'contract')
     .map(column => column.key);
 }
 

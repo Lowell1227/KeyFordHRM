@@ -80,7 +80,7 @@ describe('buildRosterWorkbook', () => {
     expect(sheet).toBeDefined();
     expect(sheet!.rowCount).toBe(4); // two header rows + two employees
     const headerValues = (sheet!.getRow(2).values as Array<unknown>).slice(1);
-    expect(headerValues).toEqual(['姓名', '工号', '部门', '岗位', '绩效直属上级', '任职状态', '系统权限', '直属下属', '钉钉登录']);
+    expect(headerValues).toEqual(['姓名', '工号', '岗位', '绩效直属上级', '任职状态', '系统权限', '直属下属', '钉钉登录']);
     expect(sheet!.getRow(3).getCell(2).value).toBe('347');
     expect(sheet!.getRow(4).getCell(1).value).toBe('苏萌');
     expect(sheet!.actualRowCount).toBe(4);

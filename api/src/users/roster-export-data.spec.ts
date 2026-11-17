@@ -55,8 +55,8 @@ describe('roster archive export', () => {
     const defaults = groups.flatMap(group => group.fields).filter(field => field.defaultSelected).map(field => field.key);
     expect(defaults).toEqual(expect.arrayContaining([...DEFAULT_ROSTER_EXPORT_COLUMNS, 'latestContractType', 'latestEffectiveFrom', 'latestContractStatus']));
     expect(defaults).not.toContain('contractHistory');
-    expect(DEFAULT_ROSTER_EXPORT_COLUMNS).toHaveLength(9);
-    expect(rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['organization_edit'] }).flatMap(group => group.fields)).toHaveLength(10);
+    expect(DEFAULT_ROSTER_EXPORT_COLUMNS).toHaveLength(8);
+    expect(rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['organization_edit'] }).flatMap(group => group.fields)).toHaveLength(9);
     expect(() => parseRosterExportColumns('contractHistory', { sysRole: 'hr_user', hrCapabilities: ['organization_edit'] })).toThrow('权限');
     expect(() => parseRosterExportColumns('bankAccountEncrypted', { sysRole: 'hr' })).toThrow('有效');
   });
@@ -70,6 +70,32 @@ describe('roster archive export', () => {
     expect(parseRosterExportColumns(undefined, organization)).toEqual(DEFAULT_ROSTER_EXPORT_COLUMNS);
     const workbook = await buildRosterWorkbook([employee()], columns);
     expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['花名册']);
+  });
+
+  it('exports only the three department levels, default-selecting them within existing archive permissions', async () => {
+    const hr = { sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] };
+    const organization = { sysRole: 'hr_user', hrCapabilities: ['organization_edit'] };
+    const levels = ['departmentLevel1', 'departmentLevel2', 'departmentLevel3'];
+    const fields = rosterExportFieldGroups(hr).flatMap(group => group.fields);
+    expect(fields.filter(field => levels.includes(field.key))).toEqual([
+      { key: 'departmentLevel1', label: '一级部门', defaultSelected: true },
+      { key: 'departmentLevel2', label: '二级部门', defaultSelected: true },
+      { key: 'departmentLevel3', label: '三级部门', defaultSelected: true },
+    ]);
+    expect(fields.map(field => field.key)).not.toContain('deptName');
+    expect(fields.map(field => field.label)).not.toContain('部门');
+    expect(parseRosterExportColumns(undefined, hr)).toEqual(expect.arrayContaining(levels));
+    expect(() => parseRosterExportColumns('name,deptName', hr)).toThrow('有效');
+    expect(() => parseRosterExportColumns(levels.join(','), organization)).toThrow('权限');
+    const cells = rosterArchiveCells({ status: 'active', dept: { name: '三级组', fullPath: '一级部 / 二级部 / 三级组' } });
+    const built = await buildRosterWorkbook([employee({ archiveFields: cells })], parseRosterExportColumns(undefined, hr));
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await built.xlsx.writeBuffer() as any);
+    const sheet = workbook.getWorksheet('花名册')!;
+    const headers = (sheet.getRow(2).values as unknown[]).slice(1);
+    expect(headers).not.toContain('部门');
+    expect(headers.slice(2, 5)).toEqual(['一级部门', '二级部门', '三级部门']);
+    expect((sheet.getRow(3).values as unknown[]).slice(3, 6)).toEqual(['一级部', '二级部', '三级组']);
   });
 
   it('selects the later effective transfer rather than a later signature or ancillary material', () => {
