@@ -56,6 +56,6 @@
 - [x] Independent targeted review of final source and policy boundary. Two P2 findings fixed and independently closed; no remaining P1/P2 blocker.
 - [x] One final full API run (180/3060), affected regression/integration tests, Web type check and direct real-backend PC/mobile checks (8/8) using fictional isolated data only. Fixed production build remains a release gate below.
 - [x] Record inherited Web test debt separately; do not remove assertions or weaken guards.
-- [ ] Commit task files, push and verify the exact remote SHA; build production once from that fixed source.
-- [ ] Fresh backup and rollback images; retain67 migrations/config and only replace API/Web.
-- [ ] External health/resources and affected read-only real-role paths, then release record and project memory. Human acceptance remains separate.
+- [x] Commit task files, push and verify the exact remote SHA `3e024872`; build production once from that fixed source.
+- [x] Fresh backup and rollback images; retain67 migrations/config and only replace API/Web.
+- [x] External health/resources and affected read-only real-role paths (6 checks, 4 responsive pages), then release record and project memory. Human acceptance remains separate.
