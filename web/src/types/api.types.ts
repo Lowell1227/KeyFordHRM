@@ -1007,6 +1007,10 @@ export interface CycleParticipantRecord {
     deptName: string | null;
     managerId: string | null;
     managerName: string | null;
+    deptHeadId: string | null;
+    deptHeadName: string | null;
+    approverId: string | null;
+    approverName: string | null;
     participantDisposition: 'active' | 'cycle_exempt' | 'top_leader_exempt';
     isExempt: boolean;
     exemptReason: string | null;

@@ -568,7 +568,9 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-stage-4')).toContainText('公示归档');
     await expect(page.getByTestId('cycle-workspace')).toContainText('审核人：姚瑶');
     await expect(page.getByTestId('cycle-workspace')).not.toContainText('HR管理员审核池');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('结果审核：按周期审核');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toHaveText(
+      '目标审核流程：员工填写 → 绩效直属上级 → 部门负责人 → 员工确认 → 分管领导',
+    );
   });
 
   test('shows the launched participant record without duplicating cycle concepts', async ({ page }) => {
@@ -603,12 +605,14 @@ test.describe('compact cycle management list', () => {
         participants: [
           {
             employeeId: 'employee-active', employeeName: '陈晨', deptId: 'hr-team', deptName: '人事组',
-            managerId: 'manager-1', managerName: '姚瑶', participantDisposition: 'active',
+            managerId: 'manager-1', managerName: '姚瑶', deptHeadId: 'dept-head-1', deptHeadName: '方园',
+            approverId: 'approver-1', approverName: '倪靖', participantDisposition: 'active',
             isExempt: false, exemptReason: null, status: 'indicator_drafting',
           },
           {
             employeeId: 'employee-exempt', employeeName: '方园', deptId: 'hr-team', deptName: '人事组',
-            managerId: 'manager-1', managerName: '俞丹', participantDisposition: 'cycle_exempt',
+            managerId: 'manager-1', managerName: '俞丹', deptHeadId: null, deptHeadName: null,
+            approverId: null, approverName: null, participantDisposition: 'cycle_exempt',
             isExempt: true, exemptReason: 'HR 按部门设置为本周期豁免', status: 'exempted',
           },
         ],
@@ -618,9 +622,14 @@ test.describe('compact cycle management list', () => {
     await page.goto('/cycles?cycleId=cycle-launched');
 
     await expect.poll(() => participantRecordRequests).toEqual(['cycle-launched']);
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('评分期数');
+    const approvalFlow = page.getByTestId('cycle-workspace-scoring-summary');
+    await expect(approvalFlow).toHaveText(
+      '目标审核流程：员工填写 → 绩效直属上级 → 部门负责人 → 员工确认 → 分管领导',
+    );
+    await expect(approvalFlow).not.toContainText('公司负责人');
+    await expect(approvalFlow).not.toContainText('已调整月份');
     const progress = page.getByTestId('cycle-current-action');
-    await expect(progress).toContainText('目标完成');
+    await expect(progress).toContainText('目标已生效');
     await expect(progress).toContainText('0/101');
     await expect(progress).not.toContainText('参与任务');
 
@@ -630,6 +639,9 @@ test.describe('compact cycle management list', () => {
     await expect(record).toContainText('范围人数109');
     await expect(record).toContainText('参与人员101');
     await expect(record).toContainText('豁免人员8人');
+    await expect(record.getByRole('columnheader', { name: '部门负责人' })).toBeVisible();
+    await expect(record.getByRole('columnheader', { name: '分管领导' })).toBeVisible();
+    await expect(record).toContainText('倪靖');
 
     await page.getByTestId('participant-filter-exempted').click();
     await expect(record).toContainText('方园');
@@ -658,12 +670,14 @@ test.describe('compact cycle management list', () => {
         participants: [
           {
             employeeId: 'employee-1', employeeName: '陈晨', deptId: 'hr-team', deptName: '人事组',
-            managerId: 'manager-1', managerName: '姚瑶', participantDisposition: 'active',
+            managerId: 'manager-1', managerName: '姚瑶', deptHeadId: 'dept-head-1', deptHeadName: '方园',
+            approverId: 'approver-1', approverName: '倪靖', participantDisposition: 'active',
             isExempt: false, exemptReason: null, status: 'indicator_drafting',
           },
           {
             employeeId: 'employee-2', employeeName: '方园', deptId: 'hr-team', deptName: '人事组',
-            managerId: 'manager-1', managerName: '俞丹', participantDisposition: 'active',
+            managerId: 'manager-1', managerName: '俞丹', deptHeadId: 'dept-head-1', deptHeadName: '方园',
+            approverId: 'approver-1', approverName: '倪靖', participantDisposition: 'active',
             isExempt: false, exemptReason: null, status: 'indicator_drafting',
           },
         ],
@@ -835,7 +849,7 @@ test.describe('compact cycle management list', () => {
     await expect(participantDetails).toContainText('林晓');
     await expect(participantDetails).toContainText('销售部');
     await expect(participantDetails).toContainText('周强');
-    await expect(participantDetails.getByRole('columnheader', { name: '部门复核人' })).toBeVisible();
+    await expect(participantDetails.getByRole('columnheader', { name: '部门负责人' })).toBeVisible();
     await expect(participantDetails.getByRole('columnheader', { name: '分管领导' })).toBeVisible();
     await expect(participantDetails).toContainText('员工档案中的绩效直属上级');
     await expect(participantDetails).toContainText('继承销售事业部明确配置');
@@ -871,7 +885,7 @@ test.describe('compact cycle management list', () => {
 
     const details = page.getByTestId('cycle-preflight-details');
     await expect(details.getByRole('columnheader', { name: '绩效直属上级' })).toBeVisible();
-    await expect(details.getByRole('columnheader', { name: '部门复核人' })).toBeVisible();
+    await expect(details.getByRole('columnheader', { name: '部门负责人' })).toBeVisible();
     await expect(details.getByRole('columnheader', { name: '分管领导' })).toBeVisible();
     await expect(details).toContainText('周强');
     await expect(details).toContainText('员工档案中的绩效直属上级');

@@ -89,21 +89,10 @@ function blockerActionLabel(code: string): string {
   return '';
 }
 
-function scoringSummary(cycle: AssessmentCycle): string {
-  if (cycle.workflowVersion !== 2) return '历史流程';
-  return cycle.scoringFrequency === 'monthly'
-    ? `月度自评 · ${cycle.periodSchedules?.length ?? 0}期`
-    : '周期结束统一评分';
-}
-
 const reviewReminderCoolingDown = computed(() => Boolean(
   props.preflight?.reviewReminderAvailableAt
   && dayjs(props.preflight.reviewReminderAvailableAt).isAfter(dayjs()),
 ));
-
-function scheduleExceptionCount(cycle: AssessmentCycle): number {
-  return cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0;
-}
 
 type V2PreflightParticipant = LaunchPreflightResult['participants'][number] & {
   participantDisposition?: 'active' | 'cycle_exempt' | 'top_leader_exempt';
@@ -271,9 +260,7 @@ watch(() => props.cycle?.id, () => {
             <span v-if="cycle.workflowVersion !== 2 && cycle.monthlyFollowUpRequired">需按月跟进</span>
           </div>
           <div v-if="cycle" class="cycle-workspace__scoring" data-testid="cycle-workspace-scoring-summary">
-            <span>{{ scoringSummary(cycle) }}</span>
-            <span v-if="cycle.workflowVersion === 2">已调整月份：{{ scheduleExceptionCount(cycle) }}个</span>
-            <span v-if="cycle.workflowVersion === 2">公司负责人（不参与绩效审批）：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
+            <span>目标审核流程：员工填写 → 绩效直属上级 → 部门负责人 → 员工确认 → 分管领导</span>
           </div>
         </div>
       </div>
@@ -547,23 +534,22 @@ watch(() => props.cycle?.id, () => {
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column v-if="isPrelaunch" label="部门复核人" min-width="180">
+              <el-table-column label="部门负责人" min-width="180">
                 <template #default="{ row }">
                   <div class="cycle-relation-cell">
                     <strong>{{ row.deptHeadName || '未配置' }}</strong>
-                    <span>{{ deptHeadSourceLabel(row as V2PreflightParticipant) }}</span>
+                    <span v-if="isPrelaunch">{{ deptHeadSourceLabel(row as V2PreflightParticipant) }}</span>
                   </div>
                 </template>
               </el-table-column>
               <el-table-column
-                v-if="isPrelaunch"
                 label="分管领导"
                 min-width="210"
               >
                 <template #default="{ row }">
                   <div class="cycle-relation-cell">
                     <strong>{{ row.approverName || '未配置' }}</strong>
-                    <span>{{ approverSourceLabel(row as V2PreflightParticipant) }}</span>
+                    <span v-if="isPrelaunch">{{ approverSourceLabel(row as V2PreflightParticipant) }}</span>
                   </div>
                 </template>
               </el-table-column>

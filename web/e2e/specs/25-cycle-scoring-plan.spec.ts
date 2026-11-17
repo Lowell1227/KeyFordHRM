@@ -240,7 +240,7 @@ async function mockIntegratedCyclePage(
             status: integratedCycle.status,
             goalSettingOpenAt: integratedCycle.goalSettingOpenAt,
           },
-          participantCount: 3,
+          participantCount: 2,
           templateCount: 0,
           participants: [
             {
@@ -251,7 +251,9 @@ async function mockIntegratedCyclePage(
               managerId: 'manager-1',
               managerName: '王强',
               deptHeadId: 'manager-1',
+              deptHeadName: '王强',
               approverId: 'leader-1',
+              approverName: '倪靖',
               templateId: null,
               templateName: null,
               templateVersion: null,
@@ -274,22 +276,6 @@ async function mockIntegratedCyclePage(
               isExempt: false,
               exemptReason: null,
               participantDisposition: 'active',
-            },
-            {
-              employeeId: 'leader-1',
-              employeeName: '李宏',
-              deptId: null,
-              deptName: null,
-              managerId: null,
-              managerName: null,
-              deptHeadId: null,
-              approverId: null,
-              templateId: null,
-              templateName: null,
-              templateVersion: null,
-              isExempt: true,
-              exemptReason: '最高负责人豁免',
-              participantDisposition: 'top_leader_exempt',
             },
           ],
           exclusions: [],
@@ -772,7 +758,9 @@ test.describe('cycle scoring plan integration', () => {
 
     await expect(page.getByTestId('cycle-workspace')).toBeVisible();
     expect(updateBodies).toHaveLength(0);
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度自评 · 3期');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toHaveText(
+      '目标审核流程：员工填写 → 绩效直属上级 → 部门负责人 → 员工确认 → 分管领导',
+    );
   });
 
   test('treats persisted schedule ids as non-semantic after an approved plan is changed then restored', async ({ page }) => {
@@ -908,29 +896,32 @@ test.describe('cycle scoring plan integration', () => {
     });
   });
 
-  test('shows scoring, fixed review, exceptions, final approver, and v2 preflight dispositions', async ({ page }) => {
+  test('shows the target approval flow and keeps approvers outside the assessment scope', async ({ page }) => {
     await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
     await page.goto('/cycles?group=attention');
 
     await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('月度自评 · 3期');
     await page.getByText(integratedCycle.name, { exact: true }).first().click();
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度自评 · 3期');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('结果审核：按周期审核');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('已调整月份：1个');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司负责人（不参与绩效审批）：李宏');
+    const approvalFlow = page.getByTestId('cycle-workspace-scoring-summary');
+    await expect(approvalFlow).toHaveText(
+      '目标审核流程：员工填写 → 绩效直属上级 → 部门负责人 → 员工确认 → 分管领导',
+    );
+    await expect(approvalFlow).not.toContainText('月度自评');
+    await expect(approvalFlow).not.toContainText('已调整月份');
+    await expect(approvalFlow).not.toContainText('公司负责人');
 
     await page.getByRole('button', { name: '发起考核' }).click();
     const preflightSummary = page.getByTestId('cycle-preflight-summary');
-    await expect(preflightSummary).toContainText('范围人数3人');
+    await expect(preflightSummary).toContainText('范围人数2人');
     await expect(preflightSummary).toContainText('参与人员2人');
-    await expect(preflightSummary).toContainText('豁免人员1人');
+    await expect(preflightSummary).toContainText('豁免人员0人');
     await expect(preflightSummary).not.toContainText('未进入范围');
     await expect(preflightSummary).not.toContainText('公司最终审定人');
 
     const participantDetails = page.getByTestId('cycle-preflight-details');
     await participantDetails.locator('summary').click();
-    await expect(participantDetails).toContainText('李宏');
+    await expect(participantDetails).not.toContainText('李宏');
     await expect(participantDetails).toContainText('孙珊');
-    await expect(participantDetails).toContainText('最高负责人豁免');
+    await expect(participantDetails).toContainText('倪靖');
   });
 });
