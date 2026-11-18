@@ -16,6 +16,7 @@ const loading = ref(false);
 const busy = ref(false);
 const comment = ref('');
 const validation = ref('');
+const writeError = ref('');
 const error = ref('');
 const workspaceContainer = computed(() => props.embedded ? 'div' : ChartCard);
 let loadSequence = 0;
@@ -44,6 +45,7 @@ async function load() {
 async function review(action: 'approve' | 'reject') {
   if (!props.canReview || busy.value || !detail.value) return;
   validation.value = '';
+  writeError.value = '';
   const reason = comment.value.trim();
   if (action === 'reject' && !reason) { validation.value = '请填写退回原因'; return; }
   busy.value = true;
@@ -52,6 +54,8 @@ async function review(action: 'approve' | 'reject') {
     await tasksApi.deptReview(props.task.id, { action, ...(reason ? { comment: reason } : {}) });
     ElMessage.success(action === 'approve' ? '部门复核通过' : '已退回直属上级');
     emit('reviewed');
+  } catch (cause) {
+    writeError.value = cause instanceof Error ? cause.message : '提交复核失败，请重试';
   } finally { busy.value = false; emit('busy', false); }
 }
 watch(() => [props.task.id, props.task.status], load, { immediate: true });
@@ -77,16 +81,21 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
           :raw-grade="(detail.currentGrade) ?? null"
           :calibrated-grade="(task.gradeResult?.calibratedGrade as PerfGrade | null | undefined) ?? null"
         />
-        <PerformanceResultEvidence :evidence="detail.resultEvidence" :periods="detail.periods" :records="detail.flowRecords ?? task.flowRecords" />
+        <div class="review-body">
         <el-form v-if="canReview" label-position="top" class="review-form">
-          <el-form-item label="复核意见" :error="validation">
-            <el-input v-model="comment" type="textarea" :rows="3" maxlength="2000" aria-label="复核意见" placeholder="通过时选填，退回时请说明原因" />
+          <el-form-item label="复核意见（退回时必填）" :error="validation">
+            <el-input v-model="comment" type="textarea" :rows="3" maxlength="2000" aria-label="复核意见" placeholder="通过时选填，退回时请说明原因" @input="validation = ''; writeError = ''" />
           </el-form-item>
-          <div class="review-actions">
-            <el-button :loading="busy" @click="review('reject')">退回上级重评</el-button>
-            <el-button type="primary" :loading="busy" @click="review('approve')">复核通过</el-button>
-          </div>
         </el-form>
+        <div v-if="canReview" class="review-actions">
+          <span v-if="writeError" role="alert" class="review-write-error">{{ writeError }}</span>
+          <el-button :loading="busy" @click="review('reject')">退回给绩效上级</el-button>
+          <el-button type="primary" :loading="busy" @click="review('approve')">提交部门复核</el-button>
+        </div>
+        <details class="review-evidence"><summary>查看评分依据与办理记录</summary>
+          <PerformanceResultEvidence :evidence="detail.resultEvidence" :periods="detail.periods" :records="detail.flowRecords ?? task.flowRecords" />
+        </details>
+        </div>
       </template>
     </component>
   </div>
@@ -96,6 +105,9 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
 .department-review-workspace { min-width: 0; }
 .department-review-workspace__embedded { min-width: 0; }
 .review-form { margin-top: 18px; }
-.review-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.review-actions { position: sticky; top: 0; z-index: 2; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 0; background: var(--app-card-bg, #fff); border-bottom: 1px solid var(--el-border-color); }
 .review-actions .el-button { margin: 0; }
+.review-write-error { flex-basis: 100%; color: var(--el-color-danger); }
+.review-evidence { margin-top: 12px; }
+.review-evidence summary { cursor: pointer; color: var(--el-color-primary); }
 </style>

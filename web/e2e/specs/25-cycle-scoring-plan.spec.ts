@@ -865,7 +865,7 @@ test.describe('cycle scoring plan integration', () => {
 
     await page.getByRole('button', { name: '审核', exact: true }).click();
     await page.getByRole('dialog', { name: '审核考核周期' })
-      .getByRole('button', { name: '审核通过' })
+      .getByRole('button', { name: '通过周期计划' })
       .click();
 
     await expect.poll(() => reviewBodies).toHaveLength(1);
@@ -873,6 +873,22 @@ test.describe('cycle scoring plan integration', () => {
       action: 'approve',
       expectedPlanVersion: pendingCycle.planVersion,
     });
+  });
+
+  test('requires a rejection reason before rejecting a cycle plan', async ({ page }) => {
+    const reviewBodies: Record<string, unknown>[] = [];
+    const pendingCycle: AssessmentCycle = { ...integratedCycle, reviewerId: undefined, reviewer: null, reviewStatus: 'pending' };
+    await mockIntegratedCyclePage(page, { cycles: [pendingCycle], reviewBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByRole('button', { name: '审核', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '审核考核周期' });
+    await dialog.getByRole('button', { name: '退回周期计划' }).click();
+    await expect(dialog.getByText('请填写退回原因')).toBeVisible();
+    expect(reviewBodies).toHaveLength(0);
+    await dialog.getByRole('textbox', { name: '退回原因' }).fill('请补充考核范围');
+    await dialog.getByRole('button', { name: '退回周期计划' }).click();
+    await expect.poll(() => reviewBodies.length).toBe(1);
+    expect(reviewBodies[0]).toMatchObject({ action: 'reject', comment: '请补充考核范围', expectedPlanVersion: pendingCycle.planVersion });
   });
 
   test('submits the current plan version when postponing an active cycle deadline', async ({ page }) => {

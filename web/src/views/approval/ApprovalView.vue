@@ -66,8 +66,10 @@ const rejectDialog = ref({
   visible: false,
   mode: 'single' as 'single' | 'batch',
   taskId: undefined as string | undefined,
+  taskIds: [] as string[],
   comment: '',
 });
+const rejectError = ref('');
 
 const gradeCounts = computed<Record<PerfGrade, number>>(() => {
   const counts: Record<PerfGrade, number> = { A: 0, B: 0, C: 0, D: 0 };
@@ -182,8 +184,10 @@ function clearApprovalState() {
     visible: false,
     mode: 'single',
     taskId: undefined,
+    taskIds: [],
     comment: '',
   };
+  rejectError.value = '';
 }
 
 async function selectApprovalCycle(cycleId: string) {
@@ -313,6 +317,7 @@ async function handleApproveSingle(taskId: string) {
   try {
     await approvalApi.approve(selectedCycleId.value, { taskIds: [taskId] });
     ElMessage.success('已通过');
+    if (detailDrawer.value.taskId === taskId) closeDetail();
     refreshList();
   } finally {
     submitting.value = false;
@@ -333,27 +338,28 @@ async function handleBatchApprove() {
   }
 }
 
-async function doBatchReject(comment: string) {
-  if (selectedTaskIds.value.length === 0) return;
+async function doBatchReject(comment: string): Promise<boolean> {
+  if (rejectDialog.value.taskIds.length === 0) return false;
   submitting.value = true;
   let successCount = 0;
-  let failCount = 0;
+  const failedIds: string[] = [];
   try {
-    for (const taskId of selectedTaskIds.value) {
+    for (const taskId of rejectDialog.value.taskIds) {
       try {
         await approvalApi.rejectTask(taskId, { comment });
         successCount++;
       } catch (e) {
-        failCount++;
-        console.error(`退回任务 ${taskId} 失败`, e);
+        failedIds.push(taskId);
       }
     }
-    if (failCount === 0) {
+    rejectDialog.value.taskIds = failedIds;
+    if (failedIds.length === 0) {
       ElMessage.success(`批量退回成功，共 ${successCount} 条`);
     } else {
-      ElMessage.warning(`退回结果：成功 ${successCount} 条，失败 ${failCount} 条`);
+      rejectError.value = `已退回 ${successCount} 条，仍有 ${failedIds.length} 条失败。请核对后重试剩余任务。`;
     }
-    refreshList();
+    void loadTasks();
+    return failedIds.length === 0;
   } finally {
     submitting.value = false;
   }
@@ -364,29 +370,35 @@ function openRejectDialog(options: { taskId?: string }) {
     visible: true,
     mode: options.taskId ? 'single' : 'batch',
     taskId: options.taskId,
+    taskIds: options.taskId ? [options.taskId] : [...selectedTaskIds.value],
     comment: '',
   };
+  rejectError.value = '';
 }
 
 async function confirmReject() {
   const comment = rejectDialog.value.comment.trim();
   if (!comment) {
-    ElMessage.warning('退回绩效校准时必须填写审批意见');
+    rejectError.value = '请填写退回原因';
     return;
   }
-  rejectDialog.value.visible = false;
+  rejectError.value = '';
 
   if (rejectDialog.value.mode === 'single' && rejectDialog.value.taskId) {
     submitting.value = true;
     try {
       await approvalApi.rejectTask(rejectDialog.value.taskId, { comment });
       ElMessage.success('已退回绩效校准');
+      if (detailDrawer.value.taskId === rejectDialog.value.taskId) closeDetail();
+      rejectDialog.value.visible = false;
       refreshList();
+    } catch (error) {
+      rejectError.value = readErrorMessage(error);
     } finally {
       submitting.value = false;
     }
   } else {
-    await doBatchReject(comment);
+    if (await doBatchReject(comment)) rejectDialog.value.visible = false;
   }
 }
 
@@ -397,9 +409,13 @@ async function handleApproveSingleWithConfirm(taskId: string) {
       cancelButtonText: '取消',
       type: 'warning',
     });
-    await handleApproveSingle(taskId);
   } catch {
-    // 用户取消，不处理
+    return;
+  }
+  try {
+    await handleApproveSingle(taskId);
+  } catch (error) {
+    ElMessage.error(readErrorMessage(error));
   }
 }
 
@@ -482,7 +498,9 @@ function handleBatchReject() {
           show-icon
         />
 
-        <div v-if="overview" class="approval-view__overview">
+        <details v-if="overview" class="approval-view__overview-disclosure">
+          <summary>审批依据 · 待我审批 {{ overview.ownPending }} 人 · 全周期待审批 {{ overview.cyclePending }} 人 · 查看分布与退回记录</summary>
+        <div class="approval-view__overview">
           <ChartCard :padded="true" class="approval-view__overview-card">
             <template #title>全校准分布（只读）</template>
             <GradeDistChart :data="gradeCounts" title="" :height="220" />
@@ -543,6 +561,7 @@ function handleBatchReject() {
             <EmptyState v-else description="暂无退回记录" />
           </ChartCard>
         </div>
+        </details>
         <div class="desktop-result-table">
         <el-table
           class="app-table performance-result-table"
@@ -658,6 +677,11 @@ function handleBatchReject() {
         />
         <PerformanceResultEvidence :evidence="detailDrawer.detail.resultEvidence" :records="detailDrawer.detail.flowRecords" />
       </template>
+      <template #footer>
+        <el-button v-if="detailDrawer.detail && canOperateTask(detailDrawer.detail)" :loading="submitting" @click="handleRejectSingle(detailDrawer.detail.id)">退回绩效校准</el-button>
+        <el-button v-if="detailDrawer.detail && canOperateTask(detailDrawer.detail)" type="primary" :loading="submitting" @click="handleApproveSingleWithConfirm(detailDrawer.detail.id)">通过绩效结果</el-button>
+        <el-button @click="detailDrawer.visible = false">关闭</el-button>
+      </template>
     </PerformanceResultDrawer>
 
     <el-dialog
@@ -671,22 +695,18 @@ function handleBatchReject() {
       <p class="approval-view__reject-tip">
         退回后该任务将回到绩效校准环节，请填写审批意见。
       </p>
-      <el-input
-        v-model="rejectDialog.comment"
-        type="textarea"
-        :rows="4"
-        placeholder="请输入审批意见（必填）"
-        maxlength="500"
-        show-word-limit
-      />
+      <el-form label-position="top"><el-form-item label="退回原因" required :error="rejectError === '请填写退回原因' ? rejectError : ''">
+        <el-input v-model="rejectDialog.comment" type="textarea" :rows="4" aria-label="退回原因" placeholder="请说明需重新校准的内容" maxlength="500" show-word-limit @input="rejectError = ''" />
+      </el-form-item></el-form>
+      <p v-if="rejectError && rejectError !== '请填写退回原因'" role="alert" class="approval-view__load-error">{{ rejectError }}</p>
       <template #footer>
-        <el-button @click="rejectDialog.visible = false">取消</el-button>
+        <el-button :disabled="submitting" @click="rejectDialog.visible = false">取消</el-button>
         <el-button
           type="danger"
           :loading="submitting"
           @click="confirmReject"
         >
-          确认退回
+          退回绩效校准
         </el-button>
       </template>
     </el-dialog>

@@ -43,6 +43,12 @@ function handleMore(command: string, cycle: AssessmentCycle) {
   if (command === 'notification-mode') emit('notification-mode', cycle);
 }
 
+function openCardFromKeyboard(event: KeyboardEvent, cycle: AssessmentCycle) {
+  if (event.target !== event.currentTarget) return;
+  event.preventDefault();
+  emit('open', cycle);
+}
+
 function notificationLabel(cycle: AssessmentCycle): string {
   if (cycle.notificationMode === 'launch_only') return '钉钉：仅发起提醒';
   if (cycle.notificationMode === 'launch_and_reminders') return '钉钉：发起＋每日催办';
@@ -308,7 +314,8 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       role="button"
       tabindex="0"
       @click="emit('open', cycle)"
-      @keyup.enter="emit('open', cycle)"
+      @keyup.enter="openCardFromKeyboard($event, cycle)"
+      @keyup.space="openCardFromKeyboard($event, cycle)"
     >
       <header>
         <div>

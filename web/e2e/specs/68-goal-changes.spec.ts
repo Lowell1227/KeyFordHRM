@@ -44,6 +44,18 @@ async function setup(page: Page, actor = 'employee', canGrant = false, isAssesso
     else if (p === '/notifications/unread-count') data = 0;
     else if (p === '/goal-changes/context') data = { canGrant, tasks };
     else if (p === '/goal-changes/entry') data = { visible: !isAssessorOnly };
+    else if (p === '/goal-changes/my-pending') data = [];
+    else if (p === '/goal-changes/page') {
+      const params = new URL(route.request().url()).searchParams;
+      const scope = params.get('scope') || 'self';
+      const all = [row(), row('change-b', 'task-team')];
+      const filtered = all.filter(item => (scope === 'all' || scope === 'review'
+        || (scope === 'self' ? item.employeeId === actor : item.managerId === actor && item.employeeId !== actor))
+        && (!params.get('status') || item.status === params.get('status'))
+        && (!params.get('keyword') || `${item.employeeName} ${item.cycleName} ${item.reason}`.includes(params.get('keyword')!)));
+      const page = Number(params.get('page') || 1), pageSize = Number(params.get('pageSize') || 10);
+      data = { items: filtered.slice((page - 1) * pageSize, page * pageSize), total: filtered.length, page, pageSize };
+    }
     else if (p.startsWith('/goal-changes') && method !== 'GET') {
       const body = route.request().postDataJSON();
       writes.push({ path: p, method, body });
@@ -64,6 +76,28 @@ async function setup(page: Page, actor = 'employee', canGrant = false, isAssesso
   return { writes, tasks };
 }
 async function go(page: Page, path = '/goal-changes') { await page.goto(new URL(path, baseURL).href); }
+
+test('goal change history requests only the selected server page and filters stale responses', async ({ page }) => {
+  await setup(page);
+  const requestedPages: number[] = [];
+  await page.route('**/api/v1/goal-changes/page?**', async route => {
+    const params = new URL(route.request().url()).searchParams;
+    const currentPage = Number(params.get('page') || 1);
+    requestedPages.push(currentPage);
+    const items = Array.from({ length: 10 }, (_, index) => ({
+      ...row(`change-${(currentPage - 1) * 10 + index}`),
+      employeeId: 'employee', employeeName: `第${(currentPage - 1) * 10 + index + 1}位员工`,
+    }));
+    await route.fulfill({ json: envelope({ items, total: 25, page: currentPage, pageSize: 10 }) });
+  });
+  await go(page);
+  await expect(page.locator('.el-table__body').getByText('第1位员工', { exact: true })).toBeVisible();
+  await expect(page.locator('.el-table__body').getByText('第11位员工')).toHaveCount(0);
+  await page.locator('.el-pagination').getByRole('listitem', { name: '第 2 页' }).click();
+  await expect(page.locator('.el-table__body').getByText('第11位员工', { exact: true })).toBeVisible();
+  await expect(page.locator('.el-table__body').getByText('第1位员工', { exact: true })).toHaveCount(0);
+  expect(requestedPages).toContain(2);
+});
 
 for (const width of [1440, 390]) {
   test(`four performance sections keep one navigation baseline at ${width}px`, async ({ page }) => {
@@ -193,6 +227,21 @@ test('dashboard improvement entries name the HR and leadership goal stages', asy
   await go(page, '/dashboard');
   await expect(page.getByRole('link', { name: /合成HR环节员工.*HR确认/ })).toBeVisible();
   await expect(page.getByRole('link', { name: /合成领导环节员工.*分管领导确认目标/ })).toBeVisible();
+});
+
+test('a returned manager-created change appears in both the dashboard and change pending tab', async ({ page }) => {
+  await setup(page);
+  const returned = { ...row('change-b', 'task-team'), creatorId: 'employee', status: 'revision',
+    currentOwnerId: 'employee', allowedActions: ['edit', 'submit'] };
+  await page.route('**/api/v1/goal-changes/my-pending', route => route.fulfill({ json: envelope([returned]) }));
+  await go(page, '/dashboard');
+  const dashboardEntry = page.getByRole('link', { name: /合成团队员工.*修改目标变更/ });
+  await expect(dashboardEntry).toBeVisible();
+  await dashboardEntry.click();
+  await expect(page).toHaveURL(/\/goal-changes\/change-b$/);
+  await go(page, '/goal-changes');
+  await page.getByRole('tab', { name: '待我处理' }).click();
+  await expect(page.locator('.desktop-result-table').getByText('合成团队员工', { exact: true })).toBeVisible();
 });
 
 for (const { actualUpdatedAt, retryAfterFailure } of [
@@ -396,8 +445,23 @@ test('submitted change shows one business submission node despite draft audit ev
     ] }) }) : route.fallback());
   await go(page, '/goal-changes/change-a');
   const records = page.locator('.records');
-  await expect(records.getByText('合成员工 · 提交目标变更')).toBeVisible();
+  await expect(records.getByText('目标变更提交 · 合成员工 · 提交目标变更')).toBeVisible();
   await expect(records.locator('.el-timeline-item')).toHaveCount(1);
+});
+
+test('read-only change summarizes changed goals and names employee confirmation in history', async ({ page }) => {
+  await setup(page);
+  const updated = { ...original, name: '调整后的交付目标', weight: 1 };
+  await page.route('**/api/v1/goal-changes/change-a', route => route.request().method() === 'GET'
+    ? route.fulfill({ json: envelope({ ...detail(), status: 'active', allowedActions: [], goals: [updated], records: [
+      { id: 'r1', action: 'approve', actorName: '合成员工', createdAt: '2026-11-18T10:00:00Z', newValue: { previousStatus: 'indicator_confirming' } },
+      { id: 'r2', action: 'submit', actorName: '合成员工', createdAt: '2026-11-17T10:00:00Z', newValue: {} },
+    ] }) }) : route.fallback());
+  await go(page, '/goal-changes/change-a');
+  await expect(page.getByRole('region', { name: '变更摘要' })).toContainText('调整 1 项');
+  await expect(page.getByText('调整 · 调整后的交付目标')).toBeVisible();
+  await expect(page.locator('.records .el-timeline-item').first()).toContainText('员工确认 · 合成员工 · 员工确认');
+  await expect(page.getByText('查看完整目标对比')).toBeVisible();
 });
 
 test('zero-weight veto metadata survives save, and backend workflow warning keeps HR revoke', async ({ page }) => {
@@ -515,7 +579,7 @@ test('closing the detail never loads an undefined record', async ({ page }) => {
 
 test('relevant review queue and action visibility use allowedActions, not global role', async ({ page }) => {
   await setup(page, 'reviewer');
-  await page.route('**/api/v1/goal-changes', (route) => route.fulfill({ json: envelope([
+  await page.route('**/api/v1/goal-changes/my-pending', (route) => route.fulfill({ json: envelope([
     { ...row('review', 'unknown-task'), status: 'indicator_reviewing', allowedActions: ['decide'] },
     { ...row('read-only', 'another-task'), status: 'active', allowedActions: [] },
   ]) }));
@@ -527,13 +591,13 @@ test('relevant review queue and action visibility use allowedActions, not global
 test('context and list failures are retryable, never shown as empty success', async ({ page }) => {
   await setup(page);
   await page.route('**/api/v1/goal-changes/context', (route) => route.fulfill({ status: 403, json: { message: '无权限' } }));
-  await page.route('**/api/v1/goal-changes', (route) => route.fulfill({ status: 500, json: { message: '读取失败' } }));
+  await page.route('**/api/v1/goal-changes/page*', (route) => route.fulfill({ status: 500, json: { message: '读取失败' } }));
   await go(page);
   await expect(page.getByTestId('goal-change-context-error')).toContainText('无权');
   await expect(page.getByTestId('goal-change-list-error')).toContainText('失败');
   await expect(page.getByText('暂无目标变更', { exact: true })).toHaveCount(0);
   await page.unroute('**/api/v1/goal-changes/context');
-  await page.unroute('**/api/v1/goal-changes');
+  await page.unroute('**/api/v1/goal-changes/page*');
   await page.getByRole('button', { name: '重试任务范围', exact: true }).click();
   await page.getByRole('button', { name: '重试变更列表', exact: true }).click();
   await expect(page.getByTestId('goal-change-context-error')).toHaveCount(0);

@@ -24,9 +24,24 @@ const can = (action: string) => detail.value?.allowedActions.includes(action) ??
 const canEdit = computed(() => can('edit'));
 const businessRecords = computed(() => {
   const records = detail.value?.records ?? [];
-  return records.some(record => record.action === 'submit')
+  const visible = records.some(record => record.action === 'submit')
     ? records.filter(record => !['create', 'save_draft', 'edit', 'update'].includes(record.action)) : records;
+  return [...visible].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 });
+const changedGoals = computed(() => {
+  const before = detail.value?.beforeGoals ?? [];
+  const original = new Map(before.filter(goal => goal.sourceInstanceId).map(goal => [goal.sourceInstanceId, goal]));
+  const afterIds = new Set(goals.value.map(goal => goal.sourceInstanceId).filter(Boolean));
+  return [
+    ...before.filter(goal => goal.sourceInstanceId && !afterIds.has(goal.sourceInstanceId)).map(goal => ({ key: `remove-${goal.sourceInstanceId}`, label: `删除 · ${goal.name}` })),
+    ...goals.value.filter(goal => !goal.sourceInstanceId).map((goal, index) => ({ key: `add-${index}`, label: `新增 · ${goal.name || '未命名目标'}` })),
+    ...goals.value.filter(goal => goal.sourceInstanceId && original.has(goal.sourceInstanceId) && JSON.stringify(original.get(goal.sourceInstanceId)) !== JSON.stringify(goal))
+      .map(goal => ({ key: `update-${goal.sourceInstanceId}`, label: `调整 · ${goal.name}` })),
+  ];
+});
+const changeCounts = computed(() => ({ added: changedGoals.value.filter(item => item.key.startsWith('add-')).length,
+  removed: changedGoals.value.filter(item => item.key.startsWith('remove-')).length,
+  updated: changedGoals.value.filter(item => item.key.startsWith('update-')).length }));
 const total = computed(() => goals.value.reduce((sum, goal) => sum + goal.weight, 0));
 const reasonError = computed(() => validate.value && !reason.value.trim() ? '请填写变更原因' : '');
 const goalErrors = computed(() => goals.value.map(goal => ({
@@ -127,6 +142,19 @@ function recordComment(value: unknown) {
   if (value && typeof value === 'object' && 'comment' in value && typeof value.comment === 'string') return value.comment;
   return '';
 }
+function recordNode(record: GoalChangeDetail['records'][number]) {
+  if (record.action === 'submit') return '目标变更提交';
+  const value = record.newValue;
+  const previous = value && typeof value === 'object' && 'previousStatus' in value ? value.previousStatus : null;
+  return typeof previous === 'string' && previous in statusLabels
+    ? statusLabels[previous as keyof typeof statusLabels] : '目标变更';
+}
+function recordAction(record: GoalChangeDetail['records'][number]) {
+  const value = record.newValue;
+  const previous = value && typeof value === 'object' && 'previousStatus' in value ? value.previousStatus : null;
+  if (record.action === 'approve' && previous === 'indicator_confirming') return '员工确认';
+  return actionLabels[record.action] || '流程办理';
+}
 </script>
 
 <template>
@@ -143,14 +171,21 @@ function recordComment(value: unknown) {
         <el-form-item v-if="canEdit" label="变更原因" required :error="reasonError"><el-input v-model="reason" aria-label="变更原因" type="textarea" :rows="2" maxlength="4000" :disabled="busy" /></el-form-item>
         <div v-else class="read-reason"><strong>变更原因</strong><p>{{ detail.reason || '未填写' }}</p></div>
       </el-form>
+      <section class="change-digest" aria-label="变更摘要">
+        <strong>本次变更：新增 {{ changeCounts.added }} 项 · 删除 {{ changeCounts.removed }} 项 · 调整 {{ changeCounts.updated }} 项</strong>
+        <ul v-if="changedGoals.length"><li v-for="item in changedGoals" :key="item.key">{{ item.label }}</li></ul>
+      </section>
       <fieldset :disabled="busy" class="goals-fieldset">
-        <GoalChangeGoals v-model="goals" :before-goals="detail.beforeGoals" :editable="canEdit" :errors="goalErrors" />
+        <GoalChangeGoals v-if="canEdit" v-model="goals" :before-goals="detail.beforeGoals" :editable="canEdit" :errors="goalErrors" />
+        <details v-else class="full-goal-diff"><summary>查看完整目标对比</summary>
+          <GoalChangeGoals v-model="goals" :before-goals="detail.beforeGoals" :editable="false" :errors="goalErrors" />
+        </details>
       </fieldset>
       <div class="weight-total">变更后权重合计：{{ percent(total) }}%</div>
       <div v-if="totalError" class="field-error" role="alert">{{ totalError }}</div>
       <section class="records"><h3>办理记录</h3>
         <el-timeline v-if="businessRecords.length"><el-timeline-item v-for="record in businessRecords" :key="record.id" :timestamp="formatDateTime(record.createdAt)">
-          <strong>{{ record.actorName }} · {{ actionLabels[record.action] || '流程办理' }}</strong><p v-if="recordComment(record.newValue)">{{ recordComment(record.newValue) }}</p>
+          <strong>{{ recordNode(record) }} · {{ record.actorName }} · {{ recordAction(record) }}</strong><p v-if="recordComment(record.newValue)">{{ recordComment(record.newValue) }}</p>
         </el-timeline-item></el-timeline><p v-else>暂无办理记录</p>
       </section>
     </div>
@@ -189,5 +224,9 @@ function recordComment(value: unknown) {
 .field-error, .request-error { color: var(--el-color-danger); font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
 .footer-error { flex-basis: 100%; text-align: left; }
 .records { border-top: 1px solid var(--el-border-color); margin-top: 20px; padding-top: 12px; }
+.change-digest { padding: 12px; margin: 12px 0; border: 1px solid var(--el-border-color); border-radius: 6px; }
+.change-digest ul { margin: 8px 0 0; padding-left: 20px; }
+.change-digest li { margin-top: 4px; overflow-wrap: anywhere; }
+.full-goal-diff summary { cursor: pointer; padding: 8px 0; color: var(--el-color-primary); }
 h3 { font-size: 15px; margin: 0 0 16px; }
 </style>

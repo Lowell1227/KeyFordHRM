@@ -56,11 +56,15 @@ export interface GoalChangeDetail extends GoalChangeRow {
   records: Array<{ id: string; action: string; actorName: string; createdAt: string; newValue: unknown }>;
   protectedPeriodKeys: string[];
 }
+export interface GoalChangePage { items: GoalChangeRow[]; total: number; page: number; pageSize: number }
+export interface GoalChangeListQuery { scope: 'self' | 'team' | 'review' | 'all'; page: number; pageSize: number; status?: string; keyword?: string }
 
 // The shared HTTP interceptor unwraps the API envelope.
 export const goalChangesApi = {
   context: () => http.get<never, GoalChangeContext>('/goal-changes/context', { skipErrorMessage: true }),
   entry: () => http.get<never, { visible: boolean }>('/goal-changes/entry', { skipErrorMessage: true }),
+  myPending: () => http.get<never, GoalChangeRow[]>('/goal-changes/my-pending', { skipErrorMessage: true }),
+  page: (query: GoalChangeListQuery) => http.get<never, GoalChangePage>('/goal-changes/page', { params: query, skipErrorMessage: true }),
   list: () => http.get<never, GoalChangeRow[]>('/goal-changes', { skipErrorMessage: true }),
   detail: (id: string) => http.get<never, GoalChangeDetail>(`/goal-changes/${encodeURIComponent(id)}`, { skipErrorMessage: true }),
   grant: (taskId: string, expectedRevision?: number) => http.post('/goal-changes/grants',

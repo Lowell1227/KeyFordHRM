@@ -92,7 +92,7 @@ for (const width of [1440, 390]) {
     await expect(summary.getByText('92.40', { exact: true })).toBeVisible();
     await expect(page.getByTestId('department-review-workspace').getByTestId('review-history')).toContainText('周期交付稳定，建议加强协作。');
     await page.getByRole('textbox', { name: '复核意见' }).fill('复核确认交付依据充分');
-    await page.getByRole('button', { name: '复核通过', exact: true }).click();
+    await page.getByRole('button', { name: '提交部门复核', exact: true }).click();
     await expect.poll(() => submissions).toEqual([{ action: 'approve', comment: '复核确认交付依据充分' }]);
     await expect(page.getByText('部门复核已通过，已进入绩效校准。', { exact: true })).toBeVisible();
     await page.goto('/department-review');
@@ -106,7 +106,7 @@ for (const width of [1440, 390]) {
     const history = page.getByTestId('department-review-workspace').getByTestId('review-history');
     await expect(history).toContainText('周期交付稳定，建议加强协作。');
     await expect(history).toContainText('复核确认交付依据充分');
-    await expect(page.getByRole('button', { name: '复核通过', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '提交部门复核', exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
   });
 }
@@ -124,8 +124,8 @@ for (const width of [1440, 390]) {
     await expect(workspace).toBeVisible();
     await expect(workspace.getByTestId('review-history')).toContainText('合并办理');
     await expect(workspace.getByTestId('review-history')).toContainText('周期交付稳定，建议加强协作。');
-    await expect(page.getByRole('button', { name: '复核通过', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '退回上级重评', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '提交部门复核', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '退回给绩效上级', exact: true })).toHaveCount(0);
     expect(submissions).toHaveLength(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
@@ -134,11 +134,11 @@ for (const width of [1440, 390]) {
 test('退回必须填写原因，提交后进入上级重评', async ({ page }) => {
   const submissions = await setup(page);
   await page.goto('/tasks/' + taskId);
-  await page.getByRole('button', { name: '退回上级重评', exact: true }).click();
+  await page.getByRole('button', { name: '退回给绩效上级', exact: true }).click();
   await expect(page.getByText('请填写退回原因', { exact: true })).toBeVisible();
   expect(submissions).toHaveLength(0);
   await page.getByRole('textbox', { name: '复核意见' }).fill('请补充最终等级依据');
-  await page.getByRole('button', { name: '退回上级重评', exact: true }).click();
+  await page.getByRole('button', { name: '退回给绩效上级', exact: true }).click();
   await expect.poll(() => submissions).toEqual([{ action: 'reject', comment: '请补充最终等级依据' }]);
   await expect(page.getByText('已退回直属上级重新评定。', { exact: true })).toBeVisible();
 });
@@ -150,7 +150,7 @@ test('复核请求未完成时抽屉不可关闭，完成后仍刷新名单', as
   await page.goto('/department-review');
   await page.getByRole('button', { name: '进入复核', exact: true }).click();
   const drawer = page.getByTestId('business-detail-drawer');
-  await drawer.getByRole('button', { name: '复核通过', exact: true }).click();
+  await drawer.getByRole('button', { name: '提交部门复核', exact: true }).click();
   await expect(drawer.getByRole('button', { name: '关闭', exact: true })).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(drawer).toBeVisible();
@@ -310,7 +310,7 @@ test('员工公示前不能看到复核操作及未公示结果', async ({ page 
   await page.goto('/tasks/' + taskId + '?stage=result');
   await expect(page.getByText('虚拟员工甲', { exact: true }).first()).toBeVisible();
   await expect(page.getByTestId('department-review-workspace')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '复核通过', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '提交部门复核', exact: true })).toHaveCount(0);
   await expect(page.getByText('92.40', { exact: true })).toHaveCount(0);
 });
 
@@ -319,7 +319,7 @@ test('部门负责人查看本人任务时仍遵守员工公示边界', async ({
   await page.goto('/tasks/' + taskId + '?stage=result');
   await expect(page.getByText('虚拟员工甲', { exact: true }).first()).toBeVisible();
   await expect(page.getByTestId('department-review-workspace')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '复核通过', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '提交部门复核', exact: true })).toHaveCount(0);
   await expect(page.getByText('92.40', { exact: true })).toHaveCount(0);
 });
 
@@ -330,7 +330,7 @@ test('没有部门复核记录的上级评分任务不能显示已退回', async
   await expect(workspace).toBeVisible();
   await expect(workspace.getByTestId('review-history')).toContainText('周期交付稳定，建议加强协作。');
   await expect(workspace).not.toContainText('已退回直属上级重新评定');
-  await expect(workspace.getByRole('button', { name: '复核通过', exact: true })).toHaveCount(0);
+  await expect(workspace.getByRole('button', { name: '提交部门复核', exact: true })).toHaveCount(0);
 });
 
 test('没有部门复核记录的校准任务只显示真实当前环节', async ({ page }) => {
@@ -340,5 +340,5 @@ test('没有部门复核记录的校准任务只显示真实当前环节', async
   await expect(workspace).toBeVisible();
   await expect(workspace).toContainText('当前已进入绩效校准。');
   await expect(workspace).not.toContainText('部门复核已通过');
-  await expect(workspace.getByRole('button', { name: '复核通过', exact: true })).toHaveCount(0);
+  await expect(workspace.getByRole('button', { name: '提交部门复核', exact: true })).toHaveCount(0);
 });

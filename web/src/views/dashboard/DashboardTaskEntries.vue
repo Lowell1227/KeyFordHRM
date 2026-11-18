@@ -5,6 +5,7 @@ import { cyclesApi } from '@/api/cycles.api';
 import { goalPlansApi, canMonitorGoals } from '@/api/goal-plans.api';
 import { tasksApi } from '@/api/tasks.api';
 import { improvementPlansApi } from '@/api/improvement-plans.api';
+import { goalChangesApi, type GoalChangeRow } from '@/api/goal-changes.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { getEmployeeTaskStageState, isTerminalTaskStatus, resolveEmployeeTaskEntry } from '@/views/task/task-stage';
 import type { AssessmentCycle, TaskListItem, ImprovementPlan } from '@/types/api.types';
@@ -17,6 +18,8 @@ const cycles = ref<AssessmentCycle[]>([]);
 const personalTasks = ref<TaskListItem[]>([]);
 const improvementPending = ref<ImprovementPlan[]>([]);
 const improvementError = ref(false);
+const goalChangePending = ref<GoalChangeRow[]>([]);
+const goalChangeError = ref(false);
 const goalReviewTotal = ref(0);
 const goalReviewError = ref(false);
 const loading = ref(false);
@@ -120,6 +123,8 @@ async function loadEntries() {
   personalTasks.value = [];
   improvementPending.value = [];
   improvementError.value = false;
+  goalChangePending.value = [];
+  goalChangeError.value = false;
   teamCounts.value = {};
   personalError.value = false;
   cyclesError.value = false;
@@ -130,6 +135,9 @@ async function loadEntries() {
     improvementPlansApi.myPending().then((items) => {
       if (requestId === requestSerial) improvementPending.value = items;
     }).catch(() => { if (requestId === requestSerial) improvementError.value = true; }),
+    goalChangesApi.myPending().then((items) => {
+      if (requestId === requestSerial) goalChangePending.value = items;
+    }).catch(() => { if (requestId === requestSerial) goalChangeError.value = true; }),
   ]);
   if (requestId !== requestSerial) return;
   if (auth.isManager) {
@@ -172,6 +180,14 @@ function improvementAction(status: ImprovementPlan['status']): string {
     dept_review: '部门负责人评价', vp_review: '最终审核',
   };
   return labels[status] ?? '查看计划';
+}
+
+function goalChangeAction(item: GoalChangeRow): string {
+  if (item.allowedActions.includes('edit') || item.allowedActions.includes('submit')) {
+    return item.status === 'revision' ? '修改目标变更' : '提交目标变更';
+  }
+  if (item.status === 'indicator_confirming') return '确认目标变更';
+  return '审核目标变更';
 }
 
 watch(() => [auth.user?.id, auth.user?.sysRole, auth.isManager], () => void loadEntries(), { immediate: true });
@@ -235,6 +251,14 @@ onUnmounted(() => { requestSerial += 1; });
       </article>
       <p v-if="!visiblePlans.length && !personalError && !cyclesError" class="dashboard-tasks__empty">当前没有进行中的本人任务{{ auth.isManager ? '或团队任务' : '' }}。</p>
     </template>
+  </section>
+  <section v-if="goalChangePending.length || goalChangeError" class="dashboard-improvement" aria-label="目标变更待办">
+    <h2>目标变更待办</h2>
+    <p v-if="goalChangeError" class="task-note">目标变更待办暂时无法加载。请进入目标变更页面重试。</p>
+    <router-link v-for="item in goalChangePending" :key="item.id" :to="`/goal-changes/${item.id}`" class="dashboard-improvement__item">
+      <span><strong>{{ item.employeeName }}</strong> · {{ goalChangeAction(item) }}</span>
+      <span class="dashboard-improvement__open">去处理</span>
+    </router-link>
   </section>
   <section v-if="improvementPending.length || improvementError" class="dashboard-improvement" aria-label="改进计划待办">
     <h2>改进计划待办</h2>

@@ -26,6 +26,8 @@ const activeTab = ref<SupportTab>('history');
       <button
         type="button"
         role="tab"
+        id="goal-review-reference-tab"
+        aria-controls="goal-review-reference-panel"
         data-testid="goal-review-support-reference-tab"
         :aria-selected="activeTab === 'reference'"
         :class="{ 'is-active': activeTab === 'reference' }"
@@ -36,6 +38,8 @@ const activeTab = ref<SupportTab>('history');
       <button
         type="button"
         role="tab"
+        id="goal-review-history-tab"
+        aria-controls="goal-review-history-panel"
         data-testid="goal-review-support-history-tab"
         :aria-selected="activeTab === 'history'"
         :class="{ 'is-active': activeTab === 'history' }"
@@ -47,11 +51,14 @@ const activeTab = ref<SupportTab>('history');
 
     <GoalReviewReferencePanel
       v-show="activeTab === 'reference'"
+      id="goal-review-reference-panel"
+      role="tabpanel"
+      aria-labelledby="goal-review-reference-tab"
       :cycle-id="cycleId"
       :employee-id="employeeId"
       :indicators="indicators"
     />
-    <div v-show="activeTab === 'history'" class="goal-review-support__history">
+    <div v-show="activeTab === 'history'" id="goal-review-history-panel" role="tabpanel" aria-labelledby="goal-review-history-tab" class="goal-review-support__history">
       <IndicatorOperationTimeline :records="flowRecords" :show-header="false" />
       <el-empty
         v-if="!flowRecords.length"

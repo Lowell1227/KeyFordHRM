@@ -15,31 +15,40 @@ import { grantLabels, statusLabels } from './goal-change-labels';
 
 const route = useRoute(), router = useRouter(), auth = useAuthStore();
 const context = ref<GoalChangeContext | null>(null), rows = ref<GoalChangeRow[]>([]);
-const contextError = ref(''), listError = ref(''), dialogError = ref('');
+const pendingRows = ref<GoalChangeRow[]>([]), listTotal = ref(0);
+const contextError = ref(''), listError = ref(''), pendingError = ref(''), dialogError = ref('');
 const loading = ref(false), contextLoading = ref(false), busy = ref(false);
 const scope = ref('self');
 const filters = reactive({ keyword: '', status: '' });
 const { page, pageSize, pageSizeOptions } = usePagination({ defaultPageSize: 10 });
 const dialog = ref(false);
+const createdId = ref('');
 const selection = reactive({ taskId: '' });
-let contextSession = 0, listSession = 0, dialogSession = 0, alive = true;
-onBeforeUnmount(() => { alive = false; contextSession++; listSession++; dialogSession++; });
+let contextSession = 0, listSession = 0, pendingSession = 0, dialogSession = 0, alive = true;
+let filterTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => { alive = false; contextSession++; listSession++; pendingSession++; dialogSession++; clearTimeout(filterTimer); });
 
 const tasks = computed(() => context.value?.tasks ?? []);
 const selectedTask = computed(() => tasks.value.find(task => task.id === selection.taskId));
 const startTasks = computed(() => tasks.value.filter(task => task.canStart && (scope.value === 'self'
   ? task.employeeId === auth.user?.id : scope.value === 'team' ? task.managerId === auth.user?.id : true)));
-const filteredRows = computed(() => rows.value.filter(row => {
-  const inScope = scope.value === 'review' ? row.allowedActions.includes('decide')
-    : scope.value === 'all' ? true
-      : scope.value === 'team' ? row.managerId === auth.user?.id && row.employeeId !== auth.user?.id
-        : row.employeeId === auth.user?.id;
-  return inScope && (!filters.status || row.status === filters.status)
+const queueScope = computed(() => scope.value === 'pending' || scope.value === 'review');
+const filteredRows = computed(() => (queueScope.value ? pendingRows.value : rows.value).filter(row => {
+  if (!queueScope.value) return true;
+  return (scope.value !== 'review' || row.allowedActions.includes('decide'))
+    && (!filters.status || row.status === filters.status)
     && `${row.employeeName} ${row.cycleName} ${row.reason} ${row.creatorName}`.includes(filters.keyword.trim());
 }));
-const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
-watch([scope, () => filters.keyword, () => filters.status, pageSize], () => { page.value = 1; });
-watch(() => filteredRows.value.length, length => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize.value))); });
+const pageRows = computed(() => queueScope.value ? filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value) : rows.value);
+const totalRows = computed(() => queueScope.value ? filteredRows.value.length : listTotal.value);
+watch([scope, () => filters.keyword, () => filters.status, pageSize, page], (values, previous) => {
+  if (values.slice(0, 4).some((value, index) => value !== previous[index]) && page.value !== 1) { page.value = 1; return; }
+  ++listSession;
+  clearTimeout(filterTimer);
+  if (queueScope.value) { loading.value = false; return; }
+  filterTimer = setTimeout(() => void loadList(), values[1] !== previous[1] ? 250 : 0);
+});
+watch(() => totalRows.value, length => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize.value))); });
 watch(() => selection.taskId, () => { dialogError.value = ''; });
 watch(() => route.fullPath, () => { dialogSession++; dialog.value = false; busy.value = false; });
 
@@ -54,29 +63,47 @@ async function loadContext() {
   } finally { if (alive && token === contextSession) contextLoading.value = false; }
 }
 async function loadList() {
+  if (queueScope.value) { ++listSession; loading.value = false; return; }
   const token = ++listSession;
   loading.value = true; listError.value = '';
   try {
-    const result = await goalChangesApi.list();
-    if (alive && token === listSession) rows.value = result;
+    const result = await goalChangesApi.page({ scope: scope.value as 'self' | 'team' | 'all', page: page.value,
+      pageSize: pageSize.value, ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.keyword.trim() ? { keyword: filters.keyword.trim() } : {}) });
+    if (alive && token === listSession) { rows.value = result.items; listTotal.value = result.total; }
   } catch (error) {
     if (alive && token === listSession) listError.value = goalChangeError(error, '目标变更列表读取失败');
   } finally { if (alive && token === listSession) loading.value = false; }
 }
-async function refresh() { await Promise.all([loadContext(), loadList()]); }
+async function loadPending() {
+  const token = ++pendingSession;
+  pendingError.value = '';
+  try {
+    const result = await goalChangesApi.myPending();
+    if (alive && token === pendingSession) {
+      pendingRows.value = result;
+      if (result.length && scope.value === 'self') scope.value = 'pending';
+    }
+  } catch (error) {
+    if (alive && token === pendingSession) pendingError.value = goalChangeError(error, '待我处理读取失败');
+  }
+}
+async function refresh() { await Promise.all([loadContext(), loadList(), loadPending()]); }
 onMounted(refresh);
 function openDetail(id: string) { void router.push({ name: 'GoalChangeDetail', params: { id }, query: route.query }); }
-function openDialog() { dialogSession++; dialogError.value = ''; selection.taskId = ''; dialog.value = true; }
+function openDialog() { dialogSession++; dialogError.value = ''; createdId.value = ''; selection.taskId = ''; dialog.value = true; }
 async function start() {
   const task = selectedTask.value, token = dialogSession, path = route.fullPath;
   dialogError.value = '';
-  if (!task || !startTasks.value.some(item => item.id === task.id)) { dialogError.value = '请选择可发起变更的考核任务'; return; }
+  if (!createdId.value && (!task || !startTasks.value.some(item => item.id === task.id))) { dialogError.value = '请选择可发起变更的考核任务'; return; }
   if (busy.value) return;
   busy.value = true;
   try {
-    const created = await goalChangesApi.create(task.id);
+    if (!createdId.value) createdId.value = (await goalChangesApi.create(task!.id)).id;
     if (!alive || token !== dialogSession || route.fullPath !== path) return;
-    dialog.value = false; openDetail(created.id); void refresh();
+    await router.push({ name: 'GoalChangeDetail', params: { id: createdId.value }, query: route.query });
+    if (route.fullPath === path) throw new Error('变更已创建，但详情未打开；请点击“查看已创建的变更”重试');
+    void refresh();
   } catch (error) {
     if (alive && token === dialogSession && route.fullPath === path) dialogError.value = goalChangeError(error, '发起失败，请刷新任务范围核对是否已创建');
   } finally { if (alive && token === dialogSession) busy.value = false; }
@@ -95,6 +122,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
     <BusinessListPage variant="workflow" :loading="loading || contextLoading" class="goal-changes-list">
       <template #filters>
         <el-tabs v-model="scope" aria-label="变更范围">
+          <el-tab-pane :label="`待我处理（${pendingRows.length}）`" name="pending" />
           <el-tab-pane label="我的变更" name="self" /><el-tab-pane label="团队变更" name="team" />
           <el-tab-pane label="待我审核" name="review" /><el-tab-pane label="相关记录" name="all" />
         </el-tabs>
@@ -112,13 +140,16 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
         <div v-if="contextError" class="request-error" role="alert" data-testid="goal-change-context-error">
           {{ contextError }} <el-button link type="primary" @click="loadContext">重试任务范围</el-button>
         </div>
-        <div v-if="listError" class="request-error" role="alert" data-testid="goal-change-list-error">
+        <div v-if="!queueScope && listError" class="request-error" role="alert" data-testid="goal-change-list-error">
           {{ listError }} <el-button link type="primary" @click="loadList">重试变更列表</el-button>
         </div>
-        <el-empty v-if="!loading && !contextLoading && !listError && !contextError && !filteredRows.length" description="暂无目标变更" />
+        <div v-if="queueScope && pendingError" class="request-error" role="alert" data-testid="goal-change-pending-error">
+          {{ pendingError }} <el-button link type="primary" @click="loadPending">重试待我处理</el-button>
+        </div>
+        <el-empty v-if="!loading && !contextLoading && !(queueScope ? pendingError : listError) && !contextError && !totalRows" :description="queueScope ? '当前没有待我处理的目标变更' : '暂无目标变更'" />
       </template>
       <template #desktop-list>
-        <el-table v-if="!listError" :data="pageRows" height="100%" class="app-table">
+        <el-table v-if="!(queueScope ? pendingError : listError)" :data="pageRows" height="100%" class="app-table">
           <el-table-column prop="employeeName" label="员工" min-width="120" />
           <el-table-column prop="cycleName" label="考核周期" min-width="160" />
           <el-table-column label="当前环节" min-width="170"><template #default="{ row }">{{ statusLabels[row.status as keyof typeof statusLabels] || row.status }}</template></el-table-column>
@@ -129,7 +160,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
         </el-table>
       </template>
       <template #mobile-list>
-        <div v-if="!listError" class="mobile-stack">
+        <div v-if="!(queueScope ? pendingError : listError)" class="mobile-stack">
           <MobileResultCard v-for="row in pageRows" :key="row.id">
             <template #title>{{ row.employeeName }}</template><template #status><el-tag size="small">{{ statusLabels[row.status] }}</el-tag></template>
             <div class="mobile-result-field"><span>考核周期</span><span>{{ row.cycleName }}</span></div>
@@ -139,7 +170,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
           </MobileResultCard>
         </div>
       </template>
-      <template #pagination><ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="filteredRows.length" /></template>
+      <template #pagination><ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="totalRows" /></template>
       <template #detail>
         <RouterView v-slot="{ Component }"><component :is="Component" @changed="refresh" /></RouterView>
         <el-dialog :model-value="dialog" title="发起目标变更" width="min(520px, 96vw)"
@@ -154,7 +185,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
             <div v-if="dialogError" class="request-error" role="alert">{{ dialogError }}</div>
           </el-form>
           <template #footer>
-            <el-button type="primary" :loading="busy" @click="start">开始填写</el-button>
+            <el-button type="primary" :loading="busy" @click="start">{{ createdId ? '查看已创建的变更' : '开始填写' }}</el-button>
           </template>
         </el-dialog>
       </template>

@@ -11,6 +11,9 @@ export default defineConfig({
   },
   testDir: './e2e/specs',
   testMatch: [
+    '72-performance-entry-optimization.spec.ts',
+    '68-goal-changes.spec.ts',
+    '51-result-retention.spec.ts',
     '10-team-performance-contract.spec.ts',
     '12-goal-tracking-model.spec.ts',
     '13-cycle-first-performance-context.spec.ts',

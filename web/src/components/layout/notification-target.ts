@@ -8,6 +8,13 @@ export function resolveNotificationTarget(
   const taskId = notification.taskId;
   const cycleId = notification.cycleId || undefined;
 
+  if (notification.type === 'goal_change' || notification.type === 'improvement_plan') {
+    const path = notification.extraData?.path;
+    const prefix = notification.type === 'goal_change' ? 'goal-changes' : 'improvement-plans';
+    if (typeof path === 'string' && new RegExp(`^/${prefix}(?:/[A-Za-z0-9-]+)?$`).test(path)) return { path };
+    return null;
+  }
+
   if (notification.type === 'talent_interview' && typeof notification.extraData?.invitationId === 'string') {
     return { path: `/talent-interviews/${encodeURIComponent(notification.extraData.invitationId)}` };
   }
@@ -21,6 +28,9 @@ export function resolveNotificationTarget(
     return { name: 'ConfirmationDetail', params: { id: applicationId } };
   }
   if (!taskId) return null;
+  if (notification.type === 'indicator_setting_notice' && notification.extraData?.action === 'employee_goal') {
+    return { name: 'TaskDetail', params: { id: taskId } };
+  }
   const periodId = typeof notification.extraData?.periodId === 'string'
     ? notification.extraData.periodId
     : null;

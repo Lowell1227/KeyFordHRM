@@ -32,8 +32,8 @@ for (const width of [1440, 390]) {
     await page.getByRole('dialog').getByRole('button', { name: '通过', exact: true }).click();
     await expect(first).toContainText('待员工确认');
     await second.getByRole('button', { name: '退回', exact: true }).click();
-    await page.getByPlaceholder('请输入审批意见（必填）').fill('补充校准依据');
-    await page.getByRole('button', { name: '确认退回', exact: true }).click();
+    await page.getByRole('textbox', { name: '退回原因' }).fill('补充校准依据');
+    await page.getByRole('button', { name: '退回绩效校准', exact: true }).click();
     await expect(second).toContainText('绩效校准中');
     await page.reload();
     for (const row of [first, second]) {

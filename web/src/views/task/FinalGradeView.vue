@@ -22,6 +22,7 @@ const emit = defineEmits<{ submitted: [] }>();
 const taskId = computed(() => props.taskId || String(route.params.id));
 const detail = ref<FinalGradeDetail | null>(null);
 const loading = ref(false);
+const loadError = ref('');
 const submitting = ref(false);
 const selectedGrade = ref<PerfGrade | null>(null);
 const comment = ref('');
@@ -40,6 +41,7 @@ async function loadDetail() {
   const sequence = ++loadSequence;
   const requestedTaskId = taskId.value;
   loading.value = true;
+  loadError.value = '';
   try {
     const result = await tasksApi.getFinalGrade(requestedTaskId);
     if (sequence !== loadSequence || requestedTaskId !== taskId.value) return;
@@ -48,7 +50,7 @@ async function loadDetail() {
     comment.value = detail.value.comment ?? '';
   } catch (e) {
     if (sequence !== loadSequence) return;
-    ElMessage.error(e instanceof Error ? e.message : '获取评定数据失败');
+    loadError.value = e instanceof Error ? e.message : '获取评定数据失败';
     detail.value = null;
   } finally {
     if (sequence === loadSequence) loading.value = false;
@@ -106,6 +108,9 @@ watch(taskId, loadDetail, { immediate: true });
 
 <template>
   <div v-loading="loading" class="final-grade-view page-stack" data-testid="manager-period-results">
+    <el-alert v-if="loadError && !loading" :title="loadError" type="error" :closable="false" show-icon data-testid="final-grade-load-error">
+      <el-button link type="primary" @click="loadDetail">重试读取结果评定</el-button>
+    </el-alert>
     <template v-if="detail">
       <ChartCard :padded="true">
         <template #title>
@@ -175,6 +180,7 @@ watch(taskId, loadDetail, { immediate: true });
             :key="grade"
             type="button"
             :aria-label="`整周期最终等级 ${grade}`"
+            :aria-pressed="selectedGrade === grade"
             class="grade-option"
             :class="{ 'grade-option--active': selectedGrade === grade }"
             @click="selectedGrade = grade"
@@ -284,6 +290,7 @@ watch(taskId, loadDetail, { immediate: true });
 .grade-option:hover {
   border-color: var(--el-color-primary);
 }
+.grade-option:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
 
 .grade-option--active {
   border-color: var(--el-color-primary);
@@ -297,6 +304,13 @@ watch(taskId, loadDetail, { immediate: true });
 
 .submit-row {
   margin-top: 20px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 0;
+  background: #fff;
 }
 @media (max-width: 767px) {
   .title-row { font-size: 15px; flex-wrap: wrap; }

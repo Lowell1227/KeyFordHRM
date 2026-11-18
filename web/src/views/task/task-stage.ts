@@ -207,7 +207,10 @@ export function resolveEmployeeTaskEntry(task: EmployeeTaskStageSource): Employe
     };
   }
   const nextUnopened = monthlyPeriods.find((item) => item.status === 'unopened');
-  if (task.workflowVersion === 2 && nextUnopened) {
+  if (task.workflowVersion === 2 && nextUnopened && ![
+    'pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting',
+    'indicator_dept_reviewing', 'indicator_confirming', 'indicator_approving',
+  ].includes(task.status)) {
     return {
       stage: 'self-eval',
       label: '目标跟进',

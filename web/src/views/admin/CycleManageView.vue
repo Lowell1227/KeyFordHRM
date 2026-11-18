@@ -197,6 +197,10 @@ const participantRecordError = ref('');
 const participantRecord = ref<CycleParticipantRecord | null>(null);
 const launchActionMode = ref<'launch' | 'schedule' | null>(null);
 const reviewActionMode = ref<'review' | 'remind' | null>(null);
+const reviewCycleDialogVisible = ref(false);
+const reviewCycleTarget = ref<AssessmentCycle | null>(null);
+const reviewCycleComment = ref('');
+const reviewCycleError = ref('');
 const detailLoading = ref(false);
 const detailError = ref('');
 const cycleDetail = ref<AssessmentCycle | null>(null);
@@ -1530,32 +1534,36 @@ async function selectStatusGroup(group: CycleListGroup) {
   await loadCycles();
 }
 
-async function handleReviewCycle(cycle: AssessmentCycle) {
+function handleReviewCycle(cycle: AssessmentCycle) {
   if (reviewActionMode.value) return;
+  reviewCycleTarget.value = cycle;
+  reviewCycleComment.value = '';
+  reviewCycleError.value = '';
+  reviewCycleDialogVisible.value = true;
+}
+
+async function submitCycleReview(action: 'approve' | 'reject') {
+  const cycle = reviewCycleTarget.value;
+  if (!cycle || reviewActionMode.value) return;
+  if (action === 'reject' && !reviewCycleComment.value.trim()) {
+    reviewCycleError.value = '请填写退回原因';
+    return;
+  }
+  reviewCycleError.value = '';
   reviewActionMode.value = 'review';
-  const scoringSummary = cycle.workflowVersion === 2
-    ? cycle.scoringFrequency === 'monthly'
-      ? `月度自评，共 ${cycle.periodSchedules?.length ?? 0} 期`
-      : '周期结束统一评分，共 1 期'
-    : '历史流程';
-  const reviewSummary = cycle.workflowVersion === 2
-    ? `已调整月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；公司负责人（不参与绩效审批）：${cycle.companyFinalApprover?.name || '未配置'}；`
-    : '';
   try {
-    await ElMessageBox.confirm(
-      `确认审核通过「${cycle.name}」？${scoringSummary}。${reviewSummary}通过后创建人可发起考核。`,
-      '审核考核周期',
-      { confirmButtonText: '审核通过', cancelButtonText: '取消', type: 'warning' },
-    );
-    const updated = await cyclesApi.review(cycle.id, 'approve', cycle.planVersion);
+    const updated = await cyclesApi.review(cycle.id, action, cycle.planVersion, reviewCycleComment.value.trim() || undefined);
     const index = cycles.value.findIndex((item) => item.id === updated.id);
     if (index >= 0) cycles.value[index] = updated;
     if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
-    ElMessage.success('考核周期已审核通过');
+    reviewCycleDialogVisible.value = false;
+    reviewCycleTarget.value = null;
+    reviewCycleComment.value = '';
+    ElMessage.success(action === 'approve' ? '周期计划已审核通过' : '周期计划已退回创建人');
     await loadCycles();
     if (isCycleWorkspace.value) await loadCycleDetail(cycle.id);
-  } catch {
-    // 用户取消或接口错误由拦截器展示。
+  } catch (error) {
+    reviewCycleError.value = error instanceof Error ? error.message : '提交失败，请重试';
   } finally {
     reviewActionMode.value = null;
   }
@@ -1740,6 +1748,22 @@ onMounted(() => {
     </ChartCard>
 
     </template>
+
+    <el-dialog v-model="reviewCycleDialogVisible" title="审核考核周期" width="min(520px, 96vw)" :close-on-click-modal="false" :close-on-press-escape="!reviewActionMode">
+      <p v-if="reviewCycleTarget">{{ reviewCycleTarget.name }} · {{ reviewCycleTarget.reviewer?.name || 'HR管理员' }}审核</p>
+      <p>通过后创建人可发起考核；退回后由创建人修改并重新提交审核。</p>
+      <el-form label-position="top">
+        <el-form-item label="退回原因" :error="reviewCycleError === '请填写退回原因' ? reviewCycleError : ''">
+          <el-input v-model="reviewCycleComment" type="textarea" :rows="3" maxlength="500" show-word-limit aria-label="退回原因" @input="reviewCycleError = ''" />
+        </el-form-item>
+      </el-form>
+      <div v-if="reviewCycleError && reviewCycleError !== '请填写退回原因'" role="alert" class="cycle-review-error">{{ reviewCycleError }}</div>
+      <template #footer>
+        <el-button :disabled="!!reviewActionMode" @click="reviewCycleDialogVisible = false">取消</el-button>
+        <el-button type="warning" plain :loading="!!reviewActionMode" @click="submitCycleReview('reject')">退回周期计划</el-button>
+        <el-button type="primary" :loading="!!reviewActionMode" @click="submitCycleReview('approve')">通过周期计划</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 新建/编辑周期 -->
     <el-dialog

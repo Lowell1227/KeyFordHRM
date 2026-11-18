@@ -58,6 +58,7 @@ const props = withDefaults(
     departments?: VisibilityDepartmentOption[];
     users?: VisibilityUserOption[];
     busy?: boolean;
+    rejectAction: (payload: GoalReviewRejectPayload) => Promise<boolean>;
   }>(),
   {
     departments: () => [],
@@ -69,13 +70,16 @@ const props = withDefaults(
 const emit = defineEmits<{
   save: [payload: GoalReviewSavePayload];
   approve: [payload: GoalReviewActionPayload];
-  reject: [payload: GoalReviewRejectPayload];
 }>();
 
 const task = ref<TaskDetail>();
 const auth = useAuthStore();
 const loading = ref(false);
 const error = ref('');
+const rejectDialogVisible = ref(false);
+const rejectReason = ref('');
+const rejectError = ref('');
+const rejectSubmitting = ref(false);
 const editing = ref(false);
 const draftIndicators = reactive<IndicatorInstance[]>([]);
 const validationIndicatorIds = ref<string[]>([]);
@@ -373,28 +377,44 @@ async function handleApprove() {
 
 async function handleReject() {
   if (!isReviewable.value || !task.value?.updatedAt) return;
+  rejectError.value = '';
+  rejectDialogVisible.value = true;
+}
+
+async function submitReject() {
+  if (!isReviewable.value || !task.value?.updatedAt || rejectSubmitting.value) return;
+  const reason = rejectReason.value.trim();
+  if (!reason) {
+    rejectError.value = '请输入退回原因和修改要求';
+    return;
+  }
+  rejectError.value = '';
+  rejectSubmitting.value = true;
   try {
-    const { value } = await ElMessageBox.prompt('请说明需要员工修改的内容', '退回修改', {
-      confirmButtonText: '退回修改',
-      cancelButtonText: '取消',
-      inputPlaceholder: '请输入退回原因和修改要求',
-      inputPattern: /\S+/,
-      inputErrorMessage: '请输入退回原因',
-      type: 'warning',
-    });
-    emit('reject', {
+    const succeeded = await props.rejectAction({
       taskId: task.value.id,
       expectedUpdatedAt: task.value.updatedAt,
-      reason: value.trim(),
+      reason,
     });
-  } catch (promptError) {
-    if (promptError === 'cancel' || promptError === 'close') return;
+    if (succeeded) {
+      rejectDialogVisible.value = false;
+      rejectReason.value = '';
+    } else {
+      rejectError.value = '退回未完成，请核对任务状态后重试';
+    }
+  } catch (submitError) {
+    rejectError.value = submitError instanceof Error ? submitError.message : '退回失败，请重试';
+  } finally {
+    rejectSubmitting.value = false;
   }
 }
 
 watch(
   () => props.taskId,
   () => {
+    rejectDialogVisible.value = false;
+    rejectReason.value = '';
+    rejectError.value = '';
     void loadTask();
   },
   { immediate: true },
@@ -665,10 +685,21 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
     </template>
 
     <el-empty v-else :image-size="52" description="暂无目标审核详情" />
+    <el-dialog v-model="rejectDialogVisible" title="退回目标计划" width="min(520px, 94vw)" :close-on-click-modal="!rejectSubmitting" :close-on-press-escape="!rejectSubmitting" :show-close="!rejectSubmitting">
+      <p>退回后由员工修改目标并重新提交审核。</p>
+      <label for="goal-review-reject-reason">退回原因和修改要求</label>
+      <el-input id="goal-review-reject-reason" v-model="rejectReason" type="textarea" :rows="4" maxlength="2000" show-word-limit :disabled="rejectSubmitting" aria-label="退回原因和修改要求" @input="rejectError = ''" />
+      <p v-if="rejectError" class="goal-review__reject-error" role="alert">{{ rejectError }}</p>
+      <template #footer>
+        <el-button :disabled="rejectSubmitting" @click="rejectDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="rejectSubmitting" data-testid="goal-review-submit-reject" @click="submitReject">退回给员工修改</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <style scoped>
+.goal-review__reject-error { margin: 8px 0 0; color: var(--el-color-danger); font-size: 13px; }
 .goal-review {
   min-width: 0;
   overflow: hidden;

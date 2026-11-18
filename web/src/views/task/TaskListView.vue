@@ -57,6 +57,7 @@ const workspaceQuery = useTaskWorkspaceQuery();
 
 const list = ref<TaskListItem[]>([]);
 const loading = ref(false);
+const personalError = ref('');
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref<string>('');
 const teamLoading = ref(false);
@@ -324,11 +325,13 @@ async function loadList(options: LoadListOptions = {}) {
   const requestId = ++personalRequestSerial;
   if (!selectedCycleId.value) {
     list.value = [];
+    personalError.value = '';
     loading.value = false;
     return;
   }
   const cycleId = selectedCycleId.value;
   loading.value = true;
+  personalError.value = '';
   try {
     const baseParams = {
       cycleId,
@@ -336,10 +339,12 @@ async function loadList(options: LoadListOptions = {}) {
     const scopedTasks = await fetchAllMine(baseParams);
     if (requestId !== personalRequestSerial || selectedCycleId.value !== cycleId) return;
     list.value = sortTasksByCycleDesc(scopedTasks);
+    personalError.value = '';
   } catch {
     if (requestId === personalRequestSerial) {
       list.value = [];
-      if (!options.silent) ElMessage.error('获取绩效任务失败');
+      personalError.value = '绩效任务读取失败，请重试';
+      if (!options.silent) ElMessage.error(personalError.value);
     }
   } finally {
     if (requestId === personalRequestSerial) loading.value = false;
@@ -909,12 +914,12 @@ async function executeSingleGoalReview(
   task: TeamTaskVersion,
   actionLabel: string,
   submit: () => Promise<BatchReviewResult>,
-) {
+): Promise<boolean> {
   const item = teamPage.value.items.find((candidate) => candidate.id === task.taskId)
     ?? (hydratedTeamTask.value?.id === task.taskId ? hydratedTeamTask.value : undefined);
   if (!item || !auth.user?.id || item.managerId !== auth.user.id) {
     ElMessage.warning('无权处理非直属下属的绩效任务');
-    return;
+    return false;
   }
   const requestId = ++singleOperationSerial;
   const contextKey = teamContextKey();
@@ -927,13 +932,15 @@ async function executeSingleGoalReview(
   );
   try {
     const result = await submit();
-    if (!isCurrentRequest()) return;
+    if (!isCurrentRequest()) return false;
     await applyBatchResult(actionLabel, result, labels, contextKey);
     if (result.succeeded.length > 0) await loadGoalReviewTotal();
     if (isCurrentRequest()) await goalReviewRef.value?.reload();
+    return result.succeeded.some((item) => item.taskId === task.taskId);
   } catch (error) {
-    if (!isCurrentRequest()) return;
+    if (!isCurrentRequest()) return false;
     await handleBatchRequestError(actionLabel, [task], labels, contextKey, error);
+    return false;
   } finally {
     if (requestId === singleOperationSerial) teamSingleRequestBusy.value = false;
   }
@@ -950,7 +957,7 @@ async function approveSingleGoalReview(payload: GoalReviewActionPayload) {
 
 async function rejectSingleGoalReview(payload: GoalReviewRejectPayload) {
   const task = { taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt };
-  await executeSingleGoalReview(
+  return executeSingleGoalReview(
     task,
     '单项退回',
     () => tasksApi.batchRejectIndicators({ tasks: [task], reason: payload.reason }),
@@ -1256,7 +1263,7 @@ watch(
         :busy="teamBatchBusy"
         @save="saveSingleGoalReview"
         @approve="approveSingleGoalReview"
-        @reject="rejectSingleGoalReview"
+        :reject-action="rejectSingleGoalReview"
       />
       <FinalGradeView
         v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask && !workspaceQuery.state.value.periodId && ['completed', 'no_result'].includes(selectedTeamTask.periodReview?.status || '')"
@@ -1282,8 +1289,11 @@ watch(
       <h2 class="personal-task-surface__title">{{ selectedStageLabel }}</h2>
 
       <section data-testid="task-surface" v-loading="loading">
+        <el-alert v-if="personalError && !loading" :title="personalError" type="error" :closable="false" show-icon data-testid="personal-task-error">
+          <el-button link type="primary" @click="loadList()">重试读取</el-button>
+        </el-alert>
         <article
-          v-if="personalTask"
+          v-if="personalTask && !personalError"
           class="personal-task-card"
           data-testid="personal-task-card"
           @click="goDetail(personalTask)"
@@ -1316,7 +1326,7 @@ watch(
           </el-button>
         </article>
 
-        <div v-else-if="!loading" class="empty-wrap">
+        <div v-else-if="!loading && !personalError" class="empty-wrap">
           <EmptyState description="暂无绩效任务。请等待HR发起考核周期后再查看。" />
         </div>
       </section>

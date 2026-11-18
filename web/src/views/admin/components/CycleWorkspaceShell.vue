@@ -262,6 +262,12 @@ watch(() => props.cycle?.id, () => {
           <div v-if="cycle" class="cycle-workspace__scoring" data-testid="cycle-workspace-scoring-summary">
             <span>目标审核流程：员工填写 → 绩效直属上级 → 部门负责人 → 员工确认 → 分管领导</span>
           </div>
+          <div v-if="cycle?.reviewedAt" class="cycle-workspace__review-history" data-testid="cycle-review-history">
+            周期计划审核 · {{ cycle.reviewer?.name || 'HR管理员' }} · {{ cycle.reviewStatus === 'rejected' ? '退回' : '通过' }} ·
+            {{ dayjs(cycle.reviewedAt).format('YYYY-MM-DD HH:mm') }}
+            <span v-if="cycle.reviewComment"> · 意见：{{ cycle.reviewComment }}</span>
+            <span v-if="cycle.reviewStatus === 'rejected'"> · 下一步：创建人修改并重新提交</span>
+          </div>
         </div>
       </div>
       <div

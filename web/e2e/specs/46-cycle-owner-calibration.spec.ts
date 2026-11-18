@@ -53,6 +53,21 @@ async function setup(page: Page) {
 }
 
 for (const width of [1440, 390]) {
+  test(`校准驳回在 ${width}px 保留多行原因并原位校验`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const calls = await setup(page);
+    await page.goto(`/calibration?cycleId=${cycleId}`);
+    await calibrationItem(page, width, '虚拟员工甲').getByRole('button', { name: '驳回', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '校准驳回' });
+    await dialog.getByRole('button', { name: '驳回给绩效上级' }).click();
+    await expect(dialog).toContainText('请填写校准驳回原因');
+    await dialog.getByRole('textbox', { name: '驳回原因' }).fill('请补充月度成果\n并重新评定');
+    await dialog.getByRole('button', { name: '驳回给绩效上级' }).click();
+    await expect.poll(() => calls.filter(call => call.path.endsWith('/calibration/reject')).length).toBe(1);
+    expect(calls.find(call => call.path.endsWith('/calibration/reject'))?.body).toEqual({
+      taskIds: ['other-task'], reason: '请补充月度成果\n并重新评定',
+    });
+  });
   test(`校准详情保留复核意见、退回及周期评语 ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     const calls = await setup(page);

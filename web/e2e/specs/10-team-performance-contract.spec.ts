@@ -1582,16 +1582,39 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByRole('button', { name: '待我审核', exact: true })).toBeVisible();
 
     await page.getByTestId('goal-review-reject').click();
-    const rejectDialog = page.getByRole('dialog', { name: '退回修改' });
-    await rejectDialog.getByRole('button', { name: '退回修改', exact: true }).click();
-    await expect(page.locator('.el-message-box__errormsg')).toHaveText('请输入退回原因');
+    const rejectDialog = page.getByRole('dialog', { name: '退回目标计划' });
+    await rejectDialog.getByTestId('goal-review-submit-reject').click();
+    await expect(rejectDialog.getByRole('alert')).toHaveText('请输入退回原因和修改要求');
     expect(rejectionBody).toBeUndefined();
-    await page.getByRole('textbox', { name: '请说明需要员工修改的内容' }).fill('目标口径需要补充');
-    await rejectDialog.getByRole('button', { name: '退回修改', exact: true }).click();
+    await rejectDialog.getByRole('textbox', { name: '退回原因和修改要求' }).fill('目标口径需要补充');
+    await rejectDialog.getByTestId('goal-review-submit-reject').click();
     await expect.poll(() => rejectionBody).toEqual({
       tasks: [{ taskId: 'task-1', updatedAt: '2026-08-09T00:00:00.000Z' }],
       reason: '目标口径需要补充',
     });
+  });
+
+  test('goal review keeps the return reason after a failed request and retries in place', async ({ page }) => {
+    await mockGoalReviewWorkspace(page);
+    let attempts = 0;
+    await page.route('**/api/v1/tasks/team/indicator-review/batch-reject', async route => {
+      attempts++;
+      await route.fulfill({ status: attempts === 1 ? 500 : 200, contentType: 'application/json',
+        body: JSON.stringify(attempts === 1
+          ? { code: 500, message: '网络暂不可用' }
+          : apiResponse({ succeeded: [{ taskId: 'task-1', status: 'indicator_drafting' }], failed: [] })) });
+    });
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-reject').click();
+    const dialog = page.getByRole('dialog', { name: '退回目标计划' });
+    const reason = dialog.getByRole('textbox', { name: '退回原因和修改要求' });
+    await reason.fill('请补充目标衡量口径');
+    await dialog.getByTestId('goal-review-submit-reject').click();
+    await expect(dialog.getByRole('alert')).toBeVisible();
+    await expect(reason).toHaveValue('请补充目标衡量口径');
+    await dialog.getByTestId('goal-review-submit-reject').click();
+    await expect.poll(() => attempts).toBe(2);
+    await expect(dialog).toHaveCount(0);
   });
 
   for (const action of ['approve', 'reject'] as const) {
@@ -1631,12 +1654,17 @@ test.describe('team list manager workspace', () => {
           .getByRole('button', { name: '通过', exact: true }).click();
       } else {
         await page.getByTestId('goal-review-reject').click();
-        await page.getByRole('textbox', { name: '请说明需要员工修改的内容' }).fill('目标需要重写');
-        await page.getByRole('dialog', { name: '退回修改' })
-          .getByRole('button', { name: '退回修改', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: '退回目标计划' });
+        await dialog.getByRole('textbox', { name: '退回原因和修改要求' }).fill('目标需要重写');
+        await dialog.getByTestId('goal-review-submit-reject').click();
       }
 
-      await page.getByTestId('team-task-row-task-2').click();
+      if (action === 'reject') {
+        await expect(page.getByRole('dialog', { name: '退回目标计划' })).toBeVisible();
+        await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-2');
+      } else {
+        await page.getByTestId('team-task-row-task-2').click();
+      }
       await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
       await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
       releaseResponse();

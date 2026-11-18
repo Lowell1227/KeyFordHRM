@@ -54,7 +54,8 @@ const page = ref(1);
 const pageSize = ref(10);
 
 /** 个人详情抽屉。 */
-const drawer = ref({ visible: false, loading: false, detail: null as CalibrationCandidateDetail | null });
+const drawer = ref({ visible: false, loading: false, taskId: '', error: '', detail: null as CalibrationCandidateDetail | null });
+const rejectDialog = ref({ visible: false, taskIds: [] as string[], reason: '', error: '' });
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
@@ -102,6 +103,10 @@ function canCalibrate(candidate: CalibrationCandidate): boolean {
 }
 
 const pendingCandidates = computed(() => candidates.value.filter(canCalibrate));
+const drawerCanCalibrate = computed(() => {
+  const candidate = candidates.value.find(item => item.taskId === drawer.value.detail?.taskId);
+  return candidate ? canCalibrate(candidate) : false;
+});
 
 /** 分布仅统计已进入评定链路的任务（与后端口径一致）。 */
 const countedTotal = computed(() => {
@@ -197,7 +202,8 @@ async function normalizeCalibrationCycle() {
 function clearCalibrationState() {
   listRequest++;
   detailRequest++;
-  drawer.value = { visible: false, loading: false, detail: null };
+  drawer.value = { visible: false, loading: false, taskId: '', error: '', detail: null };
+  rejectDialog.value = { visible: false, taskIds: [], reason: '', error: '' };
   candidates.value = [];
   summary.value = null;
   selectedTaskIds.value = [];
@@ -246,15 +252,14 @@ async function openDetail(taskId: string) {
   if (!selectedCycleId.value || !candidates.value.some((c) => c.taskId === taskId && c.canViewDetail !== false)) return;
   const cycleId = selectedCycleId.value;
   const request = ++detailRequest;
-  drawer.value = { visible: true, loading: true, detail: null };
+  drawer.value = { visible: true, loading: true, taskId, error: '', detail: null };
   try {
     const detail = await calibrationApi.getCandidateDetail(cycleId, taskId);
     if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
     drawer.value.detail = detail;
   } catch (e) {
     if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
-    ElMessage.error(e instanceof Error ? e.message : '获取详情失败');
-    drawer.value.visible = false;
+    drawer.value.error = e instanceof Error ? e.message : '获取详情失败';
   } finally {
     if (request === detailRequest) drawer.value.loading = false;
   }
@@ -289,35 +294,34 @@ async function handleConfirm(taskIds: string[]) {
 }
 
 /** 驳回（单人或批量，原因必填）。 */
-async function handleReject(taskIds: string[]) {
+function handleReject(taskIds: string[]) {
   if (!selectedCycleId.value || !areActionable(taskIds) || acting.value) return;
+  rejectDialog.value = { visible: true, taskIds: [...taskIds], reason: '', error: '' };
+}
+
+async function submitReject() {
+  if (!selectedCycleId.value || acting.value) return;
   const cycleId = selectedCycleId.value;
-  const requestedTaskIds = [...taskIds];
-  let reason = '';
-  try {
-    const input = await ElMessageBox.prompt(
-      `驳回后任务将退回直属上级，可重新编写月度结果与最终等级。${taskIds.length > 1 ? `（共 ${taskIds.length} 人，使用同一原因）` : ''}`,
-      '校准驳回',
-      {
-        confirmButtonText: '确认驳回',
-        cancelButtonText: '取消',
-        inputPlaceholder: '驳回原因（必填）',
-        inputValidator: (v) => (v && v.trim() ? true : '驳回原因不能为空'),
-      },
-    );
-    reason = input.value.trim();
-  } catch {
+  const requestedTaskIds = [...rejectDialog.value.taskIds];
+  const reason = rejectDialog.value.reason.trim();
+  if (!reason) {
+    rejectDialog.value.error = '请填写校准驳回原因';
     return;
   }
-  if (cycleId !== selectedCycleId.value || !areActionable(requestedTaskIds)) return;
+  rejectDialog.value.error = '';
+  if (!areActionable(requestedTaskIds)) {
+    rejectDialog.value.error = '任务状态已变化，请刷新后重试';
+    return;
+  }
   acting.value = true;
   try {
     const res = await calibrationApi.reject(cycleId, { taskIds: requestedTaskIds, reason });
     ElMessage.success(`已驳回 ${res.updated} 人，退回直属上级重新评定`);
+    rejectDialog.value.visible = false;
     selectedTaskIds.value = [];
     await loadCandidates();
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '驳回失败');
+    rejectDialog.value.error = e instanceof Error ? e.message : '驳回失败，请重试';
   } finally {
     acting.value = false;
   }
@@ -421,6 +425,8 @@ async function resetCalibrationFilters() {
     <EmptyState v-if="!selectedCycle" description="暂无可校准的考核周期" />
 
     <template v-else>
+      <details class="calibration-analysis-disclosure">
+        <summary>等级分布与校准参考 · 评定链路 {{ countedTotal }} 人{{ hasWarnings ? ' · 存在超限' : ' · 未超限' }}</summary>
       <ChartCard :padded="true" class="calibration-analysis">
         <template #title>等级分布（评定链路 {{ countedTotal }} 人）</template>
         <template #extra><el-tag v-if="hasWarnings" type="danger" effect="dark">存在超限</el-tag></template>
@@ -465,6 +471,7 @@ async function resetCalibrationFilters() {
           </aside>
         </div>
       </ChartCard>
+      </details>
 
       <ChartCard :padded="true" class="list-result-card">
         <template #title>校准名单</template>
@@ -591,6 +598,7 @@ async function resetCalibrationFilters() {
       data-testid="calibration-detail-drawer"
     >
       <div v-loading="drawer.loading">
+        <div v-if="drawer.error" role="alert" class="calibration-detail-error">{{ drawer.error }} <el-button link type="primary" @click="openDetail(drawer.taskId)">重试</el-button></div>
         <template v-if="drawer.detail">
           <PerformanceResultSummary
           score-hint="分数与等级无换算关系"
@@ -609,7 +617,22 @@ async function resetCalibrationFilters() {
           <PerformanceResultEvidence :evidence="drawer.detail.resultEvidence" :periods="drawer.detail.periods" :indicators="drawer.detail.indicators" :records="drawer.detail.flowRecords" />
         </template>
       </div>
+      <template #footer>
+        <el-button v-if="drawer.detail && drawerCanCalibrate" :loading="acting" @click="handleReject([drawer.detail.taskId])">驳回给绩效上级</el-button>
+        <el-button v-if="drawer.detail && drawerCanCalibrate" type="primary" :loading="acting" @click="handleConfirm([drawer.detail.taskId])">确认校准并提交审批</el-button>
+        <el-button @click="drawer.visible = false">关闭</el-button>
+      </template>
     </PerformanceResultDrawer>
+    <el-dialog v-model="rejectDialog.visible" title="校准驳回" width="min(520px, 96vw)" :close-on-click-modal="false" :close-on-press-escape="!acting" :show-close="!acting">
+      <p>驳回后任务退回绩效直属上级，可重新评定结果。{{ rejectDialog.taskIds.length > 1 ? `共 ${rejectDialog.taskIds.length} 人，使用同一原因。` : '' }}</p>
+      <el-form label-position="top"><el-form-item label="驳回原因" required :error="rejectDialog.error">
+        <el-input v-model="rejectDialog.reason" type="textarea" :rows="4" maxlength="500" show-word-limit aria-label="驳回原因" :disabled="acting" @input="rejectDialog.error = ''" />
+      </el-form-item></el-form>
+      <template #footer>
+        <el-button :disabled="acting" @click="rejectDialog.visible = false">取消</el-button>
+        <el-button type="danger" :loading="acting" @click="submitReject">驳回给绩效上级</el-button>
+      </template>
+    </el-dialog>
     </template>
   </BusinessListPage>
 </template>
