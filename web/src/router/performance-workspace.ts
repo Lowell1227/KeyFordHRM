@@ -2,6 +2,7 @@ const PERFORMANCE_WORKSPACE_PATHS = new Set([
   '/tasks',
   '/objectives',
   '/action-items',
+  '/goal-changes',
 ]);
 
 function normalizePath(path: string) {
@@ -9,5 +10,6 @@ function normalizePath(path: string) {
 }
 
 export function isPerformanceWorkspacePath(path: string) {
-  return PERFORMANCE_WORKSPACE_PATHS.has(normalizePath(path));
+  const normalized = normalizePath(path);
+  return PERFORMANCE_WORKSPACE_PATHS.has(normalized) || normalized.startsWith('/goal-changes/');
 }

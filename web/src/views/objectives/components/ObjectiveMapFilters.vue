@@ -11,6 +11,7 @@ const props = defineProps<{
   reviewOnly: boolean;
   reviewCount: number;
   indicatorMode?: boolean;
+  showCycle?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -29,7 +30,7 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
 
 <template>
   <div data-testid="objective-map-filters" class="objective-map-filters">
-    <div class="objective-map-filters__cycle">
+    <div v-if="showCycle !== false" class="objective-map-filters__cycle">
       <el-icon aria-hidden="true"><Calendar /></el-icon>
       <span class="objective-map-filters__cycle-label">周期：</span>
       <el-select
@@ -46,7 +47,7 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
       </el-select>
     </div>
 
-    <span v-if="!indicatorMode" class="objective-map-filters__divider" aria-hidden="true" />
+    <span v-if="showCycle !== false && !indicatorMode" class="objective-map-filters__divider" aria-hidden="true" />
 
     <button
       v-for="item in scopes"

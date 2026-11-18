@@ -669,6 +669,21 @@ async function removeRow(row: Objective) {
 <template>
   <PerformanceWorkspace title="目标地图" active-section="map" :show-context="false">
     <template #toolbar>
+      <label class="objective-map-cycle-filter">
+        <span>考核周期</span>
+        <el-select
+          :model-value="filters.cycleId"
+          data-testid="objective-map-cycle"
+          aria-label="目标周期"
+          :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
+          :disabled="!cycles.length"
+          @update:model-value="selectObjectiveCycle(String($event ?? ''))"
+        >
+          <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
+        </el-select>
+      </label>
+    </template>
+    <template #actions>
       <el-button
         v-if="canManage && !indicatorMapMode"
         data-testid="objective-create"
@@ -686,7 +701,7 @@ async function removeRow(row: Objective) {
         class="performance-surface"
         :class="{ 'is-indicator-map': indicatorMapMode }"
       >
-        <div data-testid="objective-map-toolbar" class="objective-map__toolbar">
+        <div v-if="!indicatorMapMode" data-testid="objective-map-toolbar" class="objective-map__toolbar">
           <ObjectiveMapFilters
             :cycles="cycles"
             :cycle-id="filters.cycleId"
@@ -695,7 +710,7 @@ async function removeRow(row: Objective) {
             :review-only="reviewOnly"
             :review-count="reviewCount"
             :indicator-mode="indicatorMapMode"
-            @update:cycle-id="selectObjectiveCycle"
+            :show-cycle="false"
             @update:scope="selectedScope = $event"
             @update:review-only="reviewOnly = $event"
           />
@@ -1016,6 +1031,22 @@ async function removeRow(row: Objective) {
   box-sizing: border-box;
   gap: 0;
   padding: 0;
+}
+
+.objective-map-cycle-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #4d576b;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.objective-map-cycle-filter :deep(.el-select) { width: min(340px, 48vw); }
+
+@media (max-width: 768px) {
+  .objective-map-cycle-filter span { display: none; }
+  .objective-map-cycle-filter :deep(.el-select) { width: 190px; }
 }
 
 .objective-map__toolbar {

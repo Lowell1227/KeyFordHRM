@@ -1042,6 +1042,8 @@ test.describe("11-navigation-entrypoints header", () => {
       "/objectives//",
       "/action-items",
       "/action-items///",
+      "/goal-changes",
+      "/goal-changes/change-1",
     ]) {
       expect(isPerformanceWorkspacePath(path)).toBe(true);
     }
@@ -1050,6 +1052,7 @@ test.describe("11-navigation-entrypoints header", () => {
       "/tasks/task-1",
       "/tasks-extra",
       "/performance/tasks",
+      "/goal-changes-extra",
     ]) {
       expect(isPerformanceWorkspacePath(path)).toBe(false);
     }

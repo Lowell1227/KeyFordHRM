@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
 import type { GoalTrackingResult, PerformanceCycleContext } from '@/types/api.types';
 import {
-  formatGoalTrackingContextLabel,
   goalTrackingStatus,
   goalTrackingCompletion,
   goalTrackingActualTarget,
@@ -16,7 +14,6 @@ const props = defineProps<{
   person: GoalTrackingPerson | null;
   contexts: PerformanceCycleContext[];
   selectedContext: PerformanceCycleContext | null;
-  selectedCycleId: string;
   result: GoalTrackingResult;
   isSelf: boolean;
   cyclesLoading: boolean;
@@ -25,11 +22,8 @@ const props = defineProps<{
   error: string;
   notice: string;
 }>();
-const route = useRoute();
-const router = useRouter();
 
 const emit = defineEmits<{
-  cycleChange: [cycleId: string];
   retryCycles: [];
   retryIndicators: [];
   openIndicator: [indicatorId: string];
@@ -107,31 +101,6 @@ const actionStateLabel = computed(() => {
   return action.value.label;
 });
 
-function handleCycleChange(event: Event) {
-  emit('cycleChange', (event.target as HTMLSelectElement).value);
-}
-
-async function openAction() {
-  const current = action.value;
-  if (!current || !('taskId' in current)) return;
-  let stage: 'goal-setting' | 'goal-confirmation' | 'self-eval' | null = null;
-  let periodId: string | undefined;
-  if (current.kind === 'goal-setting') {
-    stage = 'goal-setting';
-  } else if (current.kind === 'goal-confirmation') {
-    stage = 'goal-confirmation';
-  } else if (current.kind === 'review') {
-    stage = 'self-eval';
-    periodId = current.periodId;
-  }
-  if (!stage) return;
-  await router.push({
-    name: 'TaskDetail',
-    params: { id: current.taskId },
-    query: { stage, periodId, returnTo: route.fullPath },
-  });
-}
-
 function periodName(period: PerformanceCycleContext['periods'][number]) {
   if (period.periodType === 'cycle') return '整周期';
   const [, month = period.periodKey] = period.periodKey.split('-');
@@ -160,23 +129,6 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
         <strong>{{ person?.name || '未选择人员' }}</strong>
         <span v-if="!isSelf">目标执行情况</span>
       </div>
-      <div class="tracking-cycle__selector">
-        <label for="goal-tracking-cycle">考核周期</label>
-        <el-skeleton v-if="cyclesLoading" :rows="1" animated />
-        <template v-else>
-          <select
-            id="goal-tracking-cycle"
-            :value="selectedCycleId"
-            data-testid="goal-tracking-cycle"
-            @change="handleCycleChange"
-          >
-            <option v-if="contexts.length === 0" value="">暂无考核周期</option>
-            <option v-for="context in contexts" :key="context.id" :value="context.id">
-              {{ formatGoalTrackingContextLabel(context) }}
-            </option>
-          </select>
-        </template>
-      </div>
     </header>
 
     <p v-if="notice" class="tracking-cycle__notice" role="status">{{ notice }}</p>
@@ -198,12 +150,6 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
         <strong>{{ actionStateLabel }}</strong>
         <small v-if="actionHint">{{ actionHint }}</small>
       </div>
-      <el-button
-        v-if="isSelf && action && ['goal-setting', 'goal-confirmation', 'review'].includes(action.kind)"
-        type="primary"
-        data-testid="goal-tracking-primary-action"
-        @click="openAction"
-      >{{ action.label }}</el-button>
     </section>
 
     <div class="tracking-cycle__layout">
@@ -289,17 +235,12 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
 
 <style scoped>
 .tracking-cycle { min-width: 0; display: grid; gap: 14px; color: #263249; }
-.tracking-cycle__hero { min-width: 0; display: grid; grid-template-columns: 52px minmax(120px, .55fr) minmax(320px, 1.45fr); align-items: center; gap: 12px; padding: 16px 18px; border: 1px solid #e8ecf3; border-radius: 15px; background: #fff; box-shadow: 0 2px 8px rgb(34 55 88 / 4%); }
+.tracking-cycle__hero { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 16px 18px; border: 1px solid #e8ecf3; border-radius: 15px; background: #fff; box-shadow: 0 2px 8px rgb(34 55 88 / 4%); }
 .tracking-cycle__avatar { width: 48px; height: 48px; display: grid; place-items: center; overflow: hidden; border-radius: 13px; background: linear-gradient(145deg, #576cdf, #3e59cc); color: #fff; font-size: 20px; font-weight: 700; }
 .tracking-cycle__avatar img { width: 100%; height: 100%; object-fit: cover; }
 .tracking-cycle__identity { min-width: 0; display: grid; gap: 3px; }
 .tracking-cycle__identity strong { font-size: 18px; }
 .tracking-cycle__identity span { color: #8a95a8; font-size: 12px; }
-.tracking-cycle__selector { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 10px; }
-.tracking-cycle__selector label { color: #7d889c; font-size: 12px; }
-.tracking-cycle__selector select { width: 100%; height: 38px; padding: 0 34px 0 12px; border: 1px solid #dce2ec; border-radius: 8px; outline: none; background: #fff; color: #253047; font-size: 13px; font-weight: 600; }
-.tracking-cycle__selector select:focus { border-color: #5873df; box-shadow: 0 0 0 3px rgb(88 115 223 / 12%); }
-.tracking-cycle__selector small { grid-column: 2; overflow: hidden; color: #8a94a5; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .tracking-cycle__notice { margin: 0; padding: 9px 12px; border: 1px solid #f0d29a; border-radius: 8px; background: #fff8e8; color: #936200; font-size: 12px; }
 .tracking-cycle__summary { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(145px, .7fr)) minmax(240px, 1.4fr) auto; align-items: center; gap: 1px; overflow: hidden; border: 1px solid #e8ecf3; border-radius: 14px; background: #fff; }
 .tracking-cycle__summary > div { min-width: 0; min-height: 76px; display: grid; align-content: center; gap: 4px; padding: 12px 16px; border-right: 1px solid #edf0f5; }
@@ -347,12 +288,9 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
 
 @media (max-width: 768px) {
   .tracking-cycle { gap: 10px; }
-  .tracking-cycle__hero { grid-template-columns: 44px minmax(0, 1fr); gap: 9px; padding: 12px; border-radius: 12px; }
+  .tracking-cycle__hero { gap: 9px; padding: 12px; border-radius: 12px; }
   .tracking-cycle__avatar { width: 42px; height: 42px; border-radius: 11px; }
   .tracking-cycle__identity strong { font-size: 16px; }
-  .tracking-cycle__selector { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); margin-top: 4px; }
-  .tracking-cycle__selector label { display: none; }
-  .tracking-cycle__selector small { grid-column: 1; white-space: normal; line-height: 1.5; }
   .tracking-cycle__summary { grid-template-columns: repeat(2, minmax(0, 1fr)); border-radius: 12px; }
   .tracking-cycle__summary > div { min-height: 64px; padding: 10px 12px; }
   .tracking-cycle__summary > div:nth-child(2n) { border-right: 0; }

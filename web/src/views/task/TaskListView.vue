@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
+import { DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
 import GoalPlanList from './components/GoalPlanList.vue';
 import { canMonitorGoals, goalPlansApi, type GoalScope } from '@/api/goal-plans.api';
 import { tasksApi } from '@/api/tasks.api';
@@ -223,7 +223,6 @@ const allowedPerformanceSections = computed(() => {
     : (['tracking', 'map', 'tasks'] as const);
   return auth.user?.isAssessorOnly ? sections : [...sections, 'changes'] as const;
 });
-const selectedCycleName = computed(() => selectedCycle.value?.name ?? '暂无考核周期');
 
 const personalTask = computed(() => list.value[0] ?? null);
 
@@ -679,10 +678,6 @@ function setTeamStageState(stageState: TeamStageState | undefined) {
   void updateTeamContext({ stageState, taskId: undefined });
 }
 
-function onManagerCycleChange(value: string) {
-  onCycleChange(value);
-}
-
 function setTeamDepartment(value: string) {
   void updateTeamContext({
     deptId: value || undefined,
@@ -1084,7 +1079,7 @@ watch(
 </script>
 
 <template>
-  <nav class="goal-plan-navigation" aria-label="目标计划视图">
+  <nav v-if="goalView || isTeamTaskWorkspace" class="goal-plan-navigation" aria-label="目标计划视图">
     <el-button :type="goalView === 'mine' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
     <el-button :type="goalView === 'review' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=review')">
       {{ goalReviewTotal > 0 ? `待我审核（${goalReviewTotal}）` : '待我审核' }}
@@ -1103,35 +1098,23 @@ watch(
     :show-context="!isTeamTaskWorkspace"
   >
     <template #toolbar>
-      <el-tag v-if="activeScope === 'mine'" type="info" effect="plain">{{ selectedCycleName }}</el-tag>
+      <label class="task-cycle-toolbar">
+        <span>考核周期</span>
+        <el-select
+          :model-value="selectedCycleId"
+          :data-testid="activeScope === 'team' ? 'team-cycle-filter' : 'task-cycle-filter'"
+          aria-label="考核周期"
+          :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
+          :disabled="cycles.length === 0"
+          @change="onCycleChange"
+        >
+          <el-option v-for="cycle in cycles" :key="cycle.id" :label="formatPerformanceCycleOption(cycle)" :value="cycle.id" />
+        </el-select>
+      </label>
     </template>
-
     <template #context>
       <PerformanceContextPanel v-if="isManagerCapable" title="绩效阶段">
         <div data-testid="manager-task-navigation" class="task-context">
-          <div class="task-context__cycle">
-            <div class="task-context__label">
-              <el-icon><Calendar /></el-icon>
-              <span>考核周期</span>
-            </div>
-            <el-select
-              :model-value="selectedCycleId"
-              :data-testid="activeScope === 'team' ? 'team-cycle-filter' : 'task-cycle-filter'"
-              aria-label="考核周期"
-              :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
-              :disabled="cycles.length === 0"
-              @change="onManagerCycleChange"
-            >
-              <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
-              <el-option
-                v-for="cycle in cycles"
-                :key="cycle.id"
-                :label="formatPerformanceCycleOption(cycle)"
-                :value="cycle.id"
-              />
-            </el-select>
-          </div>
-
           <div
             class="task-context__group manager-task-group"
             data-testid="manager-personal-task-group"
@@ -1201,29 +1184,6 @@ watch(
 
       <PerformanceContextPanel v-else title="绩效阶段">
         <div data-testid="task-context" class="task-context">
-          <div class="task-context__cycle">
-            <div class="task-context__label">
-              <el-icon><Calendar /></el-icon>
-              <span>考核周期</span>
-            </div>
-            <el-select
-              v-model="selectedCycleId"
-              data-testid="task-cycle-filter"
-              aria-label="考核周期"
-              :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
-              :disabled="cycles.length === 0"
-              @change="onCycleChange"
-            >
-              <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
-              <el-option
-                v-for="cycle in cycles"
-                :key="cycle.id"
-                :label="formatPerformanceCycleOption(cycle)"
-                :value="cycle.id"
-              />
-            </el-select>
-          </div>
-
           <div class="task-context__group">
             <div class="task-context__label">
               <el-icon><UserFilled /></el-icon>
@@ -1254,6 +1214,14 @@ watch(
         </div>
       </PerformanceContextPanel>
     </template>
+
+    <nav v-if="!isTeamTaskWorkspace" class="goal-plan-navigation is-content-tabs" aria-label="目标计划视图">
+      <el-button @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
+      <el-button @click="router.push('/tasks?goalView=review')">
+        {{ goalReviewTotal > 0 ? `待我审核（${goalReviewTotal}）` : '待我审核' }}
+      </el-button>
+      <el-button v-if="canMonitor" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
+    </nav>
 
     <section
       v-if="goalReviewTotal > 0 && !isTeamTaskWorkspace"
@@ -1538,15 +1506,6 @@ watch(
 
 .task-context {
   min-width: 0;
-}
-
-.task-context__cycle {
-  padding: 2px 4px 14px;
-  border-bottom: 1px solid #edf0f4;
-}
-
-.task-context__cycle :deep(.el-select) {
-  width: 100%;
 }
 
 .task-context__label {
@@ -1957,10 +1916,6 @@ watch(
     padding: 10px;
   }
 
-  .task-context__cycle {
-    padding-bottom: 10px;
-  }
-
   .task-stage-list {
     flex-direction: row;
     overflow-x: auto;
@@ -2033,6 +1988,31 @@ watch(
 
 .goal-plan-navigation .el-button {
   margin-left: 0;
+}
+
+.goal-plan-navigation.is-content-tabs {
+  flex-wrap: nowrap;
+  margin-bottom: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  background: #fff;
+  border-bottom: 1px solid #e5e8ef;
+}
+
+.task-cycle-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #4d576b;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.task-cycle-toolbar :deep(.el-select) { width: min(340px, 32vw); }
+
+@media (max-width: 768px) {
+  .task-cycle-toolbar span { display: none; }
+  .task-cycle-toolbar :deep(.el-select) { width: 180px; }
 }
 
 .goal-review-notice {

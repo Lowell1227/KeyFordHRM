@@ -37,9 +37,12 @@ const visibleSections = computed(() =>
 
 <template>
   <section class="performance-workspace" :aria-label="title">
-    <header v-if="showHeader && $slots.toolbar" class="performance-workspace__header">
+    <header v-if="showHeader" class="performance-workspace__header">
       <div class="performance-workspace__toolbar">
         <slot name="toolbar" />
+      </div>
+      <div v-if="$slots.actions" class="performance-workspace__actions">
+        <slot name="actions" />
       </div>
     </header>
 
@@ -92,11 +95,11 @@ const visibleSections = computed(() =>
 }
 
 .performance-workspace__header {
-  min-height: 48px;
+  height: 56px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 16px;
   padding: 0 24px;
   background: #fff;
@@ -109,6 +112,17 @@ const visibleSections = computed(() =>
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
+}
+
+.performance-workspace__actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.performance-workspace__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 .performance-workspace__body {
@@ -211,8 +225,14 @@ const visibleSections = computed(() =>
   }
 
   .performance-workspace__header {
-    min-height: 52px;
-    padding: 8px 12px;
+    height: 52px;
+    padding: 0 12px;
+    overflow-x: auto;
+  }
+
+  .performance-workspace__toolbar,
+  .performance-workspace__actions {
+    flex-shrink: 0;
   }
 
   .performance-workspace__header h1 {

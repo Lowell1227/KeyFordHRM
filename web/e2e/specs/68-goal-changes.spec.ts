@@ -64,6 +64,31 @@ async function setup(page: Page, actor = 'employee', canGrant = false, isAssesso
 }
 async function go(page: Page, path = '/goal-changes') { await page.goto(new URL(path, baseURL).href); }
 
+for (const width of [1440, 390]) {
+  test(`four performance sections keep one navigation baseline at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await setup(page, 'employee', true);
+    const baselines: number[] = [];
+    for (const path of ['/action-items', '/objectives', '/tasks', '/goal-changes']) {
+      await go(page, path);
+      const navigation = page.getByTestId('performance-secondary-nav');
+      await expect(navigation, path).toBeVisible({ timeout: 15000 });
+      const header = page.locator('.performance-workspace__header');
+      await expect(header).toHaveCount(1);
+      const headerBox = await header.boundingBox();
+      const navigationBox = await navigation.boundingBox();
+      expect(headerBox?.height).toBe(width === 390 ? 52 : 56);
+      expect(navigationBox).not.toBeNull();
+      if (path === '/action-items') await expect(header.getByTestId('goal-tracking-cycle')).toBeVisible();
+      if (path === '/objectives') await expect(header.getByTestId('objective-map-cycle')).toBeVisible();
+      if (path === '/tasks') await expect(header.getByTestId('task-cycle-filter')).toBeVisible();
+      if (path === '/goal-changes') await expect(header.getByRole('button', { name: '开放变更' })).toBeVisible();
+      baselines.push(navigationBox!.y);
+    }
+    expect(Math.max(...baselines) - Math.min(...baselines)).toBeLessThanOrEqual(1);
+  });
+}
+
 test('workspace exposes goal changes; self and frozen-team scopes keep their own rows', async ({ page }) => {
   await setup(page);
   await go(page);

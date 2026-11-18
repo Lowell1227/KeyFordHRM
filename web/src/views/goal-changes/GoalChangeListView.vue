@@ -115,11 +115,14 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
 
 <template>
   <PerformanceWorkspace title="目标变更" active-section="changes" :show-context="false">
+    <template #toolbar>
+      <span class="goal-changes-toolbar-label">变更申请与记录</span>
+    </template>
+    <template #actions>
+      <el-button v-if="context?.canGrant" :disabled="contextLoading" @click="openDialog('grant')">开放变更</el-button>
+      <el-button v-if="startTasks.length" type="primary" :disabled="contextLoading" @click="openDialog('start')">发起变更</el-button>
+    </template>
     <BusinessListPage variant="workflow" :loading="loading || contextLoading" class="goal-changes-list">
-      <template #primary-action>
-        <el-button v-if="context?.canGrant" :disabled="contextLoading" @click="openDialog('grant')">开放变更</el-button>
-        <el-button v-if="startTasks.length" type="primary" :disabled="contextLoading" @click="openDialog('start')">发起变更</el-button>
-      </template>
       <template #filters>
         <el-tabs v-model="scope" aria-label="变更范围">
           <el-tab-pane label="我的变更" name="self" /><el-tab-pane label="团队变更" name="team" />
@@ -202,6 +205,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
 
 <style scoped>
 .goal-changes-list { padding: 16px; }
+.goal-changes-toolbar-label { color: #4d576b; font-size: 13px; white-space: nowrap; }
 .goal-changes-list :deep(.el-select) { width: 200px; }
 .request-error { padding: 12px; color: var(--el-color-danger); overflow-wrap: anywhere; }
 .mobile-stack { display: grid; gap: 10px; }
