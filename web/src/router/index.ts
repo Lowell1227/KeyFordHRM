@@ -40,7 +40,7 @@ router.beforeEach(async (to) => {
   if (auth.passwordChangeRequired && to.name !== 'ChangePassword') {
     return { name: 'ChangePassword' };
   }
-  if (!auth.passwordChangeRequired && to.name === 'ChangePassword') {
+  if (!auth.passwordChangeRequired && to.name === 'ChangePassword' && to.query.purpose !== 'export') {
     return { name: 'Dashboard' };
   }
 

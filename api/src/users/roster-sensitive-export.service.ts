@@ -40,7 +40,7 @@ export class RosterSensitiveExportService {
     if (!actor || actor.deletedAt || actor.archivedAt || !['active', 'probation'].includes(actor.status)) {
       throw new ForbiddenException('当前账号不可导出身份证号');
     }
-    if (!actor.passwordHash || actor.mustChangePassword) throw new ForbiddenException('请先在个人中心设置或修改账号密码，再导出身份证号');
+    if (!actor.passwordHash || actor.mustChangePassword) throw new ForbiddenException('请先设置或修改当前账号密码，再导出身份证号');
     if (!await bcrypt.compare(input.accountPassword, actor.passwordHash)) throw new ForbiddenException('账号密码不正确');
     this.attempts.delete(viewer.id);
   }

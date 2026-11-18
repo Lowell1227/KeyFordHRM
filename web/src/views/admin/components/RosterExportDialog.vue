@@ -1,12 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { Lock } from '@element-plus/icons-vue';
+import { useRouter } from 'vue-router';
+import { useAuthStore } from '@/stores/auth.store';
+import { isLocalPreview } from '@/utils/preview-mode';
 import { usersApi, type RosterExportModule } from '@/api/users.api';
 import type { UserQuery } from '@/types/api.types';
 import { useExport } from '@/composables/useExport';
 
 const visible = defineModel<boolean>({ default: false });
 const props = defineProps<{ query: UserQuery; total: number }>();
+const auth = useAuthStore();
+const router = useRouter();
+function openAccountPasswordSettings() {
+  clearPasswords(); visible.value = false;
+  void router.push({ path: '/change-password', query: { purpose: 'export' } });
+}
 const modules = ref<RosterExportModule[]>([]);
 const selected = ref<string[]>([]);
 const initialized = ref(false);
@@ -122,24 +131,33 @@ async function exportRoster() {
         <small v-if="module.fields.some(field => field.key === 'contractHistory')" class="roster-export-note">单独工作表，每份合同一行</small>
       </section>
     </div>
-    <el-form v-if="sensitive" class="roster-export-passwords" label-position="top" :disabled="busy" @submit.prevent>
+    <section v-if="sensitive" class="roster-export-passwords" aria-label="安全验证">
       <div class="roster-export-security-heading">
         <el-icon><Lock /></el-icon><h3>安全验证</h3><span>含身份证号</span>
       </div>
       <p class="roster-export-note">验证本人账号，为Excel设置独立的打开密码。</p>
+      <p class="roster-export-account">当前账号：{{ auth.user?.name }}<span v-if="auth.user?.employeeNo">（{{ auth.user.employeeNo }}）</span></p>
+      <p v-if="isLocalPreview" class="roster-export-note">预览账号与正式账号独立。快捷进入预览后，请先设置当前预览账号密码。</p>
+      <el-button link type="primary" :disabled="busy" class="roster-export-settings" @click="openAccountPasswordSettings">设置当前账号密码</el-button>
       <div class="roster-export-password-grid">
-      <el-form-item class="roster-export-account-password" label="当前账号密码" :error="passwordErrors.account">
-        <el-input v-model="accountPassword" type="password" show-password autocomplete="off" :maxlength="128" aria-label="当前账号密码" />
-      </el-form-item>
-      <el-form-item label="Excel打开密码" :error="passwordErrors.file">
-        <el-input v-model="filePassword" type="password" show-password autocomplete="new-password" :maxlength="64" placeholder="至少4位，可用纯数字" aria-label="Excel打开密码" />
-      </el-form-item>
-      <el-form-item label="再次输入打开密码" :error="passwordErrors.confirm">
-        <el-input v-model="confirmFilePassword" type="password" show-password autocomplete="new-password" :maxlength="64" aria-label="再次输入打开密码" />
-      </el-form-item>
+        <div class="roster-export-account-password roster-export-password-field">
+          <label for="roster-account-verification">当前账号密码</label>
+          <el-input id="roster-account-verification" v-model="accountPassword" type="password" show-password autocomplete="current-password" form="roster-export-verification-only" name="roster-account-verification" :disabled="busy" :maxlength="128" aria-label="当前账号密码" :aria-invalid="!!passwordErrors.account" />
+          <p v-if="passwordErrors.account" class="roster-export-field-error" role="alert">{{ passwordErrors.account }}</p>
+        </div>
+        <div class="roster-export-password-field">
+          <label for="roster-file-open-password">Excel打开密码</label>
+          <el-input id="roster-file-open-password" v-model="filePassword" type="password" show-password autocomplete="one-time-code" form="roster-export-file-only" name="roster-file-open-password" data-lpignore="true" data-1p-ignore :disabled="busy" :maxlength="64" placeholder="至少4位，可用纯数字" aria-label="Excel打开密码" :aria-invalid="!!passwordErrors.file" />
+          <p v-if="passwordErrors.file" class="roster-export-field-error" role="alert">{{ passwordErrors.file }}</p>
+        </div>
+        <div class="roster-export-password-field">
+          <label for="roster-file-confirm-password">再次输入打开密码</label>
+          <el-input id="roster-file-confirm-password" v-model="confirmFilePassword" type="password" show-password autocomplete="one-time-code" form="roster-export-file-only" name="roster-file-confirm-password" data-lpignore="true" data-1p-ignore :disabled="busy" :maxlength="64" aria-label="再次输入打开密码" :aria-invalid="!!passwordErrors.confirm" />
+          <p v-if="passwordErrors.confirm" class="roster-export-field-error" role="alert">{{ passwordErrors.confirm }}</p>
+        </div>
       </div>
-      <small>请妥善保管文件打开密码，系统不保存该密码。</small>
-    </el-form>
+      <small>本操作不会修改账号密码。文件打开密码仅用于本次导出，系统不保存。</small>
+    </section>
     <p v-if="exportError" class="roster-export-error" role="alert">{{ exportError }}</p>
     <template #footer>
       <el-button :disabled="exporter.loading.value" @click="visible = false">取消</el-button>
@@ -172,6 +190,11 @@ async function exportRoster() {
 .roster-export-security-heading > span { margin-left: auto; font-size: 12px; color: var(--el-text-color-secondary); }
 .roster-export-password-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
 .roster-export-account-password { grid-column: 1 / -1; }
+.roster-export-account { margin: 0 0 8px; font-size: 13px; color: var(--el-text-color-regular); }
+.roster-export-settings { margin-bottom: 12px; }
+.roster-export-password-field { margin-bottom: 16px; }
+.roster-export-password-field label { display: block; margin-bottom: 8px; font-size: 14px; color: var(--el-text-color-regular); }
+.roster-export-field-error { color: var(--el-color-danger); font-size: 12px; line-height: 1.5; margin: 4px 0 0; }
 .roster-export-passwords > small { display: block; color: var(--el-text-color-secondary); line-height: 1.5; }
 .roster-export-passwords :deep(.el-form-item) { margin-bottom: 16px; }
 .roster-export-passwords .roster-export-note { padding-left: 0; margin: 0 0 12px; }

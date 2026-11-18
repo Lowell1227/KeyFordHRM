@@ -7,11 +7,16 @@ import { assertContractPreview, createContractFixture, removeContractFixture, pr
 const requireApi = createRequire(resolve(process.cwd(), '../api/package.json'));
 const cryptoOffice = requireApi('officecrypto-tool');
 const ExcelJS = requireApi('exceljs');
-const accountPassword = 'fictional-account';
+const accountPassword = '135790';
 const filePassword = '4567';
 
 test('identity export verifies actor password, encrypts the real download and clears credentials', async ({ page }, info) => {
   assertContractPreview(info);
+  const mounted = JSON.parse(execFileSync('docker', ['inspect', 'hrm-api-1', 'hrm-web-1'], { encoding: 'utf8' }));
+  const normalized = (value: string) => value.replaceAll('\\', '/').toLowerCase();
+  for (const [index, folder] of ['api', 'web'].entries()) {
+    expect(normalized(mounted[index].Mounts.find((mount: any) => mount.Destination === '/app').Source), 'Preview must serve this checkout').toBe(normalized(resolve(process.cwd(), '..', folder)));
+  }
   const pageErrors: string[] = [];
   page.on('pageerror', error => pageErrors.push(error.name));
   const fixture = createContractFixture();
@@ -43,6 +48,10 @@ test('identity export verifies actor password, encrypts the real download and cl
     const file = dialog.getByLabel('Excel打开密码', { exact: true });
     const confirm = dialog.getByLabel('再次输入打开密码', { exact: true });
     await expect(dialog.getByRole('heading', { name: '安全验证', exact: true })).toBeVisible();
+    await expect(dialog.getByText(`当前账号：${fixture.operator.name}（${fixture.operator.employeeNo}）`, { exact: true })).toBeVisible();
+    await expect(dialog.getByText('预览账号与正式账号独立。快捷进入预览后，请先设置当前预览账号密码。', { exact: true })).toBeVisible();
+    expect(await file.evaluate((element: HTMLInputElement) => ({ form: element.form, autocomplete: element.autocomplete }))).toEqual({ form: null, autocomplete: 'one-time-code' });
+    await expect(dialog.locator('form')).toHaveCount(0);
     const submit = dialog.getByRole('button', { name: '导出 Excel', exact: true });
     await account.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('sensitive-export-dialog.png'), fullPage: true, animations: 'disabled' });
@@ -82,6 +91,38 @@ test('identity export verifies actor password, encrypts the real download and cl
     expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain(accountPassword);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     const cancel = dialog.getByRole('button', { name: '取消', exact: true }); await expect(cancel).toBeVisible(); await cancel.click();
+    const unchanged = execFileSync('docker', ['exec', '-i', 'hrm-api-1', 'node'], { encoding: 'utf8', input: `
+      require('./prisma/preview-guard.cjs').assertPreviewEnvironment(process.env);
+      const {PrismaClient}=require('@prisma/client'),bcrypt=require('bcrypt');const p=new PrismaClient();
+      (async()=>{const u=await p.user.findUniqueOrThrow({where:{id:${JSON.stringify(fixture.operator.id)}}});
+        const same=await bcrypt.compare(${JSON.stringify(accountPassword)},u.passwordHash);
+        const fileBecameAccount=await bcrypt.compare(${JSON.stringify(filePassword)},u.passwordHash);
+        const changes=await p.auditLog.count({where:{userId:u.id,action:'change_password'}});
+        console.log(JSON.stringify({same,fileBecameAccount,changes}));
+      })().catch(()=>process.exitCode=1).finally(()=>p.$disconnect());` });
+    expect(JSON.parse(unchanged)).toEqual({ same: true, fileBecameAccount: false, changes: 0 });
+    // Account changes require the explicit, separately labelled settings page.
+    await page.getByRole('button', { name: '导出花名册', exact: true }).click();
+    await dialog.getByText('身份证号', { exact: true }).click();
+    await dialog.getByRole('button', { name: '设置当前账号密码', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '设置当前账号密码', exact: true })).toBeVisible();
+    const settings = page.getByRole('form', { name: '设置账号密码', exact: true });
+    await settings.getByLabel('新密码', { exact: true }).fill('246890');
+    await settings.getByLabel('再次输入新密码', { exact: true }).fill('246890');
+    await settings.getByRole('button', { name: '保存并返回员工档案', exact: true }).click();
+    await expect(page).toHaveURL(/\/users$/);
+    const afterSetting = await page.request.post(previewOrigin + '/api/v1/users/export-sensitive', {
+      headers: { authorization: 'Bearer ' + fixture.token },
+      data: { columns: 'name,idNumber', keyword: fixture.employee.employeeNo, accountPassword: '246890', filePassword },
+    });
+    expect(afterSetting.status()).toBe(201);
+    expect(cryptoOffice.isEncrypted(Buffer.from(await afterSetting.body()))).toBe(true);
+    const anonymous = await page.context().browser()!.newContext();
+    try {
+      const anonymousPage = await anonymous.newPage();
+      await anonymousPage.goto(previewOrigin + '/change-password?purpose=export');
+      await expect(anonymousPage).toHaveURL(/\/login\?/);
+    } finally { await anonymous.close(); }
     expect(pageErrors).toEqual([]);
   } finally { await page.close(); removeContractFixture(fixture); }
 });

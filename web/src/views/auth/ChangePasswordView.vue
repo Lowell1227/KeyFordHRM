@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { isLocalPreview } from '@/utils/preview-mode';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
+const forExport = route.query.purpose === 'export';
 const saving = ref(false);
 const form = reactive({ password: '', confirmPassword: '' });
 
@@ -26,7 +29,7 @@ async function submit() {
   try {
     await auth.changePassword(form.password, form.confirmPassword);
     ElMessage.success('密码修改成功');
-    await router.replace({ name: 'Dashboard' });
+    await router.replace(forExport ? { path: '/users' } : { name: 'Dashboard' });
   } finally {
     saving.value = false;
   }
@@ -37,9 +40,11 @@ async function submit() {
   <main class="change-password-page">
     <section class="change-password-card">
       <img src="/brand/logo-2025.png" alt="KAYFORD 孚德" class="logo" />
-      <h1>请先修改初始密码</h1>
-      <p>为保障账号安全，首次使用工号和初始密码登录后必须修改密码。</p>
-      <el-form label-position="top" @submit.prevent="submit">
+      <h1>{{ forExport ? '设置当前账号密码' : '请先修改初始密码' }}</h1>
+      <p v-if="forExport">为 {{ auth.user?.name }}<span v-if="auth.user?.employeeNo">（{{ auth.user.employeeNo }}）</span>设置账号密码，用于登录及敏感资料导出验证。</p>
+      <p v-else>为保障账号安全，首次使用工号和初始密码登录后必须修改密码。</p>
+      <p v-if="forExport && isLocalPreview">当前为独立预览环境，不会修改正式账号密码。</p>
+      <el-form label-position="top" aria-label="设置账号密码" @submit.prevent="submit">
         <el-form-item label="新密码">
           <el-input
             v-model="form.password"
@@ -62,7 +67,7 @@ async function submit() {
             autocomplete="new-password"
           />
         </el-form-item>
-        <el-button class="submit" type="primary" native-type="submit" :loading="saving">保存并进入系统</el-button>
+      <el-button class="submit" type="primary" native-type="submit" :loading="saving">{{ forExport ? '保存并返回员工档案' : '保存并进入系统' }}</el-button>
       </el-form>
       <small>密码仅校验为 4—6 位数字，两次输入一致即可；不能继续使用 0000。</small>
     </section>
