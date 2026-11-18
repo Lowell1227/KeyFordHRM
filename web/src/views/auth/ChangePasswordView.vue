@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth.store';
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const forExport = route.query.purpose === 'export';
+const forExport = isLocalPreview && route.query.purpose === 'export';
 const saving = ref(false);
 const form = reactive({ password: '', confirmPassword: '' });
 

@@ -104,6 +104,24 @@ async function mockPage(page: Page, intercept?: (route: Route, url: URL) => Prom
   await expect(page.getByRole('button', { name: '查看档案', exact: true }).filter({ visible: true }).first()).toBeVisible();
 }
 
+test('非预览导出隐藏账号设置入口和预览说明，不能使用预览专用改密入口', async ({ page }) => {
+  await mockPage(page, async (route, url) => {
+    if (!url.pathname.endsWith('/users/export-fields')) return false;
+    await respond(route, [{ key: 'contact', label: '身份与联系', fields: [
+      { key: 'idNumber', label: '身份证号', defaultSelected: false },
+    ] }]);
+    return true;
+  });
+  await page.getByRole('button', { name: '导出花名册', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '导出花名册', exact: true });
+  await dialog.getByText('身份证号', { exact: true }).click();
+  await expect(dialog.getByLabel('当前账号密码', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '设置当前账号密码', exact: true })).toHaveCount(0);
+  await expect(dialog.getByText(/预览账号与正式账号独立/)).toHaveCount(0);
+  await page.goto('/change-password?purpose=export');
+  await expect(page).toHaveURL(/\/dashboard$/);
+});
+
 for (const width of [1440, 1024, 390]) {
   test(`${width}px 导出选列采用已查询范围并可操作`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: width === 390 ? 844 : width === 1024 ? 768 : 900 });

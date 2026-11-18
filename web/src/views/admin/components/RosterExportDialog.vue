@@ -13,6 +13,7 @@ const props = defineProps<{ query: UserQuery; total: number }>();
 const auth = useAuthStore();
 const router = useRouter();
 function openAccountPasswordSettings() {
+  if (!isLocalPreview) return;
   clearPasswords(); visible.value = false;
   void router.push({ path: '/change-password', query: { purpose: 'export' } });
 }
@@ -138,7 +139,7 @@ async function exportRoster() {
       <p class="roster-export-note">验证本人账号，为Excel设置独立的打开密码。</p>
       <p class="roster-export-account">当前账号：{{ auth.user?.name }}<span v-if="auth.user?.employeeNo">（{{ auth.user.employeeNo }}）</span></p>
       <p v-if="isLocalPreview" class="roster-export-note">预览账号与正式账号独立。快捷进入预览后，请先设置当前预览账号密码。</p>
-      <el-button link type="primary" :disabled="busy" class="roster-export-settings" @click="openAccountPasswordSettings">设置当前账号密码</el-button>
+      <el-button v-if="isLocalPreview" link type="primary" :disabled="busy" class="roster-export-settings" @click="openAccountPasswordSettings">设置当前账号密码</el-button>
       <div class="roster-export-password-grid">
         <div class="roster-export-account-password roster-export-password-field">
           <label for="roster-account-verification">当前账号密码</label>

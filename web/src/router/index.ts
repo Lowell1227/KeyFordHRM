@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { previewStorageKey } from '@/api/archive-assistant.api';
 import { routes } from './routes';
 import { canAccessRoute } from './navigation';
+import { isLocalPreview } from '@/utils/preview-mode';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -40,7 +41,7 @@ router.beforeEach(async (to) => {
   if (auth.passwordChangeRequired && to.name !== 'ChangePassword') {
     return { name: 'ChangePassword' };
   }
-  if (!auth.passwordChangeRequired && to.name === 'ChangePassword' && to.query.purpose !== 'export') {
+  if (!auth.passwordChangeRequired && to.name === 'ChangePassword' && !(isLocalPreview && to.query.purpose === 'export')) {
     return { name: 'Dashboard' };
   }
 
