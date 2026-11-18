@@ -54,9 +54,11 @@ export const usersApi = {
   },
 
   /** GET /users/export — 按当前筛选导出花名册 Excel（blob） */
-  exportRoster(query: UserQuery & { columns?: string }): Promise<Blob> {
-    return http
-      .get('/users/export', { params: query as Record<string, unknown>, responseType: 'blob' })
+  exportRoster(query: UserQuery & { columns?: string }, credentials?: { accountPassword: string; filePassword: string }): Promise<Blob> {
+    const request = credentials
+      ? http.post('/users/export-sensitive', { ...query, ...credentials }, { responseType: 'blob', skipErrorMessage: true, timeout: 90000 })
+      : http.get('/users/export', { params: query as Record<string, unknown>, responseType: 'blob' });
+    return request
       .then((res) => (res as { data: Blob }).data)
       .catch(async (error) => {
         // Axios keeps JSON error bodies as Blob when requesting a spreadsheet.

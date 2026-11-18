@@ -25,6 +25,8 @@ import { hasHrCapability } from '@/auth/hr-capabilities';
 import * as bcrypt from 'bcrypt';
 import { currentWorkerWhere, CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import { activeApplicationWhere } from '@/employee-archives/employee-data-change-view';
+import { RosterSensitiveExportService } from './roster-sensitive-export.service';
+import { SensitiveRosterExportDto } from './dto/sensitive-roster-export.dto';
 
 export type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
@@ -130,6 +132,7 @@ export class UsersService {
     private readonly prisma: PrismaService,
     private readonly dataScope: DataScopeService,
     private readonly businessCapabilities: BusinessCapabilitiesService,
+    private readonly sensitiveExport?: RosterSensitiveExportService,
   ) {}
 
   /** 构建用户列表查询条件（列表与导出共用，保证所见即所得）。 */
@@ -304,6 +307,20 @@ export class UsersService {
   /** GET /users/export — 按当前查询范围和所选模块字段导出花名册。 */
   async exportRoster(dto: UserQueryDto, viewer: AuthUser): Promise<StreamableFile> {
     const columns = parseRosterExportColumns(dto.columns, viewer);
+    if (columns.includes('idNumber')) throw new BadRequestException('导出身份证号需要验证账号密码并设置Excel打开密码');
+    return this.createRosterExport(dto, viewer);
+  }
+
+  async exportSensitiveRoster(dto: SensitiveRosterExportDto, viewer: AuthUser): Promise<StreamableFile> {
+    const columns = parseRosterExportColumns(dto.columns, viewer);
+    if (!columns.includes('idNumber')) throw new BadRequestException('请选择身份证号字段，或使用普通导出');
+    if (!this.sensitiveExport) throw new ForbiddenException('敏感导出不可用');
+    await this.sensitiveExport.authorize(viewer, dto);
+    return this.createRosterExport(dto, viewer, dto.filePassword);
+  }
+
+  private async createRosterExport(dto: UserQueryDto, viewer: AuthUser, filePassword?: string): Promise<StreamableFile> {
+    const columns = parseRosterExportColumns(dto.columns, viewer);
     const archiveAccess = canExportArchiveFields(viewer);
     const { where, scopeFilter } = await this.buildUserListWhere(dto, viewer);
     const total = await this.prisma.user.count({ where });
@@ -328,6 +345,7 @@ export class UsersService {
               phone: true, gender: true, birthDate: true, ethnicity: true, education: true, professionalTitle: true,
               school: true, graduationDate: true, major: true, maritalStatus: true, childrenStatus: true, childrenCount: true,
               politicalStatus: true, nativePlace: true, householdType: true, idAddress: true, idNumberFingerprint: true,
+              ...(filePassword ? { idNumberEncrypted: true } as const : {}),
               currentAddress: true, emergencyContactName: true, emergencyContactRelation: true, emergencyContactPhone: true,
               socialSecurityStatus: true, socialSecurityStartDate: true, housingFundStatus: true, housingFundStartDate: true,
               bankName: true, bankBranch: true, bankAccountFingerprint: true,
@@ -382,13 +400,22 @@ export class UsersService {
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
       matchedHistoricalEmployeeNo: null,
-      ...(archiveAccess ? { archiveFields: rosterArchiveCells(u), contracts: u.employeeContracts ?? [] } : {}),
+      ...(archiveAccess ? { archiveFields: { ...rosterArchiveCells(u), ...(filePassword ? {
+        idNumber: this.sensitiveExport!.decryptIdentity(u.employeeProfile?.idNumberEncrypted),
+      } : {}) }, contracts: u.employeeContracts ?? [] } : {}),
     }));
+    const workbook = await buildRosterWorkbook(items, columns);
+    const plain = Buffer.from(await workbook.xlsx.writeBuffer());
+    let buffer: Buffer = plain;
+    if (filePassword) {
+      try { buffer = await this.sensitiveExport!.encryptWorkbook(plain, filePassword); }
+      finally { plain.fill(0); }
+    }
     await this.prisma.auditLog.create({ data: {
       userId: viewer.id,
       action: 'export_employee_roster',
       entityType: 'employee_roster_export',
-      newValue: { total: items.length, columns, filters: {
+      newValue: { total: items.length, columns, ...(filePassword ? { encrypted: true, identityIncluded: true } : {}), filters: {
         deptId: dto.deptId ?? null, status: dto.status ?? null,
         sysRole: dto.sysRole ?? null, archived: dto.archived ?? false,
         includeResigned: dto.includeResigned ?? false,
@@ -396,8 +423,6 @@ export class UsersService {
         includeTestAccounts: dto.includeTestAccounts ?? false, eligibleFor: dto.eligibleFor ?? null,
       } },
     } });
-    const workbook = await buildRosterWorkbook(items, columns);
-    const buffer = await workbook.xlsx.writeBuffer();
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const filename = encodeURIComponent(`花名册-${date}.xlsx`);
     return new StreamableFile(buffer as unknown as Buffer, {

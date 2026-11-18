@@ -1,4 +1,5 @@
-import { Controller, Get, Patch, Param, Query, Body, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Header, Patch, Param, Query, Body, ParseUUIDPipe } from '@nestjs/common';
+import { SensitiveRosterExportDto } from './dto/sensitive-roster-export.dto';
 import { SysRole } from '@prisma/client';
 import { UsersService } from './users.service';
 import { UserQueryDto } from './dto/user-query.dto';
@@ -29,6 +30,15 @@ export class UsersController {
   @HrCapabilities('employee_archive_edit', 'employee_archive_review', 'organization_edit')
   exportRoster(@Query() dto: UserQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.usersService.exportRoster(dto, viewer);
+  }
+
+  @Post('export-sensitive')
+  @Header('Cache-Control', 'no-store, private')
+  @Header('Pragma', 'no-cache')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  exportSensitiveRoster(@Body() dto: SensitiveRosterExportDto, @CurrentUser() viewer: AuthUser) {
+    return this.usersService.exportSensitiveRoster(dto, viewer);
   }
 
   @Get('export-fields')

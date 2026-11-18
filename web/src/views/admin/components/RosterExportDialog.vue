@@ -12,6 +12,15 @@ const initialized = ref(false);
 const fieldsLoading = ref(false);
 const fieldsError = ref('');
 const exportError = ref('');
+const accountPassword = ref('');
+const filePassword = ref('');
+const confirmFilePassword = ref('');
+const passwordErrors = ref<Record<string, string>>({});
+const sensitive = computed(() => selected.value.includes('idNumber'));
+function clearPasswords(clearErrors = true) {
+  accountPassword.value = ''; filePassword.value = ''; confirmFilePassword.value = ''; if (clearErrors) passwordErrors.value = {};
+}
+watch(sensitive, () => { clearPasswords(); exportError.value = ''; });
 const exporter = useExport();
 let loadGeneration = 0;
 
@@ -50,6 +59,7 @@ async function loadFields() {
 }
 
 watch(visible, value => {
+  clearPasswords();
   if (value) void loadFields();
   else ++loadGeneration;
 });
@@ -57,15 +67,27 @@ watch(visible, value => {
 async function exportRoster() {
   if (busy.value || fieldsError.value || !selected.value.length) return;
   exportError.value = '';
+  passwordErrors.value = {};
+  if (sensitive.value) {
+    if (!accountPassword.value) passwordErrors.value.account = '请输入当前账号密码';
+    if (filePassword.value.length < 8 || filePassword.value.length > 64 || !filePassword.value.trim()) passwordErrors.value.file = '请输入8至64位Excel打开密码';
+    else if (filePassword.value === accountPassword.value) passwordErrors.value.file = '不能与账号密码相同';
+    if (filePassword.value !== confirmFilePassword.value) passwordErrors.value.confirm = '两次打开密码不一致';
+    if (Object.keys(passwordErrors.value).length) return;
+  }
   const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()).replace(/-/g, '');
   try {
     await exporter.download(() => usersApi.exportRoster({
       ...props.query,
       columns: fields.value.filter(field => selected.value.includes(field.key)).map(field => field.key).join(','),
-    }), `花名册-${date}.xlsx`);
+    }, sensitive.value ? { accountPassword: accountPassword.value, filePassword: filePassword.value } : undefined), `花名册-${date}.xlsx`);
     visible.value = false;
   } catch (error) {
-    exportError.value = error instanceof Error ? error.message : '导出失败，请重试。';
+    const message = error instanceof Error ? error.message : '导出失败，请重试。';
+    if (sensitive.value && /账号密码|个人中心|15分钟/.test(message)) passwordErrors.value.account = message;
+    else exportError.value = message;
+  } finally {
+    clearPasswords(false);
   }
 }
 </script>
@@ -80,7 +102,7 @@ async function exportRoster() {
       <el-button link type="primary" :disabled="busy || !!fieldsError" @click="selected = fields.map(field => field.key)">全选</el-button>
       <el-button link :disabled="busy || !!fieldsError" @click="selected = []">清空</el-button>
     </div>
-    <div v-loading="fieldsLoading" class="roster-export-modules" aria-label="导出模块">
+    <div v-loading="fieldsLoading" class="roster-export-modules" :style="sensitive ? { maxHeight: '20vh' } : undefined" aria-label="导出模块">
       <div v-if="fieldsError" class="roster-export-error" role="alert">
         <span>{{ fieldsError }}</span><el-button link type="primary" @click="loadFields">重试</el-button>
       </div>
@@ -99,6 +121,19 @@ async function exportRoster() {
         <small v-if="module.fields.some(field => field.key === 'contractHistory')" class="roster-export-note">单独工作表，每份合同一行</small>
       </section>
     </div>
+    <el-form v-if="sensitive" class="roster-export-passwords" label-position="top" :disabled="busy" @submit.prevent>
+      <p class="roster-export-note">包含完整身份证号，需验证本人账号，并为文件设置独立的打开密码。</p>
+      <el-form-item label="当前账号密码" :error="passwordErrors.account">
+        <el-input v-model="accountPassword" type="password" show-password autocomplete="off" :maxlength="128" aria-label="当前账号密码" />
+      </el-form-item>
+      <el-form-item label="Excel打开密码" :error="passwordErrors.file">
+        <el-input v-model="filePassword" type="password" show-password autocomplete="new-password" :maxlength="64" placeholder="8至64位，不同于账号密码" aria-label="Excel打开密码" />
+      </el-form-item>
+      <el-form-item label="再次输入打开密码" :error="passwordErrors.confirm">
+        <el-input v-model="confirmFilePassword" type="password" show-password autocomplete="new-password" :maxlength="64" aria-label="再次输入打开密码" />
+      </el-form-item>
+      <small>请妥善保管文件打开密码，系统不保存该密码。</small>
+    </el-form>
     <p v-if="exportError" class="roster-export-error" role="alert">{{ exportError }}</p>
     <template #footer>
       <el-button :disabled="exporter.loading.value" @click="visible = false">取消</el-button>
@@ -108,6 +143,8 @@ async function exportRoster() {
 </template>
 
 <style scoped>
+:global(.roster-export-dialog) { max-height: 92vh; display: flex; flex-direction: column; }
+:global(.roster-export-dialog .el-dialog__body) { overflow-y: auto; min-height: 0; }
 .roster-export-count { margin: 0 0 12px; color: var(--el-text-color-secondary); }
 .roster-export-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .roster-export-tools strong { margin-right: auto; }
@@ -123,6 +160,9 @@ async function exportRoster() {
 .roster-export-fields :deep(.el-checkbox__label) { line-height: 1.5; overflow-wrap: anywhere; }
 .roster-export-note { display: block; padding-left: 24px; }
 .roster-export-error { color: var(--el-color-danger); display: flex; align-items: center; gap: 12px; overflow-wrap: anywhere; }
+.roster-export-passwords { margin-top: 12px; }
+.roster-export-passwords :deep(.el-form-item) { margin-bottom: 16px; }
+.roster-export-passwords .roster-export-note { padding-left: 0; margin: 0 0 12px; }
 @media (max-width: 600px) {
   .roster-export-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 8px; padding-left: 12px; }
   .roster-export-modules { max-height: 52vh; padding-right: 4px; }

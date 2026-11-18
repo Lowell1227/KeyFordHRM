@@ -52,6 +52,7 @@ export const ROSTER_EXPORT_COLUMNS = [
   { key: 'householdType', header: '户籍类型', group: 'contact', width: 16 },
   { key: 'idAddress', header: '身份证地址', group: 'contact', width: 38 },
   { key: 'idNumberConfigured', header: '身份证号录入状态', group: 'contact', width: 20 },
+  { key: 'idNumber', header: '身份证号', group: 'contact', width: 24 },
   { key: 'currentAddress', header: '现住址', group: 'contact', width: 38 },
   { key: 'emergencyContactName', header: '紧急联系人', group: 'contact', width: 16 },
   { key: 'emergencyContactRelation', header: '紧急联系人关系', group: 'contact', width: 18 },
