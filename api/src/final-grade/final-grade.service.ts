@@ -86,8 +86,8 @@ export class FinalGradeService {
   /** GET /tasks/:id/final-grade — 评定页数据。 */
   async getFinalGrade(taskId: string, viewer: AuthUser): Promise<FinalGradeDetail> {
     const task = await this.getTaskOrThrow(taskId);
-    // 复核人可读取评定依据，写入仍仅允许绩效直属上级/系统管理员。
-    if (task.deptHeadId !== viewer.id || task.employeeId === viewer.id) this.assertManager(task, viewer);
+    // 部门复核人及系统管理员可读取评定依据，写入仅允许任务冻结的绩效直属上级。
+    if (task.deptHeadId !== viewer.id || task.employeeId === viewer.id) this.assertManager(task, viewer, true);
 
     const latestReject = await this.prisma.flowRecord.findFirst({
       where: {
@@ -143,7 +143,7 @@ export class FinalGradeService {
       comment: typeof submissionData?.comment === 'string' ? submissionData.comment : null,
       allPeriodsComplete,
       canSubmit: allPeriodsComplete && task.status === TaskStatus.manager_scoring
-        && (task.managerId === viewer.id || viewer.sysRole === 'system_admin'),
+        && task.managerId === viewer.id && task.employeeId !== viewer.id,
       latestReject: latestReject
         ? {
             nodeType: latestReject.nodeType,
@@ -322,8 +322,9 @@ export class FinalGradeService {
   private assertManager(
     task: { managerId: string | null; employeeId: string },
     viewer: AuthUser,
+    allowAdminRead = false,
   ): void {
-    if (task.employeeId === viewer.id || (viewer.sysRole !== 'system_admin' && task.managerId !== viewer.id)) {
+    if (task.employeeId === viewer.id || (task.managerId !== viewer.id && !(allowAdminRead && viewer.sysRole === 'system_admin'))) {
       throw new ForbiddenException({
         code: ERROR_CODE.FORBIDDEN,
         message: '仅直属上级可操作',

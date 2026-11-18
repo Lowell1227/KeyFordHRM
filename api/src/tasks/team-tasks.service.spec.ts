@@ -193,6 +193,7 @@ describe("TeamTasksService", () => {
       expect.objectContaining({
         where: expect.objectContaining({
           managerId: managerViewer.id,
+          NOT: { employeeId: managerViewer.id },
           cycleId: "cycle-1",
           deptId: "dept-1",
           employeeId: "employee-1",
@@ -221,13 +222,13 @@ describe("TeamTasksService", () => {
     expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        where: { managerId: managerViewer.id, cycleId: "cycle-1" },
+        where: { managerId: managerViewer.id, NOT: { employeeId: managerViewer.id }, cycleId: "cycle-1" },
       }),
     );
     expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        where: { managerId: managerViewer.id, cycleId: "cycle-1" },
+        where: { managerId: managerViewer.id, NOT: { employeeId: managerViewer.id }, cycleId: "cycle-1" },
       }),
     );
     expect(result).toEqual({
@@ -418,6 +419,7 @@ describe("TeamTasksService", () => {
 
       const itemWhere = {
         managerId: managerViewer.id,
+        NOT: { employeeId: managerViewer.id },
         status: { in: ["exempted"] },
       };
       expect(prisma.assessmentTask.count).toHaveBeenCalledWith({
@@ -469,7 +471,7 @@ describe("TeamTasksService", () => {
     expect(prisma.assessmentTask.count).not.toHaveBeenCalled();
     expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ where: { managerId: managerViewer.id } }),
+      expect.objectContaining({ where: { managerId: managerViewer.id, NOT: { employeeId: managerViewer.id } } }),
     );
     expect(result).toMatchObject({
       total: 1,

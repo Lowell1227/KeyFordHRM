@@ -153,6 +153,7 @@ describe('PeriodReviewsService', () => {
     prisma.assessmentPeriod.findMany.mockResolvedValue([{
       id: 'previous-period',
       periodKey: '2026-12',
+      managerSubmittedAt: new Date('2027-01-03T08:00:00.000Z'),
       indicatorReviews: [{
         indicatorVersionItemId: 'previous-item',
         actualValueText: '上月完成600万元',
@@ -298,6 +299,30 @@ describe('PeriodReviewsService', () => {
     ]);
     expect(result.latestProgress).toMatchObject({ actualValue: 12, targetValueSnapshot: 10, completionPercent: 120 });
     expect(result).toMatchObject({ progress: 70, selfScore: 82, managerScore: null });
+  });
+
+  it('hides an unsubmitted manager draft from the employee while retaining it for the frozen manager', async () => {
+    const draft = {
+      ...period,
+      status: 'manager_scoring',
+      employeeSubmittedAt: new Date('2027-02-02T08:00:00.000Z'),
+      managerScoreTotal: new Prisma.Decimal(91),
+      managerGrade: 'A',
+      indicatorReviews: [{ ...period.indicatorReviews[0], managerScore: new Prisma.Decimal(91), managerComment: '尚未提交的评价' }],
+    };
+    prisma.assessmentPeriod.findUnique.mockResolvedValue(draft);
+    prisma.assessmentPeriod.findMany.mockResolvedValue([{
+      id: 'previous-draft', periodKey: '2026-12', managerSubmittedAt: null,
+      indicatorReviews: [{ indicatorVersionItemId: 'previous-item', progress: 60, selfScore: new Prisma.Decimal(75), managerScore: new Prisma.Decimal(78) }],
+      indicatorVersion: { items: [{ id: 'previous-item', sourceInstanceId: '12121212-1212-4212-8212-121212121212' }] },
+    }]);
+
+    const employeeView = await service.getReview(period.id, employee);
+    expect(employeeView.period).toMatchObject({ managerScoreTotal: null, managerGrade: null, managerSubmittedAt: null });
+    expect(employeeView.indicators[0]).toMatchObject({ managerScore: null, managerComment: null, history: [{ managerScore: null }] });
+    const managerView = await service.getReview(period.id, manager);
+    expect(managerView.period).toMatchObject({ managerScoreTotal: 91, managerGrade: 'A' });
+    expect(managerView.indicators[0]).toMatchObject({ managerScore: 91, managerComment: '尚未提交的评价', history: [{ managerScore: 78 }] });
   });
 
   it('returns the page header, frozen goal reference, current draft, history, and alignments', async () => {

@@ -15,7 +15,7 @@ describe('GoalChangesService access and revisions', () => {
     const tx: any = { $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentTask: { findUnique: jest.fn().mockResolvedValue(task), findMany: jest.fn().mockResolvedValue([task]) },
       goalChangeRequest: { findUnique: jest.fn().mockResolvedValue(request), findFirst: jest.fn().mockResolvedValue(null),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       goalChangeGrant: { findUnique: jest.fn().mockResolvedValue(task.goalChangeGrant) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -50,6 +50,39 @@ describe('GoalChangesService access and revisions', () => {
     tx.goalChangeRequest.findFirst.mockResolvedValue({ id: 'old-request' });
     expect(await service.entry(viewer)).toEqual({ visible: true });
     expect(await service.entry({ ...viewer, isAssessorOnly: true })).toEqual({ visible: true });
+  });
+  it('returns a manager-created revision as that manager own actionable goal-change task', async () => {
+    const request = { id: 'request', taskId: 'task', creatorId: 'manager', status: 'revision', revision: 2,
+      task: { ...task, employee: { ...task.employee, name: '虚构员工' }, cycle: { ...task.cycle, name: '虚构周期' } },
+      creator: { name: '虚构上级' } };
+    const { service, tx } = setup(request);
+    tx.goalChangeRequest.findMany.mockResolvedValue([request]);
+    const rows = await (service as any).myPending({ ...viewer, id: 'manager' });
+    expect(rows).toMatchObject([{ id: 'request', employeeName: '虚构员工', creatorName: '虚构上级',
+      currentOwnerId: 'manager', allowedActions: expect.arrayContaining(['edit', 'submit']) }]);
+    expect(tx.goalChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ OR: expect.any(Array) }),
+      include: expect.objectContaining({ task: expect.any(Object), creator: expect.any(Object) }),
+    }));
+  });
+  it('pages authorized goal changes in the database before loading task relations', async () => {
+    const request = { id: 'request', taskId: 'task', creatorId: 'employee', status: 'active', revision: 2,
+      task: { ...task, employee: { ...task.employee, name: '虚构员工' }, cycle: { ...task.cycle, name: '虚构周期' } },
+      creator: { name: '虚构发起人' } };
+    const { service, tx } = setup(request);
+    tx.goalChangeRequest.count.mockResolvedValue(37);
+    tx.goalChangeRequest.findMany.mockResolvedValue([request]);
+    const result = await (service as any).findPage({ page: 2, pageSize: 10, skip: 10, take: 10,
+      scope: 'self', status: 'active', keyword: '虚构' }, viewer);
+    expect(result).toMatchObject({ total: 37, page: 2, pageSize: 10,
+      items: [{ id: 'request', employeeName: '虚构员工', creatorName: '虚构发起人' }] });
+    const where = tx.goalChangeRequest.findMany.mock.calls[0][0].where;
+    expect(where.AND).toEqual(expect.arrayContaining([
+      { task: { OR: expect.any(Array) } }, { task: { employeeId: 'employee' } }, { status: 'active' },
+    ]));
+    expect(tx.goalChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 10, take: 10,
+      include: expect.objectContaining({ task: expect.any(Object), creator: expect.any(Object) }) }));
+    expect(tx.assessmentTask.findUnique).not.toHaveBeenCalled();
   });
   it('submits edited content and its status in one revisioned write', async () => {
     const goal: any = { sourceInstanceId: 'g1', name: '调整目标', description: null, scoringStandard: null,

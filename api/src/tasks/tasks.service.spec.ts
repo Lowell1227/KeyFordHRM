@@ -194,6 +194,15 @@ describe('TasksService', () => {
     } as AssessmentTask;
   }
 
+  it('marks a notice for the employee goal action even when the employee also manages a team', async () => {
+    const task = { ...makeTask(TaskStatus.indicator_confirming), employeeId: 'mgr-1', managerId: 'mgr-1' };
+    await (service as any).notifyGoalHandler(task, makeViewer({ id: 'head-1' }));
+    expect(notificationsService.create).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'mgr-1', taskId: 'task-1', type: 'indicator_setting_notice',
+      extraData: { action: 'employee_goal' },
+    }));
+  });
+
   function makeIndicator(overrides: Partial<IndicatorInstance> = {}): IndicatorInstance {
     return {
       id: 'ind-1',

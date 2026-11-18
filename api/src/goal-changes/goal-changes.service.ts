@@ -5,6 +5,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { hasApprovedGoalBaseline } from '@/tasks/goal-workflow';
 import { ChangeGoal, canGrantChanges, changeOwner, nextChangeStage, validateChangeGoals } from './goal-change-rules';
+import { GoalChangeListQueryDto } from './dto/goal-change-list-query.dto';
 
 const actor = { select: { id: true, name: true, status: true, deletedAt: true, archivedAt: true } } as const;
 const taskInclude = {
@@ -84,8 +85,10 @@ export class GoalChangesService {
     return result;
   }
 
-  private async map(request: Request, task: Task, viewer: AuthUser) {
-    const creator = await this.prisma.user.findUnique({ where: { id: request.creatorId }, select: { name: true } });
+  private async map(request: Request, task: Task, viewer: AuthUser, creatorName?: string) {
+    const creator = creatorName === undefined
+      ? await this.prisma.user.findUnique({ where: { id: request.creatorId }, select: { name: true } })
+      : { name: creatorName };
     let workflowIssue: string | null = null;
     if (!['active', 'revoked'].includes(request.status)) {
       try { this.assertEligible(task); } catch (error) { workflowIssue = error instanceof Error ? error.message : '当前不能办理'; }
@@ -134,6 +137,63 @@ export class GoalChangesService {
       if (task && this.canView(task, viewer)) result.push(await this.map(request, task, viewer));
     }
     return result;
+  }
+
+  async findPage(query: GoalChangeListQueryDto, viewer: AuthUser) {
+    const id = viewer.id;
+    const scoped: Prisma.GoalChangeRequestWhereInput = query.scope === 'self'
+      ? { task: { employeeId: id } }
+      : query.scope === 'team'
+        ? { task: { managerId: id, NOT: { employeeId: id } } }
+        : query.scope === 'review'
+          ? { OR: [
+            { status: 'indicator_reviewing', task: { managerId: id } },
+            { status: 'indicator_dept_reviewing', task: { deptHeadId: id } },
+            { status: 'indicator_confirming', task: { employeeId: id } },
+            { status: 'indicator_approving', task: { approverId: id } },
+          ] }
+          : {};
+    const keyword = query.keyword?.trim();
+    const where: Prisma.GoalChangeRequestWhereInput = { AND: [
+      { task: this.scope(viewer) }, scoped,
+      ...(query.status ? [{ status: query.status }] : []),
+      ...(keyword ? [{ OR: [
+        { task: { employee: { name: { contains: keyword, mode: 'insensitive' } } } },
+        { task: { cycle: { name: { contains: keyword, mode: 'insensitive' } } } },
+        { creator: { name: { contains: keyword, mode: 'insensitive' } } },
+        { reason: { contains: keyword, mode: 'insensitive' } },
+      ] } satisfies Prisma.GoalChangeRequestWhereInput] : []),
+    ] };
+    const [total, requests] = await Promise.all([
+      this.prisma.goalChangeRequest.count({ where }),
+      this.prisma.goalChangeRequest.findMany({ where, skip: query.skip, take: query.take,
+        include: { task: { include: taskInclude }, creator: { select: { name: true } } },
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }] }),
+    ]);
+    const items = await Promise.all(requests.map(({ task, creator, ...request }) => this.map(request, task, viewer, creator.name)));
+    return { items, total, page: query.page, pageSize: query.pageSize };
+  }
+
+  async myPending(viewer: AuthUser) {
+    if (viewer.isAssessorOnly) return [];
+    const id = viewer.id;
+    const requests = await this.prisma.goalChangeRequest.findMany({
+      where: { OR: [
+        { status: { in: ['draft', 'revision'] }, creatorId: id, task: { OR: [{ employeeId: id }, { managerId: id }] } },
+        { status: 'indicator_reviewing', task: { managerId: id } },
+        { status: 'indicator_dept_reviewing', task: { deptHeadId: id } },
+        { status: 'indicator_confirming', task: { employeeId: id } },
+        { status: 'indicator_approving', task: { approverId: id } },
+      ] },
+      include: { task: { include: taskInclude }, creator: { select: { name: true } } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const rows = await Promise.all(requests.map(async ({ task, creator, ...request }) => {
+      if (!task || !this.canView(task, viewer)) return null;
+      const row = await this.map(request, task, viewer, creator.name);
+      return row.allowedActions.some((action) => ['edit', 'submit', 'decide'].includes(action)) ? row : null;
+    }));
+    return rows.filter((row): row is NonNullable<typeof row> => row !== null);
   }
 
   private scope(viewer: AuthUser): Prisma.AssessmentTaskWhereInput {

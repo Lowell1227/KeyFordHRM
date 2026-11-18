@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { CycleStatus, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
 import { CyclesService } from './cycles.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
@@ -481,6 +481,15 @@ describe('CyclesService', () => {
       expectedPlanVersion: 3,
     }, systemAdministrator)).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '   '])('requires a real reason when returning a cycle plan: %p', async (comment) => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({ reviewStatus: 'pending' }));
+    await expect(service.review('cycle-1', {
+      action: 'reject', expectedPlanVersion: 3, comment,
+    }, reviewer)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('returns a clear conflict when the reviewed plan version is stale', async () => {

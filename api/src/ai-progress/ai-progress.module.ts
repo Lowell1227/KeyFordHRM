@@ -16,9 +16,10 @@ import { PerformanceCardService } from '../dingtalk/performance-card.service';
 import { TasksModule } from '../tasks/tasks.module';
 import { PeriodReviewsModule } from '../period-reviews/period-reviews.module';
 import { ImprovementPlansModule } from '../improvement-plans/improvement-plans.module';
+import { GoalChangesModule } from '../goal-changes/goal-changes.module';
 
 @Module({
-  imports: [EmployeeArchivesModule, PrismaModule, AuthModule, ObjectivesModule, TasksModule, PeriodReviewsModule, ImprovementPlansModule],
+  imports: [EmployeeArchivesModule, PrismaModule, AuthModule, ObjectivesModule, TasksModule, PeriodReviewsModule, ImprovementPlansModule, GoalChangesModule],
   controllers: [AiConfigController, AiProgressController],
   providers: [
     AiConfigService,

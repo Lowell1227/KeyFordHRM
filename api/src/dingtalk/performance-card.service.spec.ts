@@ -61,6 +61,7 @@ describe('performance lifecycle cards (authorized read projection)', () => {
   let periods: any;
   let prisma: any;
   let improvements: any;
+  let goalChanges: any;
   let env: Record<string, string>;
   beforeEach(() => {
     task = taskFixture();
@@ -76,6 +77,7 @@ describe('performance lifecycle cards (authorized read projection)', () => {
       assessmentTask: { findMany: jest.fn(async () => [{ id: task.id }]) },
     };
     improvements = { myPending: jest.fn(async () => []) };
+    goalChanges = { myPending: jest.fn(async () => []) };
     env = { DINGTALK_BOT_HRM_URL: 'https://hrm.example' };
     service = new PerformanceCardService(
       eligibility,
@@ -83,6 +85,7 @@ describe('performance lifecycle cards (authorized read projection)', () => {
       periods,
       prisma,
       improvements,
+      goalChanges,
       { get: (key: string) => env[key] } as ConfigService,
     );
   });
@@ -374,6 +377,17 @@ describe('performance lifecycle cards (authorized read projection)', () => {
         cycleLabel: '',
         primaryText: '处理改进计划',
         primaryUrl: 'https://hrm.example/improvement-plans',
+      },
+    });
+  });
+  it('links a returned goal change to its authorized detail without inventing a new approval', async () => {
+    prisma.assessmentTask.findMany.mockResolvedValue([]);
+    goalChanges.myPending.mockResolvedValue([{ id: 'change-1', employeeName: '合成团队员工',
+      cycleName: '九月绩效', status: 'revision', currentOwnerId: 'owner', allowedActions: ['edit', 'submit'] }]);
+    expect(cards(await service.query('我的待办', sender))[0]).toMatchObject({
+      kind: 'todo', subjectKey: 'goal-change:change-1', params: {
+        title: '目标变更', subjectName: '合成团队员工', primaryText: '修改目标变更',
+        primaryUrl: 'https://hrm.example/goal-changes/change-1',
       },
     });
   });

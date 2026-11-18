@@ -864,6 +864,7 @@ export class TasksService {
         cycleId: task.cycleId,
         taskId: task.id,
         type: 'indicator_setting_notice',
+        extraData: { action: userId === task.employeeId ? 'employee_goal' : 'manager_goal_review' },
         title:
           task.status === 'goal_confirmed' || task.status === 'self_eval'
             ? '目标已生效'
@@ -1383,6 +1384,7 @@ export class TasksService {
         type: 'indicator_setting_notice',
         title: '考核指标待确认',
         content: '主管已审核本周期正式考核指标，请进入“我的绩效”确认。',
+        extraData: { action: 'employee_goal' },
       });
     }
 

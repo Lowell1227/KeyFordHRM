@@ -1165,6 +1165,9 @@ export class CyclesService {
   }
 
   async review(id: string, dto: ReviewCycleDto, user: AuthUser) {
+    if (dto.action === 'reject' && !dto.comment?.trim()) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '退回周期计划时请填写原因' });
+    }
     return this.prisma.$transaction(async (tx) => {
       const cycle = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
       if (!cycle) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });

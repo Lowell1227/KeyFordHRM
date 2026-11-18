@@ -44,6 +44,11 @@ describe('FinalGradeService department review access', () => {
   it('does not allow the department reviewer to change the manager final grade', async () => {
     await expect(makeService().submitFinalGrade(task.id, { grade: 'C' }, viewer('head-1'))).rejects.toThrow(ForbiddenException);
   });
+  it('does not offer or allow final-grade submission to an unrelated system administrator', async () => {
+    const admin = { ...viewer('admin-1'), sysRole: 'system_admin' } as AuthUser;
+    expect((await makeService().getFinalGrade(task.id, admin)).canSubmit).toBe(false);
+    await expect(makeService().submitFinalGrade(task.id, { grade: 'C' }, admin)).rejects.toThrow(ForbiddenException);
+  });
   it('does not reveal an unpublished result to its employee who is also the frozen department head', async () => {
     await expect(makeService({ deptHeadId: task.employeeId }).getFinalGrade(task.id, viewer(task.employeeId))).rejects.toThrow(ForbiddenException);
   });
@@ -132,7 +137,8 @@ describe('FinalGradeService combined department review', () => {
     return { service, state: () => state, notifications, periodsSnapshot: JSON.stringify(periods), updatedAt };
   }
 
-  it.each([viewer(), viewer('admin-1', 'system_admin')])('persists both real flow records attributed to the actual submitter $id', async (actor) => {
+  it('persists both real flow records attributed to the frozen manager', async () => {
+    const actor = viewer();
     const fixture = setup();
     const result = await fixture.service.submitFinalGrade('task-1', { grade: 'C', comment: '  下周期加强交付。  ' }, actor);
     expect(result).toEqual({ id: 'task-1', status: 'hr_calibration', grade: 'C' });
@@ -181,13 +187,18 @@ describe('FinalGradeService combined department review', () => {
   it.each([
     { managerId: 'manager-1', deptHeadId: 'head-1' },
     { managerId: 'manager-1', deptHeadId: null },
-    { managerId: null, deptHeadId: null },
   ])('keeps separate or missing frozen reviewers at department review: $managerId / $deptHeadId', async (relations) => {
     const fixture = setup(relations);
-    expect(await fixture.service.submitFinalGrade('task-1', { grade: 'B' }, viewer('admin-1', 'system_admin'))).toMatchObject({ status: 'dept_review' });
+    expect(await fixture.service.submitFinalGrade('task-1', { grade: 'B' }, viewer())).toMatchObject({ status: 'dept_review' });
     expect(fixture.state().records).toHaveLength(1);
     expect(fixture.state().records[0]).toMatchObject({ nodeType: 'manager_score', action: 'submit' });
     expect(fixture.state().task.deptReviewedAt).toBeNull();
+  });
+
+  it('does not allow an administrator to fill a missing frozen manager', async () => {
+    const fixture = setup({ managerId: null, deptHeadId: null });
+    await expect(fixture.service.submitFinalGrade('task-1', { grade: 'B' }, viewer('admin-1', 'system_admin'))).rejects.toThrow(ForbiddenException);
+    expect(fixture.state()).toMatchObject({ grade: null, records: [], task: { status: 'manager_scoring' } });
   });
 
   it('rejects incomplete months before persisting a grade or either flow record', async () => {

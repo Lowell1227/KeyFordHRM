@@ -1,14 +1,17 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ChangeDecisionDto, ChangeDraftDto, ChangeGrantDto, ChangeRevisionDto, ChangeSubmitDto, ChangeTaskDto } from './goal-changes.dto';
 import { GoalChangesService } from './goal-changes.service';
+import { GoalChangeListQueryDto } from './dto/goal-change-list-query.dto';
 
 @Controller('goal-changes')
 export class GoalChangesController {
   constructor(private readonly service: GoalChangesService) {}
   @Get('context') context(@CurrentUser() viewer: AuthUser) { return this.service.context(viewer); }
   @Get('entry') entry(@CurrentUser() viewer: AuthUser) { return this.service.entry(viewer); }
+  @Get('my-pending') myPending(@CurrentUser() viewer: AuthUser) { return this.service.myPending(viewer); }
+  @Get('page') page(@Query() query: GoalChangeListQueryDto, @CurrentUser() viewer: AuthUser) { return this.service.findPage(query, viewer); }
   @Post('grants') @HttpCode(200)
   open(@Body() input: ChangeGrantDto, @CurrentUser() viewer: AuthUser) { return this.service.openGrant(input, viewer); }
   @Post('grants/:taskId/revoke') @HttpCode(200)

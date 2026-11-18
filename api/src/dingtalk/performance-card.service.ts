@@ -20,6 +20,7 @@ import {
 import { PeriodReviewsService } from '../period-reviews/period-reviews.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ImprovementWorkflowService } from '../improvement-plans/improvement-workflow.service';
+import { GoalChangesService } from '../goal-changes/goal-changes.service';
 
 export interface PerformanceCard {
   kind: 'todo' | 'goal' | 'evaluation' | 'result';
@@ -38,6 +39,7 @@ export class PerformanceCardService {
     private readonly periods: PeriodReviewsService,
     private readonly prisma: PrismaService,
     private readonly improvements: ImprovementWorkflowService,
+    private readonly goalChanges: GoalChangesService,
     private readonly config: ConfigService,
   ) {}
 
@@ -308,6 +310,27 @@ export class PerformanceCardService {
         }
       }
       if (cards.length > 5) break;
+    }
+    const changes = await this.goalChanges.myPending(viewer);
+    for (const change of changes) {
+      if (change.currentOwnerId !== viewer.id || !change.allowedActions.length) continue;
+      const editing = change.allowedActions.includes('edit') || change.allowedActions.includes('submit');
+      const action = editing
+        ? change.status === 'revision' ? '修改目标变更' : '提交目标变更'
+        : change.status === 'indicator_confirming' ? '确认目标变更' : '审核目标变更';
+      cards.push(this.card('todo', `goal-change:${change.id}`, {
+        title: '目标变更',
+        subjectName: change.employeeName,
+        cycleLabel: change.cycleName,
+        periodLabel: '',
+        stateLabel: '待本人办理',
+        summary: '请进入目标变更，按当前环节办理。',
+        dueLabel: '',
+        primaryText: action,
+        primaryUrl: this.url(`/goal-changes/${encodeURIComponent(change.id)}`),
+        secondaryText: '',
+        secondaryUrl: '',
+      }));
     }
     const plans = await this.improvements.myPending(viewer);
     for (const plan of plans) {

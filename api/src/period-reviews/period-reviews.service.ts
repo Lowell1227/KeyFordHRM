@@ -144,6 +144,7 @@ export class PeriodReviewsService {
 
     const sourceById = new Map<string, SourceContext>(sources.map((source) => [source.id, source]));
     const currentByItem = new Map(period.indicatorReviews.map((review) => [review.indicatorVersionItemId, review]));
+    const employeeReadingManagerDraft = period.task.employeeId === viewer.id && !period.managerSubmittedAt;
 
     return {
       period: {
@@ -160,9 +161,9 @@ export class PeriodReviewsService {
         employeeSubmittedAt: period.employeeSubmittedAt,
         managerSubmittedAt: period.managerSubmittedAt,
         selfScoreTotal: this.decimalNumber(period.selfScoreTotal),
-        managerScoreTotal: this.decimalNumber(period.managerScoreTotal),
+        managerScoreTotal: employeeReadingManagerDraft ? null : this.decimalNumber(period.managerScoreTotal),
         selfGrade: period.selfGrade,
-        managerGrade: period.managerGrade,
+        managerGrade: employeeReadingManagerDraft ? null : period.managerGrade,
         attachments: this.periodAttachments(period.employeeAttachments),
         draftVersion: period.draftVersion,
       },
@@ -235,8 +236,8 @@ export class PeriodReviewsService {
           supportNeeded: review?.supportNeeded ?? null,
           attachments: this.jsonArray(review?.employeeAttachments),
           selfScore: isScoreRequired ? this.decimalNumber(review?.selfScore) : null,
-          managerScore: this.decimalNumber(review?.managerScore),
-          managerComment: review?.managerComment ?? null,
+          managerScore: employeeReadingManagerDraft ? null : this.decimalNumber(review?.managerScore),
+          managerComment: employeeReadingManagerDraft ? null : review?.managerComment ?? null,
           latestProgress: latest ? {
             progress: latest.progress,
             ...progressValues(latest),
@@ -247,7 +248,7 @@ export class PeriodReviewsService {
           } : null,
           progressReferences,
           alignedObjectives: (source?.objectiveAlignments ?? []).map((alignment) => alignment.objective),
-          history: this.historyForSource(previousPeriods, item.sourceInstanceId),
+          history: this.historyForSource(previousPeriods, item.sourceInstanceId, period.task.employeeId === viewer.id),
         };
       }),
     };
@@ -1094,6 +1095,7 @@ export class PeriodReviewsService {
   private historyForSource(
     periods: Array<{
       periodKey: string;
+      managerSubmittedAt: Date | null;
       indicatorVersion: { items: Array<{ id: string; sourceInstanceId: string | null }> } | null;
       indicatorReviews: Array<{
         indicatorVersionItemId: string;
@@ -1105,6 +1107,7 @@ export class PeriodReviewsService {
       }>;
     }>,
     sourceInstanceId: string | null,
+    employeeView: boolean,
   ) {
     if (!sourceInstanceId) return [];
     return periods.flatMap((previous) => {
@@ -1119,7 +1122,7 @@ export class PeriodReviewsService {
         healthStatus: review.healthStatus,
         actualValueText: review.actualValueText,
         selfScore: this.decimalNumber(review.selfScore),
-        managerScore: this.decimalNumber(review.managerScore),
+        managerScore: employeeView && !previous.managerSubmittedAt ? null : this.decimalNumber(review.managerScore),
       }];
     });
   }

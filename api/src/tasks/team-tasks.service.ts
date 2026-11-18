@@ -141,6 +141,8 @@ export class TeamTasksService {
   ): Promise<TeamTaskPage> {
     const authorizedWhere: Prisma.AssessmentTaskWhereInput = {
       managerId: viewer.id,
+      // Historical self-managed tasks cannot expose unpublished results through a team projection.
+      NOT: { employeeId: viewer.id },
     };
     const filteredWhere = this.withFilters(authorizedWhere, dto);
     const facetWhere: Prisma.AssessmentTaskWhereInput = { ...authorizedWhere };
