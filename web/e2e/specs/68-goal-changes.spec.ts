@@ -39,10 +39,11 @@ async function setup(page: Page, actor = 'employee', canGrant = false, isAssesso
     const method = route.request().method();
     let data: unknown = [];
     if (p === '/auth/me') data = { id: actor, name: '合成测试人', sysRole: canGrant ? 'hr_user' : 'employee',
-      isAssessorOnly, hrCapabilities: [], businessCapabilities: { canManageTeam: false }, canViewAll: false };
+      isAssessorOnly, hrCapabilities: canGrant ? ['cycle_plan_edit'] : [], businessCapabilities: { canManageTeam: false }, canViewAll: false };
     else if (p === '/tasks/mine' || p === '/goal-plans') data = { items: [], total: 0, page: 1, pageSize: 10 };
     else if (p === '/notifications/unread-count') data = 0;
     else if (p === '/goal-changes/context') data = { canGrant, tasks };
+    else if (p === '/goal-changes/entry') data = { visible: !isAssessorOnly };
     else if (p.startsWith('/goal-changes') && method !== 'GET') {
       const body = route.request().postDataJSON();
       writes.push({ path: p, method, body });
@@ -82,7 +83,7 @@ for (const width of [1440, 390]) {
       if (path === '/action-items') await expect(header.getByTestId('goal-tracking-cycle')).toBeVisible();
       if (path === '/objectives') await expect(header.getByTestId('objective-map-cycle')).toBeVisible();
       if (path === '/tasks') await expect(header.getByTestId('task-cycle-filter')).toBeVisible();
-      if (path === '/goal-changes') await expect(header.getByRole('button', { name: '开放变更' })).toBeVisible();
+      if (path === '/goal-changes') await expect(header.getByText('变更申请与记录')).toBeVisible();
       baselines.push(navigationBox!.y);
     }
     expect(Math.max(...baselines) - Math.min(...baselines)).toBeLessThanOrEqual(1);
@@ -102,8 +103,38 @@ test('workspace exposes goal changes; self and frozen-team scopes keep their own
   await expect(table.getByText('合成员工', { exact: true })).toHaveCount(0);
 });
 
+test('entry is hidden without a grant or history and remains for related history', async ({ page }) => {
+  await setup(page);
+  await page.route('**/api/v1/goal-changes/entry', route => route.fulfill({ json: envelope({ visible: false }) }));
+  await go(page, '/tasks');
+  await expect(page.getByRole('link', { name: '目标变更', exact: true })).toHaveCount(0);
+  await page.unroute('**/api/v1/goal-changes/entry');
+  await go(page, '/tasks');
+  await expect(page.getByRole('link', { name: '目标变更', exact: true })).toBeVisible();
+});
+
+test('ordinary employee can open the read-only goal map', async ({ page }) => {
+  await setup(page);
+  await go(page, '/tasks');
+  await expect(page.getByRole('link', { name: '目标地图', exact: true })).toBeVisible();
+});
+
+test('HR grant ledger is separate from applications and employee cannot open it', async ({ page }) => {
+  await setup(page, 'hr', true);
+  await go(page, '/goal-changes');
+  await expect(page.getByRole('button', { name: '开放变更', exact: true })).toHaveCount(0);
+  await go(page, '/goal-change-grants');
+  await expect(page.getByText('按考核周期为员工开放目标变更')).toBeVisible();
+  await page.route('**/api/v1/auth/me', route => route.fulfill({ json: envelope({
+    id: 'employee', name: '合成员工', sysRole: 'employee', hrCapabilities: [], isAssessorOnly: false,
+    businessCapabilities: { canManageTeam: false }, canViewAll: false,
+  }) }));
+  await go(page, '/goal-change-grants');
+  await expect(page).toHaveURL(/\/dashboard$/);
+});
+
 for (const path of ['/tasks', '/action-items']) {
-  test(`non-assessor reaches changes from ${path}, while assessor navigation stays unchanged`, async ({ page }) => {
+  test(`related user reaches changes from ${path}, while an unrelated assessor has no entry`, async ({ page }) => {
     await setup(page);
     await go(page, path);
     await expect(page.getByRole('link', { name: '目标变更', exact: true })).toBeVisible();
@@ -111,13 +142,14 @@ for (const path of ['/tasks', '/action-items']) {
     await expect(page).toHaveURL(/\/goal-changes$/);
     await page.route('**/api/v1/auth/me', route => route.fulfill({ json: envelope({ id: 'assessor', name: '合成审核人',
       sysRole: 'employee', isAssessorOnly: true, businessCapabilities: { canManageTeam: false }, hrCapabilities: [] }) }));
+    await page.route('**/api/v1/goal-changes/entry', route => route.fulfill({ json: envelope({ visible: false }) }));
     await go(page, path);
     await expect(page.getByTestId('performance-secondary-nav')).toBeVisible();
     await expect(page.getByRole('link', { name: '目标变更', exact: true })).toHaveCount(0);
   });
 }
 
-test('manager team and goal-plan modes expose one change entry, never for assessors', async ({ page }) => {
+test('manager team and goal-plan modes expose one change entry, not for an unrelated assessor', async ({ page }) => {
   const { writes } = await setup(page);
   let isAssessorOnly = false;
   await page.route('**/api/v1/auth/me', route => route.fulfill({ json: envelope({
@@ -142,6 +174,7 @@ test('manager team and goal-plan modes expose one change entry, never for assess
   await expect(topNavigation.getByRole('button', { name: '目标变更', exact: true })).toHaveCount(0);
   await expect(page.getByRole('link', { name: '目标变更', exact: true })).toHaveCount(1);
   isAssessorOnly = true;
+  await page.route('**/api/v1/goal-changes/entry', route => route.fulfill({ json: envelope({ visible: false }) }));
   for (const path of paths) {
     await go(page, path);
     await expect(topNavigation).toBeVisible();
@@ -211,21 +244,14 @@ test(`legacy self-evaluation uses ${actualUpdatedAt ? 'returned' : 'loaded'} tas
 
 test('HR opens and revokes a task grant using the read revision and frozen manager', async ({ page }) => {
   const { writes } = await setup(page, 'hr', true);
-  await go(page);
-  await page.getByRole('button', { name: '开放变更', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '开放变更' });
-  await dialog.getByRole('combobox', { name: '考核周期' }).click({ force: true });
-  await page.getByRole('option', { name: '合成季度', exact: true }).click();
-  await dialog.getByRole('combobox', { name: '员工' }).click({ force: true });
-  await page.getByRole('option', { name: /合成员工.*S001/ }).click();
-  await expect(dialog.getByText('冻结绩效上级', { exact: true })).toBeVisible();
-  await dialog.getByRole('button', { name: '开放变更', exact: true }).click();
+  await go(page, '/goal-change-grants');
+  await expect(page.getByText('冻结绩效上级', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '开放变更', exact: true }).first().click();
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]).toEqual({ path: '/goal-changes/grants', method: 'POST', body: { taskId: 'task-self', expectedRevision: 3 } });
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole('button', { name: '撤销资格', exact: true }).click();
-  await expect(page.getByText('同时撤销进行中的申请，原目标保持生效', { exact: false })).toBeVisible();
-  await page.getByRole('dialog', { name: '撤销开放资格' }).getByRole('button', { name: '撤销资格', exact: true }).click();
+  await page.getByRole('button', { name: '撤销授权', exact: true }).first().click();
+  await expect(page.getByText('撤销授权会同时撤销办理中的变更申请', { exact: false })).toBeVisible();
+  await page.getByRole('dialog', { name: '撤销变更授权' }).getByRole('button', { name: '撤销授权', exact: true }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1].body).toEqual({ expectedRevision: 4 });
   expect(writes[1].path).toBe('/goal-changes/grants/task-self/revoke');
@@ -274,7 +300,7 @@ test('edit converts percentages, preserves hidden metadata and submits the newly
   } });
   await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
   await expect.poll(() => writes.length).toBe(2);
-  expect(writes[1]).toEqual({ path: '/goal-changes/change-a/submit', method: 'POST', body: { expectedRevision: 5 } });
+  expect(writes[1]).toMatchObject({ path: '/goal-changes/change-a/submit', method: 'POST', body: { expectedRevision: 5, reason: '新业务范围' } });
 });
 
 test('delete retains the original in the diff; total weight must equal 100 percent', async ({ page }) => {
@@ -346,21 +372,32 @@ test('HR task selection excludes cycles without per-task grant permission', asyn
   const { tasks } = await setup(page, 'hr', true);
   await page.route('**/api/v1/goal-changes/context', route => route.fulfill({ json: envelope({ canGrant: true,
     tasks: [tasks[0], { ...tasks[1], cycleId: 'other-cycle', cycleName: '无管理权限周期', canGrant: false }] }) }));
-  await go(page);
-  await page.getByRole('button', { name: '开放变更', exact: true }).click();
-  await page.getByRole('dialog', { name: '开放变更' }).getByRole('combobox', { name: '考核周期' }).click({ force: true });
-  await expect(page.getByRole('option', { name: '合成季度', exact: true })).toBeVisible();
-  await expect(page.getByRole('option', { name: '无管理权限周期', exact: true })).toHaveCount(0);
+  await go(page, '/goal-change-grants');
+  await expect(page.getByText('合成季度', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('无管理权限周期', { exact: true })).toHaveCount(0);
 });
 
-test('dirty submit saves first, then submits the returned revision without another click', async ({ page }) => {
+test('dirty submit writes content and transition once without a draft save', async ({ page }) => {
   const { writes } = await setup(page);
   await go(page, '/goal-changes/change-a');
   await page.getByRole('textbox', { name: '变更原因' }).fill('直接提交修改');
   await page.getByRole('button', { name: '提交审核', exact: true }).click();
-  await expect.poll(() => writes.length).toBe(2);
-  expect(writes[0]).toMatchObject({ method: 'PATCH', body: { expectedRevision: 4, reason: '直接提交修改' } });
-  expect(writes[1]).toEqual({ path: '/goal-changes/change-a/submit', method: 'POST', body: { expectedRevision: 5 } });
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toMatchObject({ path: '/goal-changes/change-a/submit', method: 'POST', body: { expectedRevision: 4, reason: '直接提交修改' } });
+});
+
+test('submitted change shows one business submission node despite draft audit events', async ({ page }) => {
+  await setup(page);
+  await page.route('**/api/v1/goal-changes/change-a', route => route.request().method() === 'GET'
+    ? route.fulfill({ json: envelope({ ...detail(), status: 'indicator_reviewing', allowedActions: [], records: [
+      { id: 'r1', action: 'create', actorName: '合成员工', createdAt: '2026-11-17T10:00:00Z' },
+      { id: 'r2', action: 'save_draft', actorName: '合成员工', createdAt: '2026-11-17T10:01:00Z' },
+      { id: 'r3', action: 'submit', actorName: '合成员工', createdAt: '2026-11-17T10:02:00Z' },
+    ] }) }) : route.fallback());
+  await go(page, '/goal-changes/change-a');
+  const records = page.locator('.records');
+  await expect(records.getByText('合成员工 · 提交目标变更')).toBeVisible();
+  await expect(records.locator('.el-timeline-item')).toHaveCount(1);
 });
 
 test('zero-weight veto metadata survives save, and backend workflow warning keeps HR revoke', async ({ page }) => {
@@ -431,45 +468,36 @@ test('new targets can only choose original dimension and type combinations', asy
   expect(writes[0].body.goals[2]).toMatchObject({ sourceInstanceId: null, dimensionName: '团队协作', dimensionWeight: 0.4, indicatorType: 'attitude' });
 });
 
-test('busy direct submit blocks navigation and uses the saved revision on the original ID', async ({ page }) => {
-  const { writes } = await setup(page);
+test('busy direct submit blocks navigation and uses the original revision', async ({ page }) => {
+  await setup(page);
   let release!: () => void;
   const hold = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/v1/goal-changes/change-a', async route => {
-    if (route.request().method() !== 'PATCH') return route.fallback();
+  const submissions: any[] = [];
+  await page.route('**/api/v1/goal-changes/change-a/submit', async route => {
+    submissions.push(route.request().postDataJSON());
     await hold;
     return route.fulfill({ json: envelope({ ...detail(), reason: '等待保存', revision: 19 }) });
   });
   await go(page);
   await page.getByRole('button', { name: '查看', exact: true }).click();
   await page.getByRole('textbox', { name: '变更原因' }).fill('等待保存');
-  const saveStarted = page.waitForRequest(request => request.method() === 'PATCH');
+  const saveStarted = page.waitForRequest(request => request.url().endsWith('/submit') && request.method() === 'POST');
   await page.getByRole('button', { name: '提交审核', exact: true }).click();
   await saveStarted;
   await page.goBack();
   await expect(page).toHaveURL(/change-a$/);
   await expect(page.getByText('正在办理，请稍候', { exact: true })).toBeVisible();
   release();
-  await expect.poll(() => writes.length).toBe(1);
-  expect(writes[0]).toEqual({ path: '/goal-changes/change-a/submit', method: 'POST', body: { expectedRevision: 19 } });
+  await expect.poll(() => submissions.length).toBe(1);
+  expect(submissions[0]).toMatchObject({ expectedRevision: 4, reason: '等待保存' });
 });
 
-test('grant confirmation captured before navigation cannot write after the route changes', async ({ page }) => {
+test('cancelled grant revocation cannot write', async ({ page }) => {
   const { writes, tasks } = await setup(page, 'hr', true);
   tasks[0].grant = { state: 'open', revision: 3 };
-  await go(page, '/goal-changes?origin=first');
-  await page.getByRole('link', { name: '目标变更', exact: true }).click();
-  await page.getByRole('button', { name: '开放变更', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '开放变更' });
-  await dialog.getByRole('combobox', { name: '考核周期' }).click({ force: true });
-  await page.getByRole('option', { name: '合成季度', exact: true }).click();
-  await dialog.getByRole('combobox', { name: '员工' }).click({ force: true });
-  await page.getByRole('option', { name: /合成员工.*S001/ }).click();
-  await dialog.getByRole('button', { name: '撤销资格', exact: true }).click();
-  await page.goBack();
-  await expect(page).toHaveURL(/origin=first$/);
-  await page.getByRole('button', { name: '撤销资格', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '撤销开放资格' })).toBeHidden();
+  await go(page, '/goal-change-grants');
+  await page.getByRole('button', { name: '撤销授权', exact: true }).first().click();
+  await page.getByRole('dialog', { name: '撤销变更授权' }).getByRole('button', { name: '保留授权', exact: true }).click();
   expect(writes).toHaveLength(0);
 });
 

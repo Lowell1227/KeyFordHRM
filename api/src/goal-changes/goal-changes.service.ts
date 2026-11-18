@@ -113,6 +113,19 @@ export class GoalChangesService {
       || (viewer.sysRole === 'hr_user' && Boolean(viewer.hrCapabilities?.includes('cycle_plan_edit')))), tasks: result };
   }
 
+  async entry(viewer: AuthUser) {
+    const history = await this.prisma.goalChangeRequest.findFirst({ where: { task: this.scope(viewer) }, select: { id: true } });
+    if (history) return { visible: true };
+    if (viewer.isAssessorOnly) return { visible: false };
+    const tasks = await this.prisma.assessmentTask.findMany({
+      where: { AND: [this.scope(viewer), { goalChangeGrant: { is: { state: 'open' } } },
+        { OR: [{ employeeId: viewer.id }, { managerId: viewer.id }] }] }, include: taskInclude,
+    });
+    return { visible: tasks.some((task) => {
+      try { this.assertEligible(task); return true; } catch { return false; }
+    }) };
+  }
+
   async findAll(viewer: AuthUser) {
     const requests = await this.prisma.goalChangeRequest.findMany({ where: { task: this.scope(viewer) }, orderBy: { updatedAt: 'desc' } });
     const result: Array<Awaited<ReturnType<GoalChangesService['map']>>> = [];
@@ -255,14 +268,21 @@ export class GoalChangesService {
     if (actors.some((person) => !this.available(person))) throw new ConflictException('审批人员缺失、离职或已归档，请联系HR维护本周期审批关系');
   }
 
-  async submit(id: string, input: Versioned, viewer: AuthUser) {
+  async submit(id: string, input: Versioned & { reason?: string; goals?: ChangeGoal[] }, viewer: AuthUser) {
     const result = await this.mutate(id, input.expectedRevision, viewer, async (tx, request, task) => {
       if (!this.actions(request, task, viewer).includes('submit')) throw new ForbiddenException('当前不能提交此变更');
-      if (!request.reason?.trim()) throw new BadRequestException('请填写变更原因');
-      validateChangeGoals(this.goalArray(request.goals), this.goalArray(request.beforeGoals));
+      if ((input.reason === undefined) !== (input.goals === undefined)
+        || (input.reason !== undefined && (typeof input.reason !== 'string' || !Array.isArray(input.goals)))) {
+        throw new BadRequestException('请同时提交变更原因和目标');
+      }
+      const reason = (input.reason ?? request.reason)?.trim();
+      if (!reason) throw new BadRequestException('请填写变更原因');
+      const goals = validateChangeGoals(input.goals ?? this.goalArray(request.goals), this.goalArray(request.beforeGoals));
       this.assertReviewActors(task);
       const next = nextChangeStage(task, 'indicator_drafting', task.cycle.goalWorkflowVersion);
-      await this.write(tx, request, viewer, 'submit', { status: next.status }, { skipped: next.skipped });
+      await this.write(tx, request, viewer, 'submit', {
+        status: next.status, reason, goals: goals as unknown as Prisma.InputJsonValue,
+      }, { skipped: next.skipped });
     });
     await this.notifyOwner(result, viewer);
     return result;

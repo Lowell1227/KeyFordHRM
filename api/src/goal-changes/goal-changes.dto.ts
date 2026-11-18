@@ -23,6 +23,10 @@ export class ChangeDraftDto extends ChangeRevisionDto {
   @IsString() @MaxLength(4000) reason: string;
   @IsArray() @ArrayMaxSize(100) @ValidateNested({ each: true }) @Type(() => ChangeGoalDto) goals: ChangeGoalDto[];
 }
+export class ChangeSubmitDto extends ChangeRevisionDto {
+  @IsOptional() @IsString() @MaxLength(4000) reason?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(100) @ValidateNested({ each: true }) @Type(() => ChangeGoalDto) goals?: ChangeGoalDto[];
+}
 export class ChangeDecisionDto extends ChangeRevisionDto {
   @IsBoolean() approve: boolean;
   @IsOptional() @IsString() @MaxLength(4000) comment?: string;

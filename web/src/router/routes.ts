@@ -345,6 +345,15 @@ export const routes: RouteRecordRaw[] = [
     }],
   },
   {
+    path: '/goal-change-grants',
+    name: 'GoalChangeGrants',
+    component: () => import('@/views/goal-changes/GoalChangeGrantView.vue'),
+    meta: {
+      requiresAuth: true, title: '目标变更授权', roles: ['hr'], hrCapabilities: ['cycle_plan_edit'],
+      navigation: { module: 'performance', label: '目标变更授权', order: 25, group: 'performance', groupLabel: '绩效运营' },
+    },
+  },
+  {
     path: '/improvement-plans',
     name: 'ImprovementPlans',
     component: () => import('@/views/improvement-plans/ImprovementPlanListView.vue'),

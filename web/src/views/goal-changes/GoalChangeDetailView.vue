@@ -22,6 +22,11 @@ const snapshot = () => JSON.stringify({ reason: reason.value, goals: goals.value
 const dirty = computed(() => Boolean(detail.value) && snapshot() !== baseline.value);
 const can = (action: string) => detail.value?.allowedActions.includes(action) ?? false;
 const canEdit = computed(() => can('edit'));
+const businessRecords = computed(() => {
+  const records = detail.value?.records ?? [];
+  return records.some(record => record.action === 'submit')
+    ? records.filter(record => !['create', 'save_draft', 'edit', 'update'].includes(record.action)) : records;
+});
 const total = computed(() => goals.value.reduce((sum, goal) => sum + goal.weight, 0));
 const reasonError = computed(() => validate.value && !reason.value.trim() ? '请填写变更原因' : '');
 const goalErrors = computed(() => goals.value.map(goal => ({
@@ -94,18 +99,7 @@ async function write(kind: 'save' | 'submit' | 'approve' | 'reject' | 'revoke', 
   try {
     if (kind === 'save') await goalChangesApi.update(captured.id, body);
     else if (kind === 'submit') {
-      let revision = captured.revision;
-      if (dirty.value) {
-        const saved = await goalChangesApi.update(captured.id, body);
-        if (!current(captured)) return;
-        if (saved.id !== captured.id || !Number.isInteger(saved.revision)) throw new Error('保存结果与当前记录不一致，请重新加载核对');
-        revision = saved.revision;
-        detail.value = saved;
-        baseline.value = snapshot();
-        if (!saved.allowedActions.includes('submit')) throw new Error(saved.workflowIssue || '当前变更已不能提交，请重新加载核对');
-      }
-      if (!current(captured)) return;
-      await goalChangesApi.submit(captured.id, revision);
+      await goalChangesApi.submit(captured.id, body);
     }
     else if (kind === 'revoke') await goalChangesApi.revoke(captured.id, captured.revision);
     else await goalChangesApi.decide(captured.id, { expectedRevision: captured.revision, approve: kind === 'approve',
@@ -155,7 +149,7 @@ function recordComment(value: unknown) {
       <div class="weight-total">变更后权重合计：{{ percent(total) }}%</div>
       <div v-if="totalError" class="field-error" role="alert">{{ totalError }}</div>
       <section class="records"><h3>办理记录</h3>
-        <el-timeline v-if="detail.records.length"><el-timeline-item v-for="record in detail.records" :key="record.id" :timestamp="formatDateTime(record.createdAt)">
+        <el-timeline v-if="businessRecords.length"><el-timeline-item v-for="record in businessRecords" :key="record.id" :timestamp="formatDateTime(record.createdAt)">
           <strong>{{ record.actorName }} · {{ actionLabels[record.action] || '流程办理' }}</strong><p v-if="recordComment(record.newValue)">{{ recordComment(record.newValue) }}</p>
         </el-timeline-item></el-timeline><p v-else>暂无办理记录</p>
       </section>

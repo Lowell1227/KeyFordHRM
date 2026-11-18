@@ -20,11 +20,7 @@ const selectedIndicatorId = ref(
   typeof route.query.indicatorId === 'string' ? route.query.indicatorId : '',
 );
 const sections = computed(() => {
-  const items = auth.user?.sysRole === 'employee'
-  && !auth.user?.businessCapabilities?.canManageObjectives
-  ? (['tracking', 'tasks'] as const)
-  : (['tracking', 'map', 'tasks'] as const);
-  return auth.user?.isAssessorOnly ? items : [...items, 'changes'] as const;
+  return ['tracking', 'map', 'tasks', 'changes'] as const;
 });
 
 watch(() => route.query.indicatorId, (indicatorId) => {

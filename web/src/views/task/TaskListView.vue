@@ -9,6 +9,7 @@ import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { usersApi } from '@/api/users.api';
 import { useAuthStore } from '@/stores/auth.store';
+import { useGoalChangeEntry } from '@/composables/useGoalChangeEntry';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
@@ -48,6 +49,7 @@ import { formatPerformanceCycleOption, resolvePerformanceCycle } from '@/utils/p
 const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
+const canSeeChanges = useGoalChangeEntry();
 const goalView = computed(() => ['mine','review','monitor'].includes(String(route.query.goalView)) ? route.query.goalView as GoalScope : null);
 const canMonitor = computed(() => canMonitorGoals(auth.user));
 const goalReviewTotal = ref(0);
@@ -217,11 +219,7 @@ const teamCountTabs = computed<Array<{
   { key: 'exempted', label: '已豁免', count: teamPage.value.counts.exempted, testId: 'exempted' },
 ]);
 const allowedPerformanceSections = computed(() => {
-  const sections = auth.user?.sysRole === 'employee'
-    && !auth.user?.businessCapabilities?.canManageObjectives
-    ? (['tracking', 'tasks'] as const)
-    : (['tracking', 'map', 'tasks'] as const);
-  return auth.user?.isAssessorOnly ? sections : [...sections, 'changes'] as const;
+  return ['tracking', 'map', 'tasks', 'changes'] as const;
 });
 
 const personalTask = computed(() => list.value[0] ?? null);
@@ -1086,7 +1084,7 @@ watch(
     </el-button>
     <el-button v-if="canMonitor" :type="goalView === 'monitor' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
     <el-button v-if="goalView" @click="router.push('/tasks')">绩效待办</el-button>
-    <el-button v-if="!auth.user?.isAssessorOnly && (isTeamTaskWorkspace || goalView)" @click="router.push('/goal-changes')">目标变更</el-button>
+    <el-button v-if="canSeeChanges && (isTeamTaskWorkspace || goalView)" @click="router.push('/goal-changes')">目标变更</el-button>
   </nav>
   <GoalPlanList v-if="goalView" :key="goalView" :scope="goalView" :allowed="goalView !== 'monitor' || canMonitor"/>
   <PerformanceWorkspace v-else

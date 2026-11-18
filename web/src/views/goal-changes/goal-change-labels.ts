@@ -7,7 +7,7 @@ export const statusLabels: Record<GoalChangeStatus, string> = {
 };
 export const grantLabels = { open: '已开放', consumed: '已使用', revoked: '已撤销' };
 export const actionLabels: Record<string, string> = {
-  create: '发起变更', edit: '修改草稿', update: '修改草稿', save_draft: '保存草稿', submit: '提交审核',
+  create: '发起变更', edit: '修改草稿', update: '修改草稿', save_draft: '保存草稿', submit: '提交目标变更',
   approve: '审核通过', reject: '退回修改', decide: '审核', activate: '变更生效',
   active: '变更生效', revoke: '撤销变更', skip: '自动跳过',
 };

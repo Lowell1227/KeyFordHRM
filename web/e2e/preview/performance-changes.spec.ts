@@ -331,14 +331,17 @@ test.describe('Real UI evidence (all transitions through pages; desktop and mobi
   test('goal HR grant -> employee real selects/add/delete -> frozen manager/head/employee/VP approvals', async ({ page, request, changes }, info) => {
     const { f } = changes;
     const before = state(f);
-    await login(page, changes, 'hr2', '/goal-changes');
-    await page.getByRole('button', { name: L.grant, exact: true }).click();
-    const grantDialog = page.getByRole('dialog', { name: L.grant, exact: true });
-    await pick(page, grantDialog, L.cycle, `${f.prefix}_main`);
-    await pick(page, grantDialog, L.employee, `${f.actors.employee.name} \u00b7 ${f.actors.employee.employeeNo}`);
-    const context = await uiWrite<Context>(page, 'POST', '/goal-changes/grants', () => grantDialog.getByRole('button', { name: L.grantNow }).click());
+    await login(page, changes, 'hr2', '/goal-change-grants');
+    await page.getByRole('combobox', { name: L.cycle }).click({ force: true });
+    await page.getByRole('option', { name: `${f.prefix}_main`, exact: true }).click();
+    const grantRow = page.locator('.desktop-result-table:visible .el-table__row, .mobile-result-list:visible .mobile-result-card')
+      .filter({ hasText: f.actors.employee.employeeNo });
+    await expect(grantRow).toContainText(f.actors.manager.name);
+    const context = await uiWrite<Context>(page, 'POST', '/goal-changes/grants', () => grantRow.getByRole('button', { name: L.grantNow }).click());
     expect(context.tasks.find(row => row.id === f.taskId)?.grant?.state).toBe('open');
+    expect(await api<{ visible: boolean }>(request, changes, 'manager', 'GET', '/goal-changes/entry')).toEqual({ visible: true });
     await login(page, changes, 'manager', '/tasks?scope=team');
+    await expect.poll(() => new URL(page.url()).searchParams.has('cycleId')).toBe(true);
     // This covers a real manager entry, not the separately tested team-only layout.
     await page.getByRole('button', { name: L.changes, exact: true })
       .or(page.getByRole('link', { name: L.changes, exact: true })).filter({ visible: true }).first().click();

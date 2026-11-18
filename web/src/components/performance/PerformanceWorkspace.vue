@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { useAuthStore } from '@/stores/auth.store';
+import { useGoalChangeEntry } from '@/composables/useGoalChangeEntry';
 
-const auth = useAuthStore();
+const canSeeChanges = useGoalChangeEntry();
 
 type PerformanceSection = 'tracking' | 'map' | 'tasks' | 'changes';
 
@@ -31,7 +31,7 @@ const allSections = [
 ] as const;
 
 const visibleSections = computed(() =>
-  allSections.filter((section) => props.sections.includes(section.key) && (section.key !== 'changes' || !auth.user?.isAssessorOnly)),
+  allSections.filter((section) => props.sections.includes(section.key) && (section.key !== 'changes' || canSeeChanges.value)),
 );
 </script>
 

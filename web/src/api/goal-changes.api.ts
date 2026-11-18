@@ -60,6 +60,7 @@ export interface GoalChangeDetail extends GoalChangeRow {
 // The shared HTTP interceptor unwraps the API envelope.
 export const goalChangesApi = {
   context: () => http.get<never, GoalChangeContext>('/goal-changes/context', { skipErrorMessage: true }),
+  entry: () => http.get<never, { visible: boolean }>('/goal-changes/entry', { skipErrorMessage: true }),
   list: () => http.get<never, GoalChangeRow[]>('/goal-changes', { skipErrorMessage: true }),
   detail: (id: string) => http.get<never, GoalChangeDetail>(`/goal-changes/${encodeURIComponent(id)}`, { skipErrorMessage: true }),
   grant: (taskId: string, expectedRevision?: number) => http.post('/goal-changes/grants',
@@ -69,8 +70,8 @@ export const goalChangesApi = {
   create: (taskId: string) => http.post<never, GoalChangeDetail>('/goal-changes', { taskId }, { skipErrorMessage: true }),
   update: (id: string, body: { expectedRevision: number; reason: string; goals: GoalChangeItem[] }) =>
     http.patch<never, GoalChangeDetail>(`/goal-changes/${encodeURIComponent(id)}`, body, { skipErrorMessage: true }),
-  submit: (id: string, expectedRevision: number) => http.post(`/goal-changes/${encodeURIComponent(id)}/submit`,
-    { expectedRevision }, { skipErrorMessage: true }),
+  submit: (id: string, body: { expectedRevision: number; reason: string; goals: GoalChangeItem[] }) =>
+    http.post(`/goal-changes/${encodeURIComponent(id)}/submit`, body, { skipErrorMessage: true }),
   decide: (id: string, body: { expectedRevision: number; approve: boolean; comment?: string }) =>
     http.post(`/goal-changes/${encodeURIComponent(id)}/decide`, body, { skipErrorMessage: true }),
   revoke: (id: string, expectedRevision: number) => http.post(`/goal-changes/${encodeURIComponent(id)}/revoke`,

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { goalChangesApi, goalChangeError, type GoalChangeContext, type GoalChangeRow } from '@/api/goal-changes.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePagination } from '@/composables/usePagination';
@@ -20,15 +20,12 @@ const loading = ref(false), contextLoading = ref(false), busy = ref(false);
 const scope = ref('self');
 const filters = reactive({ keyword: '', status: '' });
 const { page, pageSize, pageSizeOptions } = usePagination({ defaultPageSize: 10 });
-const dialog = ref<'grant' | 'start' | ''>('');
-const selection = reactive({ cycleId: '', taskId: '' });
+const dialog = ref(false);
+const selection = reactive({ taskId: '' });
 let contextSession = 0, listSession = 0, dialogSession = 0, alive = true;
 onBeforeUnmount(() => { alive = false; contextSession++; listSession++; dialogSession++; });
 
 const tasks = computed(() => context.value?.tasks ?? []);
-const grantableTasks = computed(() => tasks.value.filter(task => task.canGrant));
-const cycles = computed(() => [...new Map(grantableTasks.value.map(task => [task.cycleId, task.cycleName])).entries()]);
-const grantTasks = computed(() => grantableTasks.value.filter(task => task.cycleId === selection.cycleId));
 const selectedTask = computed(() => tasks.value.find(task => task.id === selection.taskId));
 const startTasks = computed(() => tasks.value.filter(task => task.canStart && (scope.value === 'self'
   ? task.employeeId === auth.user?.id : scope.value === 'team' ? task.managerId === auth.user?.id : true)));
@@ -43,9 +40,8 @@ const filteredRows = computed(() => rows.value.filter(row => {
 const pageRows = computed(() => filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 watch([scope, () => filters.keyword, () => filters.status, pageSize], () => { page.value = 1; });
 watch(() => filteredRows.value.length, length => { page.value = Math.min(page.value, Math.max(1, Math.ceil(length / pageSize.value))); });
-watch(() => selection.cycleId, () => { selection.taskId = ''; dialogError.value = ''; });
 watch(() => selection.taskId, () => { dialogError.value = ''; });
-watch(() => route.fullPath, () => { dialogSession++; dialog.value = ''; busy.value = false; });
+watch(() => route.fullPath, () => { dialogSession++; dialog.value = false; busy.value = false; });
 
 async function loadContext() {
   const token = ++contextSession;
@@ -70,32 +66,7 @@ async function loadList() {
 async function refresh() { await Promise.all([loadContext(), loadList()]); }
 onMounted(refresh);
 function openDetail(id: string) { void router.push({ name: 'GoalChangeDetail', params: { id }, query: route.query }); }
-function openDialog(kind: 'grant' | 'start') {
-  dialogSession++; dialogError.value = ''; selection.cycleId = ''; selection.taskId = ''; dialog.value = kind;
-}
-async function grantAction(revoke = false) {
-  const task = selectedTask.value, token = dialogSession, path = route.fullPath;
-  dialogError.value = '';
-  if (!task) { dialogError.value = '请选择考核周期和员工'; return; }
-  if (!context.value?.canGrant || !task.canGrant || busy.value) return;
-  const taskId = task.id, revision = task.grant?.revision;
-  const current = () => alive && token === dialogSession && route.fullPath === path;
-  if (revoke) {
-    if (revision === undefined) return;
-    try { await ElMessageBox.confirm('撤销开放资格将同时撤销进行中的申请，原目标保持生效。', '撤销开放资格',
-      { confirmButtonText: '撤销资格', cancelButtonText: '保留资格', type: 'warning' }); } catch { return; }
-    if (!current() || selectedTask.value?.id !== taskId) return;
-  }
-  busy.value = true;
-  try {
-    if (revoke) await goalChangesApi.revokeGrant(taskId, revision!);
-    else await goalChangesApi.grant(taskId, revision);
-    if (!current()) return;
-    ElMessage.success(revoke ? '开放资格已撤销' : '变更资格已开放');
-    await refresh();
-  } catch (error) { if (current()) dialogError.value = goalChangeError(error, '开放资格操作失败，请刷新任务范围核对后重试'); }
-  finally { if (current()) busy.value = false; }
-}
+function openDialog() { dialogSession++; dialogError.value = ''; selection.taskId = ''; dialog.value = true; }
 async function start() {
   const task = selectedTask.value, token = dialogSession, path = route.fullPath;
   dialogError.value = '';
@@ -105,7 +76,7 @@ async function start() {
   try {
     const created = await goalChangesApi.create(task.id);
     if (!alive || token !== dialogSession || route.fullPath !== path) return;
-    dialog.value = ''; openDetail(created.id); void refresh();
+    dialog.value = false; openDetail(created.id); void refresh();
   } catch (error) {
     if (alive && token === dialogSession && route.fullPath === path) dialogError.value = goalChangeError(error, '发起失败，请刷新任务范围核对是否已创建');
   } finally { if (alive && token === dialogSession) busy.value = false; }
@@ -119,8 +90,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
       <span class="goal-changes-toolbar-label">变更申请与记录</span>
     </template>
     <template #actions>
-      <el-button v-if="context?.canGrant" :disabled="contextLoading" @click="openDialog('grant')">开放变更</el-button>
-      <el-button v-if="startTasks.length" type="primary" :disabled="contextLoading" @click="openDialog('start')">发起变更</el-button>
+      <el-button v-if="startTasks.length" type="primary" :disabled="contextLoading" @click="openDialog">发起变更</el-button>
     </template>
     <BusinessListPage variant="workflow" :loading="loading || contextLoading" class="goal-changes-list">
       <template #filters>
@@ -172,30 +142,19 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
       <template #pagination><ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="filteredRows.length" /></template>
       <template #detail>
         <RouterView v-slot="{ Component }"><component :is="Component" @changed="refresh" /></RouterView>
-        <el-dialog :model-value="Boolean(dialog)" :title="dialog === 'grant' ? '开放变更' : '发起目标变更'" width="min(520px, 96vw)"
+        <el-dialog :model-value="dialog" title="发起目标变更" width="min(520px, 96vw)"
           :before-close="closeDialog" :close-on-click-modal="false" :show-close="!busy" :close-on-press-escape="!busy"
-          @update:model-value="value => { if (!value) dialog = ''; }">
+          @update:model-value="value => { if (!value) dialog = false; }">
           <el-form label-position="top">
-            <template v-if="dialog === 'grant'">
-              <el-form-item label="考核周期" required><el-select v-model="selection.cycleId" aria-label="考核周期" :disabled="busy" placeholder="选择周期">
-                <el-option v-for="[id, name] in cycles" :key="id" :value="id" :label="name" />
-              </el-select></el-form-item>
-              <el-form-item label="员工" required><el-select v-model="selection.taskId" aria-label="员工" filterable :disabled="busy || !selection.cycleId" placeholder="选择员工">
-                <el-option v-for="task in grantTasks" :key="task.id" :value="task.id" :label="`${task.employeeName} · ${task.employeeNo || '无工号'}`" />
-              </el-select></el-form-item>
-            </template>
-            <el-form-item v-else label="考核任务" required><el-select v-model="selection.taskId" aria-label="考核任务" filterable :disabled="busy" placeholder="选择已开放的任务">
+            <el-form-item label="考核任务" required><el-select v-model="selection.taskId" aria-label="考核任务" filterable :disabled="busy" placeholder="选择已开放的任务">
               <el-option v-for="task in startTasks" :key="task.id" :value="task.id" :label="`${task.employeeName} · ${task.cycleName}`" />
             </el-select></el-form-item>
             <dl v-if="selectedTask" class="task-summary"><dt>冻结绩效直属上级</dt><dd>{{ selectedTask.managerName || '未配置' }}</dd>
               <dt>变更资格</dt><dd>{{ selectedTask.grant ? grantLabels[selectedTask.grant.state] : '未开放' }}</dd></dl>
-            <el-empty v-if="dialog === 'grant' && !grantableTasks.length" description="暂无有权开放变更的考核任务" />
             <div v-if="dialogError" class="request-error" role="alert">{{ dialogError }}</div>
           </el-form>
           <template #footer>
-            <el-button v-if="dialog === 'grant' && selectedTask?.grant?.state === 'open'" type="danger" :disabled="busy" @click="grantAction(true)">撤销资格</el-button>
-            <el-button v-if="dialog === 'grant'" type="primary" :loading="busy" :disabled="!selectedTask?.canGrant || selectedTask.grant?.state === 'open' || Boolean(selectedTask.requestId)" @click="grantAction(false)">开放变更</el-button>
-            <el-button v-else type="primary" :loading="busy" @click="start">开始填写</el-button>
+            <el-button type="primary" :loading="busy" @click="start">开始填写</el-button>
           </template>
         </el-dialog>
       </template>
