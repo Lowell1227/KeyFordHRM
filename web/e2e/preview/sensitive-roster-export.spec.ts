@@ -8,7 +8,7 @@ const requireApi = createRequire(resolve(process.cwd(), '../api/package.json'));
 const cryptoOffice = requireApi('officecrypto-tool');
 const ExcelJS = requireApi('exceljs');
 const accountPassword = 'fictional-account';
-const filePassword = 'fictional-file-2026';
+const filePassword = '4567';
 
 test('identity export verifies actor password, encrypts the real download and clears credentials', async ({ page }, info) => {
   assertContractPreview(info);
@@ -42,10 +42,13 @@ test('identity export verifies actor password, encrypts the real download and cl
     const account = dialog.getByLabel('当前账号密码', { exact: true });
     const file = dialog.getByLabel('Excel打开密码', { exact: true });
     const confirm = dialog.getByLabel('再次输入打开密码', { exact: true });
+    await expect(dialog.getByRole('heading', { name: '安全验证', exact: true })).toBeVisible();
     const submit = dialog.getByRole('button', { name: '导出 Excel', exact: true });
     await account.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath('sensitive-export-dialog.png'), fullPage: true, animations: 'disabled' });
     await submit.click(); await expect(dialog.getByText('请输入当前账号密码', { exact: true })).toBeVisible();
+    await account.fill('wrong'); await file.fill('123'); await confirm.fill('123');
+    await submit.click(); await expect(dialog.getByText('请输入4至64位Excel打开密码', { exact: true })).toBeVisible();
     await account.fill('wrong'); await file.fill(filePassword); await confirm.fill(filePassword);
     const denied = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/users/export-sensitive');
     await submit.click(); expect((await denied).status()).toBe(403);

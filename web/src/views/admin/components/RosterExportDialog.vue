@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { Lock } from '@element-plus/icons-vue';
 import { usersApi, type RosterExportModule } from '@/api/users.api';
 import type { UserQuery } from '@/types/api.types';
 import { useExport } from '@/composables/useExport';
@@ -70,7 +71,7 @@ async function exportRoster() {
   passwordErrors.value = {};
   if (sensitive.value) {
     if (!accountPassword.value) passwordErrors.value.account = '请输入当前账号密码';
-    if (filePassword.value.length < 8 || filePassword.value.length > 64 || !filePassword.value.trim()) passwordErrors.value.file = '请输入8至64位Excel打开密码';
+    if (filePassword.value.length < 4 || filePassword.value.length > 64 || !filePassword.value.trim()) passwordErrors.value.file = '请输入4至64位Excel打开密码';
     else if (filePassword.value === accountPassword.value) passwordErrors.value.file = '不能与账号密码相同';
     if (filePassword.value !== confirmFilePassword.value) passwordErrors.value.confirm = '两次打开密码不一致';
     if (Object.keys(passwordErrors.value).length) return;
@@ -122,16 +123,21 @@ async function exportRoster() {
       </section>
     </div>
     <el-form v-if="sensitive" class="roster-export-passwords" label-position="top" :disabled="busy" @submit.prevent>
-      <p class="roster-export-note">包含完整身份证号，需验证本人账号，并为文件设置独立的打开密码。</p>
-      <el-form-item label="当前账号密码" :error="passwordErrors.account">
+      <div class="roster-export-security-heading">
+        <el-icon><Lock /></el-icon><h3>安全验证</h3><span>含身份证号</span>
+      </div>
+      <p class="roster-export-note">验证本人账号，为Excel设置独立的打开密码。</p>
+      <div class="roster-export-password-grid">
+      <el-form-item class="roster-export-account-password" label="当前账号密码" :error="passwordErrors.account">
         <el-input v-model="accountPassword" type="password" show-password autocomplete="off" :maxlength="128" aria-label="当前账号密码" />
       </el-form-item>
       <el-form-item label="Excel打开密码" :error="passwordErrors.file">
-        <el-input v-model="filePassword" type="password" show-password autocomplete="new-password" :maxlength="64" placeholder="8至64位，不同于账号密码" aria-label="Excel打开密码" />
+        <el-input v-model="filePassword" type="password" show-password autocomplete="new-password" :maxlength="64" placeholder="至少4位，可用纯数字" aria-label="Excel打开密码" />
       </el-form-item>
       <el-form-item label="再次输入打开密码" :error="passwordErrors.confirm">
         <el-input v-model="confirmFilePassword" type="password" show-password autocomplete="new-password" :maxlength="64" aria-label="再次输入打开密码" />
       </el-form-item>
+      </div>
       <small>请妥善保管文件打开密码，系统不保存该密码。</small>
     </el-form>
     <p v-if="exportError" class="roster-export-error" role="alert">{{ exportError }}</p>
@@ -160,10 +166,18 @@ async function exportRoster() {
 .roster-export-fields :deep(.el-checkbox__label) { line-height: 1.5; overflow-wrap: anywhere; }
 .roster-export-note { display: block; padding-left: 24px; }
 .roster-export-error { color: var(--el-color-danger); display: flex; align-items: center; gap: 12px; overflow-wrap: anywhere; }
-.roster-export-passwords { margin-top: 12px; }
+.roster-export-passwords { margin-top: 16px; padding: 16px; border: 1px solid var(--el-color-primary-light-7); border-radius: 8px; background: var(--el-color-primary-light-9); }
+.roster-export-security-heading { display: flex; align-items: center; gap: 8px; color: var(--el-color-primary); margin-bottom: 8px; }
+.roster-export-security-heading h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.roster-export-security-heading > span { margin-left: auto; font-size: 12px; color: var(--el-text-color-secondary); }
+.roster-export-password-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.roster-export-account-password { grid-column: 1 / -1; }
+.roster-export-passwords > small { display: block; color: var(--el-text-color-secondary); line-height: 1.5; }
 .roster-export-passwords :deep(.el-form-item) { margin-bottom: 16px; }
 .roster-export-passwords .roster-export-note { padding-left: 0; margin: 0 0 12px; }
 @media (max-width: 600px) {
+  .roster-export-passwords { padding: 12px; }
+  .roster-export-password-grid { grid-template-columns: minmax(0, 1fr); }
   .roster-export-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 8px; padding-left: 12px; }
   .roster-export-modules { max-height: 52vh; padding-right: 4px; }
 }

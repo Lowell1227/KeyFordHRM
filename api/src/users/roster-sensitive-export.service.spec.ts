@@ -7,7 +7,7 @@ import { RosterSensitiveExportService } from './roster-sensitive-export.service'
 
 describe('sensitive roster export', () => {
   const viewer = { id: 'fixture-hr', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] } as any;
-  const credentials = { accountPassword: 'fixture-account', filePassword: 'fixture-file-2026' };
+  const credentials = { accountPassword: 'fixture-account', filePassword: '4567' };
   let service: RosterSensitiveExportService;
   let findUnique: jest.Mock;
   beforeEach(async () => {
@@ -24,7 +24,8 @@ describe('sensitive roster export', () => {
     expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: viewer.id } }));
     await expect(service.authorize(viewer, { ...credentials, accountPassword: 'wrong' })).rejects.toThrow('账号密码不正确');
     await expect(service.authorize(viewer, { ...credentials, filePassword: credentials.accountPassword })).rejects.toThrow('不能与账号密码相同');
-    await expect(service.authorize(viewer, { ...credentials, filePassword: '' })).rejects.toThrow('8');
+    await expect(service.authorize(viewer, { ...credentials, filePassword: '' })).rejects.toThrow('4');
+    await expect(service.authorize(viewer, { ...credentials, filePassword: '123' })).rejects.toThrow('4');
   });
   it.each([{ passwordHash: null }, { mustChangePassword: true }, { status: 'resigned' }])('rejects unavailable accounts %p', async changes => {
     findUnique.mockResolvedValue({ status: 'active', passwordHash: await bcrypt.hash(credentials.accountPassword, 4), ...changes });

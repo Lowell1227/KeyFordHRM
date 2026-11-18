@@ -14,7 +14,7 @@ describe('sensitive export HTTP boundary', () => {
   let app: INestApplication, actor: any, storedActor: any;
   const count = jest.fn().mockResolvedValue(0), findMany = jest.fn().mockResolvedValue([]), audit = jest.fn().mockResolvedValue({});
   const findUnique = jest.fn().mockImplementation(async () => storedActor);
-  const input = { columns: 'name,idNumber', accountPassword: 'fixture-account', filePassword: 'fixture-file-2026' };
+  const input = { columns: 'name,idNumber', accountPassword: 'fixture-account', filePassword: '4567' };
   const prisma = { user: { count, findMany, findUnique }, auditLog: { create: audit } } as any;
   beforeAll(async () => {
     const security = new RosterSensitiveExportService(prisma, new ConfigService());
@@ -36,7 +36,7 @@ describe('sensitive export HTTP boundary', () => {
     await request(app.getHttpServer()).get('/users/export').query(input).expect(400);
     expect(findUnique).not.toHaveBeenCalled(); expect(findMany).not.toHaveBeenCalled();
   });
-  it.each([{ accountPassword: undefined }, { filePassword: '' }, { accountPassword: 'wrong' }])('rejects incomplete or wrong credentials before reading personnel %p', async changes => {
+  it.each([{ accountPassword: undefined }, { filePassword: '' }, { filePassword: '123' }, { accountPassword: 'wrong' }])('rejects incomplete or wrong credentials before reading personnel %p', async changes => {
     await request(app.getHttpServer()).post('/users/export-sensitive').send({ ...input, ...changes }).expect(changes.accountPassword === 'wrong' ? 403 : 400);
     expect(count).not.toHaveBeenCalled(); expect(findMany).not.toHaveBeenCalled(); expect(audit).not.toHaveBeenCalled();
   });

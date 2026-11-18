@@ -24,8 +24,8 @@ export class RosterSensitiveExportService {
     if (typeof input?.accountPassword !== 'string' || !input.accountPassword || input.accountPassword.length > 128) {
       throw new BadRequestException('请输入当前账号密码');
     }
-    if (typeof input.filePassword !== 'string' || input.filePassword.length < 8 || input.filePassword.length > 64 || !input.filePassword.trim()) {
-      throw new BadRequestException('Excel打开密码须为8至64位');
+    if (typeof input.filePassword !== 'string' || input.filePassword.length < 4 || input.filePassword.length > 64 || !input.filePassword.trim()) {
+      throw new BadRequestException('Excel打开密码须为4至64位');
     }
     if (input.accountPassword === input.filePassword) throw new BadRequestException('Excel打开密码不能与账号密码相同');
     const now = Date.now();
