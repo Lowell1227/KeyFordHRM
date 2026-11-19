@@ -27,7 +27,8 @@ const accountPassword = ref('');
 const filePassword = ref('');
 const confirmFilePassword = ref('');
 const passwordErrors = ref<Record<string, string>>({});
-const sensitive = computed(() => selected.value.includes('idNumber'));
+const sensitiveLabels = computed(() => modules.value.flatMap(module => module.fields).filter(field => ['idNumber', 'bankAccount'].includes(field.key) && selected.value.includes(field.key)).map(field => field.label));
+const sensitive = computed(() => sensitiveLabels.value.length > 0);
 function clearPasswords(clearErrors = true) {
   accountPassword.value = ''; filePassword.value = ''; confirmFilePassword.value = ''; if (clearErrors) passwordErrors.value = {};
 }
@@ -134,7 +135,7 @@ async function exportRoster() {
     </div>
     <section v-if="sensitive" class="roster-export-passwords" aria-label="安全验证">
       <div class="roster-export-security-heading">
-        <el-icon><Lock /></el-icon><h3>安全验证</h3><span>含身份证号</span>
+        <el-icon><Lock /></el-icon><h3>安全验证</h3><span>含{{ sensitiveLabels.join('、') }}</span>
       </div>
       <p class="roster-export-note">验证本人账号，为Excel设置独立的打开密码。</p>
       <p class="roster-export-account">当前账号：{{ auth.user?.name }}<span v-if="auth.user?.employeeNo">（{{ auth.user.employeeNo }}）</span></p>

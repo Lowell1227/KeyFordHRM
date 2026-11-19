@@ -12,7 +12,7 @@ export const ROSTER_EXPORT_GROUPS = [
   { key: 'system', label: '系统信息' },
 ] as const;
 
-/** Order follows the source roster; current-contract defaults still require archive access. */
+/** Order follows the source roster; detailed fields still require archive access. */
 export const ROSTER_EXPORT_COLUMNS = [
   { key: 'name', header: '姓名', group: 'employment', width: 14 },
   { key: 'employeeNo', header: '工号', group: 'employment', width: 14 },
@@ -65,6 +65,7 @@ export const ROSTER_EXPORT_COLUMNS = [
   { key: 'bankName', header: '开户行', group: 'bank', width: 22 },
   { key: 'bankBranch', header: '开户支行', group: 'bank', width: 28 },
   { key: 'bankAccountConfigured', header: '银行卡号录入状态', group: 'bank', width: 20 },
+  { key: 'bankAccount', header: '银行卡号', group: 'bank', width: 26 },
   { key: 'latestContractType', header: '合同类型', group: 'contract', width: 14 },
   { key: 'latestContractName', header: '合同名称', group: 'contract', width: 24 },
   { key: 'latestSigningCompany', header: '签约公司', group: 'contract', width: 24 },
@@ -85,6 +86,7 @@ export const ROSTER_EXPORT_COLUMNS = [
 ] as const;
 
 export type RosterExportColumnKey = typeof ROSTER_EXPORT_COLUMNS[number]['key'];
+export const SENSITIVE_ROSTER_EXPORT_COLUMNS: readonly RosterExportColumnKey[] = ['idNumber', 'bankAccount'];
 const LEGACY_KEYS: ReadonlySet<string> = new Set(['employeeNo', 'name', 'status', 'position',
   'directManagerName', 'systemPermission', 'directReportCount', 'dingtalkBindingState', 'companyTenure']);
 export const DEFAULT_ROSTER_EXPORT_COLUMNS: RosterExportColumnKey[] = ROSTER_EXPORT_COLUMNS
@@ -96,9 +98,7 @@ export function canExportArchiveFields(viewer: HrCapabilitySubject): boolean {
 
 function defaultRosterExportColumns(viewer?: HrCapabilitySubject): RosterExportColumnKey[] {
   if (!viewer || !canExportArchiveFields(viewer)) return [...DEFAULT_ROSTER_EXPORT_COLUMNS];
-  return ROSTER_EXPORT_COLUMNS.filter(column => DEFAULT_ROSTER_EXPORT_COLUMNS.includes(column.key)
-    || ['departmentLevel1', 'departmentLevel2', 'departmentLevel3'].includes(column.key) || column.group === 'contract')
-    .map(column => column.key);
+  return ['name', 'employeeNo', 'companyText', 'departmentLevel1', 'departmentLevel2', 'departmentLevel3', 'position', 'entryDate', 'status'];
 }
 
 export function rosterExportFieldGroups(viewer: HrCapabilitySubject) {

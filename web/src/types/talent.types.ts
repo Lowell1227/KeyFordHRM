@@ -39,7 +39,7 @@ export const TALENT_SOURCE_LABELS: Record<TalentSourceChannel, string> = {
 };
 
 export const TALENT_TAGS = [
-  'sales', 'design', 'supply_chain', 'functional', 'management',
+  'sales', 'design', 'supply_chain', 'functional', 'management', 'project_management', 'ecommerce_operations',
   'fresh_grad', 'same_industry', 'immediate_available', 'high_potential', 'interviewed_rejected',
 ] as const;
 export type TalentTag = (typeof TALENT_TAGS)[number];
@@ -49,6 +49,8 @@ export const TALENT_TAG_LABELS: Record<TalentTag, string> = {
   supply_chain: '供应链',
   functional: '职能',
   management: '管理岗',
+  project_management: '项目管理',
+  ecommerce_operations: '电商运营',
   fresh_grad: '应届生',
   same_industry: '同行业',
   immediate_available: '可即刻到岗',

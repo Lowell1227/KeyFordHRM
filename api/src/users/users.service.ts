@@ -9,7 +9,7 @@ import { PaginationDto, paginated, Paginated } from '@/common/dto/pagination.dto
 import { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { buildRosterWorkbook, parseRosterExportColumns, RosterWorkbookItem } from './users.excel';
-import { canExportArchiveFields, rosterExportFieldGroups } from './roster-export-catalog';
+import { canExportArchiveFields, rosterExportFieldGroups, SENSITIVE_ROSTER_EXPORT_COLUMNS } from './roster-export-catalog';
 import { rosterArchiveCells } from './roster-export-data';
 import { companyTenure } from '@/common/personnel/company-tenure';
 import { UserQueryDto } from './dto/user-query.dto';
@@ -307,13 +307,13 @@ export class UsersService {
   /** GET /users/export — 按当前查询范围和所选模块字段导出花名册。 */
   async exportRoster(dto: UserQueryDto, viewer: AuthUser): Promise<StreamableFile> {
     const columns = parseRosterExportColumns(dto.columns, viewer);
-    if (columns.includes('idNumber')) throw new BadRequestException('导出身份证号需要验证账号密码并设置Excel打开密码');
+    if (columns.some(key => SENSITIVE_ROSTER_EXPORT_COLUMNS.includes(key))) throw new BadRequestException('导出身份证号或银行卡号需要验证账号密码并设置Excel打开密码');
     return this.createRosterExport(dto, viewer);
   }
 
   async exportSensitiveRoster(dto: SensitiveRosterExportDto, viewer: AuthUser): Promise<StreamableFile> {
     const columns = parseRosterExportColumns(dto.columns, viewer);
-    if (!columns.includes('idNumber')) throw new BadRequestException('请选择身份证号字段，或使用普通导出');
+    if (!columns.some(key => SENSITIVE_ROSTER_EXPORT_COLUMNS.includes(key))) throw new BadRequestException('请选择身份证号或银行卡号，或使用普通导出');
     if (!this.sensitiveExport) throw new ForbiddenException('敏感导出不可用');
     await this.sensitiveExport.authorize(viewer, dto);
     return this.createRosterExport(dto, viewer, dto.filePassword);
@@ -345,7 +345,8 @@ export class UsersService {
               phone: true, gender: true, birthDate: true, ethnicity: true, education: true, professionalTitle: true,
               school: true, graduationDate: true, major: true, maritalStatus: true, childrenStatus: true, childrenCount: true,
               politicalStatus: true, nativePlace: true, householdType: true, idAddress: true, idNumberFingerprint: true,
-              ...(filePassword ? { idNumberEncrypted: true } as const : {}),
+              ...(filePassword && columns.includes('idNumber') ? { idNumberEncrypted: true } as const : {}),
+              ...(filePassword && columns.includes('bankAccount') ? { bankAccountEncrypted: true } as const : {}),
               currentAddress: true, emergencyContactName: true, emergencyContactRelation: true, emergencyContactPhone: true,
               socialSecurityStatus: true, socialSecurityStartDate: true, housingFundStatus: true, housingFundStartDate: true,
               bankName: true, bankBranch: true, bankAccountFingerprint: true,
@@ -400,8 +401,10 @@ export class UsersService {
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
       matchedHistoricalEmployeeNo: null,
-      ...(archiveAccess ? { archiveFields: { ...rosterArchiveCells(u), ...(filePassword ? {
+      ...(archiveAccess ? { archiveFields: { ...rosterArchiveCells(u), ...(filePassword && columns.includes('idNumber') ? {
         idNumber: this.sensitiveExport!.decryptIdentity(u.employeeProfile?.idNumberEncrypted),
+      } : {}), ...(filePassword && columns.includes('bankAccount') ? {
+        bankAccount: this.sensitiveExport!.decryptIdentity(u.employeeProfile?.bankAccountEncrypted, '银行卡'),
       } : {}) }, contracts: u.employeeContracts ?? [] } : {}),
     }));
     const workbook = await buildRosterWorkbook(items, columns);
@@ -415,7 +418,7 @@ export class UsersService {
       userId: viewer.id,
       action: 'export_employee_roster',
       entityType: 'employee_roster_export',
-      newValue: { total: items.length, columns, ...(filePassword ? { encrypted: true, identityIncluded: true } : {}), filters: {
+      newValue: { total: items.length, columns, ...(filePassword ? { encrypted: true, identityIncluded: columns.includes('idNumber'), bankAccountIncluded: columns.includes('bankAccount') } : {}), filters: {
         deptId: dto.deptId ?? null, status: dto.status ?? null,
         sysRole: dto.sysRole ?? null, archived: dto.archived ?? false,
         includeResigned: dto.includeResigned ?? false,

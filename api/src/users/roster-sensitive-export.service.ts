@@ -19,7 +19,7 @@ export class RosterSensitiveExportService {
 
   async authorize(viewer: AuthUser, input: SensitiveExportCredentials): Promise<void> {
     if (!['system_admin', 'hr', 'hr_user'].includes(viewer.sysRole) || !canExportArchiveFields(viewer)) {
-      throw new ForbiddenException('没有导出身份证号的权限');
+      throw new ForbiddenException('没有导出身份证号或银行卡号的权限');
     }
     if (typeof input?.accountPassword !== 'string' || !input.accountPassword || input.accountPassword.length > 128) {
       throw new BadRequestException('请输入当前账号密码');
@@ -38,14 +38,14 @@ export class RosterSensitiveExportService {
       passwordHash: true, mustChangePassword: true, status: true, deletedAt: true, archivedAt: true,
     } });
     if (!actor || actor.deletedAt || actor.archivedAt || !['active', 'probation'].includes(actor.status)) {
-      throw new ForbiddenException('当前账号不可导出身份证号');
+      throw new ForbiddenException('当前账号不可导出身份证号或银行卡号');
     }
-    if (!actor.passwordHash || actor.mustChangePassword) throw new ForbiddenException('请先设置或修改当前账号密码，再导出身份证号');
+    if (!actor.passwordHash || actor.mustChangePassword) throw new ForbiddenException('请先设置或修改当前账号密码，再导出身份证号或银行卡号');
     if (!await bcrypt.compare(input.accountPassword, actor.passwordHash)) throw new ForbiddenException('账号密码不正确');
     this.attempts.delete(viewer.id);
   }
 
-  decryptIdentity(value: Buffer | Uint8Array | null | undefined): string {
+  decryptIdentity(value: Buffer | Uint8Array | null | undefined, label: '身份证' | '银行卡' = '身份证'): string {
     if (value == null) return '';
     const secret = this.config.get<string>('EMPLOYEE_ARCHIVE_ENCRYPTION_KEY') ?? this.config.get<string>('JWT_SECRET');
     try {
@@ -56,7 +56,7 @@ export class RosterSensitiveExportService {
       decipher.setAuthTag(data.subarray(13, 29));
       try { return Buffer.concat([decipher.update(data.subarray(29)), decipher.final()]).toString('utf8'); }
       finally { key.fill(0); }
-    } catch { throw new InternalServerErrorException('身份证资料解密失败，请联系管理员核对资料'); }
+    } catch { throw new InternalServerErrorException(`${label}资料解密失败，请联系管理员核对资料`); }
   }
 
   async encryptWorkbook(plain: Buffer, password: string): Promise<Buffer> {

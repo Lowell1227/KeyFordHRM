@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
@@ -12,6 +12,26 @@ import { isLocalPreview } from '@/utils/preview-mode';
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
+
+const slides = [
+  { label: '绩效管理', lines: ['让目标更清晰，', '让成长被看见'], description: '连接目标、过程与结果，让每一次绩效沟通都有依据。', features: ['目标对齐', '过程跟进', '结果沉淀'] },
+  { label: '员工档案', lines: ['一份员工档案，', '串起每段任职'], description: '集中查看人员资料、任职历史与合同记录，让日常维护更简单。', features: ['人员资料', '任职履历', '合同记录'] },
+  { label: '人才与入离职', lines: ['从人才储备，', '到每一次新开始'], description: '统一维护人才、跟进与入离职记录，让信息衔接更顺畅。', features: ['人才储备', '跟进记录', '入离职办理'] },
+];
+const slideIndex = ref(0), carouselHovered = ref(false), carouselFocused = ref(false);
+const slide = computed(() => slides[slideIndex.value]!);
+const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+const reducedMotion = ref(motionQuery.matches);
+const syncMotion = () => { reducedMotion.value = motionQuery.matches; };
+let carouselTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  motionQuery.addEventListener('change', syncMotion);
+  carouselTimer = setInterval(() => {
+    if (!carouselHovered.value && !carouselFocused.value && !reducedMotion.value && !document.hidden)
+      slideIndex.value = (slideIndex.value + 1) % slides.length;
+  }, 6000);
+});
+onBeforeUnmount(() => { clearInterval(carouselTimer); motionQuery.removeEventListener('change', syncMotion); });
 
 const isDingTalkEnv = computed(() => navigator.userAgent.includes('DingTalk'));
 const dingtalkButtonText = computed(() => (
@@ -154,7 +174,9 @@ async function onPasswordLogin() {
 
 <template>
   <section class="login-shell" data-testid="login-shell">
-    <aside class="brand-panel" data-testid="login-brand-panel">
+    <aside class="brand-panel" data-testid="login-brand-panel" aria-label="孚德E-HR功能介绍"
+      @mouseenter="carouselHovered = true" @mouseleave="carouselHovered = false"
+      @focusin="carouselFocused = true" @focusout="carouselFocused = false">
       <img
         src="/brand/logo-2025-horizontal-inverse.png"
         alt=""
@@ -168,16 +190,22 @@ async function onPasswordLogin() {
         <span class="brand-orbit__core"></span>
       </div>
 
-      <div class="brand-copy">
-        <p class="brand-eyebrow">KAYFORD PERFORMANCE</p>
-        <h1>让目标更清晰，<br />让成长被看见</h1>
-        <p class="brand-description">连接目标、过程与结果，让每一次绩效沟通都有依据。</p>
+      <div class="brand-copy" aria-live="off">
+        <p class="brand-eyebrow">KAYFORD E-HR</p>
+        <Transition name="brand-fade" mode="out-in">
+          <div :key="slideIndex">
+            <h1>{{ slide.lines[0] }}<br />{{ slide.lines[1] }}</h1>
+            <p class="brand-description">{{ slide.description }}</p>
+          </div>
+        </Transition>
       </div>
 
+      <nav class="brand-navigation" aria-label="浏览功能板块">
+        <button v-for="(item, index) in slides" :key="item.label" type="button" :aria-pressed="slideIndex === index"
+          @click="slideIndex = index">{{ item.label }}</button>
+      </nav>
       <div class="brand-footer" aria-label="产品价值">
-        <span>目标对齐</span>
-        <span>过程跟进</span>
-        <span>结果沉淀</span>
+        <span v-for="feature in slide.features" :key="feature">{{ feature }}</span>
       </div>
     </aside>
 
@@ -186,9 +214,9 @@ async function onPasswordLogin() {
         <img src="/brand/logo-2025.png" alt="KAYFORD 孚德" class="login-logo" />
 
         <header class="auth-heading">
-          <p class="auth-eyebrow">绩效管理系统</p>
+          <p class="auth-eyebrow">孚德E-HR</p>
           <h2>{{ isLocalPreview ? '预览系统' : '欢迎登录' }}</h2>
-          <p>{{ isLocalPreview ? '本机预览 · 虚构测试数据' : '使用企业身份进入你的绩效工作台' }}</p>
+          <p>{{ isLocalPreview ? '本机预览 · 虚构测试数据' : '使用企业身份进入你的人事与绩效工作台' }}</p>
         </header>
 
         <el-form v-if="isLocalPreview" aria-label="预览登录" @submit.prevent="onPreviewLogin">
@@ -400,6 +428,13 @@ async function onPasswordLogin() {
   font-size: 15px;
   line-height: 1.8;
 }
+
+.brand-navigation { position: relative; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+.brand-navigation button { padding: 7px 10px; border: 1px solid rgba(255,255,255,.3); border-radius: 6px; background: transparent; color: #dcecf5; cursor: pointer; font: inherit; font-size: 12px; }
+.brand-navigation button[aria-pressed="true"] { background: #d4f6ed; border-color: #d4f6ed; color: #103e39; }
+.brand-navigation button:focus-visible { outline: 2px solid #85e6d2; outline-offset: 3px; }
+.brand-fade-enter-active, .brand-fade-leave-active { transition: opacity .16s ease; }
+.brand-fade-enter-from, .brand-fade-leave-to { opacity: 0; }
 
 .brand-footer {
   position: relative;
@@ -643,7 +678,8 @@ async function onPasswordLogin() {
 
 @media (max-width: 720px) {
   .login-shell {
-    display: block;
+    display: flex;
+    flex-direction: column;
     width: 100%;
     min-height: 100vh;
     min-height: 100dvh;
@@ -653,12 +689,22 @@ async function onPasswordLogin() {
   }
 
   .brand-panel {
-    display: none;
+    order: 2;
+    margin: 0 16px 24px;
+    padding: 24px;
+    border-radius: 16px;
   }
 
+  .brand-logo, .brand-orbit, .brand-footer { display: none; }
+  .brand-copy { margin: 0; padding: 0; min-height: 164px; }
+  .brand-eyebrow { margin-bottom: 12px; font-size: 10px; }
+  .brand-copy h1 { font-size: 25px; }
+  .brand-description { margin-top: 12px; font-size: 12px; line-height: 1.65; }
+  .brand-navigation { margin: 16px 0 0; gap: 6px; }
+  .brand-navigation button { padding: 7px 8px; font-size: 11px; }
+
   .auth-panel {
-    min-height: 100vh;
-    min-height: 100dvh;
+    min-height: auto;
     align-items: flex-start;
     padding: 36px 24px 30px;
   }
@@ -688,6 +734,8 @@ async function onPasswordLogin() {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .brand-fade-enter-active,
+  .brand-fade-leave-active,
   .auth-option__arrow,
   .field-reveal-enter-active,
   .field-reveal-leave-active {

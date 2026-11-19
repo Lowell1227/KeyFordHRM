@@ -53,7 +53,7 @@ describe('roster archive export', () => {
     const groups = rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] });
     expect(groups.map(group => group.key)).toEqual(['employment', 'personal', 'contact', 'insurance', 'bank', 'contract', 'history', 'system']);
     const defaults = groups.flatMap(group => group.fields).filter(field => field.defaultSelected).map(field => field.key);
-    expect(defaults).toEqual(expect.arrayContaining([...DEFAULT_ROSTER_EXPORT_COLUMNS, 'latestContractType', 'latestEffectiveFrom', 'latestContractStatus']));
+    expect(defaults).toEqual(['name', 'employeeNo', 'companyText', 'departmentLevel1', 'departmentLevel2', 'departmentLevel3', 'position', 'entryDate', 'status']);
     expect(defaults).not.toContain('contractHistory');
     expect(DEFAULT_ROSTER_EXPORT_COLUMNS).toHaveLength(8);
     expect(rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['organization_edit'] }).flatMap(group => group.fields)).toHaveLength(9);
@@ -61,11 +61,12 @@ describe('roster archive export', () => {
     expect(() => parseRosterExportColumns('bankAccountEncrypted', { sysRole: 'hr' })).toThrow('有效');
   });
 
-  it('defaults to current contract fields only for archive viewers, keeping organization-only access unchanged', async () => {
+  it('defaults to nine common personnel fields without contracts, keeping organization-only access unchanged', async () => {
     const hr = { sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] };
     const organization = { sysRole: 'hr_user', hrCapabilities: ['organization_edit'] };
     const columns = parseRosterExportColumns(undefined, hr);
-    expect(columns).toContain('latestContractType');
+    expect(columns).toHaveLength(9);
+    expect(columns.some(key => key.startsWith('latest'))).toBe(false);
     expect(columns).not.toContain('contractHistory');
     expect(parseRosterExportColumns(undefined, organization)).toEqual(DEFAULT_ROSTER_EXPORT_COLUMNS);
     const workbook = await buildRosterWorkbook([employee()], columns);
@@ -94,8 +95,15 @@ describe('roster archive export', () => {
     const sheet = workbook.getWorksheet('花名册')!;
     const headers = (sheet.getRow(2).values as unknown[]).slice(1);
     expect(headers).not.toContain('部门');
-    expect(headers.slice(2, 5)).toEqual(['一级部门', '二级部门', '三级部门']);
-    expect((sheet.getRow(3).values as unknown[]).slice(3, 6)).toEqual(['一级部', '二级部', '三级组']);
+    expect(headers.slice(3, 6)).toEqual(['一级部门', '二级部门', '三级部门']);
+    expect((sheet.getRow(3).values as unknown[]).slice(4, 7)).toEqual(['一级部', '二级部', '三级组']);
+  });
+
+  it('offers bank account numbers only within archive permissions and never selects sensitive columns by default', () => {
+    const fields = rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] }).flatMap(g => g.fields);
+    expect(fields.find(field => String(field.key) === 'bankAccount')).toEqual({ key: 'bankAccount', label: '银行卡号', defaultSelected: false });
+    expect(fields.find(field => field.key === 'idNumber')?.defaultSelected).toBe(false);
+    expect(() => parseRosterExportColumns('bankAccount', { sysRole: 'hr_user', hrCapabilities: ['organization_edit'] })).toThrow('权限');
   });
 
   it('selects the later effective transfer rather than a later signature or ancillary material', () => {
