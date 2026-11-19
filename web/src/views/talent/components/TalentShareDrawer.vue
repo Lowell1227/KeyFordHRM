@@ -40,12 +40,17 @@ const message = ref('');
 const creating = ref(false);
 const createError = ref('');
 const createdUrl = ref('');
+let submitSession = 0;
+let lastSubmission: { signature: string; requestId: string } | null = null;
 
-watch(() => props.modelValue, (open) => {
-  if (open) resetForm();
+watch(() => [props.modelValue, props.candidateId] as const, () => {
+  resetForm();
 });
 
 function resetForm() {
+  submitSession++;
+  lastSubmission = null;
+  creating.value = false;
   recipientIds.value = [];
   recipientOptions.value = [];
   expiresInDays.value = 7;
@@ -73,26 +78,35 @@ function recipientLabel(user: ShareRecipient): string {
 }
 
 async function createShare() {
+  if (creating.value) return;
   createError.value = '';
   if (recipientIds.value.length === 0) {
     createError.value = '请至少选择 1 位接收人';
     return;
   }
   creating.value = true;
+  const session = submitSession;
   try {
-    const result = await talentPoolApi.createShare(props.candidateId, {
-      recipientIds: recipientIds.value,
+    const payload = {
+      recipientIds: [...recipientIds.value].sort(),
       expiresInDays: expiresInDays.value,
       includeResume: includeResume.value,
       message: message.value.trim() || undefined,
-    });
+    };
+    const signature = JSON.stringify([props.candidateId, payload]);
+    if (lastSubmission?.signature !== signature) {
+      lastSubmission = { signature, requestId: crypto.randomUUID() };
+    }
+    const body = { ...payload, requestId: lastSubmission.requestId };
+    const result = await talentPoolApi.createShare(props.candidateId, body);
+    if (session !== submitSession) return;
     createdUrl.value = `${window.location.origin}${result.url}`;
     ElMessage.success('已生成分享链接，站内通知已发送给接收人');
     emit('changed');
   } catch (error) {
-    createError.value = error instanceof Error && error.message ? error.message : '创建分享失败，请重试';
+    if (session === submitSession) createError.value = error instanceof Error && error.message ? error.message : '创建分享失败，请重试';
   } finally {
-    creating.value = false;
+    if (session === submitSession) creating.value = false;
   }
 }
 
@@ -141,7 +155,7 @@ function shareUrl(share: TalentShareRecord): string {
   <el-drawer v-model="visible" :title="`转发候选人：${candidateName}`" size="480px" class="talent-share-drawer">
     <div class="talent-share">
       <h4 class="talent-share__section-title">新建分享</h4>
-      <el-form label-position="top" size="default" @submit.prevent>
+      <el-form label-position="top" size="default" :disabled="creating" @submit.prevent>
         <el-form-item label="接收人（HR / 实际主管 / 部门负责人，最多 5 人）" required>
           <el-select v-model="recipientIds" data-testid="talent-share-recipients" multiple filterable remote :remote-method="searchRecipients"
             :loading="searching" placeholder="输入姓名或工号搜索" :multiple-limit="MAX_RECIPIENTS" class="talent-share__recipients">

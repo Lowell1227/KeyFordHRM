@@ -99,7 +99,8 @@ export interface TalentCandidateListItem {
   currentCompany: string | null;
   currentPosition: string | null;
   yearsOfExperience: number | null;
-  education: EducationOption | null;
+  education: string | null;
+  educationReferenceDataId?: string | null;
   school: string | null;
   major: string | null;
   expectCity: string | null;
@@ -117,6 +118,10 @@ export interface TalentCandidateListItem {
   updatedAt: string;
   nextFollowUpAt: string | null;
   fileCount: number;
+  ownerId?: string | null;
+  ownerName?: string | null;
+  latestApplication?: Pick<TalentApplicationView, 'id' | 'positionName' | 'stage'> | null;
+  onboardingRequest?: TalentOnboardingRequest | null;
 }
 
 export interface TalentResumeFile {
@@ -181,12 +186,14 @@ export interface TalentQuery {
   salaryMax?: number;
   dueOnly?: boolean;
   staleOnly?: boolean;
+  mineOnly?: boolean;
   page?: number;
   pageSize?: number;
 }
 
 /** POST/PATCH /talents 请求体（PATCH 为 Partial）。 */
 export interface TalentCandidateInput {
+  ownerId?: string;
   name?: string;
   phone?: string;
   email?: string | null;
@@ -195,7 +202,8 @@ export interface TalentCandidateInput {
   currentCompany?: string | null;
   currentPosition?: string | null;
   yearsOfExperience?: number | null;
-  education?: EducationOption | null;
+  education?: string | null;
+  educationReferenceDataId?: string | null;
   school?: string | null;
   major?: string | null;
   expectCity?: string | null;
@@ -298,6 +306,7 @@ export const INTERVIEW_SYNC_LABELS: Record<string, string> = {
 };
 export interface TalentInterviewView {
   id: string;
+  applicationId?: string | null;
   candidateNameSnapshot: string;
   startsAt: string;
   endsAt: string;
@@ -316,6 +325,7 @@ export interface TalentInterviewView {
 export interface TalentInterviewInput {
   requestId?: string;
   candidateId: string;
+  applicationId?: string;
   startsAt: string;
   endsAt: string;
   participantIds: string[];
@@ -329,4 +339,99 @@ export interface TalentDeleteImpact {
   requiresForce: boolean;
   interviews: Array<{ id: string; status: TalentInterviewStatus; version: number; startsAt: string }>;
   requests: Array<{ id: string; recordStatus: string; onboardingStatus: string; requestVersion: number; updatedAt: string }>;
+}
+
+export type TalentApplicationStage = 'screening' | 'interviewing' | 'hiring_review' | 'offered' | 'accepted' | 'declined' | 'rejected' | 'reserve' | 'withdrawn' | 'onboarding' | 'hired';
+export const APPLICATION_STAGE_LABELS: Record<TalentApplicationStage, string> = {
+  screening: '初筛', interviewing: '面试中', hiring_review: '待录用确认', offered: '已确认录用', accepted: '已接受录用',
+  declined: '已拒绝录用', rejected: '已淘汰', reserve: '人才储备', withdrawn: '已撤回', onboarding: '入职办理中', hired: '已入职',
+};
+export type TalentApplicationAction = 'start_interview' | 'submit_hiring' | 'approve_hiring' | 'return_hiring' | 'accept_offer' | 'decline_offer' | 'reject' | 'reserve' | 'withdraw' | 'reopen';
+export const APPLICATION_ACTION_LABELS: Record<TalentApplicationAction, string> = {
+  start_interview: '进入面试', submit_hiring: '提交录用', approve_hiring: '确认录用', return_hiring: '退回经办',
+  accept_offer: '候选人接受', decline_offer: '候选人拒绝', reject: '淘汰', reserve: '转储备', withdraw: '撤回应聘', reopen: '重开应聘',
+};
+export interface TalentOnboardingRequest {
+  id: string;
+  onboardingStatus: string | null;
+  recordStatus: string;
+  cancelledAt: string | null;
+  archivedAt?: string | null;
+}
+export interface TalentApplicationEvent {
+  id: string;
+  applicationId: string;
+  actorId: string;
+  actorName: string | null;
+  action: string;
+  fromStage: TalentApplicationStage | null;
+  toStage: TalentApplicationStage;
+  version: number;
+  note: string | null;
+  createdAt: string;
+}
+export interface TalentApplicationView {
+  id: string;
+  candidateId: string;
+  candidateName?: string;
+  positionName: string;
+  recruitmentBatch: string | null;
+  deptId: string | null;
+  departmentNameSnapshot: string | null;
+  ownerId: string;
+  ownerName: string | null;
+  creatorName: string | null;
+  stage: TalentApplicationStage;
+  revision: number;
+  expectedEntryDate: string | null;
+  hiringReason: string | null;
+  hiringRequestedById: string | null;
+  hiringRequestedAt: string | null;
+  hiringReviewedById: string | null;
+  hiringReviewedAt: string | null;
+  reviewReturnStage: TalentApplicationStage | null;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+  allowedActions: string[];
+  events: TalentApplicationEvent[];
+  onboardingRequest: TalentOnboardingRequest | null;
+}
+export interface TalentApplicationInput {
+  positionName: string;
+  recruitmentBatch?: string | null;
+  deptId?: string | null;
+  ownerId?: string;
+  expectedEntryDate?: string | null;
+}
+export interface TalentRecruitmentOwner { id: string; name: string; employeeNo: string | null; deptName: string | null }
+export type TalentFeedbackOutcome = 'pass' | 'reject' | 'pending';
+export const FEEDBACK_OUTCOME_LABELS: Record<TalentFeedbackOutcome, string> = { pass: '通过', reject: '不通过', pending: '待定' };
+export interface TalentInterviewFeedbackView {
+  interviewId: string;
+  userId: string;
+  userName: string | null;
+  status: 'draft' | 'submitted';
+  outcome: TalentFeedbackOutcome | null;
+  summary: string | null;
+  revision: number;
+  submittedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  history?: TalentFeedbackHistory[];
+}
+export interface TalentFeedbackHistory {
+  actorName?: string | null;
+  action: string;
+  summary?: string | null;
+  outcome?: TalentFeedbackOutcome | null;
+  note?: string | null;
+  createdAt: string;
+  revision: number;
+}
+export interface TalentFeedbackResponse {
+  own: TalentInterviewFeedbackView | null;
+  items: TalentInterviewFeedbackView[];
+  canEdit: boolean;
+  canReturn: boolean;
 }

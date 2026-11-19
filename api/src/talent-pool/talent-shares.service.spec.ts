@@ -67,10 +67,13 @@ function setup(foundShare: unknown) {
     },
     user: { findMany: jest.fn().mockResolvedValue([{ id: 'mgr-1', name: '测试主管' }]), count: jest.fn() },
     employmentRecord: { findMany: jest.fn().mockResolvedValue([]) },
+    talentCandidate: { findFirst: jest.fn().mockResolvedValue(candidate()) },
     notificationLog: { create: jest.fn() },
     auditLog: { create: jest.fn() },
-    $transaction: jest.fn().mockResolvedValue([]),
+    $queryRaw: jest.fn().mockResolvedValue([]),
+    $transaction: jest.fn(),
   };
+  prisma.$transaction.mockImplementation(ops => typeof ops === 'function' ? ops(prisma) : Promise.all(ops));
   const talents = { findActive: jest.fn().mockResolvedValue(candidate()) };
   const sut = new TalentSharesService(prisma as never, talents as never);
   return { prisma, sut };

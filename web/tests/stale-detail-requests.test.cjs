@@ -59,6 +59,10 @@ function talent(t, api = {}) {
     'element-plus': messages,
     '@/stores/auth.store': { useAuthStore: () => ({ user: { sysRole: 'hr' } }) },
     '@/api/upload.api': { uploadApi: {} },
+    '@/api/talent-resume.api': { talentResumeApi: {
+      status: async () => ({ enabled: false, configured: false }), current: async () => null,
+    } },
+    '@/api/talent-recruitment.api': { talentRecruitmentApi: { owners: async () => ({ items: [] }) } },
     '@/api/talent-pool.api': { talentPoolApi: {
       detail: async id => candidate(id), checkPhone: async () => ({ exists: false }),
       update: async (id, body) => { writes.push({ id, body }); },
@@ -176,16 +180,22 @@ test('#8 mismatched detail ID never enables editing or saves foreign fields', as
   assert.ok(editor.state.loadError?.value);
 });
 
-test('#8 late attachment refresh does not replace B attachments', async t => {
+test('#8 late attachment removal does not alter B attachments or busy state', async t => {
   const pending = deferred(); let calls = 0;
-  const editor = talent(t, { detail: id => ++calls === 2 ? pending.promise : Promise.resolve(candidate(id)) });
+  const editor = talent(t, { unbindFile: async (id, fileId) => {
+    assert.equal(id, 'A'); assert.equal(fileId, 'file-A'); calls++; return pending.promise;
+  } });
   await open(editor);
-  const refresh = editor.state.refreshEditFiles();
+  const removal = editor.state.removeSavedFile(editor.state.editFiles.value[0]);
+  await flush();
+  assert.equal(calls, 1);
   editor.props.candidateId = 'B';
   await flush();
-  pending.resolve(candidate('A'));
-  await refresh;
+  pending.resolve();
+  await removal;
   assert.deepEqual(editor.state.editFiles.value.map(file => file.id), ['file-B']);
+  assert.equal(editor.state.removingFileId.value, '');
+  assert.equal(editor.state.fileError.value, '');
 });
 
 function detail(id, extra = {}) {

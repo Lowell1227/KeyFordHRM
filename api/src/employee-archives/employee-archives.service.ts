@@ -31,7 +31,7 @@ import { EmployeeIdentityMatchService } from './employee-identity-match.service'
 import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
-import { lockTalentSource, resolveTalentSource, talentSourceSelect } from './employee-talent-source';
+import { lockTalentSource, resolveTalentSource, resolveTalentApplicationSource, syncTalentApplicationOnboarding, talentSourceSelect } from './employee-talent-source';
 import { employeeArchiveView, employeeDataChangeView, activeApplicationWhere } from './employee-data-change-view';
 import { archiveIssueStates } from './employee-archive-issues';
 import { assertValidContractChanges } from './employee-contract-validation';
@@ -118,7 +118,7 @@ export class EmployeeArchivesService {
           OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }], archivedAt: null },
         select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
           profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, baseValue: true, updatedAt: true,
-          sourceSystem: true, validationWarnings: true, talentCandidateId: true, requiresArrivalConfirmation: true },
+          sourceSystem: true, validationWarnings: true, talentCandidateId: true, talentApplicationId: true, requiresArrivalConfirmation: true },
       }) : null;
       if (sourceDraft?.sourceSystem === 'archive_assistant_pilot') throw new BadRequestException('测试资料仅可保存待核草稿');
       if (input.draftId) this.assertDraftVersion(sourceDraft, input.expectedVersion);
@@ -164,6 +164,7 @@ export class EmployeeArchivesService {
       }
       await this.normalizeSubjectPayload(tx, proposedValue, {}, this.record(savedDraft?.proposedValue));
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
+      const talentApplicationId = await resolveTalentApplicationSource(tx, talentCandidateId, input.talentApplicationId, savedDraft as any);
       await this.validateSubjectPayload(tx, proposedValue, {});
       assertSubmittedEmployeeCompany(this.record(proposedValue.employee));
       const referenceBase = await normalizeEmployeePosition(tx, this.record(proposedValue.employee), {}, true);
@@ -186,9 +187,9 @@ export class EmployeeArchivesService {
           sourceType: 'manual_employee_create',
           intakeType: 'new_hire',
           onboardingStatus: 'submitted',
-          requiresArrivalConfirmation: !(input.employeeStatus === UserStatus.resigned || (input.effectiveTo && input.effectiveTo < shanghaiBusinessDate()))
-            && (savedDraft?.requiresArrivalConfirmation ?? true),
+          requiresArrivalConfirmation: !(input.employeeStatus === UserStatus.resigned || (input.effectiveTo && input.effectiveTo < shanghaiBusinessDate())),
           talentCandidateId,
+          talentApplicationId,
           baseValue: this.toJson({
             employee: {},
             profile: {},
@@ -223,6 +224,7 @@ export class EmployeeArchivesService {
       if (!this.employeeNumbers) {
         throw new BadRequestException({ code: ERROR_CODE.INTERNAL, message: '员工工号服务未就绪' });
       }
+      await syncTalentApplicationOnboarding(tx, request, 'onboarding', operator.id);
       const employeeNo = savedDraft?.employeeNo ?? await this.employeeNumbers.reserveNext(tx, request.id);
       const proposed = requestData.proposedValue as unknown as Record<string, unknown>;
       const employee = proposed.employee as Record<string, unknown>;
@@ -291,7 +293,7 @@ export class EmployeeArchivesService {
           },
           select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
             profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
-            sourceSystem: true, validationWarnings: true, baseValue: true, talentCandidateId: true, requiresArrivalConfirmation: true },
+            sourceSystem: true, validationWarnings: true, baseValue: true, talentCandidateId: true, talentApplicationId: true, requiresArrivalConfirmation: true },
         });
         if (!draft) {
           throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
@@ -309,6 +311,7 @@ export class EmployeeArchivesService {
       }
       await this.normalizeSubjectPayload(tx, proposed, {}, this.record(savedDraft?.proposedValue));
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
+      const talentApplicationId = await resolveTalentApplicationSource(tx, talentCandidateId, input.talentApplicationId, savedDraft as any);
       const proposedValue = this.toJson(proposed);
       const performanceManagerId = this.nullableString(
         this.record(proposed.performance).managerId,
@@ -323,6 +326,7 @@ export class EmployeeArchivesService {
           requiresArrivalConfirmation: savedDraft?.requiresArrivalConfirmation ?? true,
         }),
         talentCandidateId,
+        talentApplicationId,
         ...(savedDraft?.sourceSystem === 'archive_assistant_pilot' ? {} : {
           baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
         }),
@@ -348,6 +352,7 @@ export class EmployeeArchivesService {
         request = await tx.employeeDataChangeRequest.create({ data });
       }
       if (!input.draftId || input.saveMode !== 'auto') {
+        await syncTalentApplicationOnboarding(tx, request, 'onboarding', operator.id);
         await tx.auditLog.create({
           data: {
             userId: operator.id,
@@ -730,7 +735,7 @@ export class EmployeeArchivesService {
     return this.prisma.$transaction(async (tx) => {
       const drafts = await tx.employeeDataChangeRequest.findMany({
         where: { id: { in: ids }, recordStatus: 'draft', archivedAt: null },
-        select: { id: true, employeeName: true, sourceSystem: true, createdById: true, talentCandidateId: true },
+        select: { id: true, employeeName: true, sourceSystem: true, createdById: true, talentCandidateId: true, talentApplicationId: true },
       });
       if (drafts.some(draft => draft.sourceSystem === 'archive_assistant_pilot' && draft.createdById !== operator.id)) {
         throw new NotFoundException('草稿不存在');
@@ -746,7 +751,11 @@ export class EmployeeArchivesService {
         where: { id: { in: ids }, recordStatus: 'draft', archivedAt: null },
         data: { recordStatus: 'archived', archivedAt },
       });
+      if (result.count !== drafts.length) {
+        throw new ConflictException('部分草稿已提交或已归档，请刷新后重试');
+      }
       for (const draft of drafts) {
+        await syncTalentApplicationOnboarding(tx, draft, 'accepted', operator.id);
         await tx.auditLog.create({
           data: {
             userId: operator.id,
@@ -783,8 +792,12 @@ export class EmployeeArchivesService {
       try {
         await this.prisma.$transaction(async (tx) => {
           if (kind === 'draft') {
-            const draft = await tx.employeeDataChangeRequest.findUnique({ where: { id }, select: { id: true, sourceSystem: true, createdById: true, talentCandidateId: true } });
+            const draft = await tx.employeeDataChangeRequest.findUnique({ where: { id }, select: { id: true, sourceSystem: true, createdById: true, talentCandidateId: true, talentApplicationId: true } });
             if (draft?.talentCandidateId) await resolveTalentSource(tx, undefined, draft);
+            if (draft?.talentApplicationId) {
+              await resolveTalentApplicationSource(tx, draft.talentCandidateId, undefined, draft);
+              await syncTalentApplicationOnboarding(tx, draft, 'onboarding', operator.id);
+            }
             if (draft?.sourceSystem === 'archive_assistant_pilot') {
               if (draft.createdById !== operator.id) throw new NotFoundException('草稿不存在');
               throw new ConflictException('测试草稿请从机器人重新发起');

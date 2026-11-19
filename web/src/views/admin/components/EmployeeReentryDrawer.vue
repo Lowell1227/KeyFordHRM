@@ -21,6 +21,7 @@ const props = defineProps<{
   employee: User | null;
   departments: Department[];
   talentCandidateId?: string;
+  talentApplicationId?: string;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
@@ -175,6 +176,7 @@ onBeforeUnmount(() => { generation++; });
 function body(): EmployeeReentryBody & { jobFamily: string | null } {
   return {
     talentCandidateId: currentRequest.value?.talentCandidateId ?? props.talentCandidateId,
+    talentApplicationId: currentRequest.value?.talentApplicationId ?? props.talentApplicationId,
     company: form.company,
     companyText: form.companyText,
     contractSubjectId: form.contractSubjectId,

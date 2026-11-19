@@ -4,6 +4,7 @@ import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsIn
 export class CreateTalentInterviewDto {
   @IsOptional() @IsUUID() requestId?: string;
   @IsUUID() candidateId!: string;
+  @IsOptional() @IsUUID() applicationId?: string | null;
   @IsISO8601({ strict: true }) startsAt!: string;
   @IsISO8601({ strict: true }) endsAt!: string;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @ArrayUnique() @IsUUID('all', { each: true }) participantIds!: string[];
@@ -12,7 +13,7 @@ export class CreateTalentInterviewDto {
   @IsOptional() @IsString() @MaxLength(2000) note?: string | null;
 }
 
-export class UpdateTalentInterviewDto extends PartialType(OmitType(CreateTalentInterviewDto, ['candidateId', 'requestId'] as const)) {
+export class UpdateTalentInterviewDto extends PartialType(OmitType(CreateTalentInterviewDto, ['candidateId', 'requestId', 'applicationId'] as const)) {
   @IsInt() @Min(1) version!: number;
 }
 

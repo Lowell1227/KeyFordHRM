@@ -82,12 +82,62 @@ test('failed share creation retains selections, message and original-resume defa
   assert.match(state.createError.value, /资格已变化/);
 });
 
-test('overview renders talent and simple invitations separately from unfinished recruitment and retains version 0.8', async () => {
+test('share submission reuses its UUID after response loss and starts a new key for a changed payload or drawer session', async t => {
+  const previousWindow = globalThis.window;
+  globalThis.window = { location: { origin: 'http://localhost' } };
+  t.after(() => { globalThis.window = previousWindow; });
+  const requests = [];
+  const { state, props } = drawer(t, { createShare: async (id, body) => {
+    requests.push({ id, ...body });
+    if (requests.length === 1) throw new Error('Response lost');
+    return { url: '/talents/s/synthetic-token' };
+  } });
+  state.recipientIds.value = ['actual-manager'];
+  await state.createShare();
+  await state.createShare();
+  assert.match(requests[0].requestId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i);
+  assert.deepEqual(requests[1], requests[0]);
+  assert.equal(state.createdUrl.value, 'http://localhost/talents/s/synthetic-token');
+  state.message.value = 'Changed payload';
+  await state.createShare();
+  assert.notEqual(requests[2].requestId, requests[1].requestId);
+  props.modelValue = false;
+  await vue.nextTick();
+  props.modelValue = true;
+  await vue.nextTick();
+  state.recipientIds.value = ['actual-manager'];
+  await state.createShare();
+  assert.notEqual(requests[3].requestId, requests[0].requestId);
+});
+
+test('share drawer blocks concurrent submit and never attaches an old response to a new candidate', async t => {
+  const previousWindow = globalThis.window;
+  globalThis.window = { location: { origin: 'http://localhost' } };
+  t.after(() => { globalThis.window = previousWindow; });
+  let resolve;
+  const requests = [];
+  const { state, props } = drawer(t, { createShare: async (id, body) => {
+    requests.push({ id, ...body });
+    return new Promise(done => { resolve = done; });
+  } });
+  state.recipientIds.value = ['actual-manager'];
+  const pending = state.createShare();
+  const second = state.createShare();
+  assert.equal(requests.length, 1);
+  props.candidateId = 'another-candidate';
+  await vue.nextTick();
+  resolve({ url: '/talents/s/old-candidate' });
+  await Promise.all([pending, second]);
+  assert.equal(state.createdUrl.value, '');
+});
+
+test('overview separates available recruitment flow from unfinished publishing and Offer documents, retaining version 0.8', async () => {
   const component = load('views/system/SystemOverviewView.vue', {}, true).default;
   const html = await renderToString(vue.createSSRApp(component));
-  assert.match(html, /人才库与简单面试邀约/);
-  assert.match(html, /招聘职位发布、面试评价与 Offer/);
-  assert.match(html, /职位发布、面试评价和 Offer 流程尚未建设/);
+  assert.match(html, /人才库与招聘流转/);
+  assert.match(html, /面试反馈、录用确认及入职衔接可用/);
+  assert.match(html, /招聘职位发布与 Offer 文书/);
+  assert.match(html, /职位发布、招聘编制、Offer 文书与薪资审批尚未建设/);
   assert.match(html, /建设清单/);
   assert.match(html, /非实时.*健康/);
   assert.match(html, /版本 0\.8/);

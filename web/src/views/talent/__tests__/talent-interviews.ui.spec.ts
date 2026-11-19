@@ -15,6 +15,8 @@ async function install(page: Page, role: 'hr' | 'hr_user' | 'employee', writes: 
     if (url.pathname.endsWith('/talents')) return route.fulfill(envelope({ items: [candidate], total: 1, page: 1, pageSize: 20 }));
     if (url.pathname.endsWith(`/talents/${candidate.id}`)) return route.fulfill(envelope(candidate));
     if (url.pathname.endsWith('/follow-ups')) return route.fulfill(envelope([]));
+    if (url.pathname.includes('/talent-recruitment/') && url.pathname.endsWith('/applications')) return route.fulfill(envelope([]));
+    if (url.pathname.includes('/talent-recruitment/') && url.pathname.endsWith('/feedback')) return route.fulfill(envelope({ own: null, items: [], canEdit: false, canReturn: false }));
     if (url.pathname.endsWith('/users')) return route.fulfill(envelope({ items: [{ id: url.searchParams.get('status') === 'probation' ? 'probation-user' : 'synthetic-user', name: url.searchParams.get('status') === 'probation' ? '合成试用员工' : '合成参与人', employeeNo: 'SYN001', status: url.searchParams.get('status'), archivedAt: null }], total: 1 }));
     if (url.pathname.includes('/users/')) return route.fulfill(envelope({ id: url.pathname.split('/').pop(), name: url.pathname.endsWith('/probation-user') ? '合成试用员工' : '合成参与人', employeeNo: 'SYN001', status: url.pathname.endsWith('/probation-user') ? 'probation' : 'active', archivedAt: null }));
     if (url.pathname.endsWith('/talent-interviews')) {
@@ -205,13 +207,15 @@ test('F1 late search results cannot populate a reopened editor', async ({ page }
   await expect(page.getByRole('option', { name: /过期搜索人员/ })).toHaveCount(0);
 });
 
-test('HR detail exposes invitation list and source-only onboarding handoff', async ({ page }) => {
-  await install(page, 'hr'); await page.goto('/talents');
+test('HR detail exposes invitation list and accepted application onboarding handoff', async ({ page }) => {
+  await install(page, 'hr');
+  await page.route('**/api/v1/talent-recruitment/candidates/*/applications', route => route.fulfill(envelope([{ id: 'accepted-application', candidateId: candidate.id, positionName: '虚构岗位', stage: 'accepted', revision: 1, allowedActions: ['withdraw'], events: [], onboardingRequest: null }])));
+  await page.goto('/talents');
   await page.getByText(candidate.name, { exact: true }).first().click();
   await expect(page.getByRole('button', { name: '新增面试' })).toBeVisible();
   await expect(page.getByText('日程未配置', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '办理入职', exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/entry-exit\\?talentId=${candidate.id}$`));
+  await expect(page).toHaveURL(new RegExp(`/entry-exit\\?talentId=${candidate.id}&talentApplicationId=accepted-application$`));
   expect(page.url()).not.toContain(candidate.phone);
 });
 

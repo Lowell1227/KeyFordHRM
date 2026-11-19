@@ -5,6 +5,7 @@ import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
+import { canWriteRecruitment, isApplicationOpenForInterview } from './talent-recruitment-policy';
 
 const include = { participants: { orderBy: { userId: 'asc' as const } }, candidate: { select: { deletedAt: true } } } satisfies Prisma.TalentInterviewInclude;
 type Interview = Prisma.TalentInterviewGetPayload<{ include: typeof include }>;
@@ -31,6 +32,16 @@ export class TalentInterviewsService {
 
   private assertWrite(user: AuthUser) {
     if (!hasHrCapability(user, 'employee_archive_edit')) throw new ForbiddenException('无权限维护面试邀约');
+  }
+
+  private async currentWriter(tx: Prisma.TransactionClient, user: AuthUser) {
+    // The request's AuthUser may predate a business-row lock wait.
+    const actor = await tx.user.findUnique({ where: { id: user.id }, select: {
+      id: true, name: true, sysRole: true, deptId: true, isAssessorOnly: true, canViewAll: true,
+      hrCapabilities: true, status: true, deletedAt: true, archivedAt: true,
+    } });
+    if (!actor || !canWriteRecruitment(actor)) throw new ForbiddenException('当前账号无权限维护面试邀约');
+    return actor;
   }
 
   async list(query: TalentInterviewQueryDto, user: AuthUser) {
@@ -61,7 +72,7 @@ export class TalentInterviewsService {
       participantNames: row.participants.map((p) => p.userNameSnapshot),
     };
     if (!this.canReadTalent(user)) return minimal;
-    return { ...minimal, candidateId: row.candidateId,
+    return { ...minimal, candidateId: row.candidateId, applicationId: row.applicationId ?? null,
       participants: row.participants.map(({ userId, userNameSnapshot }) => ({ userId, userNameSnapshot })),
       syncStatus: row.syncStatus, calendarSyncedVersion: row.calendarSyncedVersion };
   }
@@ -97,32 +108,44 @@ export class TalentInterviewsService {
     await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${candidateId}::uuid FOR UPDATE`;
   }
 
+  private async lockApplication(tx: Prisma.TransactionClient, applicationId: string) {
+    await tx.$queryRaw`SELECT id FROM talent_applications WHERE id = ${applicationId}::uuid FOR UPDATE`;
+  }
+
+  private async validateApplication(tx: Prisma.TransactionClient, applicationId: string, candidateId: string, requireOpen: boolean) {
+    const application = await tx.talentApplication.findUnique({ where: { id: applicationId }, select: { candidateId: true, stage: true } });
+    if (!application || application.candidateId !== candidateId) throw new BadRequestException('面试必须关联同一候选人的应聘记录');
+    if (requireOpen && !isApplicationOpenForInterview(application.stage)) throw new BadRequestException('当前应聘阶段不能安排或修改面试');
+  }
+
   async create(input: CreateTalentInterviewDto, user: AuthUser) {
     this.assertWrite(user);
     const data = this.validate(input);
-    const row = await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       await this.lockCandidate(tx, input.candidateId);
+      if (input.applicationId) await this.lockApplication(tx, input.applicationId);
+      const actor = await this.currentWriter(tx, user);
       if (input.requestId) {
         const existing = await tx.talentInterview.findUnique({ where: { id: input.requestId }, include });
         if (existing) {
-          if (existing.createdById !== user.id || existing.candidateId !== input.candidateId
+          if (existing.createdById !== actor.id || existing.candidateId !== input.candidateId || (existing.applicationId ?? null) !== (input.applicationId ?? null)
             || existing.startsAt.getTime() !== data.startsAt.getTime() || existing.endsAt.getTime() !== data.endsAt.getTime()
             || existing.invitationText !== data.invitationText || existing.meetingUrl !== data.meetingUrl || existing.note !== data.note
             || JSON.stringify(existing.participants.map((p) => p.userId).sort()) !== JSON.stringify([...input.participantIds].sort())) {
             throw new ConflictException('新建请求已使用，请刷新邀约列表后重试');
           }
-          return existing;
+          return this.view(existing, actor);
         }
       }
       const candidate = await tx.talentCandidate.findUnique({ where: { id: input.candidateId } });
       if (!candidate || candidate.deletedAt) throw new NotFoundException('候选人不存在或已删除');
+      if (input.applicationId) await this.validateApplication(tx, input.applicationId, candidate.id, true);
       const participants = await this.participants(tx, input.participantIds);
-      const created = await tx.talentInterview.create({ data: { ...data, ...(input.requestId ? { id: input.requestId } : {}), candidateId: candidate.id, candidateNameSnapshot: candidate.name,
-        createdById: user.id, syncStatus: this.syncStatus(), participants: { create: participants } }, include });
-      await this.intent(tx, created, user, 'create');
-      return created;
+      const created = await tx.talentInterview.create({ data: { ...data, ...(input.requestId ? { id: input.requestId } : {}), applicationId: input.applicationId ?? null, candidateId: candidate.id, candidateNameSnapshot: candidate.name,
+        createdById: actor.id, syncStatus: this.syncStatus(), participants: { create: participants } }, include });
+      await this.intent(tx, created, actor, 'create');
+      return this.view(created, actor);
     });
-    return this.view(row, user);
   }
 
   update(id: string, input: UpdateTalentInterviewDto, user: AuthUser) { return this.mutate(id, input, user, 'update'); }
@@ -132,14 +155,19 @@ export class TalentInterviewsService {
 
   private async mutate(id: string, input: UpdateTalentInterviewDto, user: AuthUser, action: 'update' | 'cancel' | 'complete' | 'retry') {
     this.assertWrite(user);
-    const row = await this.prisma.$transaction(async (tx) => {
-      const reference = await tx.talentInterview.findUnique({ where: { id }, select: { candidateId: true } });
+    return this.prisma.$transaction(async (tx) => {
+      const reference = await tx.talentInterview.findUnique({ where: { id }, select: { candidateId: true, applicationId: true } });
       if (!reference) throw new NotFoundException('面试邀约不存在');
       await this.lockCandidate(tx, reference.candidateId);
-      // Same lock order as deletion: candidate first, then invitation.
+      if (reference.applicationId) await this.lockApplication(tx, reference.applicationId);
+      // Keep the recruitment lock order: candidate, application, invitation.
       await tx.$queryRaw`SELECT id FROM talent_interviews WHERE id = ${id}::uuid FOR UPDATE`;
+      const actor = await this.currentWriter(tx, user);
       const before = await tx.talentInterview.findUnique({ where: { id }, include });
       if (!before) throw new NotFoundException('面试邀约不存在');
+      if (before.candidateId !== reference.candidateId || before.applicationId !== reference.applicationId) throw new ConflictException('面试来源已变化，请刷新后重试');
+      if ('applicationId' in input && input.applicationId !== before.applicationId) throw new BadRequestException('面试关联的应聘记录不能更换');
+      if (before.applicationId) await this.validateApplication(tx, before.applicationId, before.candidateId, action === 'update');
       if (before.version !== input.version) throw new ConflictException('邀约已更新，请刷新后重试');
       if (action !== 'retry' && before.status !== 'scheduled') throw new BadRequestException('已结束的面试不能再修改');
       const unresolved = await tx.talentInterviewSync.findFirst({ where: { interviewId: id, status: { in: ['processing', 'uncertain'] } } });
@@ -158,11 +186,12 @@ export class TalentInterviewsService {
       if (action === 'update' && (input.startsAt === null || input.endsAt === null || input.invitationText === null || input.participantIds === null)) {
         throw new BadRequestException('时间、参与人和邀请内容不能为空');
       }
-      const participants = action === 'update' && input.participantIds !== undefined
-        ? await this.participants(tx, input.participantIds) : before.participants;
+      const currentParticipants = action === 'update'
+        ? await this.participants(tx, input.participantIds ?? before.participants.map(participant => participant.userId)) : null;
+      const participants = currentParticipants && input.participantIds !== undefined ? currentParticipants : before.participants;
       const status = action === 'cancel' ? 'cancelled' : action === 'complete' ? 'completed' : before.status;
       const changed = await tx.talentInterview.updateMany({ where: { id, version: input.version }, data: {
-        ...fields, status, version: before.version + 1, syncStatus: this.syncStatus(), updatedById: user.id,
+        ...fields, status, version: before.version + 1, syncStatus: this.syncStatus(), updatedById: actor.id,
       } });
       if (changed.count !== 1) throw new ConflictException('邀约已更新，请刷新后重试');
       if (action === 'update' && input.participantIds !== undefined) {
@@ -170,10 +199,9 @@ export class TalentInterviewsService {
         await tx.talentInterviewParticipant.createMany({ data: participants.map(({ userId, userNameSnapshot }) => ({ interviewId: id, userId, userNameSnapshot })) });
       }
       const updated = { ...before, ...fields, participants, status, version: before.version + 1, syncStatus: this.syncStatus() } as Interview;
-      await this.intent(tx, updated, user, action, before);
-      return updated;
+      await this.intent(tx, updated, actor, action, before);
+      return this.view(updated, actor);
     });
-    return this.view(row, user);
   }
 
   private async intent(tx: Prisma.TransactionClient, row: Interview, user: AuthUser, action: string, before?: Interview) {

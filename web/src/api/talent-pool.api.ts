@@ -122,7 +122,7 @@ export const talentInterviewsApi = {
   create(body: TalentInterviewInput): Promise<TalentInterviewView> {
     return http.post('/talent-interviews', body) as unknown as Promise<TalentInterviewView>;
   },
-  update(id: string, body: Partial<Omit<TalentInterviewInput, 'candidateId' | 'requestId'>> & { version: number }): Promise<TalentInterviewView> {
+  update(id: string, body: Partial<Omit<TalentInterviewInput, 'candidateId' | 'applicationId' | 'requestId'>> & { version: number }): Promise<TalentInterviewView> {
     return http.patch(`/talent-interviews/${id}`, body) as unknown as Promise<TalentInterviewView>;
   },
   action(id: string, action: 'cancel' | 'complete' | 'retry-sync', version: number): Promise<TalentInterviewView> {

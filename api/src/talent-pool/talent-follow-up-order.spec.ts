@@ -40,7 +40,7 @@ describe('Talent follow-up due and attachment query contracts', () => {
     expect(due.sql).not.toContain('CURRENT_DATE');
     expect(due.values).toEqual(['2035-03-20']);
     expect(prisma.talentCandidate.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { deletedAt: null, AND: [{ id: { in: ['candidate-1'] } }] },
+      where: expect.objectContaining({ deletedAt: null, AND: expect.arrayContaining([{ id: { in: ['candidate-1'] } }]) }),
     }));
   });
 

@@ -97,7 +97,7 @@ async function startPreview() {
     env = {
       HRM_PREVIEW: 'true', NODE_ENV: 'development', PORT: '3000',
       DATABASE_URL: `postgresql://hrm_preview:${hex()}@postgres:5432/hrm_preview`,
-      JWT_SECRET: hex(), JWT_EXPIRES_IN: '8h', EMPLOYEE_ARCHIVE_ENCRYPTION_KEY: hex(), AI_PROVIDER_ENCRYPTION_KEY: hex(),
+      JWT_SECRET: hex(), JWT_EXPIRES_IN: '8h', EMPLOYEE_ARCHIVE_ENCRYPTION_KEY: hex(), AI_PROVIDER_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
       ENABLE_TEST_QUICK_LOGIN: 'true',
       REDIS_HOST: 'redis', REDIS_PORT: '6379', REDIS_PASSWORD: redisPassword,
       REDIS_URL: `redis://:${encodeURIComponent(redisPassword)}@redis:6379/9`,
@@ -110,6 +110,12 @@ async function startPreview() {
     };
   }
   if (databaseOwner && databaseOwner !== 'hrm_preview') throw new Error('Unexpected preview database owner');
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(env.AI_PROVIDER_ENCRYPTION_KEY ?? '')) {
+    const count = databaseOwner ? docker(['exec', '-i', 'hrm-postgres-1', 'psql', '-U', pgEnv.POSTGRES_USER,
+      '-d', 'hrm_preview', '-At', '-v', 'ON_ERROR_STOP=1'], 'SELECT count(*) FROM ai_provider_credentials;') : '0';
+    if (count !== '0') throw new Error('Preview AI credentials exist; refusing to replace their master key');
+    env.AI_PROVIDER_ENCRYPTION_KEY = randomBytes(32).toString('base64');
+  }
   for (const service of ['api', 'web']) {
     const mount = containers[service].Mounts.find((item) => item.Destination === '/app/node_modules' && item.Type === 'volume');
     if (!mount) throw new Error(`Missing existing ${service} dependencies volume`);

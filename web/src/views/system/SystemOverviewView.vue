@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const productVersion = '0.8';
+const productVersion = '0.9.1';
 
 type CapabilityStatus = 'available' | 'partial' | 'pending' | 'paused';
 
@@ -72,16 +72,16 @@ const capabilities: CapabilityItem[] = [
     note: '尚未提供面向业务管理员的运行状态和异常总览。',
   },
   {
-    name: '人才库与简单面试邀约',
+    name: '人才库与招聘流转',
     status: 'available',
     statusLabel: '可用',
-    note: '候选人资料、跟进、定向分享及简单面试邀约可用；钉钉面试日程尚未启用。',
+    note: '人才资料、跟进、应聘、面试反馈、录用确认及入职衔接可用；简历解析需独立配置，钉钉日程未启用。',
   },
   {
-    name: '招聘职位发布、面试评价与 Offer',
+    name: '招聘职位发布与 Offer 文书',
     status: 'paused',
     statusLabel: '已暂缓',
-    note: '职位发布、面试评价和 Offer 流程尚未建设。',
+    note: '职位发布、招聘编制、Offer 文书与薪资审批尚未建设。',
   },
   {
     name: '薪酬指定 HR 主管权限',

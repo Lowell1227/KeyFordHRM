@@ -25,6 +25,7 @@ export class ContractReferenceDto {
 
 export class EmployeeReentryFieldsDto {
   @IsOptional() @IsUUID('4') talentCandidateId?: string;
+  @IsOptional() @IsUUID('4') talentApplicationId?: string;
   @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
   @IsOptional() @IsString() @MaxLength(150) companyText?: string | null;
   @IsOptional()
@@ -126,6 +127,7 @@ export type OnboardingRequestView = {
   arrivalConfirmedAt: Date | null;
   arrivalConfirmedById: string | null;
   talentCandidateId: string | null;
+  talentApplicationId: string | null;
   talentCandidate: { id: string; name: string; deletedAt: Date | null } | null;
   recordStatus: string;
   proposedValue: Record<string, unknown>;

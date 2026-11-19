@@ -8,10 +8,12 @@ const reviewer = { ...hr, sysRole: 'hr_user', hrCapabilities: ['employee_archive
 const draft = { candidateId: 'candidate', startsAt: '2026-12-01T02:00:00Z', endsAt: '2026-12-01T03:00:00Z', participantIds: ['participant'], invitationText: '<b>plain invitation</b>', meetingUrl: 'https://meeting.tencent.com/dm/demo', note: 'private' };
 
 function setup(overrides = {}) {
+  const actor = { ...hr, status: 'active', archivedAt: null, deletedAt: null };
   const row = { id: 'invite', candidateId: 'candidate', candidateNameSnapshot: 'Synthetic Candidate', startsAt: new Date(draft.startsAt), endsAt: new Date(draft.endsAt), invitationText: draft.invitationText, meetingUrl: draft.meetingUrl, note: draft.note, status: 'scheduled', version: 1, syncStatus: 'unconfigured', calendarSyncedVersion: 0, participants: [{ userId: 'participant', userNameSnapshot: 'Synthetic Participant' }], candidate: { deletedAt: null }, ...overrides };
   const prisma = {
     talentCandidate: { findUnique: jest.fn().mockResolvedValue({ id: 'candidate', name: row.candidateNameSnapshot, deletedAt: null }) },
-    user: { findMany: jest.fn().mockResolvedValue([{ id: 'participant', name: 'Synthetic Participant' }]) },
+    talentApplication: { findUnique: jest.fn().mockResolvedValue({ id: 'application', candidateId: 'candidate', stage: 'interviewing' }) },
+    user: { findUnique: jest.fn().mockImplementation(() => Promise.resolve({ ...actor })), findMany: jest.fn().mockResolvedValue([{ id: 'participant', name: 'Synthetic Participant' }]) },
     talentInterview: { findUnique: jest.fn().mockResolvedValue(row),
       findMany: jest.fn().mockResolvedValue([row]), create: jest.fn().mockResolvedValue(row), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     talentInterviewParticipant: { deleteMany: jest.fn(), createMany: jest.fn() },
@@ -23,10 +25,97 @@ function setup(overrides = {}) {
   };
   const tx = { ...prisma, notificationLog: { createMany: jest.fn().mockImplementation(({ data }) => Promise.resolve({ count: data.length })) } };
   prisma.$transaction.mockImplementation((fn) => fn(tx));
-  return { row, prisma, tx, sut: new TalentInterviewsService(prisma as never) };
+  return { row, actor, prisma, tx, sut: new TalentInterviewsService(prisma as never) };
+}
+
+function pauseLock(prisma: ReturnType<typeof setup>['prisma'], table: string) {
+  let unlock!: () => void;
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const released = new Promise<void>(resolve => { unlock = resolve; });
+  prisma.$queryRaw.mockImplementation(async (sql) => {
+    if (sql.join('?').includes(table)) { entered(); await released; }
+    return [{ id: 'candidate' }];
+  });
+  return { waiting, unlock };
 }
 
 describe('talent interview safety and access', () => {
+  it.each([
+    ['create', null], ['create', 'application'], ['update', null], ['update', 'application'],
+    ['cancel', null], ['cancel', 'application'], ['complete', null], ['complete', 'application'],
+    ['retrySync', null], ['retrySync', 'application'],
+  ] as const)('%s rejects revoked maintenance permission after its last business lock, application=%s', async (action, applicationId) => {
+    const { sut, prisma, tx, actor } = setup({ applicationId });
+    const lastLock = action === 'create' ? applicationId ? 'talent_applications' : 'talent_candidates' : 'talent_interviews';
+    const lock = pauseLock(prisma, lastLock);
+    const pending = action === 'create' ? sut.create({ ...draft, applicationId }, hr) : sut[action]('invite', { version: 1 }, hr);
+    try {
+      await lock.waiting;
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
+      Object.assign(actor, { sysRole: 'hr_user', hrCapabilities: [] });
+    } finally { lock.unlock(); }
+    await expect(pending).rejects.toThrow(ForbiddenException);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: hr.id } }));
+    expect(prisma.talentInterview.create).not.toHaveBeenCalled();
+    expect(prisma.talentInterview.updateMany).not.toHaveBeenCalled();
+    expect(prisma.talentInterviewSync.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(tx.notificationLog.createMany).not.toHaveBeenCalled();
+  });
+  it.each([
+    { status: 'resigned' }, { status: 'pending_entry' }, { archivedAt: new Date() },
+    { deletedAt: new Date() }, { isAssessorOnly: true },
+  ])('rechecks an actor changed during create lock wait: %j', async change => {
+    const { sut, prisma, actor, tx } = setup({ applicationId: 'application' });
+    const lock = pauseLock(prisma, 'talent_applications');
+    const pending = sut.create({ ...draft, applicationId: 'application' }, hr);
+    try { await lock.waiting; Object.assign(actor, change); } finally { lock.unlock(); }
+    await expect(pending).rejects.toThrow(ForbiddenException);
+    expect(prisma.talentInterview.create).not.toHaveBeenCalled();
+    expect(tx.notificationLog.createMany).not.toHaveBeenCalled();
+  });
+  it('rejects an actor removed while waiting, including a replay with an existing request ID', async () => {
+    const { sut, prisma } = setup({ createdById: hr.id });
+    const lock = pauseLock(prisma, 'talent_candidates');
+    const pending = sut.create({ ...draft, requestId: 'invite' }, hr);
+    try { await lock.waiting; prisma.user.findUnique.mockResolvedValueOnce(null as never); } finally { lock.unlock(); }
+    await expect(pending).rejects.toThrow(ForbiddenException);
+    expect(prisma.talentInterview.create).not.toHaveBeenCalled();
+  });
+  it.each(['create', 'update-selected', 'update-retained'] as const)('%s checks current participant eligibility after the final lock', async action => {
+    const { sut, prisma, tx } = setup({ applicationId: 'application' });
+    const lock = pauseLock(prisma, action === 'create' ? 'talent_applications' : 'talent_interviews');
+    const pending = action === 'create' ? sut.create({ ...draft, applicationId: 'application' }, hr)
+      : sut.update('invite', { version: 1, ...(action === 'update-selected' ? { participantIds: ['participant'] } : { note: 'Synthetic schedule edit' }) }, hr);
+    try {
+      await lock.waiting;
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+      prisma.user.findMany.mockResolvedValue([]);
+    } finally { lock.unlock(); }
+    await expect(pending).rejects.toThrow(BadRequestException);
+    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      id: { in: ['participant'] }, status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null,
+    } }));
+    expect(prisma.talentInterview.create).not.toHaveBeenCalled();
+    expect(prisma.talentInterview.updateMany).not.toHaveBeenCalled();
+    expect(tx.notificationLog.createMany).not.toHaveBeenCalled();
+  });
+  it('accepts a current probation HR editor without broadening participant rules or silently rewriting snapshots', async () => {
+    const { sut, prisma, actor } = setup();
+    Object.assign(actor, { sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'], status: 'probation' });
+    prisma.user.findMany.mockResolvedValue([{ id: 'participant', name: 'Current name' }]);
+    const result = await sut.update('invite', { version: 1, note: 'Synthetic edit' }, hr);
+    expect(result).toMatchObject({ version: 2, participantNames: ['Synthetic Participant'] });
+    expect(prisma.talentInterviewParticipant.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.talentInterviewParticipant.createMany).not.toHaveBeenCalled();
+  });
+  it.each(['cancel', 'complete', 'retrySync'] as const)('keeps %s available to current HR when a historical participant has departed', async action => {
+    const { sut, prisma } = setup();
+    prisma.user.findMany.mockResolvedValue([]);
+    await expect(sut[action]('invite', { version: 1 }, hr)).resolves.toMatchObject({ version: 2 });
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
   it.each(['javascript:alert(1)', 'http://meeting.tencent.com/x', 'https://meeting.tencent.com.evil.test/x', 'https://evil.test/meeting.tencent.com', 'https://user:secret@meeting.tencent.com/x', 'https://meeting.tencent.com:8443/x', 'https://meeting.tencent.com\\@evil.test/x'])('rejects unsafe URL %s', (url) => {
     expect(() => safeTencentMeetingUrl(url)).toThrow(BadRequestException);
   });
@@ -45,6 +134,38 @@ describe('talent interview safety and access', () => {
   it('unassigned user cannot inspect invitation', async () => {
     const { sut } = setup();
     await expect(sut.detail('invite', { ...employee, id: 'other' })).rejects.toThrow(NotFoundException);
+  });
+  it('links only an open application belonging to this candidate and hides its ID from ordinary participants', async () => {
+    const { sut, prisma } = setup({ applicationId: 'application' });
+    await sut.create({ ...draft, applicationId: 'application' }, hr);
+    expect(prisma.talentInterview.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ applicationId: 'application' }) }));
+    expect(prisma.$queryRaw.mock.calls.map(([sql]) => sql.join('?'))).toEqual([
+      expect.stringContaining('talent_candidates'), expect.stringContaining('talent_applications'),
+    ]);
+    await expect(sut.detail('invite', hr)).resolves.toMatchObject({ applicationId: 'application' });
+    expect(await sut.detail('invite', employee)).not.toHaveProperty('applicationId');
+    expect(await sut.detail('invite', employee)).not.toHaveProperty('candidateId');
+  });
+  it('rejects mismatched or closed application sources before creating an invitation', async () => {
+    const { sut, prisma } = setup();
+    prisma.talentApplication.findUnique.mockResolvedValue({ id: 'application', candidateId: 'other', stage: 'interviewing' });
+    await expect(sut.create({ ...draft, applicationId: 'application' }, hr)).rejects.toThrow(BadRequestException);
+    prisma.talentApplication.findUnique.mockResolvedValue({ id: 'application', candidateId: 'candidate', stage: 'accepted' });
+    await expect(sut.create({ ...draft, applicationId: 'application' }, hr)).rejects.toThrow(BadRequestException);
+    expect(prisma.talentInterview.create).not.toHaveBeenCalled();
+  });
+  it('application source is immutable and participates in replay identity', async () => {
+    const { sut, prisma } = setup({ applicationId: 'application', createdById: hr.id });
+    await expect(sut.update('invite', { version: 1, applicationId: 'other' } as any, hr)).rejects.toThrow(BadRequestException);
+    await expect(sut.create({ ...draft, requestId: 'invite' }, hr)).rejects.toThrow(ConflictException);
+    expect(prisma.talentInterview.updateMany).not.toHaveBeenCalled();
+  });
+  it('locks application between candidate and invitation on linked mutations', async () => {
+    const { sut, prisma } = setup({ applicationId: 'application' });
+    await sut.complete('invite', { version: 1 }, hr);
+    expect(prisma.$queryRaw.mock.calls.map(([sql]) => sql.join('?'))).toEqual([
+      expect.stringContaining('talent_candidates'), expect.stringContaining('talent_applications'), expect.stringContaining('talent_interviews'),
+    ]);
   });
   it('ordinary mine list filters by participation and cannot filter candidate library', async () => {
     const { sut, prisma } = setup();

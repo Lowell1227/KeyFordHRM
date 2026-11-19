@@ -35,8 +35,8 @@ export class TalentsController {
 
   @Get()
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  list(@Query() query: TalentQueryDto) {
-    return this.talents.list(query);
+  list(@Query() query: TalentQueryDto, @CurrentUser() user: AuthUser) {
+    return this.talents.list(query, user);
   }
 
   @Get('check-phone')

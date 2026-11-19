@@ -37,6 +37,7 @@ export function canAccessRoute(
   route: Pick<RouteRecordRaw, 'meta'>,
   user: NavigationUser,
 ): boolean {
+  if (route.meta?.talentHiringOnly) return user.sysRole === 'hr' || Boolean(user.hrCapabilities?.includes('talent_hiring_confirm'));
   if (route.meta?.appealLedgerOnly) return canAccessAppealLedger(user);
   const scopedCapability = route.meta?.scopedCapability;
   if (scopedCapability && user.businessCapabilities?.[scopedCapability]) return true;

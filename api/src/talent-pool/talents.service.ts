@@ -11,15 +11,40 @@ import { createHash } from 'crypto';
 import { DeleteTalentDto } from './dto/talent-interview.dto';
 import { talentEditVersion } from './talent-edit-version';
 import { shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
+import { currentWorkerWhere } from '@/common/personnel/current-worker';
+import { ERROR_CODE } from '@/common/constants/error-codes';
+
+const onboardingSummary = {
+  orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1,
+  select: { id: true, onboardingStatus: true, recordStatus: true, cancelledAt: true },
+} satisfies Prisma.EmployeeDataChangeRequestFindManyArgs;
+
+const applicationSummary = {
+  orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+  select: { id: true, candidateId: true, positionName: true, recruitmentBatch: true, departmentNameSnapshot: true,
+    ownerId: true, stage: true, revision: true, expectedEntryDate: true, createdAt: true, updatedAt: true,
+    onboardingRequests: onboardingSummary },
+} satisfies Prisma.TalentApplicationFindManyArgs;
+
+const listInclude = {
+  _count: { select: { files: true } },
+  applications: { ...applicationSummary, take: 1 },
+  onboardingRequests: onboardingSummary,
+} satisfies Prisma.TalentCandidateInclude;
 
 /** 列表查询行（含附件计数）。 */
-type CandidateRow = Prisma.TalentCandidateGetPayload<{ include: { _count: { select: { files: true } } } }>;
+type CandidateRow = Prisma.TalentCandidateGetPayload<{ include: typeof listInclude }>;
+type ApplicationSummary = Prisma.TalentApplicationGetPayload<typeof applicationSummary>;
+type OnboardingSummary = Prisma.EmployeeDataChangeRequestGetPayload<typeof onboardingSummary>;
 
 /** 列表项：候选人 + 最新一条非空「下次跟进日期」+ 附件数（需求 §4.3 / §5.1）。 */
-export type TalentListItem = Omit<CandidateRow, '_count'> & {
+export type TalentListItem = Omit<CandidateRow, '_count' | 'applications' | 'onboardingRequests'> & {
   editVersion: string;
   nextFollowUpAt: Date | null;
   fileCount: number;
+  ownerName: string | null;
+  latestApplication: Omit<ApplicationSummary, 'onboardingRequests'> & { ownerName: string | null; onboardingRequest: OnboardingSummary | null } | null;
+  onboardingRequest: OnboardingSummary | null;
 };
 
 const KEYWORD_FIELDS = ['name', 'phone', 'currentCompany', 'currentPosition', 'appliedPosition'] as const;
@@ -28,8 +53,8 @@ const KEYWORD_FIELDS = ['name', 'phone', 'currentCompany', 'currentPosition', 'a
 export class TalentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(query: TalentQueryDto): Promise<Paginated<TalentListItem>> {
-    const where = await this.buildWhere(query);
+  async list(query: TalentQueryDto, operator?: AuthUser): Promise<Paginated<TalentListItem>> {
+    const where = await this.buildWhere(query, operator);
     const [total, items] = await this.prisma.$transaction([
       this.prisma.talentCandidate.count({ where }),
       this.prisma.talentCandidate.findMany({
@@ -37,18 +62,19 @@ export class TalentsService {
         orderBy: { updatedAt: 'desc' },
         skip: query.skip,
         take: query.take,
-        include: { _count: { select: { files: true } } },
+        include: listInclude,
       }),
     ]);
-    const withDue = await this.attachNextFollowUp(items.map(({ _count, ...item }) => ({
+    const summaries = await this.attachRecruitmentSummaries(items);
+    const withDue = await this.attachNextFollowUp(summaries.map(({ _count, applications: _applications, ...item }, index) => ({
       ...item,
-      editVersion: talentEditVersion(item),
+      editVersion: talentEditVersion(items[index]),
       fileCount: _count.files,
     })));
     return paginated(withDue as TalentListItem[], total, query);
   }
 
-  private async buildWhere(query: TalentQueryDto): Promise<Prisma.TalentCandidateWhereInput> {
+  private async buildWhere(query: TalentQueryDto, operator?: AuthUser): Promise<Prisma.TalentCandidateWhereInput> {
     const where: Prisma.TalentCandidateWhereInput = { deletedAt: null };
     const and: Prisma.TalentCandidateWhereInput[] = [];
     if (query.keyword) {
@@ -63,6 +89,17 @@ export class TalentsService {
     if (query.salaryMax !== undefined) and.push({ expectSalaryMin: { lte: query.salaryMax } });
     if (query.dueOnly) and.push({ id: { in: await this.dueCandidateIds() } });
     if (query.staleOnly) and.push(this.staleWhere());
+    if (query.dueOnly || query.staleOnly) {
+      and.push({ status: { notIn: ['hired', 'rejected'] } });
+      and.push({ OR: [
+        { applications: { none: {} } },
+        { applications: { some: { stage: { notIn: ['hired', 'rejected', 'declined', 'withdrawn'] } } } },
+      ] });
+    }
+    if (query.mineOnly) {
+      if (!operator?.id) throw new BadRequestException('仅看我的负责需要当前登录人');
+      and.push({ OR: [{ ownerId: operator.id }, { ownerId: null, createdById: operator.id }] });
+    }
     if (and.length > 0) where.AND = and;
     return where;
   }
@@ -113,6 +150,8 @@ export class TalentsService {
         files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
         followUps: { orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] },
         shares: { orderBy: { createdAt: 'desc' } },
+        applications: applicationSummary,
+        onboardingRequests: onboardingSummary,
       },
     });
     if (!candidate) throw new NotFoundException('候选人不存在或已删除');
@@ -121,14 +160,35 @@ export class TalentsService {
       ? await this.prisma.user.findMany({ where: { id: { in: recipientIds } }, select: { id: true, name: true } })
       : [];
     const nameById = new Map(recipients.map((user) => [user.id, user.name]));
+    const [summary] = await this.attachRecruitmentSummaries([candidate]);
     return {
-      ...candidate,
+      ...summary,
       editVersion: talentEditVersion(candidate),
       shares: candidate.shares.map((share) => ({
         ...share,
         recipientNames: share.recipientIds.map((recipientId) => nameById.get(recipientId) ?? '已删除用户'),
       })),
     };
+  }
+
+  private async attachRecruitmentSummaries<T extends {
+    ownerId?: string | null; createdById?: string;
+    applications?: ApplicationSummary[]; onboardingRequests?: OnboardingSummary[];
+  }>(items: T[]) {
+    const ownerIds = [...new Set(items.flatMap(item => [item.ownerId ?? item.createdById,
+      ...(item.applications ?? []).map(application => application.ownerId)]).filter((id): id is string => Boolean(id)))];
+    const owners = ownerIds.length ? await this.prisma.user.findMany({
+      where: { id: { in: ownerIds } }, select: { id: true, name: true },
+    }) : [];
+    const names = new Map(owners.map(owner => [owner.id, owner.name]));
+    return items.map(({ onboardingRequests, ...item }) => {
+      const ownerId = item.ownerId ?? item.createdById ?? null;
+      const applications = (item.applications ?? []).map(({ onboardingRequests: requests, ...application }) => ({
+        ...application, ownerName: names.get(application.ownerId) ?? null, onboardingRequest: requests?.[0] ?? null,
+      }));
+      return { ...item, ownerId, ownerName: ownerId ? names.get(ownerId) ?? null : null,
+        applications, latestApplication: applications[0] ?? null, onboardingRequest: onboardingRequests?.[0] ?? null };
+    });
   }
 
   async checkPhone(phone: string) {
@@ -153,6 +213,9 @@ export class TalentsService {
     const duplicate = await this.findByPhone(input.phone);
     if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
     try {
+      const ownerId = input.ownerId ?? operator.id;
+      await this.assertOwner(ownerId, this.prisma);
+      const education = await this.resolveEducation(input, this.prisma);
       const candidate = await this.prisma.talentCandidate.create({
         data: {
           name: input.name,
@@ -164,6 +227,8 @@ export class TalentsService {
           currentPosition: input.currentPosition || null,
           yearsOfExperience: input.yearsOfExperience ?? null,
           education: input.education || null,
+          ...education,
+          ownerId,
           school: input.school || null,
           major: input.major || null,
           expectCity: input.expectCity || null,
@@ -213,8 +278,13 @@ export class TalentsService {
           if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
         }
         const { status, userId: _ignoredUserId, editVersion: _editVersion, ...rest } = input;
-        const data: Prisma.TalentCandidateUpdateInput = {
+        const ownerChanged = input.ownerId !== undefined && input.ownerId !== (before.ownerId ?? before.createdById);
+        if (ownerChanged) await this.assertOwner(input.ownerId!, tx);
+        const education = await this.resolveEducation(input, tx, before);
+        const data: Prisma.TalentCandidateUncheckedUpdateInput = {
           ...this.buildUpdateData(rest, operator),
+          ...education,
+          ...(ownerChanged ? { ownerId: input.ownerId } : {}),
           ...(status !== undefined ? { status } : {}),
         };
         const changedFields = Object.keys(data).filter(field => field !== 'updatedById'
@@ -323,6 +393,35 @@ export class TalentsService {
       ...(input.note !== undefined ? { note: input.note || null } : {}),
       updatedById: operator.id,
     };
+  }
+
+  private async assertOwner(id: string, tx: Prisma.TransactionClient) {
+    const owner = id && await tx.user.findFirst({
+      where: { ...currentWorkerWhere, id, isAssessorOnly: false, OR: [
+        { sysRole: { in: ['hr', 'system_admin'] } },
+        { sysRole: 'hr_user', hrCapabilities: { has: 'employee_archive_edit' } },
+      ] }, select: { id: true },
+    });
+    if (!owner) throw new BadRequestException('负责人须为当前在职或试用的 HR 维护人员');
+  }
+
+  private async resolveEducation(input: Pick<CreateTalentDto, 'education' | 'educationReferenceDataId'>,
+    tx: Prisma.TransactionClient, before?: { educationReferenceDataId: string | null; education: string | null }) {
+    const id = input.educationReferenceDataId;
+    if (before && (id === undefined || id === before.educationReferenceDataId)
+      && (input.education === undefined || input.education === before.education)) return {};
+    if (id == null && input.education === undefined) return id === null ? { educationReferenceDataId: null } : {};
+    const name = input.education?.trim();
+    if (id == null && !name) return { educationReferenceDataId: null, education: null };
+    const option = await tx.personnelReferenceData.findFirst({
+      where: { kind: 'education', isActive: true, ...(id ? { id } : { name }) }, select: { id: true, name: true },
+    });
+    if (!option) {
+      const message = '请选择有效的学历基础资料';
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message,
+        data: { fieldErrors: { educationReferenceDataId: message } } });
+    }
+    return { educationReferenceDataId: option.id, education: option.name };
   }
 
   // ── 简历文件（T3） ─────────────────────────────────────────────────────────

@@ -5,6 +5,10 @@ const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? val
 const toNumber = ({ value }: { value: unknown }) => (value === undefined || value === null || value === '' ? value : Number(value));
 
 export class CreateShareDto {
+  @IsOptional()
+  @IsUUID('all')
+  requestId?: string;
+
   /** 接收人（1–5 人），须为当前在职/试用的 HR、实际主管或部门负责人。 */
   @IsArray()
   @ArrayMinSize(1, { message: '请选择至少 1 位接收人' })

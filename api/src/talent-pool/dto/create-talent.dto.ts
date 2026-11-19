@@ -4,7 +4,7 @@ import {
   IsString, IsUUID, Matches, Max, MaxLength, Min,
 } from 'class-validator';
 import {
-  EDUCATION_OPTIONS, TALENT_GENDERS, TALENT_SOURCE_CHANNELS, TALENT_STATUSES, TALENT_TAGS,
+  TALENT_GENDERS, TALENT_SOURCE_CHANNELS, TALENT_STATUSES, TALENT_TAGS,
 } from '../talent.constants';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -50,8 +50,17 @@ export class CreateTalentDto {
   yearsOfExperience?: number;
 
   @IsOptional()
-  @IsIn(EDUCATION_OPTIONS as readonly string[])
-  education?: string;
+  @Transform(trim)
+  @IsString() @MaxLength(100)
+  education?: string | null;
+
+  @IsOptional()
+  @IsUUID('all')
+  educationReferenceDataId?: string | null;
+
+  @IsOptional()
+  @IsUUID('all')
+  ownerId?: string;
 
   @IsOptional()
   @Transform(trim)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { talentInterviewsApi } from '@/api/talent-pool.api';
@@ -11,9 +11,13 @@ import { formatInterviewTime, interviewTimeToIso } from '../interview-time';
 import { extractTencentMeetingLink, safeTencentMeetingLink } from '../interview-meeting-link';
 
 const props = defineProps<{ candidateId: string; editable: boolean; invitationId?: string }>();
+const emit = defineEmits<{ changed: [] }>();
 const rows = ref<TalentInterviewView[]>([]), loading = ref(false), busy = ref(false), error = ref('');
 const editing = ref(false), current = ref<TalentInterviewView | null>(null), formRef = ref<FormInstance>();
 const requestId = ref('');
+const applicationId = ref<string | undefined>();
+const panelElement = ref<HTMLElement>();
+const loadFailed = ref(false);
 const opened = ref<string[]>([]);
 type InterviewPerson = Pick<User, 'id' | 'name' | 'employeeNo' | 'status' | 'archivedAt'>;
 const people = ref<InterviewPerson[]>([]), searching = ref(false), checkingParticipants = ref(false);
@@ -21,13 +25,14 @@ const participantNames = ref<Record<string, string>>({}), participantIssues = re
 const form = reactive({ startsAt: '', endsAt: '', participantIds: [] as string[], invitationText: '', meetingUrl: '', note: '' });
 const meetingLinkManual = ref(false);
 const meetingExtraction = ref<ReturnType<typeof extractTencentMeetingLink> | null>(null);
-let generation = 0, searchGeneration = 0;
+let generation = 0, searchGeneration = 0, editorSession = 0;
 const blockedParticipantIds = computed(() => form.participantIds.filter(id => participantIssues.value[id]));
 const selectableParticipantIds = computed({
   get: () => form.participantIds.filter(id => !participantIssues.value[id]),
   set: (ids: string[]) => {
     // Keep unresolved historical participants until HR explicitly removes them.
-    form.participantIds = [...blockedParticipantIds.value, ...ids];
+    const selectable = ids.filter(id => !participantIssues.value[id] && people.value.some(person => person.id === id));
+    form.participantIds = [...new Set([...blockedParticipantIds.value, ...selectable])];
     for (const person of people.value) if (ids.includes(person.id)) participantNames.value[person.id] = person.name;
     ++searchGeneration; searching.value = false; checkingParticipants.value = false;
   },
@@ -70,7 +75,7 @@ function failure(cause: unknown) {
   return typeof message === 'string' ? message : '操作未完成，请稍后重试';
 }
 async function load() {
-  const token = ++generation; loading.value = true; error.value = '';
+  const token = ++generation; loading.value = true; error.value = ''; loadFailed.value = false;
   try {
     const result = props.invitationId ? [await talentInterviewsApi.detail(props.invitationId)]
       : await talentInterviewsApi.list({ candidateId: props.candidateId });
@@ -78,14 +83,14 @@ async function load() {
       rows.value = result;
       if (props.invitationId) opened.value = [props.invitationId];
     }
-  } catch (cause) { if (token === generation) error.value = failure(cause); }
+  } catch (cause) { if (token === generation) { error.value = failure(cause); loadFailed.value = true; } }
   finally { if (token === generation) loading.value = false; }
 }
 function closeEditor() {
-  ++searchGeneration; editing.value = false; searching.value = false; checkingParticipants.value = false;
+  ++searchGeneration; ++editorSession; editing.value = false; searching.value = false; checkingParticipants.value = false;
 }
-watch(() => [props.candidateId, props.invitationId], () => { rows.value = []; closeEditor(); void load(); }, { immediate: true });
-onBeforeUnmount(closeEditor);
+watch(() => [props.candidateId, props.invitationId], () => { rows.value = []; busy.value = false; closeEditor(); void load(); }, { immediate: true });
+onBeforeUnmount(() => { ++generation; closeEditor(); });
 
 function participantIssue(person: InterviewPerson | null) {
   if (!person) return '状态无法核验，请重新核验或移除';
@@ -131,10 +136,11 @@ function removeParticipant(id: string) {
   delete participantIssues.value[id];
   void searchPeople();
 }
-function openEditor(row: TalentInterviewView | null) {
+function openEditor(row: TalentInterviewView | null, targetApplicationId?: string) {
   if (!props.editable) return;
   closeEditor();
   current.value = row; editing.value = true; error.value = '';
+  applicationId.value = row?.applicationId ?? targetApplicationId;
   requestId.value = row ? '' : crypto.randomUUID();
   meetingLinkManual.value = Boolean(row?.meetingUrl);
   meetingExtraction.value = null;
@@ -147,25 +153,37 @@ function openEditor(row: TalentInterviewView | null) {
   formRef.value?.clearValidate();
   void searchPeople();
 }
+function openForApplication(id: string) {
+  if (busy.value) return;
+  openEditor(null, id);
+  void nextTick(() => panelElement.value?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+}
+defineExpose({ openForApplication });
 async function save() {
-  if (!props.editable || busy.value || checkingParticipants.value || !await formRef.value?.validate().catch(() => false)) return;
+  const token = generation, editor = editorSession, candidateId = props.candidateId, row = current.value;
+  const valid = () => token === generation && editor === editorSession && candidateId === props.candidateId && editing.value;
+  if (!props.editable || busy.value || checkingParticipants.value || !await formRef.value?.validate().catch(() => false) || !valid()) return;
   busy.value = true; error.value = '';
   try {
     if (!await searchPeople()) { await formRef.value?.validateField('participantIds').catch(() => false); return; }
+    if (!valid()) return;
     const body = { ...form, startsAt: interviewTimeToIso(form.startsAt), endsAt: interviewTimeToIso(form.endsAt),
       participantIds: [...form.participantIds], meetingUrl: form.meetingUrl.trim() || null, note: form.note.trim() || null };
-    if (current.value) await talentInterviewsApi.update(current.value.id, { ...body, version: current.value.version });
-    else await talentInterviewsApi.create({ ...body, candidateId: props.candidateId, requestId: requestId.value });
-    closeEditor(); ElMessage.success('面试邀约已保存'); await load();
-  } catch (cause) { error.value = failure(cause); }
-  finally { busy.value = false; }
+    if (row) await talentInterviewsApi.update(row.id, { ...body, version: row.version });
+    else await talentInterviewsApi.create({ ...body, candidateId, applicationId: applicationId.value, requestId: requestId.value });
+    if (!valid()) return;
+    closeEditor(); ElMessage.success('面试邀约已保存'); emit('changed'); await load();
+  } catch (cause) { if (valid()) error.value = (cause as { response?: { status: number } }).response?.status === 409 ? '邀约已变化，输入已保留，请核对后重试。' : failure(cause); }
+  finally { if (candidateId === props.candidateId && (editor === editorSession || !editing.value)) busy.value = false; }
 }
 function syncBlocked(row: TalentInterviewView) { return ['processing', 'uncertain'].includes(row.syncStatus ?? ''); }
 async function reconcile(row: TalentInterviewView) {
   if (!props.editable || busy.value) return;
+  const token = generation;
   busy.value = true; error.value = '';
   try {
     const result = await talentInterviewsApi.reconcileCalendar(row.id, row.version);
+    if (token !== generation) return;
     if (result.status === 'pending') {
       ElMessage.success('已找到原日程，正在同步到该日程');
       await load();
@@ -180,29 +198,31 @@ async function reconcile(row: TalentInterviewView) {
       };
       error.value = messages[result.reason ?? ''] ?? '日程结果仍无法确认，请核实后重试；不会重复创建日程。';
     }
-  } catch (cause) { error.value = failure(cause); }
-  finally { busy.value = false; }
+  } catch (cause) { if (token === generation) error.value = failure(cause); }
+  finally { if (token === generation || rows.value.some(item => item.id === row.id)) busy.value = false; }
 }
 async function action(row: TalentInterviewView, command: 'cancel' | 'complete' | 'retry-sync') {
   if (!props.editable || busy.value) return;
+  const token = generation;
   if (command !== 'retry-sync') {
     try { await ElMessageBox.confirm(command === 'cancel' ? '取消这条面试邀约？腾讯会议本身仍需单独处理。' : '将这条面试记录标记为已完成？', '面试邀约',
       { confirmButtonText: command === 'cancel' ? '取消面试' : '完成面试', cancelButtonText: '返回' }); } catch { return; }
   }
+  if (token !== generation) return;
   busy.value = true; error.value = '';
-  try { await talentInterviewsApi.action(row.id, command, row.version); await load(); }
-  catch (cause) { error.value = failure(cause); }
-  finally { busy.value = false; }
+  try { await talentInterviewsApi.action(row.id, command, row.version); if (token !== generation) return; emit('changed'); await load(); }
+  catch (cause) { if (token === generation) error.value = failure(cause); }
+  finally { if (token === generation || rows.value.some(item => item.id === row.id)) busy.value = false; }
 }
 </script>
 
 <template>
-  <section v-loading="loading" class="interview-panel">
+  <section ref="panelElement" v-loading="loading" class="interview-panel">
     <header><h4>面试邀约</h4><div class="interview-panel__actions">
       <el-tooltip content="刷新邀约"><el-button :icon="Refresh" size="small" aria-label="刷新邀约" :disabled="busy" @click="load" /></el-tooltip>
       <el-button v-if="editable && !invitationId" size="small" :icon="Plus" :disabled="busy" @click="openEditor(null)">新增面试</el-button>
     </div></header>
-    <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <el-alert v-if="error" :title="error" type="error" :closable="false"><el-button v-if="loadFailed" link type="primary" @click="load">重试</el-button></el-alert>
     <el-form v-if="editing && editable" ref="formRef" :model="form" :rules="rules" label-position="top" class="interview-panel__editor" :disabled="busy">
       <div class="interview-panel__times">
         <el-form-item label="开始时间（北京时间）" prop="startsAt"><el-date-picker v-model="form.startsAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" /></el-form-item>
@@ -234,7 +254,7 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
     <el-collapse v-if="rows.length" v-model="opened" class="interview-panel__list">
       <el-collapse-item v-for="row in rows" :key="row.id" :name="row.id">
         <template #title><div class="interview-panel__summary"><span>{{ formatInterviewTime(row.startsAt) }}（北京时间）</span><span>{{ INTERVIEW_STATUS_LABELS[row.status] }}</span><el-tag size="small" :type="row.syncStatus === 'synced' ? 'success' : 'info'">{{ INTERVIEW_SYNC_LABELS[row.syncStatus ?? 'unconfigured'] }}</el-tag></div></template>
-        <TalentInterviewContent :invitation="row" />
+        <TalentInterviewContent :key="row.id" :invitation="row" />
         <div v-if="editable" class="interview-panel__actions">
           <el-button v-if="row.status === 'scheduled'" size="small" :disabled="busy || syncBlocked(row)" @click="openEditor(row)">修改邀约</el-button>
           <el-button v-if="row.status === 'scheduled'" size="small" :disabled="busy || syncBlocked(row)" @click="action(row, 'complete')">完成面试</el-button>

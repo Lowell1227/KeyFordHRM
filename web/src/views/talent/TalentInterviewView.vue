@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Refresh, ArrowLeft } from '@element-plus/icons-vue';
 import { talentInterviewsApi } from '@/api/talent-pool.api';
@@ -32,6 +32,7 @@ async function load() {
   } finally { if (current === generation) loading.value = false; }
 }
 watch(() => [route.params.id, scope.value, canEdit.value], load, { immediate: true });
+onBeforeUnmount(() => { ++generation; });
 </script>
 
 <template>
@@ -40,7 +41,7 @@ watch(() => [route.params.id, scope.value, canEdit.value], load, { immediate: tr
       <el-tooltip v-if="route.params.id" content="我的面试邀约"><el-button :icon="ArrowLeft" aria-label="我的面试邀约" @click="router.push('/talent-interviews')" /></el-tooltip>
       <el-tooltip content="刷新"><el-button :icon="Refresh" aria-label="刷新" @click="load" /></el-tooltip>
     </div>
-    <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <el-alert v-if="error" :title="error" type="error" :closable="false"><el-button link type="primary" @click="load">重试</el-button></el-alert>
     <TalentInterviewPanel v-else-if="detail?.candidateId && canEdit" :key="detail.id" :candidate-id="detail.candidateId" :invitation-id="detail.id" editable />
     <TalentInterviewContent v-else-if="detail" :invitation="detail" />
     <template v-else-if="!route.params.id">

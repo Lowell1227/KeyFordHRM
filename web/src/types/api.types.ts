@@ -159,7 +159,8 @@ export type HrCapability =
   | 'cycle_plan_review'
   | 'performance_calibration'
   | 'performance_publish'
-  | 'confirmation_manage';
+  | 'confirmation_manage'
+  | 'talent_hiring_confirm';
 
 export interface CurrentUser {
   id: string;

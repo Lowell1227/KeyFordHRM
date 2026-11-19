@@ -21,7 +21,7 @@ import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeEffectiveDateService } from './employee-effective-date.service';
 import { approvedEmploymentSourceWhere, shanghaiBusinessDate } from './employment-timeline';
 import { employeeDataChangeView } from './employee-data-change-view';
-import { lockTalentSource, resolveTalentSource, talentSourceSelect } from './employee-talent-source';
+import { lockTalentSource, resolveTalentSource, resolveTalentApplicationSource, syncTalentApplicationOnboarding, talentSourceSelect } from './employee-talent-source';
 import {
   CancelEmployeeReentryDto,
   ConfirmEmployeeArrivalDto,
@@ -115,6 +115,7 @@ export class EmployeeOnboardingService {
       const revisions = Array.isArray(request.revisionHistory) ? request.revisionHistory : [];
       const renewed = reopening ? await this.employeeNumbers.renewReleasedReservation(tx, requestId, request.userId!) : null;
       const employeeNo = renewed?.employeeNo ?? request.employeeNo;
+      if (reopening) await syncTalentApplicationOnboarding(tx, request, 'onboarding', operator.id);
       const updated = await tx.employeeDataChangeRequest.update({ where: { id: requestId, requestVersion: input.requestVersion,
         arrivalConfirmedAt: null, archivedAt: null, onboardingStatus: request.onboardingStatus,
         cancelledAt: reopening ? { not: null } : null }, data: {
@@ -242,6 +243,7 @@ export class EmployeeOnboardingService {
       if (open) throw new ConflictException('该员工已有未完成的入职申请');
       await this.assertReferences(tx, userId, input);
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, undefined, userId);
+      const talentApplicationId = await resolveTalentApplicationSource(tx, talentCandidateId, input.talentApplicationId);
 
       const warnings = this.buildWarnings(input);
       const employee = this.normalizedEmployee(input);
@@ -261,6 +263,7 @@ export class EmployeeOnboardingService {
           onboardingStatus: OnboardingStatus.submitted,
           requiresArrivalConfirmation: !historicalOnly,
           talentCandidateId,
+          talentApplicationId,
           baseValue: this.json({
             employee: {
               status: user.status,
@@ -286,6 +289,7 @@ export class EmployeeOnboardingService {
         },
       });
       const employeeNo = await this.employeeNumbers.reserveNext(tx, request.id, userId);
+      await syncTalentApplicationOnboarding(tx, request, 'onboarding', operatorId);
       const updated = await tx.employeeDataChangeRequest.update({
         where: { id: request.id },
         include: { talentCandidate: { select: talentSourceSelect } },
@@ -326,6 +330,9 @@ export class EmployeeOnboardingService {
       if (!unfinishedStatuses.includes(request.onboardingStatus!) && !performanceOnly) throw new ConflictException('该申请当前不能修订');
       if (!request.userId) throw new ConflictException('再入职申请缺少员工标识');
       await resolveTalentSource(tx, input.talentCandidateId, request, request.userId);
+      if (input.talentApplicationId !== undefined && input.talentApplicationId !== request.talentApplicationId) {
+        throw new ConflictException('申请来源应聘不能更换，请保留原来源');
+      }
       await this.assertReferences(tx, request.userId, performanceOnly ? { performanceManagerId: input.performanceManagerId } as EmployeeReentryFieldsDto : input);
       if (performanceOnly && !input.performanceOnly && request.intakeType === OnboardingIntakeType.reentry) {
         const previous = this.record(this.record(request.proposedValue).employee);
@@ -409,6 +416,9 @@ export class EmployeeOnboardingService {
     return this.arrivalTransaction(async (tx) => {
       const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
       if (!request || !request.intakeType) throw new NotFoundException('入职申请不存在');
+      if (request.archivedAt || request.recordStatus === 'archived') {
+        throw new ConflictException('入职申请已归档，不能取消');
+      }
       if (!request.onboardingStatus || !unfinishedStatuses.includes(request.onboardingStatus)) {
         throw new ConflictException('该申请已经生效或取消，不能再次取消');
       }
@@ -418,6 +428,7 @@ export class EmployeeOnboardingService {
         await this.undoPendingProjection(tx, request);
       }
       await this.employeeNumbers.releaseReservation(tx, requestId, now);
+      await syncTalentApplicationOnboarding(tx, request, 'accepted', operatorId);
       const updated = await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: {
         onboardingStatus: OnboardingStatus.cancelled, recordStatus: 'cancelled', cancelledAt: now,
         cancelledById: operatorId, cancelledReason: input.reason.trim(), requestVersion: { increment: 1 },
@@ -514,6 +525,7 @@ export class EmployeeOnboardingService {
 
     const request = await this.prisma.$transaction(async (tx) => {
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, undefined, matchedEmployeeId);
+      const talentApplicationId = await resolveTalentApplicationSource(tx, talentCandidateId, input.talentApplicationId);
       const employee = this.normalizedEmployee(input);
       const previousEmployment = matchedEmployeeId ? await tx.employmentRecord.findFirst({
         where: { userId: matchedEmployeeId, ...approvedEmploymentSourceWhere }, orderBy: { effectiveFrom: 'desc' },
@@ -529,6 +541,7 @@ export class EmployeeOnboardingService {
         onboardingStatus: OnboardingStatus.draft,
         requiresArrivalConfirmation: !(input.effectiveTo && input.effectiveTo < shanghaiBusinessDate()),
         talentCandidateId,
+        talentApplicationId,
         baseValue: this.json(matchedEmployeeId ? { employee: { latestEmployment: previousEmployment } } : {}),
         proposedValue: this.json({
           payloadHash,
@@ -549,6 +562,7 @@ export class EmployeeOnboardingService {
         userId: operatorId, action: 'create_onboarding_intake', entityType: 'employee_data_change_request', entityId: created.id,
         newValue: this.json({ sourceSystem: input.sourceSystem, sourceReference: input.sourceReference, intakeType: input.intakeType, matchStatus }),
       } });
+      await syncTalentApplicationOnboarding(tx, created, 'onboarding', operatorId);
       return created;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     return {
@@ -749,6 +763,7 @@ export class EmployeeOnboardingService {
       arrivalDate: request.arrivalDate ?? null, arrivalConfirmedAt: request.arrivalConfirmedAt ?? null,
       arrivalConfirmedById: request.arrivalConfirmedById ?? null, talentCandidateId: request.talentCandidateId ?? null,
       talentCandidate: request.talentCandidate ?? null,
+      talentApplicationId: request.talentApplicationId ?? null,
       profileReviewStatus: request.profileReviewStatus,
       performanceReviewStatus: request.performanceReviewStatus,
       rejectedReason: request.rejectedReason ?? null,

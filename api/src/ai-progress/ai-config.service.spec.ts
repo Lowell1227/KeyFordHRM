@@ -100,6 +100,33 @@ describe('AiConfigService', () => {
     await service.activate(provider, operator);
   }
 
+  it('reads only a specified tested provider without enabling or changing the performance bot', async () => {
+    await ready('kimi');
+    await service.setBotEnabled(true, operator);
+    await service.saveProvider('deepseek', { apiKey: key, modelId: 'saved-performance-model' }, operator);
+    expect(await (service as any).getProviderRuntimeConfig('deepseek')).toBeNull();
+    await service.testProvider('deepseek', operator);
+    const before = JSON.stringify([...(storage.settings.entries()), storage.audits]);
+    fetchSpy.mockClear();
+    expect(await (service as any).getProviderRuntimeConfig('deepseek')).toMatchObject({
+      provider: 'deepseek', apiKey: key, modelId: 'saved-performance-model', configVersion: 1,
+    });
+    expect(JSON.stringify([...(storage.settings.entries()), storage.audits])).toBe(before);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(await service.getActiveRuntimeConfig()).toMatchObject({ provider: 'kimi' });
+    storage.credentials.get('deepseek').configVersion++;
+    expect(await (service as any).getProviderRuntimeConfig('deepseek')).toBeNull();
+  });
+
+  it('fails closed for unavailable specified credentials and masks persistence errors', async () => {
+    await ready('deepseek');
+    master = undefined;
+    expect(await (service as any).getProviderRuntimeConfig('deepseek')).toBeNull();
+    await expect((service as any).getProviderRuntimeConfig('invalid')).rejects.toThrow('不支持');
+    storage.db.aiProviderCredential.findUnique = async () => { throw new Error(key); };
+    await expect((service as any).getProviderRuntimeConfig('deepseek')).rejects.toThrow('AI 配置暂时不可用');
+  });
+
   it('does not activate stale or untested provider', async () => {
     await service.saveProvider('kimi', { apiKey: key, modelId: 'sample-model' }, operator);
     await expect(service.activate('kimi', operator)).rejects.toThrow();

@@ -2,7 +2,7 @@ import { ConflictException, Injectable } from '@nestjs/common';
 import { EmployeeNumberStatus, ExternalIdentityProvider, ExternalIdentityStatus, OnboardingStatus, Prisma, SysRole } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from './employment-timeline';
-import { lockTalentSource } from './employee-talent-source';
+import { lockTalentSource, syncTalentApplicationOnboarding } from './employee-talent-source';
 
 export const RESIGNATION_BINDING_DISABLED_REASON = '员工档案审核为离职';
 
@@ -207,6 +207,7 @@ export class EmployeeEffectiveDateService {
       validationWarnings: warnings as Prisma.InputJsonValue,
     } });
     if (request.talentCandidateId && request.arrivalConfirmedAt) {
+      await syncTalentApplicationOnboarding(tx, request, 'hired', request.arrivalConfirmedById ?? request.createdById);
       const candidate = await tx.talentCandidate.findUnique({ where: { id: request.talentCandidateId },
         select: { deletedAt: true, convertedUserId: true } });
       if (candidate && !candidate.deletedAt) {

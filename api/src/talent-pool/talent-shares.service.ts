@@ -1,5 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, type TalentShare } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
@@ -50,9 +50,9 @@ export class TalentSharesService {
     private readonly talents: TalentsService,
   ) {}
 
-  private async recipientWhere(): Promise<Prisma.UserWhereInput> {
+  private async recipientWhere(tx: Prisma.TransactionClient = this.prisma): Promise<Prisma.UserWhereInput> {
     const today = shanghaiBusinessDate();
-    const records = await this.prisma.employmentRecord.findMany({
+    const records = await tx.employmentRecord.findMany({
       where: {
         user: currentWorkerWhere,
         AND: [approvedEmploymentSourceWhere, { effectiveFrom: { lte: today } },
@@ -105,9 +105,9 @@ export class TalentSharesService {
     return paginated(rows.map(row => ({ id: row.id, name: row.name, employeeNo: row.employeeNo, deptName: row.dept?.name ?? null })), total, query);
   }
 
-  private async currentRecipients(ids: string[]) {
-    return this.prisma.user.findMany({
-      where: { ...await this.recipientWhere(), id: { in: ids } },
+  private async currentRecipients(ids: string[], tx: Prisma.TransactionClient = this.prisma) {
+    return tx.user.findMany({
+      where: { ...await this.recipientWhere(tx), id: { in: ids } },
       select: { id: true },
     });
   }
@@ -117,46 +117,67 @@ export class TalentSharesService {
     if (new Set(input.recipientIds).size !== input.recipientIds.length) {
       throw new BadRequestException('接收人不能重复选择');
     }
-    const candidate = await this.talents.findActive(candidateId);
-    const recipients = await this.currentRecipients(input.recipientIds);
-    if (recipients.length !== input.recipientIds.length) {
-      throw new BadRequestException('接收人资格已变化，请重新选择在职的 HR、实际主管或部门负责人');
-    }
-    const token = randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000);
-    const share = await this.prisma.talentShare.create({
-      data: {
-        candidateId,
-        token,
-        recipientIds: input.recipientIds,
-        includeResume: input.includeResume === true,
-        message: input.message?.trim() || null,
-        expiresAt,
-        createdById: operator.id,
-      },
-    });
-    // 站内通知（复用 NotificationLog，channel=system，不自动发钉钉）。
-    const title = `HR 分享了一位候选人：${candidate.name}`;
-    const content = input.message?.trim()
-      ? `${operator.name}：${input.message.trim()}`
-      : `${operator.name} 分享了一位候选人，点击查看（有效期 ${input.expiresInDays} 天）。`;
-    for (const recipient of recipients) {
-      await this.prisma.notificationLog.create({
-        data: {
-          userId: recipient.id,
-          senderId: operator.id,
-          type: 'talent_share',
-          title,
-          content,
-          status: 'sent',
-          channel: 'system',
-          isRead: false,
-          sentAt: new Date(),
-          extraData: { token } as Prisma.InputJsonValue,
-        },
+    try {
+      return await this.prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${candidateId}::uuid FOR UPDATE`;
+        if (input.requestId) {
+          const prior = await tx.talentShare.findUnique({ where: { requestId: input.requestId } });
+          if (prior) return this.replay(prior, candidateId, input, operator);
+        }
+        const candidate = await tx.talentCandidate.findFirst({ where: { id: candidateId, deletedAt: null }, select: { id: true, name: true } });
+        if (!candidate) throw new NotFoundException('候选人不存在或已删除');
+        const recipients = await this.currentRecipients(input.recipientIds, tx);
+        if (recipients.length !== input.recipientIds.length) {
+          throw new BadRequestException('接收人资格已变化，请重新选择在职的 HR、实际主管或部门负责人');
+        }
+        const token = randomBytes(32).toString('hex');
+        const createdAt = new Date();
+        const expiresAt = new Date(createdAt.getTime() + input.expiresInDays * 24 * 60 * 60 * 1000);
+        const share = await tx.talentShare.create({
+          data: { candidateId, requestId: input.requestId ?? null, token, recipientIds: [...input.recipientIds].sort(),
+            includeResume: input.includeResume === true, message: input.message?.trim() || null,
+            expiresAt, createdAt, createdById: operator.id },
+        });
+        // System records only: no external delivery is triggered by share creation.
+        const title = `HR 分享了一位候选人：${candidate.name}`;
+        const content = input.message?.trim()
+          ? `${operator.name}：${input.message.trim()}`
+          : `${operator.name} 分享了一位候选人，点击查看（有效期 ${input.expiresInDays} 天）。`;
+        for (const recipient of recipients) {
+          await tx.notificationLog.create({
+            data: { userId: recipient.id, senderId: operator.id, type: 'talent_share', title, content,
+              status: 'sent', channel: 'system', isRead: false, sentAt: createdAt, extraData: { token } },
+          });
+        }
+        await tx.auditLog.create({ data: { userId: operator.id, action: 'create_talent_share',
+          entityType: 'talent_share', entityId: share.id,
+          newValue: { candidateId, recipientIds: input.recipientIds, includeResume: input.includeResume === true,
+            expiresInDays: input.expiresInDays, requestId: input.requestId ?? null } } });
+        return this.shareResult({ id: share.id, token, expiresAt });
       });
+    } catch (error) {
+      // The UUID is globally unique; a different candidate lock cannot serialize its reuse.
+      if (input.requestId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const prior = await this.prisma.talentShare.findUnique({ where: { requestId: input.requestId } });
+        if (prior) return this.replay(prior, candidateId, input, operator);
+      }
+      throw error;
     }
-    return { id: share.id, token, url: `/talents/s/${token}`, expiresAt };
+  }
+
+  private replay(share: TalentShare, candidateId: string, input: CreateShareDto, operator: AuthUser) {
+    const duration = share.expiresAt.getTime() - share.createdAt.getTime();
+    if (share.candidateId.toLowerCase() !== candidateId.toLowerCase() || share.createdById.toLowerCase() !== operator.id.toLowerCase()
+      || JSON.stringify(share.recipientIds.map(id => id.toLowerCase()).sort()) !== JSON.stringify(input.recipientIds.map(id => id.toLowerCase()).sort())
+      || share.includeResume !== (input.includeResume === true) || share.message !== (input.message?.trim() || null)
+      || duration !== input.expiresInDays * 24 * 60 * 60 * 1000) {
+      throw new ConflictException('分享请求已用于其他内容，请重新发起分享');
+    }
+    return this.shareResult(share);
+  }
+
+  private shareResult(share: Pick<TalentShare, 'id' | 'token' | 'expiresAt'>) {
+    return { id: share.id, token: share.token, url: `/talents/s/${share.token}`, expiresAt: share.expiresAt };
   }
 
   /** 撤销分享（写 revoked_at，幂等）。 */

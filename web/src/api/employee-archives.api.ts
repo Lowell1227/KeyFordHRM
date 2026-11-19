@@ -98,6 +98,7 @@ export interface EmployeeDataReview {
   arrivalConfirmedAt?: string | null;
   arrivalConfirmedById?: string | null;
   talentCandidateId?: string | null;
+  talentApplicationId?: string | null;
   talentCandidate?: { id: string; name: string; deletedAt: string | null } | null;
   requestVersion?: number;
   changedFields?: string[];
@@ -130,6 +131,7 @@ export interface EmployeeIdentityLookupResult {
 
 export interface EmployeeCreatePayload {
   talentCandidateId?: string;
+  talentApplicationId?: string;
   draftId?: string;
   expectedVersion?: number;
   name: string;
@@ -164,6 +166,7 @@ export type EmployeeCreateDraftPayload = Omit<Partial<EmployeeCreatePayload>, 'c
 
 export interface EmployeeReentryBody {
   talentCandidateId?: string;
+  talentApplicationId?: string;
   contractSubjectId?: string | null;
   companyText?: string | null;
   company?: string | null;

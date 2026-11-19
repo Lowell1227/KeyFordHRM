@@ -51,4 +51,9 @@ export class TalentQueryDto extends PaginationDto {
   @BooleanQuery()
   @IsBoolean()
   staleOnly?: boolean;
+
+  @IsOptional()
+  @BooleanQuery()
+  @IsBoolean()
+  mineOnly?: boolean;
 }

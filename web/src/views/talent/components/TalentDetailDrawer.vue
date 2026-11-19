@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, onBeforeUnmount, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
@@ -21,6 +21,7 @@ import TalentFileList from './TalentFileList.vue';
 import TalentFollowUpTimeline from './TalentFollowUpTimeline.vue';
 import TalentShareDrawer from './TalentShareDrawer.vue';
 import TalentInterviewPanel from './TalentInterviewPanel.vue';
+import TalentApplicationPanel from './TalentApplicationPanel.vue';
 import { useTalentPermissions } from '../useTalentPermissions';
 import { formatInterviewTime } from '../interview-time';
 
@@ -50,27 +51,39 @@ const visible = computed({
 });
 
 const loading = ref(false);
+const loadError = ref(''), actionError = ref(''), rejecting = ref(false), impactLoading = ref(false);
 const detail = ref<TalentCandidateDetail | null>(null);
+const interviewPanel = ref<InstanceType<typeof TalentInterviewPanel>>();
 const shareVisible = ref(false);
+const shareContext = ref<{ candidateId: string; session: number } | null>(null);
 const deleteImpact = ref<TalentDeleteImpact | null>(null);
 const deleteVisible = ref(false), deleting = ref(false), deleteError = ref('');
 let requestId = 0;
+let session = 0;
 
 watch(() => [props.modelValue, props.candidateId], () => {
+  ++session; ++requestId;
   detail.value = null;
-  deleteVisible.value = false;
+  shareVisible.value = false; shareContext.value = null;
+  deleteVisible.value = false; deleteImpact.value = null; impactLoading.value = false;
+  deleting.value = false; rejecting.value = false; actionError.value = ''; loadError.value = '';
   if (props.modelValue) void loadDetail();
-  else requestId++;
-});
+}, { immediate: true });
+onBeforeUnmount(() => { ++requestId; ++session; });
+function active(recordId: string, token: number) { return props.modelValue && props.candidateId === recordId && token === session; }
 
 async function loadDetail() {
   if (!props.candidateId) return;
   const id = ++requestId;
+  const recordId = props.candidateId, token = session;
   loading.value = true;
+  loadError.value = '';
   try {
-    const result = await talentPoolApi.detail(props.candidateId);
-    if (id !== requestId) return;
+    const result = await talentPoolApi.detail(recordId);
+    if (id !== requestId || !active(recordId, token)) return;
     detail.value = result;
+  } catch {
+    if (id === requestId && active(recordId, token)) loadError.value = '人才详情读取失败，请重试。';
   } finally {
     if (id === requestId) loading.value = false;
   }
@@ -103,41 +116,51 @@ function startEdit() {
 }
 
 async function markRejected() {
-  if (!detail.value || !canEdit.value) return;
+  if (!detail.value || !canEdit.value || rejecting.value) return;
   const target = detail.value;
-  const generation = requestId;
+  const token = session;
   try { await ElMessageBox.confirm(
     `把「${target.name}」标记为已淘汰？如需说明原因，建议先在编辑页写好备注。`,
     '标记淘汰',
     { confirmButtonText: '标记淘汰', cancelButtonText: '取消', type: 'warning' },
   ); } catch { return; }
-  if (!props.modelValue || props.candidateId !== target.id || generation !== requestId) return;
-  await talentPoolApi.update(target.id, { status: 'rejected', editVersion: target.editVersion });
-  if (!props.modelValue || props.candidateId !== target.id || generation !== requestId) return;
-  ElMessage.success('已标记为已淘汰');
-  await loadDetail();
+  if (!active(target.id, token)) return;
+  rejecting.value = true; actionError.value = '';
+  try {
+    await talentPoolApi.update(target.id, { status: 'rejected', editVersion: target.editVersion });
+    if (!active(target.id, token)) return;
+    ElMessage.success('已标记为已淘汰'); emit('changed'); await loadDetail();
+  } catch { if (active(target.id, token)) actionError.value = '标记淘汰失败，请核对当前记录后重试。'; }
+  finally { if (active(target.id, token)) rejecting.value = false; }
 }
 
 async function removeCandidate() {
-  if (!detail.value || !canEdit.value) return;
-  deleteError.value = '';
-  deleteImpact.value = await talentPoolApi.deleteImpact(detail.value.id);
-  deleteVisible.value = true;
+  if (!detail.value || !canEdit.value || impactLoading.value) return;
+  const id = detail.value.id, token = session;
+  deleteError.value = ''; actionError.value = ''; impactLoading.value = true;
+  try {
+    const impact = await talentPoolApi.deleteImpact(id);
+    if (!active(id, token)) return;
+    deleteImpact.value = impact; deleteVisible.value = true;
+  } catch { if (active(id, token)) actionError.value = '删除影响读取失败，请点击删除重试。'; }
+  finally { if (active(id, token)) impactLoading.value = false; }
 }
 
 async function confirmDelete() {
-  if (!detail.value || !deleteImpact.value || !canEdit.value) return;
-  const id = detail.value.id;
+  if (!detail.value || !deleteImpact.value || !canEdit.value || deleting.value) return;
+  const id = detail.value.id, token = session;
   deleting.value = true; deleteError.value = '';
   try {
     await talentPoolApi.remove(id, { impactVersion: deleteImpact.value.version, force: deleteImpact.value.requiresForce });
+    if (!active(id, token)) return;
     ElMessage.success('已删除');
     deleteVisible.value = false; visible.value = false; emit('removed', id);
   } catch (error) {
+    if (!active(id, token)) return;
     const latest = (error as { response?: { data?: { data?: { impact?: TalentDeleteImpact } } } }).response?.data?.data?.impact;
     if (latest) deleteImpact.value = latest;
     deleteError.value = latest ? '关联影响已变化，请重新核对后点击仍然删除' : '删除失败，请刷新关联影响后重试';
-  } finally { deleting.value = false; }
+  } finally { if (active(id, token)) deleting.value = false; }
 }
 
 function openEmployeeArchive() {
@@ -147,10 +170,10 @@ function openEmployeeArchive() {
 
 /** Only source ID is handed to onboarding; personal data never enters the URL. */
 function goOnboarding() {
-  if (!detail.value || detail.value.status === 'hired' || !canEdit.value) return;
+  if (!detail.value?.onboardingRequest) return;
   void router.push({
     path: '/entry-exit',
-    query: { talentId: detail.value.id },
+    query: { applicationId: detail.value.onboardingRequest.id },
   });
 }
 
@@ -160,7 +183,9 @@ function onFollowUpChanged() {
 }
 
 /** 分享创建/撤销后刷新详情（历史分享列表与查看次数）。 */
-function onShareChanged() {
+function openShare() { if (detail.value) { shareContext.value = { candidateId: detail.value.id, session }; shareVisible.value = true; } }
+function onShareChanged(context: { candidateId: string; session: number }) {
+  if (!active(context.candidateId, context.session) || shareContext.value !== context || !shareVisible.value) return;
   emit('changed');
   void loadDetail();
 }
@@ -169,6 +194,7 @@ function onShareChanged() {
 <template>
   <BusinessDetailDrawer v-model="visible" :title="detail?.name ?? '人才详情'" :loading="loading"
     variant="standard" class="talent-detail-drawer">
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false"><el-button link type="primary" @click="loadDetail">重试</el-button></el-alert>
     <div v-if="detail" class="talent-detail">
       <div class="talent-detail__header">
         <div class="talent-detail__badges">
@@ -180,14 +206,15 @@ function onShareChanged() {
           <span class="talent-detail__updated">更新于 {{ formatDate(detail.updatedAt) }}</span>
         </div>
         <div v-if="canEdit" class="talent-detail__actions">
-          <el-button v-if="detail.status !== 'hired'" size="small" type="primary" plain @click="goOnboarding">办理入职</el-button>
-          <el-button size="small" plain @click="shareVisible = true">转发</el-button>
+          <el-button v-if="detail.onboardingRequest" size="small" type="primary" plain @click="goOnboarding">查看入职申请</el-button>
+          <el-button size="small" plain @click="openShare">转发</el-button>
           <el-button size="small" @click="startEdit">编辑</el-button>
           <el-button v-if="detail.status !== 'rejected' && detail.status !== 'hired'" size="small" type="warning"
-            plain @click="markRejected">标记淘汰</el-button>
-          <el-button size="small" type="danger" plain @click="removeCandidate">删除</el-button>
+            plain :loading="rejecting" @click="markRejected">标记淘汰</el-button>
+          <el-button size="small" type="danger" plain :loading="impactLoading" @click="removeCandidate">删除</el-button>
         </div>
       </div>
+      <el-alert v-if="actionError" :title="actionError" type="error" :closable="false" />
 
       <el-alert v-if="detail.status === 'hired'" type="success" :closable="false" class="talent-detail__converted">
         已于 {{ formatDate(detail.convertedAt) }} 办理入职，
@@ -211,7 +238,7 @@ function onShareChanged() {
         <div class="talent-detail__field"><span class="talent-detail__label">意向岗位</span><span>{{ field(detail.appliedPosition) }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">期望城市</span><span>{{ field(detail.expectCity) }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">期望薪资</span><span>{{ salaryText(detail) }}</span></div>
-        <div class="talent-detail__field"><span class="talent-detail__label">学历</span><span>{{ detail.education ? EDUCATION_LABELS[detail.education] : '—' }}</span></div>
+        <div class="talent-detail__field"><span class="talent-detail__label">学历</span><span>{{ detail.education ? EDUCATION_LABELS[detail.education as keyof typeof EDUCATION_LABELS] ?? detail.education : '—' }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">院校</span><span>{{ field(detail.school) }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">专业</span><span>{{ field(detail.major) }}</span></div>
         <div class="talent-detail__field talent-detail__field--wide">
@@ -231,15 +258,18 @@ function onShareChanged() {
       <h4 class="talent-detail__section-title">简历文件（{{ detail.files.length }}）</h4>
       <TalentFileList :candidate-id="detail.id" :files="detail.files" :editable="canEdit" @changed="loadDetail" />
 
-      <TalentInterviewPanel :key="detail.id" :candidate-id="detail.id" :editable="canEdit" />
+      <TalentApplicationPanel :key="detail.id" :candidate-id="detail.id" :editable="canEdit" :converted-user-id="detail.convertedUserId" @changed="onFollowUpChanged" @interview="(id: string) => interviewPanel?.openForApplication(id)" />
+      <TalentInterviewPanel ref="interviewPanel" :key="detail.id" :candidate-id="detail.id" :editable="canEdit" @changed="onFollowUpChanged" />
 
       <h4 class="talent-detail__section-title">跟进</h4>
       <TalentFollowUpTimeline :key="detail.id" :candidate-id="detail.id" :editable="canEdit" @changed="onFollowUpChanged" />
 
       <slot name="extra" />
     </div>
-    <TalentShareDrawer v-if="detail && canEdit" v-model="shareVisible" :candidate-id="detail.id" :candidate-name="detail.name"
-      :shares="detail.shares" @changed="onShareChanged" />
+    <template v-for="context in shareContext ? [shareContext] : []" :key="`${context.candidateId}:${context.session}`">
+      <TalentShareDrawer v-if="detail && canEdit && shareVisible" v-model="shareVisible" :candidate-id="context.candidateId" :candidate-name="detail.name"
+        :shares="detail.shares" @changed="onShareChanged(context)" />
+    </template>
   </BusinessDetailDrawer>
   <el-dialog v-model="deleteVisible" title="删除人才记录" width="min(560px, 94vw)" append-to-body :close-on-click-modal="false">
     <template v-if="deleteImpact">

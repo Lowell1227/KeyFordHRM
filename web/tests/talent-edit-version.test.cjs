@@ -21,5 +21,7 @@ test('quick reject captures identity and baseline before confirmation', () => {
   const action = detail.slice(detail.indexOf('async function markRejected'), detail.indexOf('async function removeCandidate'));
   assert.match(action, /const target = detail.value/);
   assert.match(action, /editVersion: target.editVersion/);
-  assert.match(action, /props.candidateId !== target.id/);
+  assert.match(action, /if \(!active\(target.id, token\)\) return/);
+  assert.match(detail, /function active\(recordId: string, token: number\).*props.modelValue && props.candidateId === recordId && token === session/);
+  assert.match(action, /emit\('changed'\)/);
 });

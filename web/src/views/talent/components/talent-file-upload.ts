@@ -2,6 +2,7 @@ import { ElMessage } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { uploadApi } from '@/api/upload.api';
 import type { Attachment } from '@/types/api.types';
+import type { TalentResumeFile } from '@/types/talent.types';
 import { compressImage, isImageFile } from '@/utils/image-compress';
 
 /** 简历文件限制（需求 §5.2）。 */
@@ -28,27 +29,47 @@ export function extractTalentObjectKey(proxyUrl: string): string {
   return (key ?? proxyUrl).replace(/^\//, '');
 }
 
-/**
- * 压缩（图片）→ 类型/大小校验 → 上传 → 绑定到候选人。
- * 单个文件失败只提示不中断批量；返回是否成功绑定。
- */
-export async function uploadAndBindTalentFile(candidateId: string, original: File): Promise<boolean> {
+export interface TalentFileUploadState {
+  uploaded?: Attachment & { size?: number };
+  file?: File;
+  preparing?: Promise<File>;
+  bound?: TalentResumeFile;
+}
+
+export async function prepareTalentFile(original: File, state: TalentFileUploadState = {}): Promise<File> {
+  if (state.file) return state.file;
+  if (!state.preparing) {
+    state.preparing = (isImageFile(original) ? compressImage(original) : Promise.resolve(original))
+      .then(file => { state.file = file; return file; })
+      .finally(() => { delete state.preparing; });
+  }
+  return state.preparing;
+}
+
+/** 压缩结果与上传对象可复用于解析和失败续传；返回是否成功绑定。 */
+export async function uploadAndBindTalentFile(candidateId: string, original: File,
+  state: TalentFileUploadState = {}, isCurrent: () => boolean = () => true): Promise<boolean> {
   const ext = talentFileExtension(original.name);
   if (!TALENT_FILE_EXTENSIONS.includes(ext)) {
     ElMessage.error(`不支持的文件类型：${original.name}（仅支持 PDF/DOC/DOCX/JPG/PNG）`);
     return false;
   }
-  const file = isImageFile(original) ? await compressImage(original) : original;
+  if (!isCurrent()) return false;
+  if (state.bound?.candidateId === candidateId) return true;
+  const file = await prepareTalentFile(original, state);
   if (file.size > TALENT_MAX_FILE_BYTES) {
     ElMessage.error(`${file.name} 超过 10MB，请压缩后重试`);
     return false;
   }
-  const uploaded = await uploadApi.upload(file, 'talent-resume') as Attachment & { size?: number };
-  await talentPoolApi.bindFile(candidateId, {
+  if (!isCurrent()) return false;
+  const uploaded = state.uploaded ?? await uploadApi.upload(file, 'talent-resume') as Attachment & { size?: number };
+  state.uploaded = uploaded;
+  if (!isCurrent()) return false;
+  state.bound = await talentPoolApi.bindFile(candidateId, {
     objectKey: extractTalentObjectKey(uploaded.url),
     fileName: file.name,
     mimeType: uploaded.mimeType ?? file.type,
     fileSize: uploaded.size ?? file.size,
-  });
+  }) as unknown as TalentResumeFile;
   return true;
 }

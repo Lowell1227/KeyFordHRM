@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { usePagination } from '@/composables/usePagination';
 import {
@@ -11,13 +11,13 @@ import {
   TALENT_TAGS,
   TALENT_TAG_LABELS,
   EDUCATION_LABELS,
+  APPLICATION_STAGE_LABELS,
   type TalentCandidateListItem,
   type TalentSourceChannel,
   type TalentStatus,
   type TalentTag,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
-import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
@@ -42,9 +42,11 @@ const filters = reactive({
   salaryMax: undefined as number | undefined,
   dueOnly: false,
   staleOnly: false,
+  mineOnly: false,
 });
 const { page, pageSize, total, pageSizeOptions, reset, withParams } = usePagination({ defaultPageSize: 20 });
 let requestId = 0;
+onBeforeUnmount(() => { ++requestId; });
 
 onMounted(() => {
   void loadList();
@@ -64,6 +66,7 @@ async function loadList() {
       salaryMax: filters.salaryMax,
       dueOnly: filters.dueOnly || undefined,
       staleOnly: filters.staleOnly || undefined,
+      mineOnly: filters.mineOnly || undefined,
     }));
     if (id !== requestId) return;
     list.value = res.items;
@@ -99,7 +102,7 @@ function onRemoved() { void loadList(); }
 function onReset() {
   Object.assign(filters, {
     keyword: '', status: '', source: '', tag: '',
-    salaryMin: undefined, salaryMax: undefined, dueOnly: false, staleOnly: false,
+    salaryMin: undefined, salaryMax: undefined, dueOnly: false, staleOnly: false, mineOnly: false,
   });
   onSearch();
 }
@@ -150,8 +153,9 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
             @change="onSearch" />
         </div>
         <div class="talent-filter-bar__switches">
-          <el-switch v-model="filters.dueOnly" @change="onSearch" /> 仅看待跟进
-          <el-switch v-model="filters.staleOnly" @change="onSearch" /> 超18个月未联系
+          <el-switch v-model="filters.mineOnly" aria-label="我的负责" @change="onSearch" /> 我的负责
+          <el-switch v-model="filters.dueOnly" aria-label="仅看待跟进" @change="onSearch" /> 仅看待跟进
+          <el-switch v-model="filters.staleOnly" aria-label="超18个月未联系" @change="onSearch" /> 超18个月未联系
         </div>
         <el-button @click="onReset">重置</el-button>
       </div>
@@ -175,6 +179,8 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           </template>
         </el-table-column>
         <el-table-column prop="phone" label="手机" width="120" />
+        <el-table-column prop="ownerName" label="负责人" min-width="100" show-overflow-tooltip><template #default="{ row }">{{ asRow(row).ownerName || '未指定' }}</template></el-table-column>
+        <el-table-column label="最新应聘" min-width="180" show-overflow-tooltip><template #default="{ row }"><span v-if="asRow(row).latestApplication">{{ asRow(row).latestApplication?.positionName }} · {{ APPLICATION_STAGE_LABELS[asRow(row).latestApplication!.stage] }}</span><span v-else>暂无应聘</span></template></el-table-column>
         <el-table-column prop="appliedPosition" label="意向岗位" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.appliedPosition || '—' }}</template>
         </el-table-column>
@@ -188,7 +194,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         </el-table-column>
         <el-table-column label="学历" width="100">
           <template #default="{ row }">
-            {{ row.education ? EDUCATION_LABELS[asRow(row).education as keyof typeof EDUCATION_LABELS] : '—' }}
+            {{ row.education ? EDUCATION_LABELS[asRow(row).education as keyof typeof EDUCATION_LABELS] ?? row.education : '—' }}
           </template>
         </el-table-column>
         <el-table-column label="期望薪资" width="110">
@@ -231,8 +237,8 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         <div v-for="field in [
           ['岗位', item.appliedPosition || item.currentPosition || '—'],
           ['手机', item.phone],
-          ['公司', item.currentCompany || '—'],
-          ['期望薪资', formatSalary(item)],
+          ['负责人', item.ownerName || '未指定'],
+          ['最新应聘', item.latestApplication ? `${item.latestApplication.positionName} · ${APPLICATION_STAGE_LABELS[item.latestApplication.stage]}` : '暂无应聘'],
         ]" :key="field[0]" class="mobile-result-field">
           <span class="mobile-result-field__label">{{ field[0] }}</span>
           <span class="mobile-result-field__value">{{ field[1] }}</span>

@@ -223,6 +223,22 @@ export class AiConfigService {
       .catch((error) => this.persistenceError(error));
   }
 
+  /** Server-only credential read; independent of the performance bot's active provider/switch. */
+  async getProviderRuntimeConfig(
+    provider: AiProvider,
+  ): Promise<(ProviderRuntimeConfig & { configVersion: number }) | null> {
+    this.assertProvider(provider);
+    const row = await this.prisma.aiProviderCredential
+      .findUnique({ where: { provider } })
+      .catch((error) => this.persistenceError(error));
+    if (!row || row.testedVersion !== row.configVersion) return null;
+    try {
+      return this.runtime(row);
+    } catch {
+      return null;
+    }
+  }
+
   private async activeRuntime(tx: Prisma.TransactionClient) {
     const active = await tx.systemConfig.findUnique({ where: { key: ACTIVE } });
     if (typeof active?.value !== 'string' || !AI_PROVIDERS.includes(active.value as AiProvider))

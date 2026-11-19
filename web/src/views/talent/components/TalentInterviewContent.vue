@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
 import { INTERVIEW_STATUS_LABELS, type TalentInterviewView } from '@/types/talent.types';
 import { formatInterviewTime } from '../interview-time';
+import TalentInterviewFeedback from './TalentInterviewFeedback.vue';
 
 const props = defineProps<{ invitation: TalentInterviewView }>();
 const safeLink = computed(() => {
@@ -38,6 +39,7 @@ async function copy() {
     <p class="interview-invitation-text">{{ invitation.invitationText }}</p>
     <a v-if="safeLink" :href="safeLink" target="_blank" rel="noopener noreferrer">打开腾讯会议</a>
     <template v-if="invitation.note"><h4>安排备注</h4><p class="interview-invitation-text">{{ invitation.note }}</p></template>
+    <TalentInterviewFeedback :key="invitation.id" :interview-id="invitation.id" :interview-version="invitation.version" />
   </div>
 </template>
 

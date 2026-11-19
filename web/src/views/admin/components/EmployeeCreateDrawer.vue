@@ -44,12 +44,13 @@ const props = defineProps<{
   initialName?: string;
   initialPhone?: string;
   talentCandidateId?: string;
+  talentApplicationId?: string;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   submitted: [requestId: string];
   saved: [];
-  reentry: [userId: string, talentCandidateId?: string];
+  reentry: [userId: string, talentCandidateId?: string, talentApplicationId?: string];
   existing: [userId: string];
   application: [requestId: string];
   next: [];
@@ -65,6 +66,7 @@ const currentStep = ref(0);
 const draftId = ref<string>();
 const draftVersion = ref<number>();
 const sourceTalentId = ref<string>();
+const sourceTalentApplicationId = ref<string>();
 const saveBlocked = ref(false);
 const wizardElement = ref<HTMLElement>();
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -85,7 +87,7 @@ let draftSavePromise: Promise<boolean> | null = null;
 let generation = 0;
 let lastSavedSnapshot = '';
 function draftSnapshot() {
-  return JSON.stringify({ form, talentCandidateId: sourceTalentId.value, step: currentStep.value, phoneDuplicateAcknowledged: phoneDuplicateAcknowledged.value });
+  return JSON.stringify({ form, talentCandidateId: sourceTalentId.value, talentApplicationId: sourceTalentApplicationId.value, step: currentStep.value, phoneDuplicateAcknowledged: phoneDuplicateAcknowledged.value });
 }
 
 type ContractDraft = Record<string, any> & { __key: string };
@@ -213,6 +215,7 @@ function reset() {
   draftId.value = props.draft?.id;
   draftVersion.value = props.draft?.requestVersion;
   sourceTalentId.value = props.draft ? props.draft.talentCandidateId ?? undefined : props.talentCandidateId;
+  sourceTalentApplicationId.value = props.draft ? props.draft.talentApplicationId ?? undefined : props.talentApplicationId;
   const savedStep = Number.isInteger(draftMeta.currentStep) ? Number(draftMeta.currentStep) : 0;
   const restoredStep = draftMeta.layoutVersion === 2
     ? Math.min(Math.max(savedStep, 0), 3)
@@ -480,7 +483,7 @@ async function openCandidate(candidate: Pick<EmployeeIdentityCandidate, 'id' | '
   }
   emit('update:modelValue', false);
   if (candidate.requestId || candidate.nextAction === 'view_application') emit('application', candidate.requestId ?? candidate.id);
-  else if (candidate.status === 'resigned' || candidate.archived) emit('reentry', candidate.id, talentId);
+  else if (candidate.status === 'resigned' || candidate.archived) emit('reentry', candidate.id, talentId, sourceTalentApplicationId.value);
   else emit('existing', candidate.id);
 }
 
@@ -508,6 +511,7 @@ function validationPayload(): EmployeeCreateDraftPayload {
   };
   return {
     talentCandidateId: sourceTalentId.value,
+    talentApplicationId: sourceTalentApplicationId.value,
     draftId: draftId.value,
     expectedVersion: draftId.value ? draftVersion.value : undefined,
     name: form.name.trim(), phone: normalizedPhone() || null, idNumber: normalizedIdNumber() || null,

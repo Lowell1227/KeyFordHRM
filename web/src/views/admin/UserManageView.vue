@@ -22,6 +22,7 @@ import {
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
 import { talentPoolApi } from '@/api/talent-pool.api';
+import { talentRecruitmentApi } from '@/api/talent-recruitment.api';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
@@ -186,6 +187,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '绩效校准', value: 'performance_calibration' },
   { label: '结果公示', value: 'performance_publish' },
   { label: '转正管理与 HR 审批', value: 'confirmation_manage' },
+  { label: '人才录用确认', value: 'talent_hiring_confirm' },
 ];
 
 type EmployeeDirectoryCategory = 'all' | UserStatus | 'archived';
@@ -1052,6 +1054,7 @@ const employeeReentryDrawerVisible = ref(false);
 const employeeReentryRef = ref<InstanceType<typeof EmployeeReentryDrawer> | null>(null);
 const employeeReentryEmployee = ref<ManagedUser | null>(null);
 const reentryTalentCandidateId = ref<string>();
+const reentryTalentApplicationId = ref<string>();
 const employmentRecordDrawerVisible = ref(false);
 const employmentRecordDrawerArchive = ref<EmployeeArchive | null>(null);
 const employmentRecordDrawerMode = ref<'default' | 'resignation'>('default');
@@ -1143,7 +1146,7 @@ async function openApplication(requestId: string, isCurrent = () => true, syncRo
   if (syncRoute && route.query.requestId !== requestId) {
     applicationOpenedFromList.value = true;
     await router.push({ path: isPersonnelLifecycleRequest(result) ? '/entry-exit' : '/users', query: {
-      ...route.query, employeeId: undefined, talentId: undefined, assistantRequestId: undefined, applicationId: undefined,
+      ...route.query, employeeId: undefined, talentId: undefined, talentApplicationId: undefined, assistantRequestId: undefined, applicationId: undefined,
       requestId, tab: isPersonnelLifecycleRequest(result) ? route.query.tab === 'arrivals' ? 'arrivals' : 'applications' : 'changes',
     } });
   }
@@ -1324,23 +1327,27 @@ function openEmployeeCreate() {
   employeeCreateDrawerVisible.value = true;
 }
 
-const talentCreatePrefill = ref<{ id: string; name: string; phone: string } | null>(null);
+const talentCreatePrefill = ref<{ id: string; name: string; phone: string; applicationId: string } | null>(null);
 const talentPrefillError = ref('');
 let talentPrefillGeneration = 0;
 
 async function applyTalentCreatePrefill() {
   const generation = ++talentPrefillGeneration;
   const id = route.query.talentId;
+  const applicationId = route.query.talentApplicationId;
   talentPrefillError.value = '';
   if (props.mode !== 'processing' || !canEditArchive.value || typeof id !== 'string' || !id) return;
   try {
     const candidate = await talentPoolApi.detail(id);
+    if (typeof applicationId !== 'string' || !applicationId) throw new Error('Missing recruitment application');
+    const application = await talentRecruitmentApi.detail(applicationId);
+    if (application.candidateId !== id || application.stage !== 'accepted') throw new Error('Application not accepted');
     if (generation !== talentPrefillGeneration || route.query.talentId !== id) return;
     if (employeeCreateDrawerVisible.value) return;
     openEmployeeCreate();
-    talentCreatePrefill.value = { id: candidate.id, name: candidate.name, phone: candidate.phone };
+    talentCreatePrefill.value = { id: candidate.id, name: candidate.name, phone: candidate.phone, applicationId };
   } catch {
-    if (generation === talentPrefillGeneration) talentPrefillError.value = '人才资料无法读取，请核对权限或人才状态后重试。';
+    if (generation === talentPrefillGeneration) talentPrefillError.value = '无法办理入职，请在人才的应聘记录中核对已接受录用的申请，或打开原入职申请。';
   }
 }
 
@@ -1356,6 +1363,7 @@ function openNextCreateDraft() {
 
 function openEmployeeReentry(row: ManagedUser) {
   reentryTalentCandidateId.value = undefined;
+  reentryTalentApplicationId.value = undefined;
   employeeReentryEmployee.value = row;
   employeeReentryDrawerVisible.value = true;
 }
@@ -1371,13 +1379,14 @@ async function openPendingOnboarding(row: ManagedUser) {
   else ElMessage.info('未找到待生效申请，请刷新列表后重试');
 }
 
-async function openEmployeeReentryById(userId: string, talentCandidateId?: string) {
+async function openEmployeeReentryById(userId: string, talentCandidateId?: string, talentApplicationId?: string) {
   const generation = ++reentryOpenGeneration;
   try {
     const user = await usersApi.findOne(userId);
     if (generation !== reentryOpenGeneration) return;
     openEmployeeReentry(user);
     reentryTalentCandidateId.value = talentCandidateId;
+    reentryTalentApplicationId.value = talentApplicationId;
   } catch {
     if (generation === reentryOpenGeneration) ElMessage.error('暂时无法打开再入职申请，已填写内容保留在草稿中，请重试');
   }
@@ -1822,6 +1831,12 @@ function setPerformanceSpecialist(enabled: string | number | boolean) {
   personSettingsDialog.value.hrCapabilities = [...capabilities];
 }
 
+function setTalentHiringConfirmation(enabled: string | number | boolean) {
+  const capabilities: HrCapability[] = personSettingsDialog.value.hrCapabilities.filter(item => item !== 'talent_hiring_confirm');
+  if (enabled === true) capabilities.push('talent_hiring_confirm');
+  personSettingsDialog.value.hrCapabilities = capabilities;
+}
+
 function toggleOrgMemberSelection(item: ManagedUser, checked: boolean) {
   selectedOrgMembers.value = checked
     ? [...selectedOrgMembers.value.filter((row) => row.id !== item.id), item]
@@ -1889,7 +1904,7 @@ async function confirmPersonSettings() {
       isSystemAdmin.value && personSettingsDialog.value.sysRole !== personSettingsDialog.value.originalSysRole;
     const nextHrCapabilities = personSettingsDialog.value.sysRole === 'hr_user'
       ? [...personSettingsDialog.value.hrCapabilities].sort()
-      : [];
+      : personSettingsDialog.value.hrCapabilities.filter(item => item === 'talent_hiring_confirm');
     const hrCapabilitiesChanged = isSystemAdmin.value
       && JSON.stringify(nextHrCapabilities) !== JSON.stringify([...personSettingsDialog.value.originalHrCapabilities].sort());
     const actions: Promise<unknown>[] = [];
@@ -2054,7 +2069,7 @@ watch(() => [route.query.employeeId, props.mode, canViewArchive.value] as const,
   void openEmployeeArchive({ id });
 }, { immediate: true });
 
-watch(() => [route.query.talentId, props.mode, canEditArchive.value], () => { void applyTalentCreatePrefill(); }, { immediate: true });
+watch(() => [route.query.talentId, route.query.talentApplicationId, props.mode, canEditArchive.value], () => { void applyTalentCreatePrefill(); }, { immediate: true });
 
 watch(() => [route.query.tab, props.mode], () => {
   if (props.mode === 'processing') {
@@ -2972,6 +2987,7 @@ onBeforeUnmount(() => {
       :initial-name="talentCreatePrefill?.name"
       :initial-phone="talentCreatePrefill?.phone"
       :talent-candidate-id="talentCreatePrefill?.id"
+      :talent-application-id="talentCreatePrefill?.applicationId"
       @next="openNextCreateDraft"
       @saved="afterEmployeeDraftSaved"
       @submitted="afterEmployeeSubmitted"
@@ -2987,6 +3003,7 @@ onBeforeUnmount(() => {
       :employee="employeeReentryEmployee"
       :departments="departments"
       :talent-candidate-id="reentryTalentCandidateId"
+      :talent-application-id="reentryTalentApplicationId"
       @submitted="afterReentrySubmitted"
     />
 
@@ -3095,6 +3112,10 @@ onBeforeUnmount(() => {
             </el-checkbox>
           </el-checkbox-group>
           <small class="dialog-tip">编辑与审核可分别赋给不同人员，也允许同一人同时拥有两项能力。</small>
+        </el-form-item>
+        <el-form-item v-if="isSystemAdmin && !['hr', 'hr_user'].includes(personSettingsDialog.sysRole)" label="招聘职责">
+          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('talent_hiring_confirm')"
+            data-testid="talent-hiring-confirm-capability" @change="setTalentHiringConfirmation">人才录用确认</el-checkbox>
         </el-form-item>
         <el-form-item>
           <template #label>

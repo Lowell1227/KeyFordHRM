@@ -158,6 +158,15 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/talent-hiring',
+    name: 'TalentHiringReview',
+    component: () => import('@/views/talent/TalentHiringReviewView.vue'),
+    meta: {
+      requiresAuth: true, title: '录用确认', talentHiringOnly: true,
+      navigation: { module: 'people', label: '录用确认', order: 16, group: 'people-archive', groupLabel: '人员档案' },
+    },
+  },
+  {
     path: '/talents/s/:token',
     name: 'TalentShared',
     component: () => import('@/views/talent/TalentSharedView.vue'),

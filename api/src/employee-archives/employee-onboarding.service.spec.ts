@@ -1,9 +1,83 @@
 import { CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
-import { ValidationPipe } from '@nestjs/common';
+import { ConflictException, ValidationPipe } from '@nestjs/common';
 import { ReviseEmployeeReentryDto } from './dto/employee-onboarding.dto';
 
 describe('EmployeeOnboardingService', () => {
+  it('rejects adding a source to an existing source-free reentry before changing the request', async () => {
+    const tx: any = {
+      $queryRaw: jest.fn(),
+      talentCandidate: { findUnique: jest.fn().mockResolvedValue({ id: 'candidate', deletedAt: null, convertedUserId: null }) },
+      employeeDataChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'r1', userId: 'u1', intakeType: 'reentry', onboardingStatus: 'pending_entry',
+          profileReviewStatus: 'approved', performanceReviewStatus: 'rejected', talentCandidateId: null }),
+        findFirst: jest.fn().mockResolvedValue(null), update: jest.fn(async ({ data }) => ({ id: 'r1', ...data })),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeOnboardingService({ $transaction: async (run: any) => run(tx) } as any, {} as any, {} as any, {} as any);
+    await expect(service.reviseReentry('r1', { performanceOnly: true, talentCandidateId: 'candidate' } as any, 'hr1'))
+      .rejects.toThrow('申请来源人才不能更换');
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  describe('cancelling archived intake', () => {
+    function cancellationSetup(archive: { archivedAt: Date | null; recordStatus: string }) {
+      const request: any = {
+        id: 'old-request', intakeType: 'new_hire', onboardingStatus: 'draft', requestVersion: 1,
+        talentCandidateId: 'candidate', talentApplicationId: 'application', userId: null, ...archive,
+      };
+      // The application has already been reused by a new intake after the old one was archived.
+      const application = { id: 'application', stage: 'onboarding', revision: 3 };
+      const tx: any = {
+        $queryRaw: jest.fn(),
+        employeeDataChangeRequest: {
+          findUnique: jest.fn().mockResolvedValue(request),
+          update: jest.fn(async ({ data }) => ({ ...request, ...data })),
+        },
+        talentApplication: {
+          findUnique: jest.fn(async () => ({ ...application })),
+          updateMany: jest.fn(async ({ data }) => { application.stage = data.stage; return { count: 1 }; }),
+        },
+        talentApplicationEvent: { create: jest.fn() }, auditLog: { create: jest.fn() },
+      };
+      const numbers = { releaseReservation: jest.fn() };
+      const service = new EmployeeOnboardingService({ $transaction: async (run: any) => run(tx) } as any, numbers as any, {} as any, {} as any);
+      return { service, tx, numbers, application };
+    }
+
+    it.each([
+      { archivedAt: new Date('2026-11-17'), recordStatus: 'draft' },
+      { archivedAt: null, recordStatus: 'archived' },
+    ])('rejects archived state %j without releasing numbers or rewinding the reused application', async archive => {
+      const { service, tx, numbers, application } = cancellationSetup(archive);
+      await expect(service.cancelReentry('old-request', { reason: 'Synthetic cancellation' }, 'hr1'))
+        .rejects.toBeInstanceOf(ConflictException);
+      expect(numbers.releaseReservation).not.toHaveBeenCalled();
+      expect(tx.talentApplication.findUnique).not.toHaveBeenCalled();
+      expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+      expect(tx.talentApplicationEvent.create).not.toHaveBeenCalled();
+      expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+      expect(tx.auditLog.create).not.toHaveBeenCalled();
+      expect(application.stage).toBe('onboarding');
+    });
+
+    it('still cancels a live intake and records its application transition', async () => {
+      const { service, tx, numbers, application } = cancellationSetup({ archivedAt: null, recordStatus: 'draft' });
+      await service.cancelReentry('old-request', { reason: 'Synthetic cancellation' }, 'hr1');
+      expect(numbers.releaseReservation).toHaveBeenCalledTimes(1);
+      expect(application.stage).toBe('accepted');
+      expect(tx.talentApplicationEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ action: 'cancel_onboarding', fromStage: 'onboarding', toStage: 'accepted' }),
+      }));
+      expect(tx.employeeDataChangeRequest.update).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ recordStatus: 'cancelled', onboardingStatus: 'cancelled' }),
+      }));
+    });
+  });
+
   it.each(['pending_entry', 'effective'])('resubmits rejected new-hire performance in %s without rewriting approved employment', async (onboardingStatus) => {
     const request: any = { id: 'r1', userId: 'u1', employeeNo: '358', intakeType: 'new_hire', onboardingStatus,
       profileReviewStatus: 'approved', performanceReviewStatus: 'rejected', profileReviewedById: 'hr-original',
