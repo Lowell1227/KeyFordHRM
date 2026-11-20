@@ -107,8 +107,8 @@ describe('TalentResumeClient (mock HTTP only)', () => {
     expect((await run()).fields).toEqual({ birthYear: 2000, phone: '13900000000', expectSalaryMin: 10, expectSalaryMax: 15, yearsOfExperience: 3 });
   });
 
-  it.each([[12000, 12], [12500, undefined], [999000, 999], [1000000, undefined], [0, 0]])(
-    'returns %s yuan/month as %s integer K/month, never silently rounding', async (yuan, k) => {
+  it.each([[12000, 12], [12500, 12.5], [5500, 5.5], [5501, 5.501], [999000, 999], [2147483647, 2147483.647], [2147483648, undefined], [0, 0]])(
+    'returns %s yuan/month as exact %s K/month without rounding', async (yuan, k) => {
       const quote = `期望月薪：${yuan}元`;
       replies(ocr({ pages: [{ index: 0, text: quote, finish_reason: 'stop' }] }), chat({
         fields: { expectSalaryMin: yuan }, evidence: { expectSalaryMin: quote }, uncertainFields: [],

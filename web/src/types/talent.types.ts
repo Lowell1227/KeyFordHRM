@@ -4,6 +4,10 @@
  */
 
 export const TALENT_STATUSES = ['new', 'contacted', 'interviewing', 'hired', 'rejected', 'reserve'] as const;
+export type TalentEmploymentStatus = 'active' | 'probation' | 'resigned' | 'pending_entry' | 'unknown';
+export const TALENT_EMPLOYMENT_STATUS_LABELS: Record<TalentEmploymentStatus, string> = {
+  active: '在职', probation: '试用', resigned: '已离职', pending_entry: '待入职', unknown: '关联待核对',
+};
 export type TalentStatus = (typeof TALENT_STATUSES)[number];
 export const TALENT_STATUS_LABELS: Record<TalentStatus, string> = {
   new: '新入库',
@@ -89,6 +93,7 @@ export const TALENT_GENDER_LABELS: Record<TalentGender, string> = {
 
 /** GET /talents 列表项（含附件计数与最新下次跟进日期）。 */
 export interface TalentCandidateListItem {
+  employmentStatus?: TalentEmploymentStatus | null;
   id: string;
   editVersion: string;
   name: string;
@@ -106,6 +111,10 @@ export interface TalentCandidateListItem {
   expectCity: string | null;
   expectSalaryMin: number | null;
   expectSalaryMax: number | null;
+  expectSalaryMinYuan?: number | null;
+  expectSalaryMaxYuan?: number | null;
+  expectSalaryUnit?: string;
+  salaryNeedsReview?: boolean;
   sourceChannel: TalentSourceChannel;
   appliedPosition: string | null;
   status: TalentStatus;
@@ -153,6 +162,7 @@ export interface TalentShareRecord {
   candidateId: string;
   token: string;
   recipientIds: string[];
+  isPublicLink: boolean;
   includeResume: boolean;
   message: string | null;
   expiresAt: string;
@@ -178,12 +188,16 @@ export interface TalentCandidateDetail extends Omit<TalentCandidateListItem, 'ne
 
 /** GET /talents 查询参数。 */
 export interface TalentQuery {
+  applicationPosition?: string;
+  applicationStage?: TalentApplicationStage;
   keyword?: string;
   status?: TalentStatus;
   source?: TalentSourceChannel;
   tag?: TalentTag;
   salaryMin?: number;
   salaryMax?: number;
+  salaryMinYuan?: number;
+  salaryMaxYuan?: number;
   dueOnly?: boolean;
   staleOnly?: boolean;
   mineOnly?: boolean;
@@ -209,6 +223,8 @@ export interface TalentCandidateInput {
   expectCity?: string | null;
   expectSalaryMin?: number | null;
   expectSalaryMax?: number | null;
+  expectSalaryMinYuan?: number | null;
+  expectSalaryMaxYuan?: number | null;
   sourceChannel?: TalentSourceChannel;
   appliedPosition?: string | null;
   status?: TalentStatus;
@@ -244,7 +260,9 @@ export interface CreateFollowUpBody {
 
 /** POST /talents/:id/shares 请求体。 */
 export interface CreateShareBody {
-  recipientIds: string[];
+  requestId?: string;
+  isPublicLink?: boolean;
+  recipientIds?: string[];
   expiresInDays: 7 | 30;
   includeResume?: boolean;
   message?: string;
@@ -347,6 +365,10 @@ export const APPLICATION_STAGE_LABELS: Record<TalentApplicationStage, string> = 
   declined: '已拒绝录用', rejected: '已淘汰', reserve: '人才储备', withdrawn: '已撤回', onboarding: '入职办理中', hired: '已入职',
 };
 export type TalentApplicationAction = 'start_interview' | 'submit_hiring' | 'approve_hiring' | 'return_hiring' | 'accept_offer' | 'decline_offer' | 'reject' | 'reserve' | 'withdraw' | 'reopen';
+export type TalentReserveReason = 'commute_distance' | 'salary_expectation' | 'work_schedule' | 'other';
+export const TALENT_RESERVE_REASON_LABELS: Record<TalentReserveReason, string> = {
+  commute_distance: '通勤距离', salary_expectation: '薪资期望', work_schedule: '工作制偏好', other: '其他',
+};
 export const APPLICATION_ACTION_LABELS: Record<TalentApplicationAction, string> = {
   start_interview: '进入面试', submit_hiring: '提交录用', approve_hiring: '确认录用', return_hiring: '退回经办',
   accept_offer: '候选人接受', decline_offer: '候选人拒绝', reject: '淘汰', reserve: '转储备', withdraw: '撤回应聘', reopen: '重开应聘',
@@ -359,6 +381,7 @@ export interface TalentOnboardingRequest {
   archivedAt?: string | null;
 }
 export interface TalentApplicationEvent {
+  reserveReasons?: TalentReserveReason[];
   id: string;
   applicationId: string;
   actorId: string;

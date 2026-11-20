@@ -9,7 +9,8 @@ const layout = computed(() => (route.meta.layout === 'auth' ? AuthLayout : Defau
 </script>
 
 <template>
-  <component :is="layout">
+  <RouterView v-if="route.meta.layout === 'plain'" />
+  <component v-else :is="layout">
     <RouterView />
   </component>
 </template>

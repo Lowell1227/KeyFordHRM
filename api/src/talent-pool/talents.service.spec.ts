@@ -138,19 +138,25 @@ describe('TalentsService 列表筛选', () => {
     const sut = listSetup(prisma);
     await sut.list({ salaryMin: 15, salaryMax: 25, skip: 0, take: 20 } as never);
     const where = prisma.talentCandidate.findMany.mock.calls[0][0].where;
-    expect(where.AND).toEqual([
-      { expectSalaryMax: { gte: 15 } },
-      { expectSalaryMin: { lte: 25 } },
-    ]);
+    expect(where.AND).toEqual([{ OR: [
+      { expectSalaryUnit: 'yuan', expectSalaryMax: { gte: 15000 }, expectSalaryMin: { lte: 25000 } },
+      { expectSalaryUnit: 'legacy_k', AND: [
+        { OR: [{ expectSalaryMin: null }, { expectSalaryMin: { not: 999 } }] },
+        { OR: [{ expectSalaryMax: null }, { expectSalaryMax: { not: 999 } }] },
+        { expectSalaryMax: { gte: 15 } }, { expectSalaryMin: { lte: 25 } },
+      ] },
+    ] }]);
   });
 
-  it('dueOnly 走「最新一条非空下次跟进日期 ≤ 今天」的候选人集合', async () => {
+  it('dueOnly 包含从未跟进与所有已安排日期，招聘阶段独立筛选', async () => {
     const prisma = buildPrisma();
-    prisma.$queryRaw.mockResolvedValue([{ id: 'due-1' }, { id: 'due-2' }]);
     const sut = listSetup(prisma);
     await sut.list({ dueOnly: true, skip: 0, take: 20 } as never);
     const where = prisma.talentCandidate.findMany.mock.calls[0][0].where;
-    expect(where.AND).toContainEqual({ id: { in: ['due-1', 'due-2'] } });
+    expect(where.AND).toEqual([{ OR: [
+      { followUps: { none: {} } },
+      { followUps: { some: { nextFollowUpAt: { not: null } } } },
+    ] }]);
   });
 
   it('staleOnly 命中 18 个月未联系（含从未跟进且入库超 18 个月）', async () => {
@@ -163,6 +169,19 @@ describe('TalentsService 列表筛选', () => {
     expect(where.AND[0].OR[1]).toEqual({
       AND: [{ lastFollowUpAt: null }, { createdAt: expect.objectContaining({}) }],
     });
+  });
+
+  it('已入职历史不回退，另显示关联员工当前离职或再入职状态', async () => {
+    const prisma = buildPrisma();
+    prisma.talentCandidate.findMany.mockResolvedValue([{ ...baseCandidate({ status: 'hired', convertedUserId: 'worker-1' }), _count: { files: 0 } }]);
+    prisma.user.findMany.mockResolvedValue([{ id: 'worker-1', status: 'resigned', deletedAt: null, archivedAt: new Date() }]);
+    const sut = service(prisma);
+    const first = await sut.list({ skip: 0, take: 20 } as never);
+    expect(first.items[0]).toMatchObject({ status: 'hired', employmentStatus: 'resigned' });
+    prisma.user.findMany.mockResolvedValue([{ id: 'worker-1', status: 'active', deletedAt: null, archivedAt: null }]);
+    const rejoined = await sut.list({ skip: 0, take: 20 } as never);
+    expect(rejoined.items[0]).toMatchObject({ status: 'hired', employmentStatus: 'active' });
+    expect(prisma.talentCandidate.update).not.toHaveBeenCalled();
   });
 });
 

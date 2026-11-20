@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query,
+  Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query,
 } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -37,6 +37,19 @@ export class TalentsController {
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   list(@Query() query: TalentQueryDto, @CurrentUser() user: AuthUser) {
     return this.talents.list(query, user);
+  }
+
+  @Get('export')
+  @Header('Cache-Control', 'no-store, private')
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  exportApplications(@Query() query: TalentQueryDto, @CurrentUser() user: AuthUser) {
+    return this.talents.exportApplications(query, user);
+  }
+
+  @Get('application-positions')
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  applicationPositions() {
+    return this.talents.applicationPositions();
   }
 
   @Get('check-phone')

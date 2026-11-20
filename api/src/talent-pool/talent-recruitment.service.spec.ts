@@ -45,6 +45,37 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
   return { sut: new TalentRecruitmentService(prisma as never), prisma, tx, app, interview, actors, feedbacks, feedbackEvents };
 }
 
+describe('reserve reasons on application events', () => {
+  it('persists optional multiple reasons on the event with the same revision and preserves independent reserve history', async () => {
+    const { sut, tx } = setup();
+    const first = await sut.act('app', { expectedRevision: 1, action: 'reserve', reserveReasons: ['commute_distance', 'salary_expectation'], note: 'Synthetic reserve note' } as never, hr);
+    expect(first.events[0]).toMatchObject({ action: 'reserve', version: 2, reserveReasons: ['commute_distance', 'salary_expectation'], note: 'Synthetic reserve note' });
+    await sut.act('app', { expectedRevision: 2, action: 'reopen' }, hr);
+    const second = await sut.act('app', { expectedRevision: 3, action: 'reserve', reserveReasons: ['other'] } as never, hr);
+    expect(second.events.filter(event => event.action === 'reserve')).toEqual([
+      expect.objectContaining({ version: 2, reserveReasons: ['commute_distance', 'salary_expectation'], note: 'Synthetic reserve note' }),
+      expect.objectContaining({ version: 4, reserveReasons: ['other'], note: null }),
+    ]);
+    expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('Synthetic reserve note');
+  });
+
+  it('keeps the previous optional-reason contract when no reasons or explanation are supplied', async () => {
+    const { sut } = setup();
+    const result = await sut.act('app', { expectedRevision: 1, action: 'reserve' }, hr);
+    expect(result.events[0]).toMatchObject({ action: 'reserve', reserveReasons: [], note: null });
+  });
+
+  it.each([
+    ['reserve', ['unknown']], ['reserve', ['other', 'other']], ['reserve', 'other'],
+    ['reserve', ['other', 'other', 'other', 'other', 'other']], ['reject', ['commute_distance']],
+  ])('rejects malformed or out-of-context reasons for %s before any event or stage change', async (action, reserveReasons) => {
+    const { sut, tx } = setup();
+    await expect(sut.act('app', { expectedRevision: 1, action, reserveReasons, note: 'Synthetic action note' } as never, hr)).rejects.toThrow(BadRequestException);
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    expect(tx.talentApplicationEvent.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('talent recruitment transactions and boundaries', () => {
   it('requires fresh independent approval and does not infer system-admin approval', async () => {
     const { sut, app, actors, tx } = setup({ stage: 'hiring_review', hiringRequestedById: hr.id });

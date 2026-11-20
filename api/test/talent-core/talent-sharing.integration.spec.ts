@@ -29,10 +29,13 @@ describe('talent core: disposable PostgreSQL', () => {
       throw new Error('Disposable talent database must be loopback and test-owned');
     }
     try {
-      execFileSync(process.execPath, [require.resolve('prisma/build/index.js'), 'db', 'push', '--skip-generate'], {
-        cwd: path.resolve(__dirname, '../..'), env: { ...process.env, DATABASE_URL: databaseUrl }, stdio: 'pipe', timeout: 60000,
+      execFileSync(process.execPath, [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'], {
+        cwd: path.resolve(__dirname, '../..'), env: { ...process.env, DATABASE_URL: databaseUrl }, stdio: 'pipe', timeout: 90000,
       });
-    } catch { throw new Error('Disposable talent schema initialization failed'); }
+    } catch (error) {
+      const stderr = String((error as { stderr?: Buffer }).stderr ?? '').replace(/postgres(?:ql)?:\/\/[^\s'"\x1b]+/gi, '[disposable database URL redacted]');
+      throw new Error(`Disposable talent schema initialization failed: ${stderr}`);
+    }
     prisma = new PrismaService({ datasources: { db: { url: databaseUrl } } });
     await prisma.$connect();
     talents = new TalentsService(prisma);
@@ -43,7 +46,7 @@ describe('talent core: disposable PostgreSQL', () => {
       data: { name: `Synthetic recipient ${name}`, sysRole: 'hr_user', status: 'probation', hrCapabilities: ['employee_archive_edit'] },
     })))).map(user => user.id);
     candidateId = (await talents.create({ name: 'Synthetic candidate', phone: '17000000000', sourceChannel: 'referral' }, actor)).id;
-  }, 120000);
+  }, 150000);
 
   afterAll(async () => {
     try { await prisma?.$disconnect(); } finally { await container?.stop(); }
@@ -52,6 +55,73 @@ describe('talent core: disposable PostgreSQL', () => {
   async function counts() {
     return { shares: await prisma.talentShare.count(), notifications: await prisma.notificationLog.count(), audits: await prisma.auditLog.count() };
   }
+
+  it('creates an anonymous external link with isolated original-file access and no notification', async () => {
+    const candidate = await talents.create({ name: 'Synthetic external candidate', phone: '17000000006', sourceChannel: 'referral' }, actor);
+    const file = await prisma.talentResumeFile.create({ data: { candidateId: candidate.id, objectKey: 'talent-resume/synthetic/external.pdf', fileName: 'Synthetic.pdf', mimeType: 'application/pdf', fileSize: 10, uploadedById: actor.id } });
+    const otherFile = await prisma.talentResumeFile.create({ data: { candidateId, objectKey: 'talent-resume/synthetic/other.pdf', fileName: 'Other.pdf', mimeType: 'application/pdf', fileSize: 10, uploadedById: actor.id } });
+    const notifications = await prisma.notificationLog.count();
+    const input = { requestId: randomUUID(), isPublicLink: true, expiresInDays: 7 };
+    const summary = await shares.create(candidate.id, input, actor).catch(error => {
+      // PostgreSQL errors can include an inserted row; never log a sharing bearer token.
+      throw new Error(`Migrated external share creation failed (${error.code ?? error.name})`);
+    });
+    expect(await shares.create(candidate.id, input, actor)).toEqual(summary);
+    expect(await prisma.talentShare.findUnique({ where: { id: summary.id } })).toMatchObject({ isPublicLink: true, recipientIds: [], includeResume: false });
+    const view = await shares.resolve(summary.token);
+    expect(view.candidate.name).toBe(candidate.name);
+    expect(view.files).toEqual([]);
+    for (const key of ['phone', 'email', 'note', 'followUps', 'expectSalaryMin', 'expectSalaryMax', 'expectSalaryMinYuan', 'expectSalaryMaxYuan', 'expectSalaryUnit', 'salaryNeedsReview']) {
+      expect(view.candidate).not.toHaveProperty(key);
+    }
+    await expect(shares.resolveFile(summary.token, file.id)).rejects.toThrow('链接已失效或无权查看');
+    const original = await shares.create(candidate.id, { isPublicLink: true, expiresInDays: 30, includeResume: true }, actor);
+    expect(original.token).not.toBe(summary.token);
+    expect(await shares.resolveFile(original.token, file.id)).toBe(file.objectKey);
+    await expect(shares.resolveFile(original.token, otherFile.id)).rejects.toThrow('链接已失效或无权查看');
+    const originalView = await shares.resolve(original.token);
+    expect(originalView.files).toHaveLength(1);
+    expect(originalView.files[0]).not.toHaveProperty('objectKey');
+    expect(await prisma.notificationLog.count()).toBe(notifications);
+    expect((await prisma.talentShare.findUnique({ where: { id: original.id } }))?.lastViewedById).toBeNull();
+    await shares.revoke(original.id, actor);
+    await expect(shares.resolve(original.token)).rejects.toThrow('链接已失效或无权查看');
+    await expect(shares.resolveFile(original.token, file.id)).rejects.toThrow('链接已失效或无权查看');
+    await prisma.talentShare.update({ where: { id: summary.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    await expect(shares.resolve(summary.token)).rejects.toThrow('链接已失效或无权查看');
+    const deleted = await shares.create(candidate.id, { isPublicLink: true, expiresInDays: 7, includeResume: true }, actor);
+    await prisma.talentCandidate.update({ where: { id: candidate.id }, data: { deletedAt: new Date() } });
+    await expect(shares.resolve(deleted.token)).rejects.toThrow('链接已失效或无权查看');
+    await expect(shares.resolveFile(deleted.token, file.id)).rejects.toThrow('链接已失效或无权查看');
+  });
+
+  it('database-default legacy links require a nonempty recipient list and current recipient eligibility', async () => {
+    const legacy = await prisma.talentShare.create({ data: { candidateId, token: 'c'.repeat(64), recipientIds, includeResume: true, expiresAt: new Date(Date.now() + 60000), createdById: actor.id } });
+    const invalidEmptyAccepted = await prisma.talentShare.create({ data: { candidateId, token: 'd'.repeat(64), recipientIds: [], expiresAt: new Date(Date.now() + 60000), createdById: actor.id } }).then(() => true, () => false);
+    expect(legacy.isPublicLink).toBe(false);
+    expect(invalidEmptyAccepted).toBe(false);
+    await expect(shares.resolve(legacy.token)).rejects.toThrow('链接已失效或无权查看');
+    await expect(shares.resolve(legacy.token, actor)).rejects.toThrow('链接已失效或无权查看');
+    const user = { ...actor, id: recipientIds[0], sysRole: 'hr_user' } as AuthUser;
+    await expect(shares.resolve(legacy.token, user)).resolves.toHaveProperty('candidate.name', 'Synthetic candidate');
+    await prisma.user.update({ where: { id: user.id }, data: { status: 'resigned' } });
+    try {
+      await expect(shares.resolve(legacy.token, user)).rejects.toThrow('链接已失效或无权查看');
+      await expect(shares.resolveFile(legacy.token, randomUUID(), user)).rejects.toThrow('链接已失效或无权查看');
+    } finally { await prisma.user.update({ where: { id: user.id }, data: { status: 'probation' } }); }
+  });
+
+  it('migrated database also rejects contradictory public recipients and oversized restricted lists', async () => {
+    const invalid = [
+      { isPublicLink: true, recipientIds: [recipientIds[0]!] },
+      { isPublicLink: false, recipientIds: Array.from({ length: 6 }, () => randomUUID()) },
+    ];
+    for (const data of invalid) {
+      const accepted = await prisma.talentShare.create({ data: { ...data, candidateId, token: randomUUID().replace(/-/g, '').repeat(2),
+        expiresAt: new Date(Date.now() + 60000), createdById: actor.id } }).then(() => true, () => false);
+      expect(accepted).toBe(false);
+    }
+  });
 
   it.each(['notification', 'audit'])('rolls back all writes on a real %s database error, then safely retries', async failure => {
     const baseline = await counts();
@@ -116,7 +186,7 @@ describe('talent core: disposable PostgreSQL', () => {
       note: 'Synthetic edit', editVersion: detail.editVersion }, actor)).resolves.toMatchObject({ education: 'legacy_unmapped', ownerId: null });
   });
 
-  it('excludes closed applications from due/stale only, keeps open applications and does not project candidate status', async () => {
+  it('pending follow-up is independent of application stage, while stale scope and candidate history remain unchanged', async () => {
     const closed = await talents.create({ name: 'Synthetic closed', phone: '17000000004', sourceChannel: 'referral' }, actor);
     const open = await talents.create({ name: 'Synthetic open', phone: '17000000005', sourceChannel: 'referral' }, actor);
     for (const candidate of [closed, open]) {
@@ -128,7 +198,7 @@ describe('talent core: disposable PostgreSQL', () => {
     }
     for (const flag of ['dueOnly', 'staleOnly']) {
       const result = await talents.list(Object.assign(new TalentQueryDto(), { [flag]: true }));
-      expect(result.items.some(row => row.id === closed.id)).toBe(false);
+      expect(result.items.some(row => row.id === closed.id)).toBe(flag === 'dueOnly');
       expect(result.items.some(row => row.id === open.id)).toBe(true);
     }
     const detail = await talents.detail(closed.id);

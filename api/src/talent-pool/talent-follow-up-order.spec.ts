@@ -26,21 +26,18 @@ function statement(call: unknown[]) {
 describe('Talent follow-up due and attachment query contracts', () => {
   afterEach(() => jest.useRealTimers());
 
-  it('binds the Shanghai calendar day as date and ranks only nonempty next dates deterministically', async () => {
+  it('pending scope uses contact history and every scheduled date without a today cutoff', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2035-03-19T16:30:00Z'));
     const { sut, prisma } = setup();
-    prisma.$queryRaw.mockResolvedValueOnce([{ id: 'candidate-1' }]).mockResolvedValueOnce([]);
+    prisma.$queryRaw.mockResolvedValue([]);
 
     await sut.list(Object.assign(new TalentQueryDto(), { dueOnly: true }));
 
-    const due = statement(prisma.$queryRaw.mock.calls[0]);
-    expect(due.sql).toContain('PARTITION BY candidate_id ORDER BY occurred_at DESC, created_at DESC, id DESC');
-    expect(due.sql).toContain('FROM talent_follow_ups WHERE next_follow_up_at IS NOT NULL');
-    expect(due.sql).toContain('WHERE rn = 1 AND next_follow_up_at <= ?::date');
-    expect(due.sql).not.toContain('CURRENT_DATE');
-    expect(due.values).toEqual(['2035-03-20']);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1); // only selected-page date attachment
     expect(prisma.talentCandidate.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ deletedAt: null, AND: expect.arrayContaining([{ id: { in: ['candidate-1'] } }]) }),
+      where: { deletedAt: null, AND: [{ OR: [
+        { followUps: { none: {} } }, { followUps: { some: { nextFollowUpAt: { not: null } } } },
+      ] }] },
     }));
   });
 

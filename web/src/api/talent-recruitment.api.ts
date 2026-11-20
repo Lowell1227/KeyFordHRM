@@ -2,7 +2,7 @@ import http from './http';
 import type { Paginated } from '@/types/api.types';
 import type {
   TalentApplicationAction, TalentApplicationInput, TalentApplicationView, TalentFeedbackOutcome,
-  TalentFeedbackResponse, TalentRecruitmentOwner,
+  TalentFeedbackResponse, TalentRecruitmentOwner, TalentReserveReason,
 } from '@/types/talent.types';
 
 const base = '/talent-recruitment';
@@ -26,7 +26,7 @@ export const talentRecruitmentApi = {
   update(id: string, body: Partial<TalentApplicationInput> & { expectedRevision: number }): Promise<TalentApplicationView> {
     return http.patch(`${base}/applications/${id}`, body, localError) as unknown as Promise<TalentApplicationView>;
   },
-  action(id: string, body: { expectedRevision: number; action: TalentApplicationAction; note?: string; expectedEntryDate?: string | null }): Promise<TalentApplicationView> {
+  action(id: string, body: { expectedRevision: number; action: TalentApplicationAction; note?: string; expectedEntryDate?: string | null; reserveReasons?: TalentReserveReason[] }): Promise<TalentApplicationView> {
     return http.post(`${base}/applications/${id}/actions`, body, localError) as unknown as Promise<TalentApplicationView>;
   },
   feedback(interviewId: string): Promise<TalentFeedbackResponse> {

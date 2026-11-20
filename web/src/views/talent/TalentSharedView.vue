@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import {
   EDUCATION_LABELS,
@@ -17,7 +16,7 @@ import { formatTalentFileSize } from './components/talent-file-upload';
 /**
  * 被分享人只读视图（需求 §5.4）。
  * 严格使用后端脱敏字段白名单：无手机号/邮箱/期望薪资/来源渠道/备注/跟进记录。
- * 登录与权限校验在后端；任何失败统一显示「链接已失效或无权查看」，不泄露候选人信息。
+ * 外链免登录，旧分享的登录与权限校验在后端；失败统一显示无权查看。
  */
 
 const route = useRoute();
@@ -67,7 +66,8 @@ async function downloadFile(fileId: string, fileName: string) {
     anchor.click();
     URL.revokeObjectURL(url);
   } catch {
-    ElMessage.error('文件下载失败，请稍后重试');
+    view.value = null;
+    invalid.value = true;
   } finally {
     downloadingId.value = '';
   }
@@ -78,7 +78,8 @@ async function downloadFile(fileId: string, fileName: string) {
   <div class="talent-shared-page" v-loading="loading">
     <div v-if="invalid && !loading" class="talent-shared-page__invalid">
       <h2>链接已失效或无权查看</h2>
-      <p>该分享可能已过期、被撤销，或你不在接收人名单中。请联系分享人（HR）重新分享。</p>
+      <p>该分享可能已过期、被撤销，或仅限指定接收人。请联系 HR 重新分享。</p>
+      <RouterLink :to="{ name: 'Login', query: { redirect: route.fullPath } }">指定接收人登录查看</RouterLink>
     </div>
 
     <div v-else-if="view" class="talent-shared">
@@ -132,14 +133,14 @@ async function downloadFile(fileId: string, fileName: string) {
         </div>
       </section>
 
-      <p class="talent-shared__footer-note">本页面为只读分享视图，不显示联系方式、薪资与跟进记录。如需联系候选人，请与 HR 沟通。</p>
+      <p class="talent-shared__footer-note">摘要不显示联系方式、薪资与内部跟进记录。HR 开启附简历原件时，原件可能包含联系方式等信息。如需联系候选人，请与 HR 沟通。</p>
     </div>
   </div>
 </template>
 
 <style scoped>
 .talent-shared-page {
-  min-height: 100%;
+  min-height: 100dvh;
   background: var(--el-bg-color-page);
 }
 .talent-shared-page__invalid {
@@ -195,6 +196,7 @@ async function downloadFile(fileId: string, fileName: string) {
   font-size: 13px;
   line-height: 20px;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 .talent-shared__label {
   flex: 0 0 auto;

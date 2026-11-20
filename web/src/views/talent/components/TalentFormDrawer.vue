@@ -27,6 +27,7 @@ import {
 } from '@/types/talent.types';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import { isImageFile } from '@/utils/image-compress';
+import { talentSalaryYuan } from '@/utils/talent-salary';
 import {
   TALENT_MAX_FILES,
   TALENT_MAX_FILE_BYTES,
@@ -155,6 +156,12 @@ const form = reactive({
   note: '',
   status: 'new' as TalentStatus,
 });
+const salaryError = ref('');
+const salaryNeedsReview = ref(false);
+const loadedSalary = reactive({ min: undefined as number | undefined, max: undefined as number | undefined, negotiable: false });
+const salaryChanged = computed(() => form.expectSalaryMin !== loadedSalary.min
+  || form.expectSalaryMax !== loadedSalary.max || form.salaryNegotiable !== loadedSalary.negotiable);
+watch(() => [form.expectSalaryMin, form.expectSalaryMax, form.salaryNegotiable], () => { salaryError.value = ''; });
 
 const rules: FormRules = {
   name: [{ required: true, message: '请填写姓名', trigger: 'blur' }],
@@ -252,6 +259,8 @@ async function onOpen() {
 }
 
 function resetForm() {
+  salaryError.value = ''; salaryNeedsReview.value = false;
+  Object.assign(loadedSalary, { min: undefined, max: undefined, negotiable: false });
   Object.assign(form, {
     name: '', phone: '', email: '', gender: 'unknown' as TalentGender,
     birthYear: undefined, currentCompany: '', currentPosition: '', yearsOfExperience: undefined,
@@ -262,6 +271,8 @@ function resetForm() {
 }
 
 function fillForm(detail: TalentCandidateDetail) {
+  const salary = talentSalaryYuan(detail);
+  salaryNeedsReview.value = salary.needsReview;
   Object.assign(form, {
     name: detail.name,
     phone: detail.phone,
@@ -273,9 +284,9 @@ function fillForm(detail: TalentCandidateDetail) {
     yearsOfExperience: detail.yearsOfExperience ?? undefined,
     appliedPosition: detail.appliedPosition ?? '',
     expectCity: detail.expectCity ?? '',
-    expectSalaryMin: detail.expectSalaryMin ?? undefined,
-    expectSalaryMax: detail.expectSalaryMax ?? undefined,
-    salaryNegotiable: detail.expectSalaryMin == null && detail.expectSalaryMax == null,
+    expectSalaryMin: salary.min ?? undefined,
+    expectSalaryMax: salary.max ?? undefined,
+    salaryNegotiable: !salary.needsReview && salary.min == null && salary.max == null,
     education: detail.education ?? '',
     educationReferenceDataId: detail.educationReferenceDataId ?? null,
     ownerId: detail.ownerId ?? detail.createdById,
@@ -286,6 +297,7 @@ function fillForm(detail: TalentCandidateDetail) {
     note: detail.note ?? '',
     status: detail.status,
   });
+  Object.assign(loadedSalary, { min: form.expectSalaryMin, max: form.expectSalaryMax, negotiable: form.salaryNegotiable });
   conflict.value = null;
 }
 
@@ -396,7 +408,7 @@ async function loadOwners(keyword = '') {
 const resumeLabels: Record<ResumeField, string> = {
   name: '姓名', phone: '手机', email: '邮箱', birthYear: '出生年份', currentCompany: '当前公司',
   currentPosition: '当前职位', yearsOfExperience: '工作年限', education: '学历', school: '院校', major: '专业',
-  appliedPosition: '意向岗位', expectCity: '期望城市', expectSalaryMin: '最低薪资（K）', expectSalaryMax: '最高薪资（K）',
+  appliedPosition: '意向岗位', expectCity: '期望城市', expectSalaryMin: '最低薪资（元/月）', expectSalaryMax: '最高薪资（元/月）',
 };
 function applyResumeField(field: ResumeField, value: string | number) {
   Object.assign(form, { [field]: value });
@@ -477,7 +489,10 @@ function applyParsedResult() {
   parseConflicts.value = [];
   let applied = 0;
   for (const field of Object.keys(resumeLabels) as ResumeField[]) {
-    const value = result.fields[field];
+    const rawValue = result.fields[field];
+    // The resume API retains K units for existing clients; this form edits integer yuan.
+    const value = typeof rawValue === 'number' && (field === 'expectSalaryMin' || field === 'expectSalaryMax')
+      ? Math.round(rawValue * 1000) : rawValue;
     if (value === undefined || value === '') continue;
     const existing = form[field];
     const negotiable = form.salaryNegotiable && (field === 'expectSalaryMin' || field === 'expectSalaryMax');
@@ -578,6 +593,14 @@ async function submit() {
   const targetId = props.candidateId;
   const valid = await formRef.value?.validate().catch(() => false);
   if (!valid || !isCurrentLoad(generation, targetId) || saveDisabled.value) return;
+  if (!form.salaryNegotiable && [form.expectSalaryMin, form.expectSalaryMax].some(value => value != null
+    && (!Number.isInteger(value) || value < 0 || value > 2147483647))) {
+    salaryError.value = '薪资请填写非负整数元/月'; return;
+  }
+  if (!form.salaryNegotiable && form.expectSalaryMin != null && form.expectSalaryMax != null
+    && form.expectSalaryMin > form.expectSalaryMax) {
+    salaryError.value = '期望薪资下限不能高于上限'; return;
+  }
   saving.value = true;
   saveError.value = '';
   educationError.value = ''; ownerFieldError.value = '';
@@ -595,8 +618,10 @@ async function submit() {
       yearsOfExperience: form.yearsOfExperience ?? null,
       appliedPosition: form.appliedPosition.trim() || null,
       expectCity: form.expectCity.trim() || null,
-      expectSalaryMin: form.salaryNegotiable ? null : (form.expectSalaryMin ?? null),
-      expectSalaryMax: form.salaryNegotiable ? null : (form.expectSalaryMax ?? null),
+      ...(!isEdit.value || salaryChanged.value ? {
+        expectSalaryMinYuan: form.salaryNegotiable ? null : (form.expectSalaryMin ?? null),
+        expectSalaryMaxYuan: form.salaryNegotiable ? null : (form.expectSalaryMax ?? null),
+      } : {}),
       education: form.education || null,
       educationReferenceDataId: form.educationReferenceDataId,
       ownerId: form.ownerId || undefined,
@@ -789,15 +814,16 @@ async function submit() {
       <el-form-item label="期望城市">
         <el-input v-model="form.expectCity" placeholder="选填" maxlength="30" />
       </el-form-item>
-      <el-form-item label="期望薪资（K）">
+      <el-form-item label="期望薪资（元/月）" :error="salaryError">
         <div class="talent-form__salary">
-          <el-input-number v-model="form.expectSalaryMin" :min="0" :max="999" :controls="false" placeholder="最低"
+          <el-input-number v-model="form.expectSalaryMin" :controls="false" placeholder="最低"
             :disabled="form.salaryNegotiable" @change="form.salaryNegotiable = false" />
           <span class="talent-form__salary-sep">–</span>
-          <el-input-number v-model="form.expectSalaryMax" :min="0" :max="999" :controls="false" placeholder="最高"
+          <el-input-number v-model="form.expectSalaryMax" :controls="false" placeholder="最高"
             :disabled="form.salaryNegotiable" @change="form.salaryNegotiable = false" />
           <el-checkbox v-model="form.salaryNegotiable">面议</el-checkbox>
         </div>
+        <span v-if="salaryNeedsReview && !salaryChanged" class="talent-form__salary-review">历史薪资待核对，原值保留；核实后重新填写。</span>
       </el-form-item>
       <el-form-item label="学历" :error="educationError">
         <PersonnelReferenceSelect v-model="form.education" v-model:reference-id="form.educationReferenceDataId" kind="education" />
@@ -864,6 +890,7 @@ async function submit() {
   flex-wrap: wrap;
 }
 .talent-form__salary :deep(.el-input-number) { width: 90px; }
+.talent-form__salary-review { display: block; margin-top: 6px; color: var(--el-color-warning-dark-2); font-size: 12px; line-height: 1.5; }
 .talent-form__salary-sep { color: var(--el-text-color-secondary); }
 .talent-form__conflict {
   display: flex;

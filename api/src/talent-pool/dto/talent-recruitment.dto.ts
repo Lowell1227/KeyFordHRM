@@ -1,8 +1,8 @@
 import { PartialType } from '@nestjs/mapped-types';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { PaginationDto } from '@/common/dto/pagination.dto';
-import { TALENT_APPLICATION_ACTIONS, type TalentApplicationAction } from '../talent-recruitment-policy';
+import { TALENT_APPLICATION_ACTIONS, TALENT_RESERVE_REASONS, type TalentApplicationAction, type TalentReserveReason } from '../talent-recruitment-policy';
 
 export class TalentOwnerQueryDto extends PaginationDto {
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
@@ -25,6 +25,8 @@ export class TalentApplicationActionDto {
   @IsInt() @Min(0) @Max(2147483646) expectedRevision!: number;
   @IsIn(TALENT_APPLICATION_ACTIONS) action!: TalentApplicationAction;
   @IsOptional() @IsString() @MaxLength(4000) note?: string | null;
+  @IsOptional() @IsArray() @ArrayMaxSize(4) @ArrayUnique() @IsIn(TALENT_RESERVE_REASONS, { each: true })
+  reserveReasons?: TalentReserveReason[];
   @IsOptional() @IsISO8601({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/) expectedEntryDate?: string | null;
 }
 

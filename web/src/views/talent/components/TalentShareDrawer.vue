@@ -6,7 +6,7 @@ import type { TalentShareRecord } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
 
 /**
- * 转发分享抽屉：选择接收人（HR、实际主管、部门负责人，最多 5 人）、
+ * 转发分享抽屉：生成免登录外链，
  * 有效期 7/30 天、可选附简历原件、留言 ≤100 字；创建后展示链接可一键复制；
  * 下方列出历史分享并支持撤销。
  */
@@ -28,12 +28,6 @@ const visible = computed({
   set: (value: boolean) => emit('update:modelValue', value),
 });
 
-type ShareRecipient = Awaited<ReturnType<typeof talentPoolApi.searchShareRecipients>>['items'][number];
-const MAX_RECIPIENTS = 5;
-
-const recipientIds = ref<string[]>([]);
-const recipientOptions = ref<ShareRecipient[]>([]);
-const searching = ref(false);
 const expiresInDays = ref<7 | 30>(7);
 const includeResume = ref(false);
 const message = ref('');
@@ -51,8 +45,6 @@ function resetForm() {
   submitSession++;
   lastSubmission = null;
   creating.value = false;
-  recipientIds.value = [];
-  recipientOptions.value = [];
   expiresInDays.value = 7;
   includeResume.value = false;
   message.value = '';
@@ -60,35 +52,14 @@ function resetForm() {
   createdUrl.value = '';
 }
 
-async function searchRecipients(keyword: string) {
-  searching.value = true;
-  try {
-    const res = await talentPoolApi.searchShareRecipients({ keyword, page: 1, pageSize: 20 });
-    recipientOptions.value = res.items;
-  } finally {
-    searching.value = false;
-  }
-}
-
-function recipientLabel(user: ShareRecipient): string {
-  const parts = [user.name];
-  if (user.employeeNo) parts.push(user.employeeNo);
-  if (user.deptName) parts.push(user.deptName);
-  return parts.join(' · ');
-}
-
 async function createShare() {
   if (creating.value) return;
   createError.value = '';
-  if (recipientIds.value.length === 0) {
-    createError.value = '请至少选择 1 位接收人';
-    return;
-  }
   creating.value = true;
   const session = submitSession;
   try {
     const payload = {
-      recipientIds: [...recipientIds.value].sort(),
+      isPublicLink: true,
       expiresInDays: expiresInDays.value,
       includeResume: includeResume.value,
       message: message.value.trim() || undefined,
@@ -101,7 +72,7 @@ async function createShare() {
     const result = await talentPoolApi.createShare(props.candidateId, body);
     if (session !== submitSession) return;
     createdUrl.value = `${window.location.origin}${result.url}`;
-    ElMessage.success('已生成分享链接，站内通知已发送给接收人');
+    ElMessage.success('已生成分享链接，可复制后私发');
     emit('changed');
   } catch (error) {
     if (session === submitSession) createError.value = error instanceof Error && error.message ? error.message : '创建分享失败，请重试';
@@ -122,7 +93,7 @@ async function copyLink() {
 
 async function revoke(share: TalentShareRecord) {
   await ElMessageBox.confirm(
-    '撤销后该链接立即失效，已收到的接收人刷新后将无法查看。确定撤销？',
+    '撤销后该链接立即失效，持有链接的人将无法继续查看。确定撤销？',
     '撤销分享',
     { confirmButtonText: '撤销分享', cancelButtonText: '取消', type: 'warning' },
   );
@@ -152,16 +123,11 @@ function shareUrl(share: TalentShareRecord): string {
 </script>
 
 <template>
-  <el-drawer v-model="visible" :title="`转发候选人：${candidateName}`" size="480px" class="talent-share-drawer">
+  <el-drawer v-model="visible" :title="`转发候选人：${candidateName}`" size="min(480px, 100vw)" class="talent-share-drawer">
     <div class="talent-share">
       <h4 class="talent-share__section-title">新建分享</h4>
+      <p class="talent-share__access-hint">持有链接的人无需登录即可查看，请仅私发给需要查看的人。到期或撤销后链接失效。</p>
       <el-form label-position="top" size="default" :disabled="creating" @submit.prevent>
-        <el-form-item label="接收人（HR / 实际主管 / 部门负责人，最多 5 人）" required>
-          <el-select v-model="recipientIds" data-testid="talent-share-recipients" multiple filterable remote :remote-method="searchRecipients"
-            :loading="searching" placeholder="输入姓名或工号搜索" :multiple-limit="MAX_RECIPIENTS" class="talent-share__recipients">
-            <el-option v-for="user in recipientOptions" :key="user.id" :label="recipientLabel(user)" :value="user.id" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="链接有效期" required>
           <el-radio-group v-model="expiresInDays">
             <el-radio-button :value="7">7 天</el-radio-button>
@@ -177,9 +143,9 @@ function shareUrl(share: TalentShareRecord): string {
             placeholder="例如：重点看供应链经验，麻烦本周内反馈" />
         </el-form-item>
         <el-alert v-if="includeResume" type="warning" :closable="false" class="talent-share__warning"
-          title="已开启附简历原件：接收人在链接有效期内可下载简历文件，请确认对方有查看权限。" />
+          title="已开启附简历原件：持有链接的人可下载文件，原件可能包含联系方式等信息，请确认后分享。" />
         <el-alert v-if="createError" type="error" :title="createError" :closable="false" class="talent-share__warning" />
-        <el-button type="primary" :loading="creating" :disabled="recipientIds.length === 0" class="talent-share__create"
+        <el-button type="primary" :loading="creating" class="talent-share__create"
           @click="createShare">生成分享链接</el-button>
       </el-form>
 
@@ -193,7 +159,7 @@ function shareUrl(share: TalentShareRecord): string {
       <div v-for="share in shares" :key="share.id" class="talent-share__history-item">
         <div class="talent-share__history-main">
           <div class="talent-share__history-recipients">
-            {{ (share.recipientNames ?? []).join('、') || '—' }}
+            {{ share.isPublicLink ? '免登录外链' : `指定接收人（需登录）：${(share.recipientNames ?? []).join('、') || '—'}` }}
             <el-tag :type="shareState(share).type" size="small" effect="light">{{ shareState(share).label }}</el-tag>
           </div>
           <div class="talent-share__history-meta">
@@ -218,7 +184,7 @@ function shareUrl(share: TalentShareRecord): string {
   font-size: 14px;
   color: var(--el-text-color-primary);
 }
-.talent-share__recipients { width: 100%; }
+.talent-share__access-hint { margin: 0 0 16px; font-size: 13px; line-height: 1.6; color: var(--el-text-color-secondary); }
 .talent-share__resume-hint { margin-left: 10px; font-size: 12px; color: var(--el-text-color-secondary); }
 .talent-share__warning { margin-bottom: 12px; }
 .talent-share__create { width: 100%; }

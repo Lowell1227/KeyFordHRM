@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { TalentSharesService, SHARE_FORBIDDEN_MESSAGE } from './talent-shares.service';
 import type { AuthUser } from '@/common/types/auth.types';
 import { plainToInstance } from 'class-transformer';
@@ -43,6 +43,7 @@ function share(overrides: Record<string, unknown> = {}) {
   return {
     id: 'share-1',
     token: 'a'.repeat(64),
+    isPublicLink: false,
     recipientIds: ['mgr-1'],
     includeResume: false,
     message: null,
@@ -80,6 +81,40 @@ function setup(foundShare: unknown) {
 }
 
 describe('TalentSharesService 创建分享', () => {
+  it('显式启用外链的新请求无需接收人，原件默认关闭且不发通知', async () => {
+    const { prisma, sut } = setup(null);
+    prisma.talentShare.create.mockResolvedValue({ id: 'external-1' });
+    const result = await sut.create('cand-1', { isPublicLink: true, expiresInDays: 7 } as never, HR);
+    expect(result.token).toMatch(/^[a-f0-9]{64}$/);
+    expect(prisma.talentShare.create.mock.calls[0][0].data).toMatchObject({ isPublicLink: true, recipientIds: [], includeResume: false });
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(prisma.notificationLog.create).not.toHaveBeenCalled();
+  });
+
+  it('缺少模式与接收人不能意外创建外链，进入事务前拒绝且无写入', async () => {
+    const { prisma, sut } = setup(null);
+    prisma.talentShare.create.mockResolvedValue({ id: 'must-not-create' });
+    await expect(sut.create('cand-1', { expiresInDays: 7 } as never, HR)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.talentShare.create).not.toHaveBeenCalled();
+    expect(prisma.notificationLog.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('明确外链模式不能同时授予指定接收人，明确受限模式必须有接收人', async () => {
+    for (const input of [{ isPublicLink: true, recipientIds: ['mgr-1'] }, { isPublicLink: false }]) {
+      await expect(setup(null).sut.create('cand-1', { ...input, expiresInDays: 7 } as never, HR)).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+
+  it('HTTP DTO 仅允许显式启用的无接收人外链，仍拒绝空接收人和无效有效期', async () => {
+    expect(await validate(plainToInstance(CreateShareDto, { isPublicLink: true, expiresInDays: 7 }))).toEqual([]);
+    expect((await validate(plainToInstance(CreateShareDto, { expiresInDays: 30 }))).some(e => e.property === 'recipientIds')).toBe(true);
+    for (const recipientIds of [[], null]) {
+      expect((await validate(plainToInstance(CreateShareDto, { recipientIds, expiresInDays: 7 }))).some(e => e.property === 'recipientIds')).toBe(true);
+    }
+    expect((await validate(plainToInstance(CreateShareDto, { isPublicLink: 'true', expiresInDays: 1 }))).map(e => e.property)).toEqual(expect.arrayContaining(['isPublicLink', 'expiresInDays']));
+  });
   it('接收人不存在、失去资格或已删除 → 400', async () => {
     const { prisma, sut } = setup(null);
     prisma.user.findMany.mockResolvedValue([{ id: 'mgr-1', name: '郑冠宇', sysRole: 'manager' }]);
@@ -256,6 +291,37 @@ describe('分享实际主管必须来自当前花名册任职，不是绩效关�
 });
 
 describe('TalentSharesService 被分享人视图（脱敏白名单）', () => {
+  it('显式外链允许匿名查看且不查询组织资格，保持严格字段白名单', async () => {
+    const { prisma, sut } = setup(share({ isPublicLink: true, recipientIds: [], includeResume: true, candidate: candidate({ phone: 'private', note: 'private', expectSalaryMin: 999, followUps: ['private'] }) }));
+    const view = await sut.resolve('a'.repeat(64), undefined as never);
+    expect(Object.keys(view.candidate).sort()).toEqual(['name', 'gender', 'genderLabel', 'age', 'currentCompany', 'currentPosition', 'yearsOfExperience', 'education', 'school', 'major', 'expectCity', 'appliedPosition', 'tags', 'status', 'statusLabel'].sort());
+    expect(view.files[0]).not.toHaveProperty('objectKey');
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(prisma.talentShare.update.mock.calls[0][0].data).toMatchObject({ lastViewedById: null });
+  });
+
+  it('旧分享即使接收人为空也不允许匿名查看或下载', async () => {
+    for (const recipientIds of [[], ['mgr-1']]) {
+      const { sut } = setup(share({ recipientIds, includeResume: true }));
+      await expect(sut.resolve('a'.repeat(64), undefined as never)).rejects.toThrow(FORBIDDEN_MESSAGE);
+      await expect(sut.resolveFile('a'.repeat(64), 'file-1', undefined as never)).rejects.toThrow(FORBIDDEN_MESSAGE);
+    }
+  });
+
+  it.each(['missing', 'expired', 'revoked', 'deleted', 'exact-expiry'])('匿名外链 %s 查看与下载返回统一错误', async reason => {
+    const now = new Date();
+    jest.useFakeTimers().setSystemTime(now);
+    try {
+      const found = reason === 'missing' ? null : share({ isPublicLink: true, includeResume: true,
+        ...(reason === 'expired' ? { expiresAt: new Date(now.getTime() - 1) } : {}),
+        ...(reason === 'exact-expiry' ? { expiresAt: now } : {}),
+        ...(reason === 'revoked' ? { revokedAt: now } : {}),
+        ...(reason === 'deleted' ? { candidate: candidate({ deletedAt: now }) } : {}) });
+      const { sut } = setup(found);
+      await expect(sut.resolve('a'.repeat(64), undefined as never)).rejects.toThrow(FORBIDDEN_MESSAGE);
+      await expect(sut.resolveFile('a'.repeat(64), 'file-1', undefined as never)).rejects.toThrow(FORBIDDEN_MESSAGE);
+    } finally { jest.useRealTimers(); }
+  });
   it('白名单 + 未过期 + 未撤销：返回视图并累计查看次数', async () => {
     const { prisma, sut } = setup(share());
     const view = await sut.resolve('a'.repeat(64), MGR);
@@ -334,12 +400,17 @@ describe('TalentSharesService 被分享人视图（脱敏白名单）', () => {
 });
 
 describe('TalentSharesService 简历下载与撤销', () => {
-  it('includeResume=false 下载简历 → 403；文件不属于候选人 → 404', async () => {
+  it('外链仅在明确附原件且文件属于该候选人时允许匿名下载', async () => {
+    await expect(setup(share({ isPublicLink: true, includeResume: true })).sut.resolveFile('a'.repeat(64), 'file-1', undefined as never)).resolves.toBe('talent-resume/2026/11/09/a.pdf');
+    await expect(setup(share({ isPublicLink: true })).sut.resolveFile('a'.repeat(64), 'file-1', undefined as never)).rejects.toThrow(FORBIDDEN_MESSAGE);
+    await expect(setup(share({ isPublicLink: true, includeResume: true })).sut.resolveFile('a'.repeat(64), 'other-candidate-file', undefined as never)).rejects.toThrow(FORBIDDEN_MESSAGE);
+  });
+  it('includeResume=false 或文件不属于候选人均统一拒绝', async () => {
     const { sut } = setup(share());
     await expect(sut.resolveFile('a'.repeat(64), 'file-1', MGR)).rejects.toThrow(FORBIDDEN_MESSAGE);
 
     const { sut: sut2 } = setup(share({ includeResume: true, candidate: candidate({ files: [] }) }));
-    await expect(sut2.resolveFile('a'.repeat(64), 'file-1', MGR)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(sut2.resolveFile('a'.repeat(64), 'file-1', MGR)).rejects.toThrow(FORBIDDEN_MESSAGE);
   });
 
   it('includeResume=true 且文件属于候选人 → 返回 objectKey 供存储层下载', async () => {
@@ -378,5 +449,20 @@ describe('TalentSharesService 简历下载与撤销', () => {
 describe('分享失效文案常量', () => {
   it('SHARE_FORBIDDEN_MESSAGE 与后端响应一致', () => {
     expect(SHARE_FORBIDDEN_MESSAGE).toBe(FORBIDDEN_MESSAGE);
+  });
+});
+
+describe('分享存储错误不回显令牌', () => {
+  it.each(['view', 'file'])('%s 存储故障返回通用503，不让带令牌的ORM异常进入日志', async mode => {
+    const { prisma, sut } = setup(null);
+    const token = 'd'.repeat(64);
+    prisma.talentShare.findUnique.mockRejectedValue(new Error(`Synthetic storage failure, token=${token}`));
+    const operation = mode === 'view' ? sut.resolve(token) : sut.resolveFile(token, 'file-1');
+    try { await operation; throw new Error('Expected storage failure'); }
+    catch (error) {
+      expect(error).toBeInstanceOf(ServiceUnavailableException);
+      expect(error.message).toBe('分享暂时无法读取，请稍后重试');
+      expect(JSON.stringify(error)).not.toContain(token);
+    }
   });
 });

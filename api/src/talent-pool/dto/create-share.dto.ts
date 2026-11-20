@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength, ValidateIf } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const toNumber = ({ value }: { value: unknown }) => (value === undefined || value === null || value === '' ? value : Number(value));
@@ -9,14 +9,20 @@ export class CreateShareDto {
   @IsUUID('all')
   requestId?: string;
 
-  /** 接收人（1–5 人），须为当前在职/试用的 HR、实际主管或部门负责人。 */
+  /** 新外链显式启用；旧客户端带接收人时保持受限分享。 */
+  @ValidateIf((_input, value) => value !== undefined)
+  @IsBoolean()
+  isPublicLink?: boolean;
+
+  /** 兼容旧客户端的受限分享（1–5 人）；新外链不传此字段。 */
+  @ValidateIf((input, value) => value !== undefined || input.isPublicLink !== true)
   @IsArray()
   @ArrayMinSize(1, { message: '请选择至少 1 位接收人' })
   @ArrayMaxSize(5, { message: '一次最多分享给 5 人' })
   @ArrayUnique({ message: '接收人不能重复选择' })
   /** 接受任何版本的 UUID（种子/历史账号存在 v1–v5）。 */
   @IsUUID('all', { each: true, message: '接收人无效' })
-  recipientIds!: string[];
+  recipientIds?: string[];
 
   /** 有效期：7 或 30 天。 */
   @Transform(toNumber)

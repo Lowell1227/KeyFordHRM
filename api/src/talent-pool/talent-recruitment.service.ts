@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
-import { allowedApplicationActions, canConfirmTalentHiring, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, type RecruitmentActor } from './talent-recruitment-policy';
+import { allowedApplicationActions, canConfirmTalentHiring, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, TALENT_RESERVE_REASONS, type RecruitmentActor, type TalentReserveReason } from './talent-recruitment-policy';
 
 const actorSelect = { id: true, name: true, sysRole: true, hrCapabilities: true, status: true, deletedAt: true, archivedAt: true, isAssessorOnly: true } satisfies Prisma.UserSelect;
 const applicationInclude = {
@@ -213,6 +213,11 @@ export class TalentRecruitmentService {
       const activeOnboarding = await this.hasActiveOnboarding(tx, row.candidateId);
       if (!allowedApplicationActions(actor, row, activeOnboarding).includes(input.action)) throw new BadRequestException('当前阶段不支持此操作，或候选人仍有进行中的入职申请');
       const note = this.text(input.note, '操作说明', 4000, ['submit_hiring', 'return_hiring', 'reject'].includes(input.action));
+      const reserveReasons = input.reserveReasons ?? [];
+      if (!Array.isArray(reserveReasons) || reserveReasons.length > 4 || new Set(reserveReasons).size !== reserveReasons.length
+        || reserveReasons.some(reason => !TALENT_RESERVE_REASONS.includes(reason)) || (input.action !== 'reserve' && reserveReasons.length > 0)) {
+        throw new BadRequestException('储备原因无效，请选择有效选项且不要重复；仅转储备时可填写原因');
+      }
       const destinations = {
         start_interview: 'interviewing', submit_hiring: 'hiring_review', approve_hiring: 'offered', return_hiring: row.reviewReturnStage,
         accept_offer: 'accepted', decline_offer: 'declined', reject: 'rejected', reserve: 'reserve', withdraw: 'withdrawn', reopen: 'screening',
@@ -226,7 +231,7 @@ export class TalentRecruitmentService {
       if (confirmation) Object.assign(fields, { hiringReviewedById: actor.id, hiringReviewedAt: new Date() });
       await this.changeApplication(tx, row, fields);
       const updated = { ...row, stage, revision: row.revision + 1 };
-      await this.event(tx, updated, actor.id, input.action, row.stage, note);
+      await this.event(tx, updated, actor.id, input.action, row.stage, note, reserveReasons);
       await this.audit(tx, actor.id, input.action, 'talent_application', id, { stage: row.stage, revision: row.revision }, { stage, revision: updated.revision });
       return this.reloadView(tx, id, actor);
     });
@@ -243,8 +248,8 @@ export class TalentRecruitmentService {
     return this.view(tx, row, actor);
   }
 
-  private async event(tx: Prisma.TransactionClient, row: Application, actorId: string, action: string, fromStage: string | null, note: string | null) {
-    await tx.talentApplicationEvent.create({ data: { applicationId: row.id, actorId, action, fromStage, toStage: row.stage, version: row.revision, note } });
+  private async event(tx: Prisma.TransactionClient, row: Application, actorId: string, action: string, fromStage: string | null, note: string | null, reserveReasons: TalentReserveReason[] = []) {
+    await tx.talentApplicationEvent.create({ data: { applicationId: row.id, actorId, action, fromStage, toStage: row.stage, version: row.revision, note, reserveReasons } });
   }
 
   private async audit(tx: Prisma.TransactionClient, userId: string, action: string, entityType: string, entityId: string,

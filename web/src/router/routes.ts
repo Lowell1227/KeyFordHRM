@@ -171,7 +171,8 @@ export const routes: RouteRecordRaw[] = [
     name: 'TalentShared',
     component: () => import('@/views/talent/TalentSharedView.vue'),
     meta: {
-      requiresAuth: true,
+      public: true,
+      layout: 'plain',
       title: '候选人分享',
     },
   },

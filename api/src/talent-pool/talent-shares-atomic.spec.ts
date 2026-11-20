@@ -50,6 +50,21 @@ function fixture() {
 }
 
 describe('atomic idempotent talent sharing', () => {
+  it('external response-loss retry returns the same token without recipient lookup or notifications', async () => {
+    const f = fixture();
+    const external = { requestId, isPublicLink: true, expiresInDays: 7 };
+    const first = await f.sut.create('candidate', external, actor);
+    const second = await f.sut.create('candidate', external, actor);
+    expect(second).toEqual(first);
+    expect(f.state().shares).toHaveLength(1);
+    expect(f.state().shares[0]).toMatchObject({ isPublicLink: true, recipientIds: [], includeResume: false });
+    expect(f.state().notifications).toHaveLength(0);
+    expect(f.state().audits).toHaveLength(1);
+    expect(f.trace).not.toContain('tx:recipients');
+    await expect(f.sut.create('candidate', input, actor)).rejects.toBeInstanceOf(ConflictException);
+    expect(f.state().shares).toHaveLength(1);
+  });
+
   it.each(['notification', 'audit'] as const)('rolls back share and every notification when %s fails; retry creates exactly one set', async failure => {
     const f = fixture();
     f.fail(failure);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, nextTick } from 'vue';
+import { ref, reactive, watch, onBeforeUnmount, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
 import { isAxiosError } from 'axios';
 import { talentPoolApi } from '@/api/talent-pool.api';
@@ -27,9 +27,12 @@ const emit = defineEmits<{
 
 const list = ref<TalentFollowUp[]>([]);
 const loading = ref(false);
+const loadError = ref('');
 const saving = ref(false);
 const formVisible = ref(false);
 const summaryInput = ref<HTMLTextAreaElement>();
+let requestId = 0;
+let session = 0;
 
 const form = reactive({
   occurredAt: beijingFollowUpToday(),
@@ -71,16 +74,32 @@ function clearNextDate() {
   errors.nextFollowUpAt = '';
 }
 
-onMounted(() => {
+watch(() => props.candidateId, () => {
+  ++session; ++requestId;
+  list.value = [];
+  loadError.value = '';
+  formVisible.value = false;
+  saving.value = false;
   void load();
-});
+}, { immediate: true });
+onBeforeUnmount(() => { ++session; ++requestId; });
+
+function active(candidateId: string, token: number) {
+  return props.candidateId === candidateId && session === token;
+}
 
 async function load() {
+  const id = ++requestId, candidateId = props.candidateId, token = session;
   loading.value = true;
+  loadError.value = '';
   try {
-    list.value = await talentPoolApi.listFollowUps(props.candidateId);
+    const result = await talentPoolApi.listFollowUps(candidateId);
+    if (id !== requestId || !active(candidateId, token)) return;
+    list.value = result;
+  } catch {
+    if (id === requestId && active(candidateId, token)) loadError.value = '跟进记录读取失败，请重试。';
   } finally {
-    loading.value = false;
+    if (id === requestId && active(candidateId, token)) loading.value = false;
   }
 }
 
@@ -99,32 +118,37 @@ function startCreate() {
 
 async function submit() {
   if (!props.editable || saving.value) return;
+  const candidateId = props.candidateId, token = session;
   await finishDateInput('occurredAt');
   await finishDateInput('nextFollowUpAt');
+  if (!active(candidateId, token)) return;
   const occurredAtValid = !errors.occurredAt && validateDate('occurredAt');
   const nextDateValid = !errors.nextFollowUpAt && validateDate('nextFollowUpAt');
   errors.summary = form.summary.trim() ? '' : '请填写跟进内容';
   if (!occurredAtValid || !nextDateValid || errors.summary) return;
   saving.value = true;
   try {
-    await talentPoolApi.addFollowUp(props.candidateId, {
+    await talentPoolApi.addFollowUp(candidateId, {
       occurredAt: form.occurredAt,
       channel: form.channel,
       summary: form.summary.trim(),
       nextFollowUpAt: form.nextFollowUpAt || null,
     });
+    if (!active(candidateId, token)) return;
     ElMessage.success('已记录跟进');
     formVisible.value = false;
     await load();
+    if (!active(candidateId, token)) return;
     emit('changed');
   } catch (error) {
+    if (!active(candidateId, token)) return;
     const message = isAxiosError(error) ? error.response?.data?.message : error instanceof Error ? error.message : '';
     if (typeof message === 'string') {
       if (message.includes('下次跟进日期')) errors.nextFollowUpAt = message;
       else if (message.includes('沟通日期')) errors.occurredAt = message;
     }
   } finally {
-    saving.value = false;
+    if (active(candidateId, token)) saving.value = false;
   }
 }
 </script>
@@ -165,7 +189,10 @@ async function submit() {
       </div>
     </el-form>
 
-    <el-empty v-if="!loading && !list.length && !formVisible" description="还没有跟进记录" :image-size="60" />
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" class="talent-follow-ups__error">
+      <el-button link type="primary" :disabled="loading" @click="load">重试</el-button>
+    </el-alert>
+    <el-empty v-if="!loading && !loadError && !list.length && !formVisible" description="还没有跟进记录" :image-size="60" />
     <el-timeline v-else v-loading="loading" class="talent-follow-ups__timeline">
       <el-timeline-item v-for="item in list" :key="item.id" :timestamp="formatFollowUpDate(item.occurredAt)" placement="top">
         <div class="talent-follow-ups__item">
@@ -190,6 +217,7 @@ async function submit() {
   justify-content: space-between;
   margin-bottom: 10px;
 }
+.talent-follow-ups__error { margin-bottom: 12px; }
 .talent-follow-ups__title {
   margin: 0;
   font-size: 14px;

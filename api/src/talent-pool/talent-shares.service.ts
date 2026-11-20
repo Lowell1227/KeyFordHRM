@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma, type TalentShare } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -112,9 +112,15 @@ export class TalentSharesService {
     });
   }
 
-  /** HR 创建单条只读分享：指定接收人 + 有效期 + 可选附简历原件。 */
+  /** HR 创建外链；带接收人的旧请求仍创建受限分享。 */
   async create(candidateId: string, input: CreateShareDto, operator: AuthUser) {
-    if (new Set(input.recipientIds).size !== input.recipientIds.length) {
+    const isPublicLink = input.isPublicLink === true;
+    const recipientIds = input.recipientIds ?? [];
+    if ((input.recipientIds !== undefined && !Array.isArray(input.recipientIds))
+      || (isPublicLink ? recipientIds.length > 0 : recipientIds.length === 0)) {
+      throw new BadRequestException('外链不指定接收人；受限分享须选择接收人');
+    }
+    if (new Set(recipientIds).size !== recipientIds.length) {
       throw new BadRequestException('接收人不能重复选择');
     }
     try {
@@ -126,15 +132,15 @@ export class TalentSharesService {
         }
         const candidate = await tx.talentCandidate.findFirst({ where: { id: candidateId, deletedAt: null }, select: { id: true, name: true } });
         if (!candidate) throw new NotFoundException('候选人不存在或已删除');
-        const recipients = await this.currentRecipients(input.recipientIds, tx);
-        if (recipients.length !== input.recipientIds.length) {
+        const recipients = isPublicLink ? [] : await this.currentRecipients(recipientIds, tx);
+        if (recipients.length !== recipientIds.length) {
           throw new BadRequestException('接收人资格已变化，请重新选择在职的 HR、实际主管或部门负责人');
         }
         const token = randomBytes(32).toString('hex');
         const createdAt = new Date();
         const expiresAt = new Date(createdAt.getTime() + input.expiresInDays * 24 * 60 * 60 * 1000);
         const share = await tx.talentShare.create({
-          data: { candidateId, requestId: input.requestId ?? null, token, recipientIds: [...input.recipientIds].sort(),
+          data: { candidateId, requestId: input.requestId ?? null, token, isPublicLink, recipientIds: [...recipientIds].sort(),
             includeResume: input.includeResume === true, message: input.message?.trim() || null,
             expiresAt, createdAt, createdById: operator.id },
         });
@@ -151,7 +157,7 @@ export class TalentSharesService {
         }
         await tx.auditLog.create({ data: { userId: operator.id, action: 'create_talent_share',
           entityType: 'talent_share', entityId: share.id,
-          newValue: { candidateId, recipientIds: input.recipientIds, includeResume: input.includeResume === true,
+          newValue: { candidateId, isPublicLink, recipientIds, includeResume: input.includeResume === true,
             expiresInDays: input.expiresInDays, requestId: input.requestId ?? null } } });
         return this.shareResult({ id: share.id, token, expiresAt });
       });
@@ -168,7 +174,8 @@ export class TalentSharesService {
   private replay(share: TalentShare, candidateId: string, input: CreateShareDto, operator: AuthUser) {
     const duration = share.expiresAt.getTime() - share.createdAt.getTime();
     if (share.candidateId.toLowerCase() !== candidateId.toLowerCase() || share.createdById.toLowerCase() !== operator.id.toLowerCase()
-      || JSON.stringify(share.recipientIds.map(id => id.toLowerCase()).sort()) !== JSON.stringify(input.recipientIds.map(id => id.toLowerCase()).sort())
+      || (share.isPublicLink === true) !== (input.isPublicLink === true)
+      || JSON.stringify(share.recipientIds.map(id => id.toLowerCase()).sort()) !== JSON.stringify((input.recipientIds ?? []).map(id => id.toLowerCase()).sort())
       || share.includeResume !== (input.includeResume === true) || share.message !== (input.message?.trim() || null)
       || duration !== input.expiresInDays * 24 * 60 * 60 * 1000) {
       throw new ConflictException('分享请求已用于其他内容，请重新发起分享');
@@ -200,14 +207,13 @@ export class TalentSharesService {
     return { id: share.id, revoked: true };
   }
 
-  /** 被分享人打开：校验登录态在 controller，这里校验白名单/有效期/撤销/软删，命中则累计查看。 */
-  async resolve(token: string, user: AuthUser): Promise<ShareView> {
+  /** 显式外链可匿名查看；历史分享仍校验登录、接收人及当前资格。 */
+  async resolve(token: string, user?: AuthUser): Promise<ShareView> {
     const share = await this.findUsableShare(token);
-    if (!share.recipientIds.includes(user.id)) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
-    if ((await this.currentRecipients([user.id])).length !== 1) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
+    await this.assertAccess(share, user);
     await this.prisma.talentShare.update({
       where: { id: share.id },
-      data: { viewCount: { increment: 1 }, lastViewedAt: new Date(), lastViewedById: user.id },
+      data: { viewCount: { increment: 1 }, lastViewedAt: new Date(), lastViewedById: user?.id ?? null },
     });
     const candidate = share.candidate;
     const now = new Date();
@@ -241,26 +247,34 @@ export class TalentSharesService {
   }
 
   /** 被分享人下载简历原件：仅 includeResume=true 且文件属于该候选人。 */
-  async resolveFile(token: string, fileId: string, user: AuthUser) {
+  async resolveFile(token: string, fileId: string, user?: AuthUser) {
     const share = await this.findUsableShare(token);
-    if (!share.recipientIds.includes(user.id)) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
-    if ((await this.currentRecipients([user.id])).length !== 1) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
+    await this.assertAccess(share, user);
     if (!share.includeResume) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
     const file = share.candidate.files.find((item) => item.id === fileId);
-    if (!file) throw new NotFoundException('简历文件不存在');
+    if (!file) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
     return file.objectKey;
+  }
+
+  private async assertAccess(share: Pick<TalentShare, 'isPublicLink' | 'recipientIds'>, user?: AuthUser) {
+    if (share.isPublicLink === true) return;
+    if (!user || !share.recipientIds.includes(user.id)
+      || (await this.currentRecipients([user.id])).length !== 1) {
+      throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
+    }
   }
 
   /** 统一失效入口：找不到 / 已过期 / 已撤销 / 候选人已软删 → 一律 403，不暴露候选人信息。 */
   private async findUsableShare(token: string) {
+    if (!/^[a-f0-9]{64}$/.test(token)) throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
     const share = await this.prisma.talentShare.findUnique({
       where: { token },
       include: { candidate: { include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } } } },
-    });
+    }).catch(() => { throw new ServiceUnavailableException('分享暂时无法读取，请稍后重试'); });
     if (!share
       || share.candidate.deletedAt !== null
       || share.revokedAt !== null
-      || share.expiresAt.getTime() < Date.now()) {
+      || share.expiresAt.getTime() <= Date.now()) {
       throw new ForbiddenException(SHARE_FORBIDDEN_MESSAGE);
     }
     return share;

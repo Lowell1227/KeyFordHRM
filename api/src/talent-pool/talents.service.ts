@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
@@ -10,9 +10,12 @@ import { UpdateTalentDto } from './dto/update-talent.dto';
 import { createHash } from 'crypto';
 import { DeleteTalentDto } from './dto/talent-interview.dto';
 import { talentEditVersion } from './talent-edit-version';
-import { shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 import { currentWorkerWhere } from '@/common/personnel/current-worker';
 import { ERROR_CODE } from '@/common/constants/error-codes';
+import { salaryWrite, serializeTalentSalary, talentSalaryWhere } from './talent-salary';
+import { talentApplicationFilter } from './talent-application-filter';
+import { buildTalentWorkbook, TALENT_EXPORT_MAX_ROWS } from './talents.excel';
+import { talentEmploymentStatus, type TalentEmploymentStatus } from './talent-employment';
 
 const onboardingSummary = {
   orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1,
@@ -45,9 +48,14 @@ export type TalentListItem = Omit<CandidateRow, '_count' | 'applications' | 'onb
   ownerName: string | null;
   latestApplication: Omit<ApplicationSummary, 'onboardingRequests'> & { ownerName: string | null; onboardingRequest: OnboardingSummary | null } | null;
   onboardingRequest: OnboardingSummary | null;
+  expectSalaryMinYuan: number | null;
+  expectSalaryMaxYuan: number | null;
+  salaryNeedsReview: boolean;
+  employmentStatus: TalentEmploymentStatus | null;
 };
 
 const KEYWORD_FIELDS = ['name', 'phone', 'currentCompany', 'currentPosition', 'appliedPosition'] as const;
+const listOrder = [{ updatedAt: 'desc' }, { id: 'desc' }] satisfies Prisma.TalentCandidateOrderByWithRelationInput[];
 
 @Injectable()
 export class TalentsService {
@@ -59,19 +67,60 @@ export class TalentsService {
       this.prisma.talentCandidate.count({ where }),
       this.prisma.talentCandidate.findMany({
         where,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: listOrder,
         skip: query.skip,
         take: query.take,
-        include: listInclude,
+        include: { ...listInclude, applications: { ...listInclude.applications, where: talentApplicationFilter(query) } },
       }),
     ]);
-    const summaries = await this.attachRecruitmentSummaries(items);
+    const summaries = await this.attachEmployment(await this.attachRecruitmentSummaries(items));
     const withDue = await this.attachNextFollowUp(summaries.map(({ _count, applications: _applications, ...item }, index) => ({
-      ...item,
+      ...serializeTalentSalary(item),
       editVersion: talentEditVersion(items[index]),
       fileCount: _count.files,
     })));
     return paginated(withDue as TalentListItem[], total, query);
+  }
+
+  async applicationPositions(): Promise<string[]> {
+    const rows = await this.prisma.talentApplication.findMany({ where: { candidate: { deletedAt: null } },
+      select: { positionName: true }, distinct: ['positionName'], orderBy: { positionName: 'asc' } });
+    return rows.map(row => row.positionName);
+  }
+
+  /** One row per matching application; candidates without applications retain one row without application filters. */
+  async exportApplications(query: TalentQueryDto, operator: AuthUser): Promise<StreamableFile> {
+    const where = await this.buildWhere(query, operator), applicationWhere = talentApplicationFilter(query);
+    const items = await this.prisma.$transaction(async tx => {
+      const applicationCount = await tx.talentApplication.count({ where: { candidate: where, ...applicationWhere } });
+      const withoutApplications = applicationWhere ? 0 : await tx.talentCandidate.count({ where: { AND: [where, { applications: { none: {} } }] } });
+      if (applicationCount + withoutApplications > TALENT_EXPORT_MAX_ROWS) throw new BadRequestException(`导出超过${TALENT_EXPORT_MAX_ROWS}行，请缩小筛选范围`);
+      const rows = await tx.talentCandidate.findMany({ where, orderBy: listOrder, select: {
+        id: true, name: true, phone: true, ownerId: true, createdById: true, status: true, convertedUserId: true, sourceChannel: true, tags: true,
+        appliedPosition: true, currentCompany: true, currentPosition: true, yearsOfExperience: true, education: true,
+        school: true, major: true, expectCity: true, expectSalaryMin: true, expectSalaryMax: true, expectSalaryUnit: true, updatedAt: true,
+        applications: { ...applicationSummary, where: applicationWhere, select: { ...applicationSummary.select,
+          events: { where: { action: 'reserve' }, select: { reserveReasons: true } },
+        } },
+      } });
+      return this.attachNextFollowUp(rows.map(row => ({ ...row, applications: row.applications.map(({ events, ...application }) => ({
+        ...application, reserveReasons: [...new Set((events ?? []).flatMap(event => event.reserveReasons))],
+      })) })), tx);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+    const candidates = await this.attachEmployment(await this.attachRecruitmentSummaries(items));
+    const rowCount = candidates.reduce((count, item) => count + Math.max(1, item.applications.length), 0);
+    const workbook = buildTalentWorkbook(candidates);
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+    await this.prisma.auditLog.create({ data: { userId: operator.id, action: 'export_talent_applications', entityType: 'talent_application_export',
+      newValue: { candidateCount: candidates.length, rowCount, filters: {
+        keywordApplied: Boolean(query.keyword), applicationPositionApplied: Boolean(query.applicationPosition), applicationStage: query.applicationStage ?? null,
+        status: query.status ?? null, source: query.source ?? null, tag: query.tag ?? null,
+        salaryFilterApplied: [query.salaryMin, query.salaryMax, query.salaryMinYuan, query.salaryMaxYuan].some(value => value != null),
+        dueOnly: Boolean(query.dueOnly), staleOnly: Boolean(query.staleOnly), mineOnly: Boolean(query.mineOnly),
+      } } } });
+    const filename = encodeURIComponent(`人才应聘记录-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    return new StreamableFile(buffer, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="talent-applications.xlsx"; filename*=UTF-8''${filename}` });
   }
 
   private async buildWhere(query: TalentQueryDto, operator?: AuthUser): Promise<Prisma.TalentCandidateWhereInput> {
@@ -85,11 +134,16 @@ export class TalentsService {
     if (query.status) where.status = query.status;
     if (query.source) where.sourceChannel = query.source;
     if (query.tag) where.tags = { has: query.tag };
-    if (query.salaryMin !== undefined) and.push({ expectSalaryMax: { gte: query.salaryMin } });
-    if (query.salaryMax !== undefined) and.push({ expectSalaryMin: { lte: query.salaryMax } });
-    if (query.dueOnly) and.push({ id: { in: await this.dueCandidateIds() } });
+    const application = talentApplicationFilter(query);
+    if (application) and.push({ applications: { some: application } });
+    const salary = talentSalaryWhere(query);
+    if (salary) and.push(salary);
+    if (query.dueOnly) and.push({ OR: [
+      { followUps: { none: {} } },
+      { followUps: { some: { nextFollowUpAt: { not: null } } } },
+    ] });
     if (query.staleOnly) and.push(this.staleWhere());
-    if (query.dueOnly || query.staleOnly) {
+    if (query.staleOnly) {
       and.push({ status: { notIn: ['hired', 'rejected'] } });
       and.push({ OR: [
         { applications: { none: {} } },
@@ -102,20 +156,6 @@ export class TalentsService {
     }
     if (and.length > 0) where.AND = and;
     return where;
-  }
-
-  /** 「仅看待跟进」：最新一条非空 next_follow_up_at ≤ 今天的候选人（软删范围外）。 */
-  private async dueCandidateIds(): Promise<string[]> {
-    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
-      SELECT candidate_id AS id FROM (
-        SELECT candidate_id, next_follow_up_at,
-               ROW_NUMBER() OVER (PARTITION BY candidate_id ORDER BY occurred_at DESC, created_at DESC, id DESC) AS rn
-        FROM talent_follow_ups
-        WHERE next_follow_up_at IS NOT NULL
-      ) latest
-      WHERE rn = 1 AND next_follow_up_at <= ${shanghaiBusinessDate().toISOString().slice(0, 10)}::date
-    `;
-    return rows.map((row) => row.id);
   }
 
   private staleWhere(): Prisma.TalentCandidateWhereInput {
@@ -131,9 +171,9 @@ export class TalentsService {
   }
 
   /** 给列表项补「最新一条非空下次跟进日期」。 */
-  private async attachNextFollowUp<T extends { id: string }>(items: T[]): Promise<Array<T & { nextFollowUpAt: Date | null }>> {
+  private async attachNextFollowUp<T extends { id: string }>(items: T[], client: Prisma.TransactionClient = this.prisma): Promise<Array<T & { nextFollowUpAt: Date | null }>> {
     if (items.length === 0) return items.map((item) => ({ ...item, nextFollowUpAt: null }));
-    const rows = await this.prisma.$queryRaw<Array<{ candidate_id: string; next_follow_up_at: Date | null }>>`
+    const rows = await client.$queryRaw<Array<{ candidate_id: string; next_follow_up_at: Date | null }>>`
       SELECT DISTINCT ON (candidate_id) candidate_id, next_follow_up_at
       FROM talent_follow_ups
       WHERE next_follow_up_at IS NOT NULL AND candidate_id::text IN (${Prisma.join(items.map((item) => item.id))})
@@ -160,15 +200,24 @@ export class TalentsService {
       ? await this.prisma.user.findMany({ where: { id: { in: recipientIds } }, select: { id: true, name: true } })
       : [];
     const nameById = new Map(recipients.map((user) => [user.id, user.name]));
-    const [summary] = await this.attachRecruitmentSummaries([candidate]);
+    const [summary] = await this.attachEmployment(await this.attachRecruitmentSummaries([candidate]));
     return {
-      ...summary,
+      ...serializeTalentSalary(summary),
       editVersion: talentEditVersion(candidate),
       shares: candidate.shares.map((share) => ({
         ...share,
         recipientNames: share.recipientIds.map((recipientId) => nameById.get(recipientId) ?? '已删除用户'),
       })),
     };
+  }
+
+  private async attachEmployment<T extends { convertedUserId?: string | null; status?: string }>(items: T[]) {
+    const ids = [...new Set(items.map(item => item.convertedUserId).filter((id): id is string => Boolean(id)))];
+    const users = ids.length ? await this.prisma.user.findMany({ where: { id: { in: ids } },
+      select: { id: true, status: true, deletedAt: true, archivedAt: true } }) : [];
+    const employees = new Map(users.map(user => [user.id, user]));
+    return items.map(item => ({ ...item, employmentStatus: !item.convertedUserId && item.status === 'hired'
+      ? 'unknown' as const : talentEmploymentStatus(item.convertedUserId, employees.get(item.convertedUserId ?? '')) }));
   }
 
   private async attachRecruitmentSummaries<T extends {
@@ -181,9 +230,9 @@ export class TalentsService {
       where: { id: { in: ownerIds } }, select: { id: true, name: true },
     }) : [];
     const names = new Map(owners.map(owner => [owner.id, owner.name]));
-    return items.map(({ onboardingRequests, ...item }) => {
+    return items.map(({ onboardingRequests, applications: sourceApplications, ...item }) => {
       const ownerId = item.ownerId ?? item.createdById ?? null;
-      const applications = (item.applications ?? []).map(({ onboardingRequests: requests, ...application }) => ({
+      const applications = (sourceApplications ?? []).map(({ onboardingRequests: requests, ...application }) => ({
         ...application, ownerName: names.get(application.ownerId) ?? null, onboardingRequest: requests?.[0] ?? null,
       }));
       return { ...item, ownerId, ownerName: ownerId ? names.get(ownerId) ?? null : null,
@@ -209,7 +258,7 @@ export class TalentsService {
     if (input.status === 'hired' || input.userId) {
       throw new BadRequestException('新建记录不能直接标记为已入职，请先入库再办理');
     }
-    this.assertSalaryRange(input.expectSalaryMin, input.expectSalaryMax);
+    const salary = salaryWrite(input);
     const duplicate = await this.findByPhone(input.phone);
     if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
     try {
@@ -232,8 +281,7 @@ export class TalentsService {
           school: input.school || null,
           major: input.major || null,
           expectCity: input.expectCity || null,
-          expectSalaryMin: input.expectSalaryMin ?? null,
-          expectSalaryMax: input.expectSalaryMax ?? null,
+          ...salary,
           sourceChannel: input.sourceChannel,
           appliedPosition: input.appliedPosition || null,
           status: input.status ?? 'new',
@@ -242,7 +290,7 @@ export class TalentsService {
           createdById: operator.id,
         },
       });
-      return { ...candidate, editVersion: talentEditVersion(candidate) };
+      return { ...serializeTalentSalary(candidate), editVersion: talentEditVersion(candidate) };
     } catch (error) {
       if (this.isUniqueViolation(error)) {
         const existing = await this.findByPhone(input.phone);
@@ -269,9 +317,7 @@ export class TalentsService {
         if (input.userId !== undefined || (input.status === 'hired' && before.status !== 'hired')) {
           throw new BadRequestException('请通过入离职办理并确认到岗，不支持手动关联员工');
         }
-        const min = input.expectSalaryMin !== undefined ? input.expectSalaryMin : before.expectSalaryMin;
-        const max = input.expectSalaryMax !== undefined ? input.expectSalaryMax : before.expectSalaryMax;
-        this.assertSalaryRange(min, max);
+        const salary = salaryWrite(input, before);
         const nextPhone = input.phone ?? before.phone;
         if (nextPhone !== before.phone) {
           const duplicate = await this.findByPhone(nextPhone, tx);
@@ -283,13 +329,14 @@ export class TalentsService {
         const education = await this.resolveEducation(input, tx, before);
         const data: Prisma.TalentCandidateUncheckedUpdateInput = {
           ...this.buildUpdateData(rest, operator),
+          ...salary,
           ...education,
           ...(ownerChanged ? { ownerId: input.ownerId } : {}),
           ...(status !== undefined ? { status } : {}),
         };
         const changedFields = Object.keys(data).filter(field => field !== 'updatedById'
           && JSON.stringify(data[field] ?? null) !== JSON.stringify(before[field] ?? null)).sort();
-        if (!changedFields.length) return { ...before, editVersion: talentEditVersion(before) };
+        if (!changedFields.length) return { ...serializeTalentSalary(before), editVersion: talentEditVersion(before) };
         const candidate = await tx.talentCandidate.update({
           where: { id },
           data: { ...data, updatedAt: new Date(Math.max(Date.now(), (before.updatedAt?.getTime() ?? 0) + 1)) },
@@ -298,7 +345,7 @@ export class TalentsService {
         });
         await tx.auditLog.create({ data: { userId: operator.id, action: 'update_talent_candidate',
           entityType: 'talent_candidate', entityId: id, newValue: { changedFields } } });
-        return { ...candidate, editVersion: talentEditVersion(candidate) };
+        return { ...serializeTalentSalary(candidate), editVersion: talentEditVersion(candidate) };
       });
     } catch (error) {
       if (this.isUniqueViolation(error) && input.phone !== undefined) {
@@ -385,8 +432,6 @@ export class TalentsService {
       ...(input.school !== undefined ? { school: input.school || null } : {}),
       ...(input.major !== undefined ? { major: input.major || null } : {}),
       ...(input.expectCity !== undefined ? { expectCity: input.expectCity || null } : {}),
-      ...(input.expectSalaryMin !== undefined ? { expectSalaryMin: input.expectSalaryMin } : {}),
-      ...(input.expectSalaryMax !== undefined ? { expectSalaryMax: input.expectSalaryMax } : {}),
       ...(input.sourceChannel !== undefined ? { sourceChannel: input.sourceChannel } : {}),
       ...(input.appliedPosition !== undefined ? { appliedPosition: input.appliedPosition || null } : {}),
       ...(input.tags !== undefined ? { tags: input.tags } : {}),
@@ -457,12 +502,6 @@ export class TalentsService {
         },
       }),
     ]);
-  }
-
-  private assertSalaryRange(min?: number | null, max?: number | null) {
-    if (min != null && max != null && min > max) {
-      throw new BadRequestException('期望薪资下限不能高于上限');
-    }
   }
 
   private async findByPhone(phone: string, client: Prisma.TransactionClient = this.prisma) {

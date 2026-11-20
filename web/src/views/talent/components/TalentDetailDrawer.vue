@@ -6,6 +6,7 @@ import { talentPoolApi } from '@/api/talent-pool.api';
 import {
   TALENT_STATUS_LABELS,
   TALENT_STATUS_TAG,
+  TALENT_EMPLOYMENT_STATUS_LABELS,
   TALENT_SOURCE_LABELS,
   TALENT_TAG_LABELS,
   EDUCATION_LABELS,
@@ -16,6 +17,7 @@ import {
   INTERVIEW_STATUS_LABELS,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
+import { formatTalentSalary } from '@/utils/talent-salary';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import TalentFileList from './TalentFileList.vue';
 import TalentFollowUpTimeline from './TalentFollowUpTimeline.vue';
@@ -53,6 +55,7 @@ const visible = computed({
 const loading = ref(false);
 const loadError = ref(''), actionError = ref(''), rejecting = ref(false), impactLoading = ref(false);
 const detail = ref<TalentCandidateDetail | null>(null);
+const employmentStatusLabel = computed(() => TALENT_EMPLOYMENT_STATUS_LABELS[detail.value?.employmentStatus ?? 'unknown']);
 const interviewPanel = ref<InstanceType<typeof TalentInterviewPanel>>();
 const shareVisible = ref(false);
 const shareContext = ref<{ candidateId: string; session: number } | null>(null);
@@ -94,12 +97,7 @@ function field(value: string | number | null | undefined): string {
 }
 
 function salaryText(item: TalentCandidateDetail): string {
-  const min = item.expectSalaryMin;
-  const max = item.expectSalaryMax;
-  if (min == null && max == null) return '面议';
-  if (min != null && max != null) return `${min}–${max}K`;
-  if (min != null) return `${min}K以上`;
-  return `${max}K以下`;
+  return formatTalentSalary(item);
 }
 
 function ageText(item: TalentCandidateDetail): string {
@@ -201,6 +199,10 @@ function onShareChanged(context: { candidateId: string; session: number }) {
           <el-tag :type="TALENT_STATUS_TAG[detail.status].type"
             :effect="TALENT_STATUS_TAG[detail.status].effect ?? 'light'" size="small">
             {{ TALENT_STATUS_LABELS[detail.status] }}
+          </el-tag>
+          <el-tag v-if="detail.employmentStatus" data-testid="talent-current-employment" size="small" effect="plain"
+            :type="detail.employmentStatus === 'resigned' || detail.employmentStatus === 'unknown' ? 'warning' : 'info'">
+            员工当前：{{ employmentStatusLabel }}
           </el-tag>
           <span class="talent-detail__source">来源：{{ TALENT_SOURCE_LABELS[detail.sourceChannel] }}</span>
           <span class="talent-detail__updated">更新于 {{ formatDate(detail.updatedAt) }}</span>

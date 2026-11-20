@@ -24,6 +24,24 @@ import type {
  * 除 viewShare / downloadShareFile 外，全部要求人才库权限（后端强制）。
  */
 export const talentPoolApi = {
+  applicationPositions(): Promise<string[]> {
+    return http.get('/talents/application-positions') as unknown as Promise<string[]>;
+  },
+
+  exportApplications(query: TalentQuery): Promise<Blob> {
+    return http.get('/talents/export', { params: query, responseType: 'blob', skipErrorMessage: true, timeout: 90000 })
+      .then(response => (response as { data: Blob }).data)
+      .catch(async error => {
+        let message = error?.response?.status === 403 ? '当前无权导出人才应聘记录。' : '导出失败，请检查网络后重试。';
+        try {
+          const body = error?.response?.data instanceof Blob ? JSON.parse(await error.response.data.text()) : error?.response?.data;
+          if (typeof body?.message === 'string') message = body.message;
+          else if (Array.isArray(body?.message)) message = body.message.join('；');
+        } catch { /* Keep a readable message for non-JSON gateway errors. */ }
+        throw new Error(message);
+      });
+  },
+
   /** GET /talents 列表。 */
   list(query: TalentQuery): Promise<Paginated<TalentCandidateListItem>> {
     return http.get('/talents', { params: query }) as unknown as Promise<Paginated<TalentCandidateListItem>>;
@@ -97,7 +115,7 @@ export const talentPoolApi = {
 
   /**
    * GET /talents/shares/:token 被分享人脱敏视图。
-   * 仅要求登录 + 白名单 + 未过期 + 未撤销；失败统一 403「链接已失效或无权查看」。
+   * 新外链免登录；旧分享仍需登录、接收人及当前资格。失败统一403。
    */
   viewShare(token: string): Promise<ShareView> {
     return http.get(`/talents/shares/${token}`) as unknown as Promise<ShareView>;

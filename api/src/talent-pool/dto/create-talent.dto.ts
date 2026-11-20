@@ -79,13 +79,24 @@ export class CreateTalentDto {
 
   @IsOptional()
   @Type(() => Number)
-  @IsInt() @Min(0)
-  expectSalaryMin?: number;
+  @IsInt() @Min(0) @Max(2147483647)
+  expectSalaryMin?: number | null;
 
   @IsOptional()
   @Type(() => Number)
-  @IsInt() @Min(0)
-  expectSalaryMax?: number;
+  @IsInt() @Min(0) @Max(2147483647)
+  expectSalaryMax?: number | null;
+
+  /** 精确元/月；不能与旧版 K/月字段同时提交。 */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt() @Min(0) @Max(2147483647)
+  expectSalaryMinYuan?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt() @Min(0) @Max(2147483647)
+  expectSalaryMaxYuan?: number | null;
 
   @IsIn(TALENT_SOURCE_CHANNELS as readonly string[], { message: '来源渠道无效' })
   sourceChannel!: string;

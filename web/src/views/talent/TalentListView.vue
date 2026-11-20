@@ -2,10 +2,12 @@
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { usePagination } from '@/composables/usePagination';
+import { useExport } from '@/composables/useExport';
 import {
   TALENT_STATUSES,
   TALENT_STATUS_LABELS,
   TALENT_STATUS_TAG,
+  TALENT_EMPLOYMENT_STATUS_LABELS,
   TALENT_SOURCE_CHANNELS,
   TALENT_SOURCE_LABELS,
   TALENT_TAGS,
@@ -16,8 +18,12 @@ import {
   type TalentSourceChannel,
   type TalentStatus,
   type TalentTag,
+  type TalentQuery,
+  type TalentApplicationStage,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
+import { formatFollowUpDate } from '@/utils/talent-follow-up-date';
+import { formatTalentSalary } from '@/utils/talent-salary';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
@@ -30,6 +36,8 @@ const { canEdit } = useTalentPermissions();
 const list = ref<TalentCandidateListItem[]>([]);
 const loading = ref(false);
 const loadError = ref('');
+const exportError = ref(''), positionsError = ref(''), applicationPositions = ref<string[]>([]);
+const { loading: exporting, download } = useExport();
 const detailVisible = ref(false);
 const formVisible = ref(false);
 const activeCandidateId = ref<string | null>(null);
@@ -38,6 +46,8 @@ const filters = reactive({
   status: '' as TalentStatus | '',
   source: '' as TalentSourceChannel | '',
   tag: '' as TalentTag | '',
+  applicationPosition: '',
+  applicationStage: '' as TalentApplicationStage | '',
   salaryMin: undefined as number | undefined,
   salaryMax: undefined as number | undefined,
   dueOnly: false,
@@ -50,24 +60,35 @@ onBeforeUnmount(() => { ++requestId; });
 
 onMounted(() => {
   void loadList();
+  void loadApplicationPositions();
 });
+
+function currentFilters(): TalentQuery {
+  return {
+    keyword: filters.keyword.trim() || undefined, status: filters.status || undefined, source: filters.source || undefined,
+    tag: filters.tag || undefined, applicationPosition: filters.applicationPosition || undefined, applicationStage: filters.applicationStage || undefined,
+    salaryMinYuan: filters.salaryMin, salaryMaxYuan: filters.salaryMax,
+    dueOnly: filters.dueOnly || undefined, staleOnly: filters.staleOnly || undefined, mineOnly: filters.mineOnly || undefined,
+  };
+}
+async function loadApplicationPositions() {
+  positionsError.value = '';
+  try { applicationPositions.value = await talentPoolApi.applicationPositions(); }
+  catch { positionsError.value = '应聘岗位选项读取失败'; }
+}
+async function exportApplications() {
+  if (exporting.value) return;
+  exportError.value = '';
+  try { await download(() => talentPoolApi.exportApplications(currentFilters()), `人才应聘记录-${new Date().toISOString().slice(0, 10)}.xlsx`); }
+  catch (cause) { exportError.value = cause instanceof Error ? cause.message : '导出失败，请重试'; }
+}
 
 async function loadList() {
   const id = ++requestId;
   loading.value = true;
   loadError.value = '';
   try {
-    const res = await talentPoolApi.list(withParams({
-      keyword: filters.keyword.trim() || undefined,
-      status: filters.status || undefined,
-      source: filters.source || undefined,
-      tag: filters.tag || undefined,
-      salaryMin: filters.salaryMin,
-      salaryMax: filters.salaryMax,
-      dueOnly: filters.dueOnly || undefined,
-      staleOnly: filters.staleOnly || undefined,
-      mineOnly: filters.mineOnly || undefined,
-    }));
+    const res = await talentPoolApi.list(withParams({ ...currentFilters() }));
     if (id !== requestId) return;
     list.value = res.items;
     total.value = res.total;
@@ -101,19 +122,14 @@ function onSaved() { void loadList(); }
 function onRemoved() { void loadList(); }
 function onReset() {
   Object.assign(filters, {
-    keyword: '', status: '', source: '', tag: '',
+    keyword: '', status: '', source: '', tag: '', applicationPosition: '', applicationStage: '',
     salaryMin: undefined, salaryMax: undefined, dueOnly: false, staleOnly: false, mineOnly: false,
   });
   onSearch();
 }
 
 function formatSalary(row: TalentCandidateListItem): string {
-  const min = row.expectSalaryMin;
-  const max = row.expectSalaryMax;
-  if (min == null && max == null) return '—';
-  if (min != null && max != null) return `${min}–${max}K`;
-  if (min != null) return `${min}K以上`;
-  return `${max}K以下`;
+  return formatTalentSalary(row, '—');
 }
 
 function formatExperience(years: number | null): string {
@@ -131,12 +147,19 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
   <BusinessListPage variant="record" :loading="loading" class="talent-list">
     <template #primary-action>
       <el-button v-if="canEdit" type="primary" @click="openCreate">新增人才</el-button>
+      <el-button :loading="exporting" :disabled="loading" @click="exportApplications">导出应聘记录</el-button>
     </template>
     <template #filters>
       <div class="talent-filter-bar">
         <el-input v-model="filters.keyword" class="talent-filter-bar__keyword" clearable placeholder="姓名 / 手机 / 公司 / 职位"
           @keyup.enter="onSearch" @clear="onSearch" />
-        <el-select v-model="filters.status" data-testid="talent-filter-status" class="talent-filter-bar__select" clearable placeholder="状态" @change="onSearch">
+        <el-select v-model="filters.applicationPosition" aria-label="应聘岗位（含历史）" data-testid="talent-filter-application-position" class="talent-filter-bar__select" clearable filterable placeholder="应聘岗位" @change="onSearch">
+          <el-option v-for="position in applicationPositions" :key="position" :label="position" :value="position" />
+        </el-select>
+        <el-select v-model="filters.applicationStage" aria-label="应聘阶段" data-testid="talent-filter-application-stage" class="talent-filter-bar__select" clearable placeholder="应聘阶段" @change="onSearch">
+          <el-option v-for="(label, stage) in APPLICATION_STAGE_LABELS" :key="stage" :label="label" :value="stage" />
+        </el-select>
+        <el-select v-model="filters.status" aria-label="人才状态" data-testid="talent-filter-status" class="talent-filter-bar__select" clearable placeholder="人才状态" @change="onSearch">
           <el-option v-for="s in TALENT_STATUSES" :key="s" :label="TALENT_STATUS_LABELS[s]" :value="s" />
         </el-select>
         <el-select v-model="filters.source" data-testid="talent-filter-source" class="talent-filter-bar__select" clearable placeholder="来源" @change="onSearch">
@@ -146,22 +169,24 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           <el-option v-for="t in TALENT_TAGS" :key="t" :label="TALENT_TAG_LABELS[t]" :value="t" />
         </el-select>
         <div class="talent-filter-bar__salary">
-          <el-input-number v-model="filters.salaryMin" :min="0" :max="999" :controls="false" placeholder="最低K"
+          <el-input-number v-model="filters.salaryMin" :controls="false" placeholder="最低元/月"
             @change="onSearch" />
           <span class="talent-filter-bar__salary-sep">–</span>
-          <el-input-number v-model="filters.salaryMax" :min="0" :max="999" :controls="false" placeholder="最高K"
+          <el-input-number v-model="filters.salaryMax" :controls="false" placeholder="最高元/月"
             @change="onSearch" />
         </div>
         <div class="talent-filter-bar__switches">
-          <el-switch v-model="filters.mineOnly" aria-label="我的负责" @change="onSearch" /> 我的负责
-          <el-switch v-model="filters.dueOnly" aria-label="仅看待跟进" @change="onSearch" /> 仅看待跟进
-          <el-switch v-model="filters.staleOnly" aria-label="超18个月未联系" @change="onSearch" /> 超18个月未联系
+          <span class="talent-filter-toggle"><el-switch v-model="filters.mineOnly" aria-label="我的负责" @change="onSearch" /> 我的负责</span>
+          <span class="talent-filter-toggle"><el-switch v-model="filters.dueOnly" aria-label="仅看待跟进" @change="onSearch" /> 仅看待跟进</span>
+          <span class="talent-filter-toggle"><el-switch v-model="filters.staleOnly" aria-label="超18个月未联系" @change="onSearch" /> 超18个月未联系</span>
         </div>
         <el-button @click="onReset">重置</el-button>
       </div>
     </template>
 
     <template #feedback>
+      <el-alert v-if="exportError" :title="exportError" type="error" :closable="false" />
+      <el-alert v-if="positionsError" :title="positionsError" type="error" :closable="false"><el-button link type="primary" @click="loadApplicationPositions">重试岗位选项</el-button></el-alert>
       <el-alert v-if="loadError" :title="loadError" type="error" :closable="false">
         <el-button link type="primary" @click="loadList">重试</el-button>
       </el-alert>
@@ -180,7 +205,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         </el-table-column>
         <el-table-column prop="phone" label="手机" width="120" />
         <el-table-column prop="ownerName" label="负责人" min-width="100" show-overflow-tooltip><template #default="{ row }">{{ asRow(row).ownerName || '未指定' }}</template></el-table-column>
-        <el-table-column label="最新应聘" min-width="180" show-overflow-tooltip><template #default="{ row }"><span v-if="asRow(row).latestApplication">{{ asRow(row).latestApplication?.positionName }} · {{ APPLICATION_STAGE_LABELS[asRow(row).latestApplication!.stage] }}</span><span v-else>暂无应聘</span></template></el-table-column>
+        <el-table-column :label="filters.applicationPosition || filters.applicationStage ? '匹配应聘' : '最新应聘'" min-width="180" show-overflow-tooltip><template #default="{ row }"><span v-if="asRow(row).latestApplication">{{ asRow(row).latestApplication?.positionName }} · {{ APPLICATION_STAGE_LABELS[asRow(row).latestApplication!.stage] }}</span><span v-else>暂无应聘</span></template></el-table-column>
         <el-table-column prop="appliedPosition" label="意向岗位" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.appliedPosition || '—' }}</template>
         </el-table-column>
@@ -205,13 +230,16 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
+            <div class="talent-status-cell">
             <el-tag :type="TALENT_STATUS_TAG[asRow(row).status].type" :effect="TALENT_STATUS_TAG[asRow(row).status].effect ?? 'light'" size="small">
               {{ TALENT_STATUS_LABELS[asRow(row).status] }}
             </el-tag>
+            <el-tag v-if="asRow(row).employmentStatus" size="small" type="info">员工{{ TALENT_EMPLOYMENT_STATUS_LABELS[asRow(row).employmentStatus!] }}</el-tag>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="下次跟进" width="110">
-          <template #default="{ row }">{{ asRow(row).nextFollowUpAt ? formatDate(asRow(row).nextFollowUpAt) : '—' }}</template>
+          <template #default="{ row }">{{ formatFollowUpDate(asRow(row).nextFollowUpAt) }}</template>
         </el-table-column>
         <el-table-column label="更新时间" width="110">
           <template #default="{ row }">{{ formatDate(asRow(row).updatedAt) }}</template>
@@ -233,12 +261,14 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           <el-tag :type="TALENT_STATUS_TAG[item.status].type" :effect="TALENT_STATUS_TAG[item.status].effect ?? 'light'" size="small">
             {{ TALENT_STATUS_LABELS[item.status] }}
           </el-tag>
+          <el-tag v-if="item.employmentStatus" size="small" type="info">员工{{ TALENT_EMPLOYMENT_STATUS_LABELS[item.employmentStatus] }}</el-tag>
         </template>
         <div v-for="field in [
           ['岗位', item.appliedPosition || item.currentPosition || '—'],
           ['手机', item.phone],
           ['负责人', item.ownerName || '未指定'],
-          ['最新应聘', item.latestApplication ? `${item.latestApplication.positionName} · ${APPLICATION_STAGE_LABELS[item.latestApplication.stage]}` : '暂无应聘'],
+          [filters.applicationPosition || filters.applicationStage ? '匹配应聘' : '最新应聘', item.latestApplication ? `${item.latestApplication.positionName} · ${APPLICATION_STAGE_LABELS[item.latestApplication.stage]}` : '暂无应聘'],
+          ['下次跟进', formatFollowUpDate(item.nextFollowUpAt)],
         ]" :key="field[0]" class="mobile-result-field">
           <span class="mobile-result-field__label">{{ field[0] }}</span>
           <span class="mobile-result-field__value">{{ field[1] }}</span>
@@ -280,16 +310,19 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
   align-items: center;
   gap: 6px;
 }
-.talent-filter-bar__salary :deep(.el-input-number) { width: 76px; }
+.talent-filter-bar__salary :deep(.el-input-number) { width: 112px; }
 .talent-filter-bar__salary-sep { color: var(--el-text-color-secondary); }
 .talent-filter-bar__switches {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: 13px;
   color: var(--el-text-color-regular);
 }
+.talent-filter-toggle { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .talent-name-cell { display: flex; flex-direction: column; gap: 2px; }
+.talent-status-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .talent-name-cell__files { font-size: 12px; color: var(--el-text-color-secondary); }
 
 @media (max-width: 768px) {

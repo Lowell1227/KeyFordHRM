@@ -8,6 +8,12 @@ export const TALENT_APPLICATION_ACTIONS = [
 ] as const;
 export type TalentApplicationAction = typeof TALENT_APPLICATION_ACTIONS[number];
 
+export const TALENT_RESERVE_REASON_LABELS = {
+  commute_distance: '通勤距离', salary_expectation: '薪资期望', work_schedule: '工作制偏好', other: '其他',
+} as const;
+export type TalentReserveReason = keyof typeof TALENT_RESERVE_REASON_LABELS;
+export const TALENT_RESERVE_REASONS = Object.keys(TALENT_RESERVE_REASON_LABELS) as TalentReserveReason[];
+
 export interface RecruitmentActor {
   id: string;
   sysRole: string;

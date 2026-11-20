@@ -150,9 +150,17 @@ describe('talent list recruitment summaries and current follow-up scope', () => 
     expect((plainToInstance(TalentQueryDto, { mineOnly: 'false' }) as any).mineOnly).toBe(false);
   });
 
-  it.each(['dueOnly', 'staleOnly'])('%s excludes terminal candidates and candidates with only closed applications', async flag => {
+  it('dueOnly keeps recruitment-stage filtering independent from follow-up work', async () => {
     const { sut, prisma } = setup();
-    await sut.list(plainToInstance(TalentQueryDto, { [flag]: true }));
+    await sut.list(plainToInstance(TalentQueryDto, { dueOnly: true }));
+    expect(prisma.talentCandidate.findMany.mock.calls[0][0].where.AND).toEqual([{ OR: [
+      { followUps: { none: {} } }, { followUps: { some: { nextFollowUpAt: { not: null } } } },
+    ] }]);
+  });
+
+  it('staleOnly excludes terminal candidates and candidates with only closed applications', async () => {
+    const { sut, prisma } = setup();
+    await sut.list(plainToInstance(TalentQueryDto, { staleOnly: true }));
     const where = prisma.talentCandidate.findMany.mock.calls[0][0].where;
     expect(where.AND).toContainEqual({ status: { notIn: ['hired', 'rejected'] } });
     expect(where.AND).toContainEqual({ OR: [

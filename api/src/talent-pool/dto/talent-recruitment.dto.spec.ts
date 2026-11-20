@@ -3,6 +3,16 @@ import { validateSync } from 'class-validator';
 import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './talent-recruitment.dto';
 
 describe('recruitment DTO contract', () => {
+  it('allows optional standard reserve reasons and rejects unknown, duplicate, non-array and oversized inputs', () => {
+    const options = { whitelist: true, forbidNonWhitelisted: true };
+    const body = { expectedRevision: 0, action: 'reserve' };
+    for (const reserveReasons of [undefined, [], ['other'], ['commute_distance', 'salary_expectation', 'work_schedule', 'other']]) {
+      expect(validateSync(plainToInstance(TalentApplicationActionDto, { ...body, ...(reserveReasons === undefined ? {} : { reserveReasons }) }), options)).toEqual([]);
+    }
+    for (const reserveReasons of [['unknown'], ['other', 'other'], 'other', ['other', 'other', 'other', 'other', 'other']]) {
+      expect(validateSync(plainToInstance(TalentApplicationActionDto, { ...body, reserveReasons }), options).some(error => error.property === 'reserveReasons')).toBe(true);
+    }
+  });
   it('accepts initial application revision zero and forbids manual hired/onboarding actions', () => {
     expect(validateSync(plainToInstance(TalentApplicationActionDto, { expectedRevision: 0, action: 'start_interview' }))).toEqual([]);
     for (const action of ['hired', 'onboarding', 'other']) expect(validateSync(plainToInstance(TalentApplicationActionDto, { expectedRevision: 0, action }))).not.toEqual([]);

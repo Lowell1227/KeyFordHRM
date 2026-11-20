@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '@/auth/auth.module';
 import { StorageModule } from '@/storage/storage.module';
 import { AiProgressModule } from '@/ai-progress/ai-progress.module';
 import { TalentsController } from './talents.controller';
@@ -7,6 +8,7 @@ import { TalentsService } from './talents.service';
 import { TalentFilesService } from './talent-files.service';
 import { TalentFollowUpsService } from './talent-follow-ups.service';
 import { TalentSharesService } from './talent-shares.service';
+import { TalentShareSessionGuard } from './talent-share-session.guard';
 import { TalentInterviewsService } from './talent-interviews.service';
 import { TalentInterviewsController } from './talent-interviews.controller';
 import { TalentRecruitmentController } from './talent-recruitment.controller';
@@ -19,9 +21,9 @@ import { TalentResumeTasksService } from './talent-resume-tasks.service';
 
 /** 人才库（MVP）：候选人录入 / 检索 / 跟进 / 转员工 / 单条只读转发。 */
 @Module({
-  imports: [StorageModule, AiProgressModule],
+  imports: [StorageModule, AiProgressModule, AuthModule],
   controllers: [TalentsController, TalentSharesController, TalentInterviewsController, TalentRecruitmentController, TalentResumeController, TalentResumeTasksController],
-  providers: [TalentsService, TalentFilesService, TalentFollowUpsService, TalentSharesService, TalentInterviewsService, TalentRecruitmentService, TalentResumeService, TalentResumeClient, TalentResumeTasksService],
+  providers: [TalentsService, TalentFilesService, TalentFollowUpsService, TalentSharesService, TalentShareSessionGuard, TalentInterviewsService, TalentRecruitmentService, TalentResumeService, TalentResumeClient, TalentResumeTasksService],
   exports: [TalentsService, TalentInterviewsService],
 })
 export class TalentPoolModule {}

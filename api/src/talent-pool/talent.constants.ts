@@ -81,5 +81,8 @@ export const TALENT_GENDER_LABELS: Record<TalentGender, string> = {
 
 /** 手机号查重冲突的业务标识（响应 data.reason）。 */
 export const TALENT_PHONE_EXISTS = 'TALENT_PHONE_EXISTS';
+export const TALENT_EMPLOYMENT_STATUS_LABELS = {
+  active: '在职', probation: '试用', resigned: '已离职', pending_entry: '待入职', unknown: '关联待核对',
+} as const;
 /** 简历文件数量超限冲突的业务标识（响应 data.reason）。 */
 export const TALENT_FILE_LIMIT = 'TALENT_FILE_LIMIT';

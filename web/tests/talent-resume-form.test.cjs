@@ -18,6 +18,11 @@ function form(t, { api = {}, resumeApi = {}, parseResume = async () => ({ fields
   const source = compileScript(parse(fs.readFileSync(filename, 'utf8')).descriptor, { id: 'resume-form' }).content;
   const loaded = new Module(filename, module);
   const events = [];
+  const salaryFilename = path.resolve(__dirname, '../src/utils/talent-salary.ts');
+  const salaryModule = new Module(salaryFilename, module);
+  salaryModule._compile(ts.transpileModule(fs.readFileSync(salaryFilename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, salaryFilename);
   const dependencies = {
     vue,
     'element-plus': { ElMessage: { success() {}, warning() {}, error() {} }, ElMessageBox: { confirm: async () => true } },
@@ -33,6 +38,7 @@ function form(t, { api = {}, resumeApi = {}, parseResume = async () => ({ fields
     '@/types/talent.types': { TALENT_STATUSES: ['new', 'hired'], TALENT_PHONE_EXISTS: 'TALENT_PHONE_EXISTS' },
     '../useTalentPermissions': { useTalentPermissions: () => ({ canEdit: vue.computed(() => true) }) },
     '@/utils/image-compress': { isImageFile: file => file.type.startsWith('image/') },
+    '@/utils/talent-salary': salaryModule.exports,
     './talent-file-upload': {
       TALENT_MAX_FILES: 3, TALENT_FILE_EXTENSIONS: ['pdf', 'jpg', 'png'], TALENT_MAX_FILE_BYTES: 10 * 1024 * 1024,
       talentFileExtension: name => name.split('.').pop().toLowerCase(),
@@ -84,7 +90,7 @@ test('parse fills blanks and requires selection to replace existing values', asy
   state.form.name = 'Human input';
   await state.parseResume(new File(['x'], 'fictional.pdf'));
   assert.equal(state.form.name, 'Human input'); assert.equal(state.form.school, 'Fictional University');
-  assert.equal(state.form.expectSalaryMin, 12);
+  assert.equal(state.form.expectSalaryMin, 12000);
   assert.equal(state.parseConflicts.value.length, 1);
   state.parseConflicts.value[0].selected = true;
   state.applySelectedParsedFields(); assert.equal(state.form.name, 'Parsed');
@@ -114,8 +120,33 @@ test('negotiable salary is a parse conflict until HR explicitly selects replacem
   state.parseConflicts.value[0].selected = true;
   state.applySelectedParsedFields();
   assert.equal(state.form.salaryNegotiable, false);
-  assert.equal(state.form.expectSalaryMin, 12);
+  assert.equal(state.form.expectSalaryMin, 12000);
   assert.equal(state.form.expectSalaryMax, undefined);
+});
+
+test('reloading the same salary values establishes a new baseline before an unrelated edit', async t => {
+  const writes = [];
+  let reads = 0;
+  const { state } = form(t, { candidateId: 'persisted', api: {
+    detail: async () => ({ ...detail(), expectSalaryMin: ++reads === 1 ? 5 : 6, expectSalaryMax: 8 }),
+    update: async (_id, body) => {
+      writes.push(body);
+      if (writes.length === 1) throw { response: { status: 409, data: { message: '资料已更新', data: { reason: 'TALENT_EDIT_CONFLICT' } } } };
+      return { ...detail(), editVersion: 'saved' };
+    },
+  } });
+  await flush();
+  state.form.expectSalaryMin = 6000;
+  await state.submit();
+  assert.equal(state.editConflict.value, true);
+  await state.reloadAfterConflict();
+  state.form.note = '虚构修改备注';
+  await state.submit();
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].expectSalaryMinYuan, 6000);
+  assert.equal(writes[1].note, '虚构修改备注');
+  assert.equal('expectSalaryMinYuan' in writes[1], false);
+  assert.equal('expectSalaryMaxYuan' in writes[1], false);
 });
 
 test('busy form ignores file selection, removal and parsing even through native input events', async t => {

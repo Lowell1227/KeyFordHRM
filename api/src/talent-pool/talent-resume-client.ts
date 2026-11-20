@@ -94,7 +94,7 @@ function validField(field: ResumeField, value: unknown, quote: string): boolean 
   if (field === 'yearsOfExperience') return value >= 0 && value <= 60 &&
     /经验|工作年限|从业|experience/i.test(quote) && !/\d\s*[-~至]\s*\d/.test(quote);
   const salaryQuote = quote.replace(/(\d)\s*[-–~至]\s*(?=\d)/g, '$1~');
-  return value >= 0 && value <= 999_000 && value % 1000 === 0 &&
+  return value >= 0 && value <= 2147483647 &&
     /月薪|月工资|月收入|每月|\/月|monthly|per month/i.test(quote) &&
     !/(?:^|[^\d])[-−]\s*\d/.test(salaryQuote) &&
     !/年薪|年收入|annual|yearly|USD|\$|美元|欧元|面议/i.test(quote);

@@ -2165,6 +2165,7 @@ model TalentCandidate {
   expectCity        String?   @map("expect_city") @db.VarChar(100)
   expectSalaryMin   Int?      @map("expect_salary_min")
   expectSalaryMax   Int?      @map("expect_salary_max")
+  expectSalaryUnit  String    @default("legacy_k") @map("expect_salary_unit") @db.VarChar(12)
   sourceChannel     String    @map("source_channel") @db.VarChar(20)
   appliedPosition   String?   @map("applied_position") @db.VarChar(100)
   status            String    @default("new") @db.VarChar(20)
@@ -2258,6 +2259,7 @@ model TalentShare {
   candidateId    String    @map("candidate_id") @db.Uuid
   token          String    @unique @db.VarChar(64)
   recipientIds   String[]  @map("recipient_ids") @db.Uuid
+  isPublicLink   Boolean   @default(false) @map("is_public_link")
   includeResume  Boolean   @default(false) @map("include_resume")
   message        String?   @db.VarChar(100)
   expiresAt      DateTime  @map("expires_at") @db.Timestamptz(6)
@@ -2348,6 +2350,7 @@ model TalentApplicationEvent {
   toStage       String   @map("to_stage") @db.VarChar(30)
   version       Int
   note          String?  @db.Text
+  reserveReasons String[] @default([]) @map("reserve_reasons") @db.VarChar(40)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   application TalentApplication @relation(fields: [applicationId], references: [id], onDelete: Restrict)
