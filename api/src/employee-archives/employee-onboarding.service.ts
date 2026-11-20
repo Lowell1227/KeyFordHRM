@@ -465,7 +465,21 @@ export class EmployeeOnboardingService {
     } });
   }
 
-  async getCurrentReentry(userId: string): Promise<OnboardingRequestView | null> {
+  async recoverableTalentFirstHire(tx: Prisma.TransactionClient, userId: string, applicationId: string, requestId?: string) {
+    const request = await tx.employeeDataChangeRequest.findFirst({ where: {
+      ...(requestId ? { id: requestId } : {}), userId, talentApplicationId: applicationId,
+      sourceType: 'manual_employee_create', intakeType: 'new_hire', requiresArrivalConfirmation: true,
+      recordStatus: 'cancelled', onboardingStatus: 'cancelled', cancelledAt: { not: null },
+    }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], include: { talentCandidate: { select: talentSourceSelect } } });
+    if (!request?.talentCandidateId || !request.talentCandidate || request.talentCandidate.deletedAt) throw new ConflictException('本次应聘的原首次入职申请不存在或来源已删除，请核对来源');
+    await this.assertCancelledArrivalReopen(tx, request, request.requestVersion);
+    // After archiving a replacement draft the application must again be accepted.
+    await resolveTalentApplicationSource(tx, request.talentCandidateId, applicationId);
+    return { ...this.toView(request), cancelledAt: request.cancelledAt };
+  }
+
+  async getCurrentReentry(userId: string, talentApplicationId?: string): Promise<OnboardingRequestView | null> {
+    if (talentApplicationId) return this.arrivalTransaction(tx => this.recoverableTalentFirstHire(tx, userId, talentApplicationId));
     const request = await this.prisma.employeeDataChangeRequest.findFirst({
       include: { talentCandidate: { select: talentSourceSelect } },
       where: { userId, OR: [

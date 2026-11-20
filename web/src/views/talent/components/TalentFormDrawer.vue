@@ -575,9 +575,10 @@ function pendingFileKind(file: File): string {
 
 /** 服务端字段错误与版本冲突保留在当前表单，不自动覆盖输入。 */
 function captureConflict(error: unknown) {
-  const response = (error as { response?: { data?: { message?: string | string[]; data?: {
+  const failure = (error as { response?: { status?: number; data?: { message?: string | string[]; data?: {
     reason?: string; existingId?: string; existingName?: string; fieldErrors?: Record<string, string>;
-  } } } })?.response?.data;
+  } } } })?.response;
+  const response = failure?.data;
   const data = response?.data;
   if (data?.reason === TALENT_PHONE_EXISTS && data.existingId) {
     conflict.value = { existingId: data.existingId, existingName: data.existingName ?? '', statusLabel: '' };
@@ -586,10 +587,11 @@ function captureConflict(error: unknown) {
   educationError.value = data?.fieldErrors?.educationReferenceDataId ?? '';
   ownerFieldError.value = data?.fieldErrors?.ownerId ?? '';
   const messages = Array.isArray(response?.message) ? response.message : typeof response?.message === 'string' ? [response.message] : [];
-  emailError.value = data?.fieldErrors?.email ?? messages.find(message => /邮箱|\bemail\b/i.test(message)) ?? '';
+  emailError.value = failure?.status === 400 ? data?.fieldErrors?.email ?? messages.find(message => /邮箱|\bemail\b/i.test(message)) ?? '' : '';
   const message = messages.join('；');
   if (!ownerFieldError.value && message.includes('负责人')) ownerFieldError.value = message;
-  return message;
+  if (emailError.value) return messages.filter(item => item !== emailError.value).join('；');
+  return message || (failure?.status === 403 ? '无权限执行此操作' : '');
 }
 
 async function reloadAfterConflict() {
@@ -667,10 +669,10 @@ async function submit() {
         if (!isCurrentLoad(generation, targetId)) return;
         loadedEditVersion.value = latest.editVersion;
       }
-      const saved = await talentPoolApi.update(candidateId, { ...body, editVersion: loadedEditVersion.value });
+      const saved = await talentPoolApi.update(candidateId, { ...body, editVersion: loadedEditVersion.value }, { skipErrorMessage: true });
       if (isCurrentLoad(generation, targetId)) loadedEditVersion.value = saved.editVersion;
     } else {
-      const created = await talentPoolApi.create(body);
+      const created = await talentPoolApi.create(body, { skipErrorMessage: true });
       candidateId = created.id;
       if (isCurrentLoad(generation, targetId)) {
         persistedCandidateId.value = candidateId;
@@ -712,7 +714,7 @@ async function submit() {
       saveError.value = savedCandidateId
         ? `人才资料已保存，附件未全部上传。${message ? `${message}。` : ''}未完成的文件已保留，可重试。`
         : editConflict.value ? '资料已更新，本次修改尚未保存，输入及待传文件已保留。'
-        : message || '保存失败，请核对填写内容后重试';
+        : message || (emailError.value ? '' : '保存失败，请核对填写内容后重试');
       if (savedCandidateId) emit('saved', savedCandidateId);
     }
   } finally {

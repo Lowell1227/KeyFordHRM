@@ -101,8 +101,9 @@ export class EmployeeArchivesController {
 
   @Get(':userId/reentry/current')
   @HrCapabilities('employee_archive_edit')
-  getCurrentReentry(@Param('userId', new ParseUUIDPipe()) userId: string) {
-    return this.onboarding.getCurrentReentry(userId);
+  getCurrentReentry(@Param('userId', new ParseUUIDPipe()) userId: string,
+    @Query('talentApplicationId', new ParseUUIDPipe({ optional: true })) talentApplicationId?: string) {
+    return this.onboarding.getCurrentReentry(userId, talentApplicationId);
   }
 
   @Patch('reentry/:requestId')

@@ -478,8 +478,8 @@ export const employeeArchivesApi = {
     return http.post(`/employee-archives/${userId}/reentry`, body) as unknown as Promise<EmployeeDataReview>;
   },
 
-  getCurrentReentry(userId: string): Promise<EmployeeDataReview | null> {
-    return http.get(`/employee-archives/${userId}/reentry/current`) as unknown as Promise<EmployeeDataReview | null>;
+  getCurrentReentry(userId: string, talentApplicationId?: string): Promise<EmployeeDataReview | null> {
+    return http.get(`/employee-archives/${userId}/reentry/current`, { params: { talentApplicationId } }) as unknown as Promise<EmployeeDataReview | null>;
   },
 
   reviseReentry(requestId: string, body: EmployeeReentryBody | { performanceOnly: true; performanceManagerId: string | null }): Promise<EmployeeDataReview> {

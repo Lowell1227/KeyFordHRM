@@ -26,7 +26,8 @@ describe('a new accepted application after a cancelled first hire (disposable Po
   }, 120000);
   afterAll(async () => { try { await db?.$disconnect(); } finally { await container?.stop(); } });
 
-  it.each([true, false])('requires review and arrival on the original identity, with stored ID number = %s', async hasId => {
+  it.each(['with-id', 'without-id', 'both-cancelled'])('reuses the original identity with the right application (%s)', async scenario => {
+    const hasId = scenario === 'with-id';
     const config = new ConfigService({ EMPLOYEE_ARCHIVE_ENCRYPTION_KEY: randomUUID() });
     const numbers = new EmployeeNumberService(), identities = new EmployeeIdentityMatchService(db, config);
     const onboarding = new EmployeeOnboardingService(db, numbers, identities, new EmployeeEffectiveDateService(db));
@@ -36,10 +37,10 @@ describe('a new accepted application after a cancelled first hire (disposable Po
     const editor = await db.user.create({ data: { name: 'Synthetic editor', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] } });
     const reviewer = await db.user.create({ data: { name: 'Synthetic reviewer', sysRole: 'hr_user', hrCapabilities: ['employee_archive_review'] } });
     const confirmer = await db.user.create({ data: { name: 'Synthetic confirmer', hrCapabilities: ['talent_hiring_confirm'] } });
-    const subject = await db.contractSubject.create({ data: { name: 'Synthetic employer ' + hasId, internalCompany: 'fuede' } });
+    const subject = await db.contractSubject.create({ data: { name: 'Synthetic employer ' + scenario, internalCompany: 'fuede' } });
     const dept = await db.department.create({ data: { name: 'Synthetic department' } });
-    const position = await db.position.create({ data: { name: 'Synthetic position', code: 'SYNTHETIC_' + hasId } });
-    const candidate = await db.talentCandidate.create({ data: { name: 'Synthetic candidate ' + hasId, phone: hasId ? '17000000000' : '17000000001', sourceChannel: 'other', createdById: editor.id } });
+    const position = await db.position.create({ data: { name: 'Synthetic position', code: 'SYNTHETIC_' + scenario } });
+    const candidate = await db.talentCandidate.create({ data: { name: 'Synthetic candidate ' + scenario, phone: hasId ? '17000000000' : scenario === 'without-id' ? '17000000001' : '17000000002', sourceChannel: 'other', createdById: editor.id } });
     const accepted = async (positionName: string) => {
       let app = await recruitment.create(candidate.id, { positionName }, editor);
       for (const action of ['submit_hiring', 'approve_hiring', 'accept_offer'] as const) {
@@ -59,7 +60,7 @@ describe('a new accepted application after a cancelled first hire (disposable Po
     await approve(a.id);
     await onboarding.cancelReentry(a.id, { reason: 'Synthetic no-show' }, editor.id);
     const oldStage = await recruitment.detail(old.id, editor);
-    await recruitment.act(old.id, { expectedRevision: oldStage.revision, action: 'withdraw', note: 'Synthetic' }, editor);
+    if (scenario !== 'both-cancelled') await recruitment.act(old.id, { expectedRevision: oldStage.revision, action: 'withdraw', note: 'Synthetic' }, editor);
     const history = await db.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: a.id } });
     const userId = history.userId!;
     const original = await db.user.findUniqueOrThrow({ where: { id: userId } });
@@ -112,6 +113,35 @@ describe('a new accepted application after a cancelled first hire (disposable Po
     expect((await db.employeeContract.findMany({ where: { userId, isActive: true } })).map(row => row.name).sort()).toEqual(['Current contract', 'Prior attachment']);
     const arrival = { arrivalDate: today.toISOString().slice(0, 10), requestVersion: pending.requestVersion };
     await expect(onboarding.confirmArrival(b.id, arrival, editor)).rejects.toMatchObject({ status: 403 });
+    if (scenario === 'both-cancelled') {
+      await onboarding.cancelReentry(b.id, { reason: 'Synthetic second no-show' }, editor.id);
+      const before = await db.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: b.id } });
+      for (const [applicationId, originalRequestId] of [[old.id, a.id], [next.id, b.id]]) {
+        const returned = await archive.saveEmployeeCreateDraft({ ...body, talentApplicationId: applicationId }, editor)
+          .then(() => null, error => error.getResponse()?.data?.applicationId);
+        expect(returned).toBe(originalRequestId);
+      }
+      expect(await db.employeeDataChangeRequest.count({ where: { talentCandidateId: candidate.id } })).toBe(2);
+      // Previously generated replacement drafts remain recoverable; their stored hint may point to B.
+      const staleHint = { userId, sourceRequestId: b.id, sameApplication: true };
+      const legacy = await db.employeeDataChangeRequest.create({ data: { ...base, talentCandidateId: candidate.id, talentApplicationId: old.id,
+        intakeType: 'new_hire', onboardingStatus: 'draft', requiresArrivalConfirmation: true, recordStatus: 'draft',
+        baseValue: { firstHireIdentity: staleHint }, revisionHistory: [{ version: 1 }], proposedValue: { employee: { name: 'Preserve legacy input' } } } });
+      await db.talentApplication.update({ where: { id: old.id }, data: { stage: 'onboarding' } });
+      await archive.archiveDrafts([legacy.id], editor);
+      await expect(onboarding.getCurrentReentry(other.id, old.id)).rejects.toMatchObject({ status: 409 });
+      await expect(onboarding.getCurrentReentry(userId, old.id)).resolves.toMatchObject({ id: a.id, talentCandidateId: candidate.id });
+      await expect(archive.restoreRecords([legacy.id], editor, 'draft')).resolves.toMatchObject({ restored: 1, failed: [] });
+      expect(await db.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: legacy.id } })).toMatchObject({
+        recordStatus: 'draft', proposedValue: legacy.proposedValue, revisionHistory: legacy.revisionHistory, requestVersion: legacy.requestVersion });
+      await archive.archiveDrafts([legacy.id], editor);
+      expect(await db.auditLog.count({ where: { entityId: legacy.id, action: 'archive_employee_draft' } })).toBe(2);
+      await onboarding.reviseArrivalDate(a.id, { ...arrival, requestVersion: history.requestVersion }, editor);
+      expect((await recruitment.detail(old.id, editor)).stage).toBe('onboarding');
+      expect((await recruitment.detail(next.id, editor)).stage).toBe('accepted');
+      expect(await db.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: b.id } })).toEqual(before);
+      return;
+    }
     await onboarding.confirmArrival(b.id, arrival, reviewer);
     expect(await db.user.count({ where: { name: candidate.name } })).toBe(1);
     const activated = await db.user.findUniqueOrThrow({ where: { id: userId } });

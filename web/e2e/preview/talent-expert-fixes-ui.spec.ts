@@ -171,12 +171,14 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       expect(invalidResponse.status()).toBe(400);
       const emailField = drawer.locator('.el-form-item').filter({ has: page.getByLabel('邮箱', { exact: true }) });
       await expect(emailField.locator('.el-form-item__error')).toHaveText('邮箱格式不正确');
+      await expect(page.getByText('邮箱格式不正确', { exact: true })).toHaveCount(1);
       await expect(email).toHaveValue(rejectedEmail);
       expect((await api<{ total: number }>('GET', `/talents?keyword=${encodeURIComponent(emailCandidate)}`, 200)).total).toBe(0);
       await emailField.evaluate(el => el.scrollIntoView({ block: 'center' }));
       await page.screenshot({ path: info.outputPath(`email-inline-${width}.png`), animations: 'disabled' });
       const validEmail = width === 1024 ? null : 'hr@example.xn--fiqs8s';
       await email.fill(validEmail ? ` ${validEmail} ` : '   ');
+      await expect(page.getByText('邮箱格式不正确', { exact: true })).toHaveCount(0);
       const [saveResponse] = await Promise.all([listenForSave(), submit.click()]);
       expect(saveResponse.status()).toBe(201);
       const created = (await saveResponse.json()).data as Candidate;
@@ -184,6 +186,19 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       expect((await api<Candidate>('GET', `/talents/${created.id}`, 200)).email).toBe(validEmail);
       await expect(drawer).not.toBeVisible();
       await expect(discard).toHaveCount(0);
+      if (mobile) {
+        await create.click();
+        await name.fill('虚构空白邮箱' + prefix);
+        await drawer.getByPlaceholder('11 位手机号').fill(phone());
+        await drawer.getByTestId('talent-form-source').click();
+        await page.getByRole('option', { name: '其他', exact: true }).click();
+        await email.fill('   ');
+        const [blankResponse] = await Promise.all([listenForSave(), submit.click()]);
+        expect(blankResponse.status()).toBe(201);
+        const blank = (await blankResponse.json()).data as Candidate;
+        candidateIds.push(blank.id);
+        expect((await api<Candidate>('GET', '/talents/' + blank.id, 200)).email).toBeNull();
+      }
       expect(blocked).toEqual([]);
       expect(pageErrors).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);

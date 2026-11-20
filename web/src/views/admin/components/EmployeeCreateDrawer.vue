@@ -52,7 +52,7 @@ const emit = defineEmits<{
   saved: [];
   reentry: [userId: string, talentCandidateId?: string, talentApplicationId?: string];
   existing: [userId: string];
-  application: [requestId: string];
+  application: [requestId: string, loaded?: EmployeeDataReview];
   next: [];
 }>();
 
@@ -449,18 +449,24 @@ async function openCandidate(candidate: Pick<EmployeeIdentityCandidate, 'id' | '
         if (session !== generation || !props.modelValue) return;
         if (result.failed?.length) { saveError.value = result.failed[0].reason; return; }
       }
-      const request = await employeeArchivesApi.getCurrentReentry(candidate.id);
+      const sourceApplication = sourceTalentApplicationId.value;
+      const request = await employeeArchivesApi.getCurrentReentry(candidate.id, sourceApplication);
       if (session !== generation || !props.modelValue) return;
       if (!request || request.userId !== candidate.id
+        || (sourceApplication && (request.talentApplicationId !== sourceApplication || request.talentCandidateId !== talentId))
         || (request.onboardingStatus === 'cancelled' && !isCancelledNewHireArrival(request))) {
         saveError.value = '未找到可继续办理的原入职申请，请刷新匹配结果后核对。';
         return;
       }
+      const detail = await employeeArchivesApi.getApplication(request.id);
+      if (session !== generation || !props.modelValue) return;
+      if (archivedDraftId) ElMessage.success('已打开原申请，本次草稿可在已归档草稿中查看');
       opened = true;
       emit('update:modelValue', false);
-      emit('application', request.id);
-    } catch {
-      if (session === generation && props.modelValue) saveError.value = '原入职申请暂时无法打开，已填写内容仍保留，请重试。';
+      emit('application', request.id, detail);
+    } catch (error) {
+      if (session === generation && props.modelValue) saveError.value = isAxiosError(error) && typeof error.response?.data?.message === 'string'
+        ? error.response.data.message : '原入职申请暂时无法打开，已填写内容仍保留，请重试。';
     } finally {
       if (archivedDraftId && !opened) {
         try {
@@ -541,16 +547,31 @@ function scheduleAutosave() {
   autosaveTimer = setTimeout(() => { void persistDraft(); }, 700);
 }
 
-function openExistingTalentApplication(error: unknown): boolean {
+async function openExistingTalentApplication(error: unknown): Promise<boolean> {
   if (!sourceTalentId.value || draftId.value || !isAxiosError(error) || error.response?.status !== 409) return false;
   const applicationId: unknown = error.response.data?.data?.applicationId;
   if (typeof applicationId !== 'string' || !applicationId.trim()) return false;
-  saveBlocked.value = true;
-  if (autosaveTimer) clearTimeout(autosaveTimer);
-  autosaveTimer = null;
-  generation++;
-  emit('update:modelValue', false);
-  emit('application', applicationId);
+  const session = generation;
+  try {
+    const detail = await employeeArchivesApi.getApplication(applicationId);
+    if (session !== generation || !props.modelValue) return true;
+    if (detail.id !== applicationId || detail.talentCandidateId !== sourceTalentId.value
+      || (sourceTalentApplicationId.value && detail.talentApplicationId !== sourceTalentApplicationId.value)) {
+      saveState.value = 'error';
+      saveError.value = '已有申请的来源与本次应聘不一致，请核对后重试';
+      return true;
+    }
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = null;
+    generation++;
+    emit('update:modelValue', false);
+    emit('application', applicationId, detail);
+  } catch {
+    if (session === generation) {
+      saveState.value = 'error';
+      saveError.value = '原入职申请暂时无法打开，已填写内容仍保留，请重试。';
+    }
+  }
   return true;
 }
 
@@ -582,10 +603,13 @@ async function persistDraft() {
       return true;
     } catch (error) {
       if (session !== generation || !props.modelValue) return false;
-      if (openExistingTalentApplication(error)) return false;
+      if (await openExistingTalentApplication(error)) return false;
       saveState.value = 'error';
-      saveBlocked.value = isAxiosError(error) && error.response?.status === 409;
-      saveError.value = saveBlocked.value ? '资料已更新，本次输入已保留。请先留存修改，再打开最新草稿核对。' : '草稿保存失败，输入内容仍保留。请重试保存，或放弃本次未保存内容。';
+      const conflict = isAxiosError(error) && error.response?.status === 409;
+      saveBlocked.value = Boolean(draftId.value) && conflict;
+      saveError.value = saveBlocked.value ? '资料已更新，本次输入已保留。请先留存修改，再打开最新草稿核对。'
+        : conflict && typeof error.response?.data?.message === 'string' ? error.response.data.message
+        : '草稿保存失败，输入内容仍保留。请重试保存，或放弃本次未保存内容。';
       return false;
     }
   })();
@@ -735,7 +759,7 @@ async function submit() {
     emit('submitted', request.id);
   } catch (error) {
     if (session !== generation || !props.modelValue) return;
-    if (openExistingTalentApplication(error)) return;
+    if (await openExistingTalentApplication(error)) return;
     const fields = isAxiosError(error) ? error.response?.data?.data?.fieldErrors : undefined;
     if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
       for (const [path, value] of Object.entries(fields)) {
@@ -850,7 +874,11 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer
             :disabled="savingAction === 'submit' || identityLoading"
             @select="openNamedReentryCandidate"
           />
-          <div v-if="replacementIdentity" class="identity-result" role="status">
+          <div v-if="firstHireIdentity?.sameApplication" class="identity-result" role="status">
+            <strong>本次应聘已有已取消的首次入职申请</strong>
+            <el-button link type="primary" :disabled="identityLoading" @click="openCandidate({ id: firstHireIdentity.userId, status: 'pending_entry', archived: false, nextAction: 'view_onboarding' })">归档此草稿并打开本次应聘原申请</el-button>
+          </div>
+          <div v-else-if="replacementIdentity" class="identity-result" role="status">
             <strong>沿用原待入职档案办理本次首次入职</strong>
             <div>{{ replacementIdentity.issue || '原首次入职已取消。本次应聘将单独提交审核，审核通过后由 HR 确认到岗。' }}</div>
           </div>

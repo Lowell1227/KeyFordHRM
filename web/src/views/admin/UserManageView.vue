@@ -1132,14 +1132,14 @@ function currentApplications(row: ManagedUser): EmployeeDataReview[] {
   return (row as ManagedUser & { currentApplications?: EmployeeDataReview[] }).currentApplications ?? [];
 }
 
-async function openApplication(requestId: string, isCurrent = () => true, syncRoute = true) {
+async function openApplication(requestId: string, isCurrent = () => true, syncRoute = true, loaded?: EmployeeDataReview) {
   if (syncRoute && employeeArchiveDrawer.value.visible) {
     if (!await prepareArchiveLeave()) return;
     archiveEditing.value = false;
     employeeArchiveDrawer.value.visible = false;
   }
   const generation = ++applicationLoadGeneration;
-  const result = await employeeArchivesApi.getApplication(requestId);
+  const result = loaded ?? await employeeArchivesApi.getApplication(requestId);
   if (!isCurrent() || generation !== applicationLoadGeneration) return;
   applicationDetail.value = result;
   applicationDetailVisible.value = true;
@@ -2992,7 +2992,7 @@ onBeforeUnmount(() => {
       @saved="afterEmployeeDraftSaved"
       @submitted="afterEmployeeSubmitted"
       @reentry="openEmployeeReentryById"
-      @application="openApplication"
+      @application="(id, loaded) => openApplication(id, undefined, true, loaded)"
       @existing="openExistingEmployeeById"
       @update:model-value="!$event && (talentCreatePrefill = null)"
     />

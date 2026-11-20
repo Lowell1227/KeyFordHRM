@@ -164,7 +164,7 @@ export class EmployeeArchivesService {
         draftVersion = draft.requestVersion;
       }
       await this.normalizeSubjectPayload(tx, proposedValue, {}, this.record(savedDraft?.proposedValue));
-      const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
+      const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any, undefined, input.talentApplicationId);
       const talentApplicationId = await resolveTalentApplicationSource(tx, talentCandidateId, input.talentApplicationId, savedDraft as any);
       await this.validateSubjectPayload(tx, proposedValue, {});
       assertSubmittedEmployeeCompany(this.record(proposedValue.employee));
@@ -174,6 +174,7 @@ export class EmployeeArchivesService {
       assertValidContractChanges(proposedValue.contracts as Record<string, unknown>[]);
       const firstHireIdentity = await cancelledFirstHireIdentity(tx, talentCandidateId, talentApplicationId, input.draftId,
         this.record(proposedValue.employee), this.record(proposedValue.profile));
+      if (firstHireIdentity?.sameApplication && !savedDraft) await this.redirectToCancelledFirstHire(tx, firstHireIdentity, talentApplicationId!);
       const previousIdentity = this.record(this.record(savedDraft?.baseValue).firstHireIdentity);
       if (previousIdentity.userId && previousIdentity.userId !== firstHireIdentity?.userId) throw new ConflictException('原待入职身份已变化，请核对原档案');
       if (firstHireIdentity?.issue) throw new ConflictException(firstHireIdentity.issue);
@@ -265,6 +266,12 @@ export class EmployeeArchivesService {
     return this.withDraftTransaction(tx => this.saveEmployeeCreateDraftWithClient(tx, input, operator));
   }
 
+  private async redirectToCancelledFirstHire(tx: Prisma.TransactionClient, history: { userId: string; sourceRequestId: string; issue: string }, applicationId: string): Promise<never> {
+    if (!this.onboarding) throw new ConflictException('原首次入职申请暂时无法核对，请重试');
+    const original = await this.onboarding.recoverableTalentFirstHire(tx, history.userId, applicationId, history.sourceRequestId);
+    throw new ConflictException({ message: history.issue, data: { applicationId: original.id } });
+  }
+
   private async withDraftTransaction<T>(run: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
     try {
       return await this.prisma.$transaction(run, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -323,10 +330,11 @@ export class EmployeeArchivesService {
         draftVersion = draft.requestVersion;
       }
       await this.normalizeSubjectPayload(tx, proposed, {}, this.record(savedDraft?.proposedValue));
-      const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
+      const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any, undefined, input.talentApplicationId);
       const talentApplicationId = await resolveTalentApplicationSource(tx, talentCandidateId, input.talentApplicationId, savedDraft as any);
       const firstHireIdentity = await cancelledFirstHireIdentity(tx, talentCandidateId, talentApplicationId, input.draftId,
         this.record(proposed.employee), this.record(proposed.profile));
+      if (firstHireIdentity?.sameApplication && !savedDraft) await this.redirectToCancelledFirstHire(tx, firstHireIdentity, talentApplicationId!);
       const previousIdentity = this.record(this.record(savedDraft?.baseValue).firstHireIdentity);
       if (previousIdentity.userId && previousIdentity.userId !== firstHireIdentity?.userId) throw new ConflictException('原待入职身份已变化，请核对原档案');
       const proposedValue = this.toJson(proposed);

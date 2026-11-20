@@ -53,13 +53,13 @@ export const talentPoolApi = {
   },
 
   /** POST /talents 新增；手机号重复返回 409（data.reason = TALENT_PHONE_EXISTS）。 */
-  create(body: TalentCandidateInput): Promise<TalentCandidateDetail> {
-    return http.post('/talents', body) as unknown as Promise<TalentCandidateDetail>;
+  create(body: TalentCandidateInput, options?: { skipErrorMessage: boolean }): Promise<TalentCandidateDetail> {
+    return http.post('/talents', body, options) as unknown as Promise<TalentCandidateDetail>;
   },
 
   /** PATCH /talents/:id 编辑；携带读取时的基准，冲突时保留输入。 */
-  update(id: string, body: UpdateTalentInput): Promise<TalentCandidateDetail> {
-    return http.patch(`/talents/${id}`, body) as unknown as Promise<TalentCandidateDetail>;
+  update(id: string, body: UpdateTalentInput, options?: { skipErrorMessage: boolean }): Promise<TalentCandidateDetail> {
+    return http.patch(`/talents/${id}`, body, options) as unknown as Promise<TalentCandidateDetail>;
   },
 
   /** DELETE /talents/:id 软删除。 */

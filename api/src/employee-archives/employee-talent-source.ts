@@ -12,6 +12,7 @@ export async function resolveTalentSource(
   inputId?: string,
   existing?: { id: string; talentCandidateId?: string | null },
   userId?: string | null,
+  requestedApplicationId?: string,
 ): Promise<string | null> {
   const existingId = existing?.talentCandidateId ?? null;
   if (existing && inputId !== undefined && inputId !== existingId) {
@@ -31,7 +32,10 @@ export async function resolveTalentSource(
     talentCandidateId: id, ...(existing ? { id: { not: existing.id } } : {}),
     archivedAt: null, cancelledAt: null,
     onboardingStatus: { in: ['draft', 'submitted', 'pending_entry'] },
-  }, select: { id: true } });
+  }, select: { id: true, talentApplicationId: true } });
+  if (open && requestedApplicationId && open.talentApplicationId !== requestedApplicationId) {
+    throw new ConflictException('该人才的其他应聘已有未完成的入职申请，请先核对后再办理本次应聘');
+  }
   if (open) throw new ConflictException({ message: '来源人才已有未完成的入职申请，请打开原申请', data: { applicationId: open.id } });
   return id;
 }

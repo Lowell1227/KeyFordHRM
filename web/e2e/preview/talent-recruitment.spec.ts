@@ -187,7 +187,9 @@ test('real recruitment pages: interviewer feedback, independent hiring, intake r
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
 
-test('a cancelled first hire can complete under a new accepted application on the same archive', async ({ page }, info) => {
+for (const restoreEarlier of [false, true]) test(restoreEarlier
+  ? 'two cancelled first hires open their own original applications and only A is restored'
+  : 'a cancelled first hire can complete under a new accepted application on the same archive', async ({ page }, info) => {
   expect(info.project.use.baseURL).toBe(origin);
   const prefix = 'RF2_' + randomUUID().slice(0, 8), name = '虚构首次入职_' + prefix;
   const actors = fixture(prefix), mobile = info.project.name === 'mobile';
@@ -228,8 +230,10 @@ test('a cancelled first hire can complete under a new accepted application on th
 
     await as(page, actors.editor!, '/talents');
     await openTalent(page, name, mobile);
-    await command(panel, '撤回应聘');
-    await expect(panel.locator('.application-panel__stage')).toHaveText('已撤回');
+    if (!restoreEarlier) {
+      await command(panel, '撤回应聘');
+      await expect(panel.locator('.application-panel__stage')).toHaveText('已撤回');
+    }
     await panel.getByRole('button', { name: '新增应聘', exact: true }).click();
     await panel.getByLabel('岗位名称', { exact: true }).fill('虚构岗位 B');
     const created = response(page, 'POST', '/talent-recruitment/candidates/' + candidate.id + '/applications');
@@ -253,6 +257,35 @@ test('a cancelled first hire can complete under a new accepted application on th
     expect(second.id).not.toBe(first.id);
     expect(second).toMatchObject({ talentApplicationId: b.id, onboardingStatus: 'submitted', intakeType: 'new_hire' });
     await approve(second.id);
+    if (restoreEarlier) {
+      await processing.getByRole('button', { name: '取消本次入职', exact: true }).click();
+      await prompt.locator('input').fill('虚构第二轮未到岗');
+      const stopped = response(page, 'POST', '/employee-archives/applications/' + second.id + '/cancel');
+      await prompt.getByRole('button', { name: '确认取消', exact: true }).click();
+      expect((await (await stopped).json()).data.userId).toBe(old.userId);
+      for (const [positionName, reqId] of [['虚构岗位 B', second.id], ['虚构岗位 A', first.id]]) {
+        await as(page, actors.editor!, '/talents');
+        await openTalent(page, name, mobile);
+        await panel.locator('.el-select').filter({ has: page.getByRole('combobox', { name: '选择应聘记录' }) }).click();
+        await page.getByRole('option', { name: new RegExp('^' + positionName) }).click();
+        await panel.getByRole('button', { name: '办理入职', exact: true }).click();
+        await expect(processing.getByRole('button', { name: '重新办理入职', exact: true })).toBeVisible();
+        await expect(page).toHaveURL(new RegExp('requestId=' + reqId));
+      }
+      await processing.getByRole('button', { name: '重新办理入职', exact: true }).click();
+      const resubmitted = response(page, 'PATCH', '/employee-archives/applications/' + first.id + '/arrival-date');
+      await processing.getByRole('button', { name: '重新提交审核', exact: true }).click();
+      expect((await (await resubmitted).json()).data).toMatchObject({ id: first.id, talentApplicationId: a.id, onboardingStatus: 'submitted' });
+      const read = async (path: string) => {
+        const response = await page.request.get(origin + '/api/v1' + path, { headers: { authorization: 'Bearer ' + actors.editor!.token } });
+        expect(response.status()).toBe(200);
+        return (await response.json()).data;
+      };
+      expect(await read('/talent-recruitment/applications/' + b.id)).toMatchObject({ stage: 'accepted' });
+      expect(await read('/employee-archives/applications/' + second.id)).toMatchObject({ onboardingStatus: 'cancelled', userId: old.userId });
+      await post('editor', '/employee-archives/applications/' + first.id + '/cancel', { reason: '虚构验收收尾' });
+      return;
+    }
     const arrived = response(page, 'POST', '/employee-archives/applications/' + second.id + '/confirm-arrival');
     await processing.getByRole('button', { name: '确认到岗', exact: true }).click();
     expect((await (await arrived).json()).data).toMatchObject({ userId: old.userId, onboardingStatus: 'effective' });

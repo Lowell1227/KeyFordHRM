@@ -19,8 +19,9 @@ export async function cancelledFirstHireIdentity(
   if (!candidate || candidate.deletedAt || candidate.convertedUserId) throw new ConflictException('来源人才已删除或已转为员工，请核对原档案');
   const prior = history[0], userId = prior.userId!;
   if (history.some(row => row.userId !== userId)) throw new ConflictException('此人才的历史首次入职关联多个身份，请核对原档案');
-  if (history.some(row => row.talentApplicationId === applicationId)) {
-    return { userId, sourceRequestId: prior.id, issue: '本次应聘已有取消的首次入职申请，请从原申请恢复办理', sameApplication: true };
+  const sameApplication = history.find(row => row.talentApplicationId === applicationId);
+  if (sameApplication) {
+    return { userId, sourceRequestId: sameApplication.id, issue: '本次应聘已有取消的首次入职申请，请从原申请恢复办理', sameApplication: true };
   }
   await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
   const user = await tx.user.findUnique({ where: { id: userId }, select: {

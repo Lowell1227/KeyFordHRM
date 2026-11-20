@@ -225,11 +225,13 @@ for (const rejectedEmail of ['invalid-email', 'hr@[127.0.0.1]']) {
     await drawer.getByRole('button', { name: '加入人才库', exact: true }).click();
     const field = drawer.locator('.el-form-item').filter({ has: page.getByLabel('邮箱', { exact: true }) });
     await expect(field.locator('.el-form-item__error')).toHaveText('邮箱格式不正确', { timeout: 2500 });
+    await expect(page.getByText('邮箱格式不正确', { exact: true })).toHaveCount(1, { timeout: 1500 });
     await expect(email).toHaveValue(rejectedEmail);
     expect(writes.map(write => write.body.email)).toEqual([rejectedEmail]);
     await field.evaluate(el => el.scrollIntoView({ block: 'center' }));
     await page.screenshot({ path: info.outputPath('email-inline.png'), animations: 'disabled' });
     await email.fill('   ');
+    await expect(page.getByText('邮箱格式不正确', { exact: true })).toHaveCount(0);
     await drawer.getByRole('button', { name: '加入人才库', exact: true }).click();
     await expect(drawer).not.toBeVisible();
     expect(writes.map(write => write.body.email)).toEqual([rejectedEmail, null]);
@@ -252,3 +254,88 @@ for (const emailError of ['邮箱不可用', ['邮箱不可用', '其他资料�
     await expect(error).toHaveCount(0);
   });
 }
+
+test('new first-hire business conflicts keep inputs retryable while a saved draft conflict locks stale writes', async ({ page }) => {
+  await install(page);
+  const accepted = { ...old, candidateId: candidate.id, stage: 'accepted' };
+  await page.route('**/talent-recruitment/applications/' + old.id, route => route.fulfill(envelope(accepted)));
+  let saves = 0;
+  const issue = '原身份已有任职、工号、到岗记录或其他办理申请，请先核对原档案';
+  await page.route('**/employee-archives/drafts', route => {
+    saves++;
+    if (saves === 2) return route.fulfill(envelope({ id: 'saved-draft', requestVersion: 1, baseValue: {} }));
+    return route.fulfill({ status: 409, json: { message: saves === 1 ? issue : '草稿已变化或已提交，请保留当前输入并重新打开最新草稿核对' } });
+  });
+  await page.goto('/entry-exit?talentId=' + candidate.id + '&talentApplicationId=' + old.id);
+  const drawer = page.getByRole('dialog', { name: '办理入职', exact: true });
+  await expect(drawer.getByText(issue, { exact: true })).toBeVisible({ timeout: 4000 });
+  const retry = drawer.getByRole('button', { name: '重试暂存' });
+  await retry.click();
+  await expect(retry).not.toBeVisible();
+  await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue(candidate.name);
+  await drawer.getByLabel('姓名', { exact: true }).fill('虚构保留修改');
+  await expect(drawer.getByText(/资料已更新，本次输入已保留/)).toBeVisible();
+  await expect(retry).not.toBeVisible();
+  await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue('虚构保留修改');
+});
+
+test('legacy same-application draft survives a failed exact original read and can retry', async ({ page }) => {
+  await install(page);
+  const source = { talentCandidateId: candidate.id, talentApplicationId: old.id };
+  const original = { ...source, id: 'original-A', userId: 'prior-person', employeeName: candidate.name,
+    intakeType: 'new_hire', sourceType: 'manual_employee_create', requiresArrivalConfirmation: true, onboardingStatus: 'cancelled',
+    recordStatus: 'cancelled', cancelledAt: '2026-11-19T00:00:00Z', profileReviewStatus: 'approved', proposedValue: {}, baseValue: {}, events: [] };
+  const marker = { userId: original.userId, sourceRequestId: 'wrong-legacy-B', sameApplication: true };
+  await page.route('**/talent-recruitment/applications/' + old.id, route => route.fulfill(envelope({ ...old, candidateId: candidate.id, stage: 'accepted' })));
+  await page.route('**/employee-archives/drafts', route => route.fulfill(envelope({ ...source, id: 'legacy', requestVersion: 1, baseValue: { firstHireIdentity: marker } })));
+  const calls: string[] = [];
+  for (const action of ['archive', 'restore']) await page.route('**/employee-archives/drafts/' + action, route => {
+    calls.push(action);
+    expect(route.request().postDataJSON().ids).toEqual(['legacy']);
+    return route.fulfill(envelope({ failed: [] }));
+  });
+  await page.route('**/employee-archives/prior-person/reentry/current*', route => {
+    expect(new URL(route.request().url()).searchParams.get('talentApplicationId')).toBe(old.id);
+    calls.push('get-scoped-A');
+    return route.fulfill(envelope(original));
+  });
+  await page.route('**/employee-archives/applications/original-A', route => {
+    calls.push('detail-A');
+    return calls.filter(call => call === 'detail-A').length === 1
+      ? route.fulfill({ status: 503, json: { message: '原单详情暂不可读' } }) : route.fulfill(envelope(original));
+  });
+  await page.goto('/entry-exit?talentId=' + candidate.id + '&talentApplicationId=' + old.id);
+  const drawer = page.getByRole('dialog', { name: '办理入职', exact: true });
+  const open = drawer.getByRole('button', { name: '归档此草稿并打开本次应聘原申请' });
+  await open.click();
+  await expect(drawer.getByText('原单详情暂不可读', { exact: true })).toBeVisible();
+  await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue(candidate.name);
+  await expect.poll(() => calls).toEqual(['archive', 'get-scoped-A', 'detail-A', 'restore']);
+  await open.click();
+  await expect(page).toHaveURL(/requestId=original-A/);
+  await expect(drawer).not.toBeVisible();
+  expect(calls).toEqual(['archive', 'get-scoped-A', 'detail-A', 'restore', 'archive', 'get-scoped-A', 'detail-A']);
+});
+
+test('a pre-existing request of the same recruitment still opens after the first autosave', async ({ page }) => {
+  await install(page);
+  await page.route('**/talent-recruitment/applications/' + old.id, route => route.fulfill(envelope({ ...old, candidateId: candidate.id, stage: 'accepted' })));
+  await page.route('**/employee-archives/drafts', route => route.fulfill({ status: 409, json: { message: '已有申请', data: { applicationId: 'existing' } } }));
+  await page.route('**/employee-archives/applications/existing', route => route.fulfill(envelope({ id: 'existing', talentCandidateId: candidate.id, talentApplicationId: old.id,
+    intakeType: 'new_hire', recordStatus: 'submitted', onboardingStatus: 'submitted', employeeName: candidate.name, baseValue: {}, proposedValue: {}, events: [] })));
+  await page.goto('/entry-exit?talentId=' + candidate.id + '&talentApplicationId=' + old.id);
+  await expect(page).toHaveURL(/requestId=existing/);
+  await expect(page.getByRole('dialog', { name: /办理详情$/ })).toBeVisible();
+});
+
+test('the talent form keeps a normal save failure visible on a phone', async ({ page }) => {
+  await install(page);
+  await page.route('**/api/v1/talents', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 503, json: { message: '岗位资料服务暂时不可用，请重试' } }) : route.fallback());
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/talents');
+  const drawer = await enterRequiredFields(page);
+  await drawer.getByRole('button', { name: '加入人才库', exact: true }).click();
+  await expect(drawer.getByText('岗位资料服务暂时不可用，请重试', { exact: true })).toBeVisible();
+  await expect(drawer).toBeVisible();
+});
