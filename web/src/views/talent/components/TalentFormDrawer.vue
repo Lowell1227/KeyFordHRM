@@ -172,7 +172,6 @@ const rules: FormRules = {
     { required: true, message: '请填写手机号', trigger: 'blur' },
     { pattern: /^1\d{10}$/, message: '手机号格式不正确', trigger: 'blur' },
   ],
-  email: [{ type: 'email', transform: (value: string) => value.trim(), message: '邮箱格式不正确', trigger: 'blur' }],
   sourceChannel: [{ required: true, message: '请选择来源', trigger: 'change' }],
 };
 

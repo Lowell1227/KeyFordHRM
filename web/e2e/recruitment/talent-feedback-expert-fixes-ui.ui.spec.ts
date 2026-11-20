@@ -11,7 +11,7 @@ const older = { ...old, id: 'oldest-matching', recruitmentBatch: '春季', revis
 const latest = { ...old, id: 'latest-other', positionName: '虚构新岗位', stage: 'screening', recruitmentBatch: null, revision: 1, allowedActions: ['reject', 'submit_hiring'] };
 const envelope = (data: unknown) => ({ json: { code: 0, data } });
 
-async function install(page: Page, options: { missing?: boolean; withdrawn?: boolean; emailError?: string | string[] } = {}) {
+async function install(page: Page, options: { missing?: boolean; withdrawn?: boolean; emailError?: string | string[]; rejectedEmail?: string } = {}) {
   const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
   let current = { ...candidate };
   const withdrawn = { ...old, stage: 'withdrawn', allowedActions: ['reopen'] };
@@ -36,7 +36,9 @@ async function install(page: Page, options: { missing?: boolean; withdrawn?: boo
       if (request.method() === 'GET') return result(current);
       const body = request.postDataJSON();
       writes.push({ path, body });
-      if (options.emailError) return route.fulfill({ status: 400, json: { message: options.emailError } });
+      if (options.emailError && (!options.rejectedEmail || body.email === options.rejectedEmail)) {
+        return route.fulfill({ status: 400, json: { message: options.emailError } });
+      }
       current = { ...current, ...body, editVersion: 'v2' };
       return route.fulfill({ status: request.method() === 'POST' ? 201 : 200, ...envelope(current) });
     }
@@ -202,25 +204,38 @@ async function enterRequiredFields(page: Page) {
   return drawer;
 }
 
-test('invalid email stays next to the field and an empty email saves successfully', async ({ page }, info) => {
+test('an API-accepted international domain email can be saved', async ({ page }) => {
   const writes = await install(page);
   await page.goto('/talents');
   const drawer = await enterRequiredFields(page);
   const email = drawer.getByLabel('邮箱', { exact: true });
-  await email.fill('invalid-email');
+  await email.fill(' hr@example.xn--fiqs8s ');
   await drawer.getByRole('button', { name: '加入人才库', exact: true }).click();
-  const error = drawer.locator('.el-form-item').filter({ has: page.getByLabel('邮箱', { exact: true }) }).locator('.el-form-item__error');
-  await expect(error).toHaveText('邮箱格式不正确', { timeout: 2500 });
-  await expect(email).toHaveValue('invalid-email');
-  expect(writes).toHaveLength(0);
-  await email.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: info.outputPath('email-inline.png'), animations: 'disabled' });
-  await email.fill('   ');
-  await drawer.getByRole('button', { name: '加入人才库', exact: true }).click();
-  await expect(drawer).not.toBeVisible();
-  expect(writes[0]?.body.email).toBeNull();
-  await expect(page.locator('.el-message-box:visible')).toHaveCount(0);
+  await expect(drawer).not.toBeVisible({ timeout: 2500 });
+  expect(writes.map(write => write.body.email)).toEqual(['hr@example.xn--fiqs8s']);
 });
+
+for (const rejectedEmail of ['invalid-email', 'hr@[127.0.0.1]']) {
+  test(`the API rejection of ${rejectedEmail} stays beside the email and an empty email saves`, async ({ page }, info) => {
+    const writes = await install(page, { emailError: '邮箱格式不正确', rejectedEmail });
+    await page.goto('/talents');
+    const drawer = await enterRequiredFields(page);
+    const email = drawer.getByLabel('邮箱', { exact: true });
+    await email.fill(rejectedEmail);
+    await drawer.getByRole('button', { name: '加入人才库', exact: true }).click();
+    const field = drawer.locator('.el-form-item').filter({ has: page.getByLabel('邮箱', { exact: true }) });
+    await expect(field.locator('.el-form-item__error')).toHaveText('邮箱格式不正确', { timeout: 2500 });
+    await expect(email).toHaveValue(rejectedEmail);
+    expect(writes.map(write => write.body.email)).toEqual([rejectedEmail]);
+    await field.evaluate(el => el.scrollIntoView({ block: 'center' }));
+    await page.screenshot({ path: info.outputPath('email-inline.png'), animations: 'disabled' });
+    await email.fill('   ');
+    await drawer.getByRole('button', { name: '加入人才库', exact: true }).click();
+    await expect(drawer).not.toBeVisible();
+    expect(writes.map(write => write.body.email)).toEqual([rejectedEmail, null]);
+    await expect(page.locator('.el-message-box:visible')).toHaveCount(0);
+  });
+}
 
 for (const emailError of ['邮箱不可用', ['邮箱不可用', '其他资料有误']]) {
   test(`the server's ${typeof emailError === 'string' ? 'string' : 'array'} email error appears beside the email`, async ({ page }) => {

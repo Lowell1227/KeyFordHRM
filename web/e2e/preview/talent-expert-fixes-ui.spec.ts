@@ -77,7 +77,7 @@ function phone() {
 }
 
 for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
-  test(`real preview preserves the application target and unsaved fields at ${width}px`, async ({ page }, info) => {
+  test(`real preview preserves the application target, unsaved fields and email validation at ${width}px`, async ({ page }, info) => {
     const mobile = width === 390;
     test.skip(info.project.name !== (mobile ? 'mobile' : 'desktop'), 'This viewport runs once in its matching device project');
     expect(info.project.use.baseURL).toBe(origin);
@@ -156,32 +156,32 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       await create.click();
       await expect(name).toHaveValue('');
 
-      await name.fill(`虚构邮箱${prefix}`);
+      const emailCandidate = `虚构邮箱${prefix}`;
+      await name.fill(emailCandidate);
       await drawer.getByPlaceholder('11 位手机号').fill(phone());
       await drawer.getByTestId('talent-form-source').click();
       await page.getByRole('option', { name: '其他', exact: true }).click();
       const email = drawer.getByLabel('邮箱', { exact: true });
-      await email.fill('invalid-email');
+      const rejectedEmail = width === 1024 ? 'invalid-email' : 'hr@[127.0.0.1]';
+      await email.fill(rejectedEmail);
       const submit = drawer.getByRole('button', { name: '加入人才库', exact: true });
-      let createRequests = 0;
-      page.on('request', request => {
-        if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/talents') createRequests++;
-      });
-      await submit.click();
-      const emailError = drawer.locator('.el-form-item').filter({ has: page.getByLabel('邮箱', { exact: true }) }).locator('.el-form-item__error');
-      await expect(emailError).toHaveText('邮箱格式不正确');
-      expect(createRequests).toBe(0);
-      await expect(email).toHaveValue('invalid-email');
-      await email.scrollIntoViewIfNeeded();
+      const listenForSave = () => page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/talents', { timeout: 6000 });
+      const [invalidResponse] = await Promise.all([listenForSave(), submit.click()]);
+      expect(invalidResponse.status()).toBe(400);
+      const emailField = drawer.locator('.el-form-item').filter({ has: page.getByLabel('邮箱', { exact: true }) });
+      await expect(emailField.locator('.el-form-item__error')).toHaveText('邮箱格式不正确');
+      await expect(email).toHaveValue(rejectedEmail);
+      expect((await api<{ total: number }>('GET', `/talents?keyword=${encodeURIComponent(emailCandidate)}`, 200)).total).toBe(0);
+      await emailField.evaluate(el => el.scrollIntoView({ block: 'center' }));
       await page.screenshot({ path: info.outputPath(`email-inline-${width}.png`), animations: 'disabled' });
-      await email.fill('');
-      const saved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/talents');
-      await submit.click();
-      const saveResponse = await saved;
+      const validEmail = width === 1024 ? null : 'hr@example.xn--fiqs8s';
+      await email.fill(validEmail ? ` ${validEmail} ` : '   ');
+      const [saveResponse] = await Promise.all([listenForSave(), submit.click()]);
       expect(saveResponse.status()).toBe(201);
       const created = (await saveResponse.json()).data as Candidate;
       candidateIds.push(created.id);
-      expect((await api<Candidate>('GET', `/talents/${created.id}`, 200)).email).toBeNull();
+      expect((await api<Candidate>('GET', `/talents/${created.id}`, 200)).email).toBe(validEmail);
       await expect(drawer).not.toBeVisible();
       await expect(discard).toHaveCount(0);
       expect(blocked).toEqual([]);
