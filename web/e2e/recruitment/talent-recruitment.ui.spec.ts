@@ -19,7 +19,7 @@ async function install(page: Page, employee = false) {
     if (path.endsWith(`/applications/${app.id}`)) return route.fulfill(envelope(app));
     if (path.endsWith('/actions')) { writes.push(req.postDataJSON()); return route.fulfill(envelope({ ...app, stage: 'interviewing', revision: 4, allowedActions: ['submit_hiring'], events: [] })); }
     if (path.endsWith('/owners')) return route.fulfill(envelope({ items: [{ id: 'hr-one', name: '虚构经办', employeeNo: 'MOCK', deptName: '虚构人事部' }], total: 1 }));
-    if (path.endsWith('/feedback')) return route.fulfill(envelope({ own: null, items: [], canEdit: true, canReturn: false }));
+    if (path.endsWith('/feedback')) return route.fulfill(envelope({ interviewVersion: interview.version, own: null, items: [], canEdit: true, canReturn: false }));
     if (path.endsWith('/talent-interviews')) return route.fulfill(envelope([]));
     if (path.endsWith(`/talent-interviews/${interview.id}`)) return route.fulfill(envelope(interview));
     if (path.endsWith('/departments') || path.endsWith('/follow-ups')) return route.fulfill(envelope([]));
@@ -41,6 +41,37 @@ test('application actions use server revision and refresh the selected record', 
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]).toMatchObject({ expectedRevision: 3, action: 'start_interview' });
   await expect(page.locator('.application-panel__stage')).toContainText('面试中');
+});
+
+test('application create keeps the same request ID on a lost response until a new form is opened', async ({ page }) => {
+  await install(page);
+  const writes: Array<{ requestId: string; positionName: string }> = [];
+  await page.route('**/api/v1/talent-recruitment/candidates/*/applications', route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    writes.push(route.request().postDataJSON());
+    if (writes.length === 1) return route.abort('failed');
+    if (writes.length === 2) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: '本次新建请求已用于其他应聘内容，请重新发起' }) });
+    return route.fulfill(envelope({ ...app, id: 'new-intent' }));
+  });
+  await page.goto('/talents');
+  await page.getByText(candidate.name, { exact: true }).first().click();
+  const panel = page.locator('.application-panel');
+  await panel.getByRole('button', { name: '新增应聘' }).click();
+  await panel.getByLabel('岗位名称').fill('虚构岗位');
+  await panel.getByRole('button', { name: '保存应聘' }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].requestId).toMatch(/^[a-f0-9-]{36}$/i);
+  await panel.getByLabel('岗位名称').fill('虚构岗位调整');
+  await panel.getByRole('button', { name: '保存应聘' }).click();
+  await expect.poll(() => writes[1]?.requestId).toBe(writes[0].requestId);
+  await expect(panel).toContainText('核对应聘记录');
+  await panel.getByRole('button', { name: '取消编辑' }).click();
+  await panel.getByRole('button', { name: '新增应聘' }).click();
+  await panel.getByLabel('岗位名称').fill('虚构岗位');
+  await panel.getByRole('button', { name: '保存应聘' }).click();
+  await expect.poll(() => writes.length).toBe(3);
+  expect(writes[2].requestId).toMatch(/^[a-f0-9-]{36}$/i);
+  expect(writes[2].requestId).not.toBe(writes[0].requestId);
 });
 
 test('invited employee sees own feedback without querying the talent pool', async ({ page }) => {
@@ -171,12 +202,12 @@ test('feedback submission uses own revision, keeps conflict input, then becomes 
   await install(page, true);
   let attempts = 0;
   await page.route('**/api/v1/talent-recruitment/interviews/*/feedback', async route => {
-    if (route.request().method() !== 'PUT') return route.fallback();
+    if (route.request().method() !== 'PUT') return route.fulfill(envelope({ interviewVersion: attempts ? 3 : 2, own: null, items: [], canEdit: true, canReturn: false }));
     const body = route.request().postDataJSON(); ++attempts;
-    expect(body).toMatchObject({ interviewVersion: 2, expectedRevision: 0, outcome: 'pass', summary: '虚构面试意见', submit: true });
+    expect(body).toMatchObject({ interviewVersion: attempts === 1 ? 2 : 3, expectedRevision: 0, outcome: 'pass', summary: '虚构面试意见', submit: true });
     if (attempts === 1) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: '版本冲突' }) });
     const own = { interviewId: interview.id, userId: 'interviewer', userName: '虚构面试官', status: 'submitted', outcome: body.outcome, summary: body.summary, revision: 1 };
-    return route.fulfill(envelope({ own, items: [own], canEdit: false, canReturn: false }));
+    return route.fulfill(envelope({ interviewVersion: 3, own, items: [own], canEdit: false, canReturn: false }));
   });
   await page.goto(`/talent-interviews/${interview.id}`);
   const panel = page.locator('.interview-feedback');
@@ -185,20 +216,40 @@ test('feedback submission uses own revision, keeps conflict input, then becomes 
   await panel.getByRole('button', { name: '提交反馈' }).click();
   await expect(panel).toContainText('输入已保留');
   await expect(panel.getByLabel('面试意见')).toHaveValue('虚构面试意见');
+  await panel.getByRole('button', { name: '刷新反馈，保留输入' }).click();
   await panel.getByRole('button', { name: '提交反馈' }).click();
   await expect(panel.getByText('虚构面试意见', { exact: true })).toBeVisible();
   await expect(panel.getByRole('button', { name: '提交反馈' })).toHaveCount(0);
   await expect(panel.getByRole('textbox')).toHaveCount(0);
 });
 
+test('feedback refresh preserves a local draft without offering submission when the stage has closed', async ({ page }) => {
+  await install(page, true);
+  let writes = 0;
+  await page.route('**/api/v1/talent-recruitment/interviews/*/feedback', route => {
+    if (route.request().method() === 'GET') return route.fulfill(envelope({ interviewVersion: writes ? 3 : 2, own: null, items: [], canEdit: !writes, canReturn: false }));
+    writes++;
+    return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: '版本冲突' }) });
+  });
+  await page.goto(`/talent-interviews/${interview.id}`);
+  const panel = page.locator('.interview-feedback');
+  await panel.getByLabel('面试意见').fill('虚构未提交意见');
+  await panel.getByRole('button', { name: '保存草稿' }).click();
+  await panel.getByRole('button', { name: '刷新反馈，保留输入' }).click();
+  await expect(panel.getByText('虚构未提交意见', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: '提交反馈' })).toHaveCount(0);
+  expect(writes).toBe(1);
+});
+
 test('HR feedback return requires a reason and targets the selected author revision', async ({ page }) => {
   await install(page);
   const feedback = { interviewId: interview.id, userId: 'author-one', userName: '虚构反馈人', status: 'submitted', outcome: 'pending', summary: '待补充意见', revision: 7 };
   const writes: Array<Record<string, unknown>> = [];
-  await page.route('**/api/v1/talent-recruitment/interviews/*/feedback', route => route.fulfill(envelope({ own: null, items: [feedback], canEdit: false, canReturn: true })));
+  await page.route('**/api/v1/talent-recruitment/interviews/*/feedback', route => route.fulfill(envelope({ interviewVersion: writes.length ? 3 : 2, own: null, items: [feedback], canEdit: false, canReturn: true })));
   await page.route('**/api/v1/talent-recruitment/interviews/*/feedback/author-one/return', route => {
     writes.push(route.request().postDataJSON());
-    return route.fulfill(envelope({ own: null, items: [{ ...feedback, status: 'draft', revision: 8 }], canEdit: false, canReturn: false }));
+    if (writes.length === 1) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: '版本冲突' }) });
+    return route.fulfill(envelope({ interviewVersion: 3, own: null, items: [{ ...feedback, status: 'draft', revision: 8 }], canEdit: false, canReturn: false }));
   });
   await page.goto(`/talent-interviews/${interview.id}`);
   const panel = page.locator('.interview-feedback');
@@ -209,6 +260,10 @@ test('HR feedback return requires a reason and targets the selected author revis
   await panel.getByRole('button', { name: '退回修改', exact: true }).click();
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]).toEqual({ interviewVersion: 2, expectedRevision: 7, note: '请补充岗位匹配依据' });
+  await panel.getByRole('button', { name: '刷新反馈，保留输入' }).click();
+  await expect(panel.getByLabel('退回原因')).toHaveValue('请补充岗位匹配依据');
+  await panel.getByRole('button', { name: '退回修改', exact: true }).click();
+  await expect.poll(() => writes[1]).toEqual({ interviewVersion: 3, expectedRevision: 7, note: '请补充岗位匹配依据' });
   await expect(panel.getByRole('button', { name: '退回反馈', exact: true })).toHaveCount(0);
 });
 
@@ -225,8 +280,8 @@ test('detail failures show retry and rejecting a talent refreshes the main list'
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.getByRole('heading', { name: '应聘记录' })).toBeVisible();
   const before = listReads;
-  await page.getByRole('button', { name: '标记淘汰', exact: true }).click();
-  await page.locator('.el-message-box').getByRole('button', { name: '标记淘汰', exact: true }).click();
+  await page.getByRole('button', { name: '设置人才状态', exact: true }).click();
+  await page.locator('.el-message-box').getByRole('button', { name: '设为已淘汰', exact: true }).click();
   await expect.poll(() => listReads).toBeGreaterThan(before);
 });
 

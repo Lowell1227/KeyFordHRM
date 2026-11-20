@@ -17,7 +17,7 @@ export const talentRecruitmentApi = {
   applications(candidateId: string): Promise<TalentApplicationView[]> {
     return http.get(`${base}/candidates/${candidateId}/applications`) as unknown as Promise<TalentApplicationView[]>;
   },
-  create(candidateId: string, body: TalentApplicationInput): Promise<TalentApplicationView> {
+  create(candidateId: string, body: TalentApplicationInput & { requestId?: string }): Promise<TalentApplicationView> {
     return http.post(`${base}/candidates/${candidateId}/applications`, body, localError) as unknown as Promise<TalentApplicationView>;
   },
   detail(id: string): Promise<TalentApplicationView> {

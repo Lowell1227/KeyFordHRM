@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -21,6 +22,7 @@ describe('talent recruitment: disposable PostgreSQL', () => {
   let participant: AuthUser;
   let otherParticipant: AuthUser;
   let confirmer: AuthUser;
+  let candidateSequence = 0;
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer('postgres:15-alpine')
@@ -31,7 +33,7 @@ describe('talent recruitment: disposable PostgreSQL', () => {
       throw new Error('Disposable recruitment database must be loopback and test-owned');
     }
     try {
-      execFileSync(process.execPath, [require.resolve('prisma/build/index.js'), 'db', 'push', '--skip-generate'], {
+      execFileSync(process.execPath, [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'], {
         cwd: path.resolve(__dirname, '../..'), env: { ...process.env, DATABASE_URL: databaseUrl }, stdio: 'pipe', timeout: 60000,
       });
     } catch { throw new Error('Disposable recruitment schema initialization failed'); }
@@ -55,7 +57,7 @@ describe('talent recruitment: disposable PostgreSQL', () => {
 
   async function fixture(linked = true) {
     const candidate = await prisma.talentCandidate.create({ data: { name: 'Synthetic recruitment candidate',
-      phone: '17000000000', sourceChannel: 'referral', createdById: hr.id } });
+      phone: String(17000000000 + ++candidateSequence), sourceChannel: 'referral', createdById: hr.id } });
     const application = linked ? await recruitment.create(candidate.id, { positionName: 'Synthetic role' }, hr) : null;
     const interview = await interviews.create({ candidateId: candidate.id, ...(application ? { applicationId: application.id } : {}),
       startsAt: '2026-12-01T02:00:00Z', endsAt: '2026-12-01T03:00:00Z', invitationText: 'Synthetic interview',
@@ -66,6 +68,35 @@ describe('talent recruitment: disposable PostgreSQL', () => {
   const submission = { interviewVersion: 1, expectedRevision: 0, submit: true,
     outcome: 'pass' as const, summary: 'Synthetic first submitted feedback' };
   const returnInput = { interviewVersion: 1, expectedRevision: 1, note: 'Synthetic HR correction request' };
+
+  it('serializes identical application creation intents, preserving events, legacy and independent applications', async () => {
+    const { candidate } = await fixture(false);
+    const intent = { requestId: randomUUID(), positionName: 'Synthetic repeatable position' };
+    const rows = await Promise.all(Array.from({ length: 4 }, () => recruitment.create(candidate.id, intent, hr)));
+    const id = rows[0].id;
+    expect(rows.map(row => row.id)).toEqual([id, id, id, id]);
+    expect(rows[0]).not.toHaveProperty('creationFingerprint');
+    expect(rows[0]).not.toHaveProperty('requestId');
+    expect(await prisma.talentApplicationEvent.count({ where: { applicationId: id, action: 'create' } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { entityId: id, action: 'create_application' } })).toBe(1);
+    await recruitment.update(id, { expectedRevision: 0, positionName: 'Updated position' }, hr);
+    await expect(recruitment.create(candidate.id, intent, hr)).resolves.toMatchObject({ id, positionName: 'Updated position' });
+    await expect(recruitment.create(candidate.id, { ...intent, recruitmentBatch: 'Other' }, hr)).rejects.toThrow(ConflictException);
+    for (const input of [{ ...intent, requestId: randomUUID() }, { positionName: intent.positionName }, { positionName: intent.positionName }]) {
+      await recruitment.create(candidate.id, input, hr);
+    }
+    expect(await prisma.talentApplication.count({ where: { candidateId: candidate.id } })).toBe(4);
+    expect(await prisma.talentApplication.count({ where: { candidateId: candidate.id, requestId: null, creationFingerprint: null } })).toBe(2);
+  });
+
+  it('rejects a global application creation key raced between different candidates', async () => {
+    const fixtures = [await fixture(false), await fixture(false)];
+    const intent = { requestId: randomUUID(), positionName: 'Synthetic position' };
+    const attempts = await Promise.allSettled(fixtures.map(({ candidate }) => recruitment.create(candidate.id, intent, hr)));
+    expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.find(result => result.status === 'rejected')).toMatchObject({ reason: expect.any(ConflictException) });
+    expect(await prisma.talentApplication.count({ where: { requestId: intent.requestId } })).toBe(1);
+  });
 
   async function snapshot(interviewId: string, applicationId?: string) {
     return {

@@ -42,6 +42,7 @@ test('real DeepSeek single parse survives close/reload and explicitly applies re
   expect(task.context).toBe('new');
   expect(accepted.request().headers()['x-resume-context']).toBe('new');
   await drawer.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('dialog', { name: '放弃未保存修改？' }).getByRole('button', { name: '放弃修改', exact: true }).click();
   await expect(drawer).not.toBeVisible();
   await page.reload();
   const recoveredResponse = page.waitForResponse(async result => {

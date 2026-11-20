@@ -325,6 +325,7 @@ export const INTERVIEW_SYNC_LABELS: Record<string, string> = {
 export interface TalentInterviewView {
   id: string;
   applicationId?: string | null;
+  application?: Pick<TalentApplicationView, 'positionName' | 'recruitmentBatch'> | null;
   candidateNameSnapshot: string;
   startsAt: string;
   endsAt: string;
@@ -453,6 +454,7 @@ export interface TalentFeedbackHistory {
   revision: number;
 }
 export interface TalentFeedbackResponse {
+  interviewVersion: number;
   own: TalentInterviewFeedbackView | null;
   items: TalentInterviewFeedbackView[];
   canEdit: boolean;

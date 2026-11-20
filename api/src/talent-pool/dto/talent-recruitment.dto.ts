@@ -9,7 +9,7 @@ export class TalentOwnerQueryDto extends PaginationDto {
   @IsString() @MaxLength(100) keyword?: string;
 }
 
-export class CreateTalentApplicationDto {
+class TalentApplicationFields {
   @IsString() @MinLength(1) @MaxLength(100) positionName!: string;
   @IsOptional() @IsString() @MaxLength(100) recruitmentBatch?: string | null;
   @IsOptional() @IsUUID() deptId?: string | null;
@@ -17,7 +17,11 @@ export class CreateTalentApplicationDto {
   @IsOptional() @IsISO8601({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/) expectedEntryDate?: string | null;
 }
 
-export class UpdateTalentApplicationDto extends PartialType(CreateTalentApplicationDto) {
+export class CreateTalentApplicationDto extends TalentApplicationFields {
+  @IsOptional() @IsUUID() requestId?: string;
+}
+
+export class UpdateTalentApplicationDto extends PartialType(TalentApplicationFields) {
   @IsInt() @Min(0) @Max(2147483646) expectedRevision!: number;
 }
 

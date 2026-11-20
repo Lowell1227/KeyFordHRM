@@ -40,7 +40,7 @@ for (const width of [1440, 390]) {
     const change = await install(page);
     let detail = await openDetail(page, width, '员工已离职');
     await expect(detail.getByTestId('talent-current-employment')).toHaveText('员工当前：已离职');
-    await expect(detail.locator('.talent-detail__badges').getByText('已入职', { exact: true })).toBeVisible();
+    await expect(detail.locator('.talent-detail__badges').getByText('人才库状态：已入职', { exact: true })).toBeVisible();
     await expect(detail.locator('.application-panel__stage')).toHaveText('已入职');
     await expect(detail).toContainText('办理入职');
     expect(await detail.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
@@ -49,7 +49,7 @@ for (const width of [1440, 390]) {
     await page.reload();
     detail = await openDetail(page, width, '员工在职');
     await expect(detail.getByTestId('talent-current-employment')).toHaveText('员工当前：在职');
-    await expect(detail.locator('.talent-detail__badges').getByText('已入职', { exact: true })).toBeVisible();
+    await expect(detail.locator('.talent-detail__badges').getByText('人才库状态：已入职', { exact: true })).toBeVisible();
     await expect(detail.locator('.application-panel__stage')).toHaveText('已入职');
   });
 
@@ -58,7 +58,7 @@ for (const width of [1440, 390]) {
     change({ convertedUserId: null, employmentStatus: 'unknown' });
     let detail = await openDetail(page, width, '员工关联待核对');
     await expect(detail.getByTestId('talent-current-employment')).toHaveText('员工当前：关联待核对');
-    await expect(detail.locator('.talent-detail__badges').getByText('已入职', { exact: true })).toBeVisible();
+    await expect(detail.locator('.talent-detail__badges').getByText('人才库状态：已入职', { exact: true })).toBeVisible();
     change({ status: 'new', employmentStatus: null });
     await page.reload();
     detail = await openDetail(page, width, null);

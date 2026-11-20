@@ -20,8 +20,9 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
     user: { findUnique: jest.fn(({ where }) => Promise.resolve(actors.find(actor => actor.id === where.id) ?? null)),
       findMany: jest.fn().mockResolvedValue(actors), count: jest.fn().mockResolvedValue(1) },
     department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept', name: 'Synthetic department', isActive: true }) },
-    talentCandidate: { findUnique: jest.fn().mockResolvedValue({ id: 'candidate', deletedAt: null }) },
-    talentApplication: { findUnique: jest.fn().mockImplementation(() => Promise.resolve({ ...app, events: [...app.events], onboardingRequests: [...app.onboardingRequests] })), findMany: jest.fn().mockResolvedValue([app]),
+    talentCandidate: { findUnique: jest.fn().mockImplementation(({ where }) => Promise.resolve({ id: where.id, deletedAt: null })) },
+    talentApplication: { findUnique: jest.fn().mockImplementation(({ where }) => Promise.resolve(where.requestId && where.requestId !== Reflect.get(app, 'requestId')
+      ? null : { ...app, events: [...app.events], onboardingRequests: [...app.onboardingRequests] })), findMany: jest.fn().mockResolvedValue([app]),
       create: jest.fn().mockImplementation(({ data }) => { Object.assign(app, data); return Promise.resolve({ ...app }); }),
       updateMany: jest.fn().mockImplementation(({ where, data }) => {
         if (app.revision !== where.revision || app.stage !== where.stage) return Promise.resolve({ count: 0 });
@@ -44,6 +45,22 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
   const prisma = { ...tx, $transaction: jest.fn().mockImplementation(fn => fn(tx)) };
   return { sut: new TalentRecruitmentService(prisma as never), prisma, tx, app, interview, actors, feedbacks, feedbackEvents };
 }
+
+describe('application creation replay', () => {
+  const intent = { requestId: '69b63655-caad-431e-bb8d-e96d5ab930ba', positionName: 'Synthetic role', recruitmentBatch: 'Round 1' };
+
+  it('replays the original creation after an edit without recording a second creation', async () => {
+    const { sut, tx } = setup();
+    const created = await sut.create('candidate', intent, hr);
+    await sut.update(created.id, { expectedRevision: 0, positionName: 'Edited role' }, hr);
+    const replay = await sut.create('candidate', intent, hr);
+    expect(tx.talentApplication.create).toHaveBeenCalledTimes(1);
+    expect(replay).toMatchObject({ id: created.id, positionName: 'Edited role' });
+    expect(replay.events.filter(event => event.action === 'create')).toHaveLength(1);
+    await expect(sut.create('candidate', { ...intent, recruitmentBatch: 'Round 2' }, hr)).rejects.toThrow(ConflictException);
+    await expect(sut.create('other-candidate', intent, hr)).rejects.toThrow(ConflictException);
+  });
+});
 
 describe('reserve reasons on application events', () => {
   it('persists optional multiple reasons on the event with the same revision and preserves independent reserve history', async () => {
@@ -270,6 +287,12 @@ describe('talent recruitment transactions and boundaries', () => {
 });
 
 describe('talent interview feedback', () => {
+  it('returns the current interview version to the participant and HR after rescheduling', async () => {
+    const { sut, interview } = setup();
+    interview.version++;
+    await expect(sut.feedback('interview', participant)).resolves.toMatchObject({ interviewVersion: 2, canEdit: true });
+    await expect(sut.feedback('interview', hr)).resolves.toMatchObject({ interviewVersion: 2 });
+  });
   it.each([null, 'app'])('preserves every submitted body and HR return note across draft edits and resubmission, application=%s', async applicationId => {
     const { sut, tx, feedbackEvents } = setup({}, { applicationId });
     await sut.saveFeedback('interview', { interviewVersion: 1, expectedRevision: 0, submit: false, summary: 'Synthetic first draft' }, participant);

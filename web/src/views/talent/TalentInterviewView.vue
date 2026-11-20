@@ -5,6 +5,7 @@ import { Refresh, ArrowLeft } from '@element-plus/icons-vue';
 import { talentInterviewsApi } from '@/api/talent-pool.api';
 import { INTERVIEW_STATUS_LABELS, type TalentInterviewView } from '@/types/talent.types';
 import TalentInterviewContent from './components/TalentInterviewContent.vue';
+import { interviewApplicationLabel } from './interview-application';
 import TalentInterviewPanel from './components/TalentInterviewPanel.vue';
 import { useTalentPermissions } from './useTalentPermissions';
 import { formatInterviewTime } from './interview-time';
@@ -53,6 +54,7 @@ onBeforeUnmount(() => { ++generation; });
       <ul v-else class="interview-page__list">
         <li v-for="item in list" :key="item.id">
           <router-link :to="`/talent-interviews/${item.id}`">{{ item.candidateNameSnapshot }}</router-link>
+          <span v-if="item.application !== undefined">{{ interviewApplicationLabel(item.application) }}</span>
           <span>{{ formatInterviewTime(item.startsAt) }}（北京时间）</span>
           <el-tag size="small">{{ INTERVIEW_STATUS_LABELS[item.status] }}</el-tag>
         </li>

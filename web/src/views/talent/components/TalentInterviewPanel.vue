@@ -8,6 +8,7 @@ import type { User } from '@/types/api.types';
 import { INTERVIEW_STATUS_LABELS, INTERVIEW_SYNC_LABELS, type TalentInterviewView } from '@/types/talent.types';
 import TalentInterviewContent from './TalentInterviewContent.vue';
 import { formatInterviewTime, interviewTimeToIso } from '../interview-time';
+import { interviewApplicationLabel, type InterviewApplication } from '../interview-application';
 import { extractTencentMeetingLink, safeTencentMeetingLink } from '../interview-meeting-link';
 
 const props = defineProps<{ candidateId: string; editable: boolean; invitationId?: string }>();
@@ -16,6 +17,7 @@ const rows = ref<TalentInterviewView[]>([]), loading = ref(false), busy = ref(fa
 const editing = ref(false), current = ref<TalentInterviewView | null>(null), formRef = ref<FormInstance>();
 const requestId = ref('');
 const applicationId = ref<string | undefined>();
+const editorApplication = ref<TalentInterviewView['application']>(null);
 const panelElement = ref<HTMLElement>();
 const loadFailed = ref(false);
 const opened = ref<string[]>([]);
@@ -136,11 +138,12 @@ function removeParticipant(id: string) {
   delete participantIssues.value[id];
   void searchPeople();
 }
-function openEditor(row: TalentInterviewView | null, targetApplicationId?: string) {
+function openEditor(row: TalentInterviewView | null, targetApplication?: InterviewApplication) {
   if (!props.editable) return;
   closeEditor();
   current.value = row; editing.value = true; error.value = '';
-  applicationId.value = row?.applicationId ?? targetApplicationId;
+  applicationId.value = row?.applicationId ?? targetApplication?.id;
+  editorApplication.value = row?.application ?? targetApplication ?? null;
   requestId.value = row ? '' : crypto.randomUUID();
   meetingLinkManual.value = Boolean(row?.meetingUrl);
   meetingExtraction.value = null;
@@ -153,9 +156,9 @@ function openEditor(row: TalentInterviewView | null, targetApplicationId?: strin
   formRef.value?.clearValidate();
   void searchPeople();
 }
-function openForApplication(id: string) {
+function openForApplication(application: InterviewApplication) {
   if (busy.value) return;
-  openEditor(null, id);
+  openEditor(null, application);
   void nextTick(() => panelElement.value?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
 }
 defineExpose({ openForApplication });
@@ -224,6 +227,7 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
     </div></header>
     <el-alert v-if="error" :title="error" type="error" :closable="false"><el-button v-if="loadFailed" link type="primary" @click="load">重试</el-button></el-alert>
     <el-form v-if="editing && editable" ref="formRef" :model="form" :rules="rules" label-position="top" class="interview-panel__editor" :disabled="busy">
+      <el-form-item label="关联应聘">{{ interviewApplicationLabel(editorApplication) }}</el-form-item>
       <div class="interview-panel__times">
         <el-form-item label="开始时间（北京时间）" prop="startsAt"><el-date-picker v-model="form.startsAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" /></el-form-item>
         <el-form-item label="结束时间（北京时间）" prop="endsAt"><el-date-picker v-model="form.endsAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" /></el-form-item>
@@ -253,7 +257,7 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
     <el-empty v-if="!loading && !rows.length && !editing" description="暂无面试邀约" :image-size="50" />
     <el-collapse v-if="rows.length" v-model="opened" class="interview-panel__list">
       <el-collapse-item v-for="row in rows" :key="row.id" :name="row.id">
-        <template #title><div class="interview-panel__summary"><span>{{ formatInterviewTime(row.startsAt) }}（北京时间）</span><span>{{ INTERVIEW_STATUS_LABELS[row.status] }}</span><el-tag size="small" :type="row.syncStatus === 'synced' ? 'success' : 'info'">{{ INTERVIEW_SYNC_LABELS[row.syncStatus ?? 'unconfigured'] }}</el-tag></div></template>
+        <template #title><div class="interview-panel__summary"><span>{{ formatInterviewTime(row.startsAt) }}（北京时间）</span><span v-if="row.application !== undefined">{{ interviewApplicationLabel(row.application) }}</span><span>{{ INTERVIEW_STATUS_LABELS[row.status] }}</span><el-tag size="small" :type="row.syncStatus === 'synced' ? 'success' : 'info'">{{ INTERVIEW_SYNC_LABELS[row.syncStatus ?? 'unconfigured'] }}</el-tag></div></template>
         <TalentInterviewContent :key="row.id" :invitation="row" />
         <div v-if="editable" class="interview-panel__actions">
           <el-button v-if="row.status === 'scheduled'" size="small" :disabled="busy || syncBlocked(row)" @click="openEditor(row)">修改邀约</el-button>
@@ -278,7 +282,7 @@ h4 { margin: 0; font-size: 14px; }
 .interview-panel__editor { margin: 12px 0; border-block: 1px solid var(--el-border-color); padding: 14px 0; }
 .interview-panel__times { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .interview-panel__editor :deep(.el-date-editor), .interview-panel__editor :deep(.el-select) { width: 100%; min-width: 0; }
-.interview-panel__summary { display: flex; flex-wrap: wrap; gap: 6px 12px; line-height: 1.5; padding: 8px 0; text-align: left; }
+.interview-panel__summary { display: flex; flex-wrap: wrap; gap: 6px 12px; min-width: 0; overflow-wrap: anywhere; line-height: 1.5; padding: 8px 0; text-align: left; }
 .interview-panel__list :deep(.el-collapse-item__header) { min-height: 48px; height: auto; }
 .interview-panel__note { white-space: pre-wrap; overflow-wrap: anywhere; }
 .interview-panel__link-hint { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }

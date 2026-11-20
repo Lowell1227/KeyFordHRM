@@ -21,6 +21,7 @@ function setup() {
     }) },
     talentApplicationEvent: { create: jest.fn() },
     employeeDataChangeRequest: {
+      findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn(async ({ where }) => where.talentCandidateId ? duplicate : draft),
       create: jest.fn(async ({ data }) => (draft = { id: 'r1', requestVersion: 1, updatedAt: new Date(), ...data })),
       update: jest.fn(async ({ data }) => { const version = draft.requestVersion; Object.assign(draft, data);
@@ -161,6 +162,7 @@ describe('resubmitted new-hire arrival gate', () => {
       talentCandidate: { findUnique: jest.fn().mockResolvedValue({ id: candidateId, deletedAt: null, convertedUserId: null }) },
       talentApplication: { findUnique: jest.fn().mockResolvedValue({ id: applicationId, candidateId, stage: 'onboarding', revision: 1 }) },
       employeeDataChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn(async ({ where }) => where.id === draft.id ? draft : null),
         update: jest.fn(async ({ data }) => {
           const version = draft.requestVersion;

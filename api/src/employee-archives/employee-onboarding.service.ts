@@ -218,6 +218,9 @@ export class EmployeeOnboardingService {
 
       const today = this.startOfTodayInShanghai();
       const historicalOnly = Boolean(input.effectiveTo && input.effectiveTo < today);
+      if (!historicalOnly && user.status === UserStatus.pending_entry && !user.archivedAt) {
+        throw new ConflictException('该员工尚未到岗，请从首次入职申请继续办理');
+      }
       if (!historicalOnly && user.status !== UserStatus.resigned && !user.archivedAt) {
         throw new ConflictException('该员工当前仍在职，请在原档案中维护，不能重复入职');
       }

@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
@@ -94,7 +95,7 @@ export class TalentRecruitmentService {
   private async view(tx: Prisma.TransactionClient, row: Application, actor: RecruitmentActor, activeOnboarding?: boolean) {
     const ids = [...new Set([row.ownerId, row.createdById, ...row.events.map(event => event.actorId)])];
     const names = new Map((await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(user => [user.id, user.name]));
-    const { events, onboardingRequests, candidate, ...fields } = row;
+    const { events, onboardingRequests, candidate, requestId, creationFingerprint, ...fields } = row;
     const visibleEvents = canReadRecruitment(actor) ? events : events.filter(event => !event.action.endsWith('_feedback'));
     const request = onboardingRequests.find(request => !request.cancelledAt && !request.archivedAt
       && activeOnboardingStatuses.includes(request.onboardingStatus as typeof activeOnboardingStatuses[number])) ?? onboardingRequests[0];
@@ -165,18 +166,35 @@ export class TalentRecruitmentService {
   async create(candidateId: string, input: CreateTalentApplicationDto, user: AuthUser) {
     return this.prisma.$transaction(async tx => {
       await this.lockCandidate(tx, candidateId);
+      if (input.requestId) {
+        // Different candidate locks cannot serialize a reused global request UUID.
+        await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${input.requestId.toLowerCase()}, 0))`;
+      }
       const actor = await this.actor(tx, user);
       this.assertWrite(actor);
       const candidate = await tx.talentCandidate.findUnique({ where: { id: candidateId }, select: { id: true, deletedAt: true } });
       if (!candidate || candidate.deletedAt) throw new NotFoundException('候选人不存在或已删除');
-      await this.assertOwner(tx, input.ownerId ?? actor.id);
-      const fields = await this.editableFields(tx, input);
+      const ownerId = input.ownerId ?? actor.id;
+      const positionName = this.text(input.positionName, '应聘岗位', 100, true)!;
+      const recruitmentBatch = this.text(input.recruitmentBatch, '招聘批次', 100);
+      const expectedEntryDate = this.date(input.expectedEntryDate);
+      const creationFingerprint = input.requestId ? createHash('sha256').update(JSON.stringify([
+        positionName, recruitmentBatch, input.deptId?.toLowerCase() ?? null, ownerId.toLowerCase(), expectedEntryDate,
+      ])).digest('hex') : null;
+      if (input.requestId) {
+        const existing = await tx.talentApplication.findUnique({ where: { requestId: input.requestId }, include: applicationInclude });
+        if (existing) {
+          if (existing.candidateId !== candidate.id || existing.createdById !== actor.id || existing.creationFingerprint !== creationFingerprint) {
+            throw new ConflictException('本次新建请求已用于其他应聘内容，请重新发起');
+          }
+          return this.view(tx, existing, actor);
+        }
+      }
+      const fields = await this.editableFields(tx, { ownerId, deptId: input.deptId });
       const row = await tx.talentApplication.create({ data: {
-        candidateId, createdById: actor.id, ownerId: input.ownerId ?? actor.id, stage: 'screening', revision: 0,
-        positionName: this.text(input.positionName, '应聘岗位', 100, true)!,
-        recruitmentBatch: fields.recruitmentBatch as string | null | undefined,
+        candidateId, createdById: actor.id, ownerId, stage: 'screening', revision: 0,
+        requestId: input.requestId ?? null, creationFingerprint, positionName, recruitmentBatch, expectedEntryDate,
         deptId: fields.deptId as string | null | undefined, departmentNameSnapshot: fields.departmentNameSnapshot as string | null | undefined,
-        expectedEntryDate: input.expectedEntryDate === undefined ? null : this.date(input.expectedEntryDate),
       }, include: applicationInclude });
       await this.event(tx, row, actor.id, 'create', null, null);
       await this.audit(tx, actor.id, 'create_application', 'talent_application', row.id, null, { candidateId, stage: row.stage, revision: row.revision });
@@ -300,7 +318,7 @@ export class TalentRecruitmentService {
     const items = rows.map(row => ({ ...row, userName: names.get(row.userId) ?? null, history: history.filter(event => event.userId === row.userId) }));
     const own = items.find(row => row.userId === actor.id) ?? null;
     const open = isFeedbackOpen(application?.stage ?? null, interview.status);
-    return { own, items, canEdit: participant && isCurrentRecruitmentActor(actor) && open && own?.status !== 'submitted',
+    return { interviewVersion: interview.version, own, items, canEdit: participant && isCurrentRecruitmentActor(actor) && open && own?.status !== 'submitted',
       canReturn: canWriteRecruitment(actor) && open && items.some(row => row.status === 'submitted') };
   }
 

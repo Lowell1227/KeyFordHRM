@@ -109,6 +109,7 @@ const ownersLoading = ref(false);
 const ownerError = ref('');
 const ownerFieldError = ref('');
 const educationError = ref('');
+const emailError = ref('');
 let ownerGeneration = 0;
 let parseGeneration = 0;
 const loadError = ref('');
@@ -156,6 +157,8 @@ const form = reactive({
   note: '',
   status: 'new' as TalentStatus,
 });
+let savedForm = '';
+let confirmingDiscard = false;
 const salaryError = ref('');
 const salaryNeedsReview = ref(false);
 const loadedSalary = reactive({ min: undefined as number | undefined, max: undefined as number | undefined, negotiable: false });
@@ -169,6 +172,7 @@ const rules: FormRules = {
     { required: true, message: '请填写手机号', trigger: 'blur' },
     { pattern: /^1\d{10}$/, message: '手机号格式不正确', trigger: 'blur' },
   ],
+  email: [{ type: 'email', transform: (value: string) => value.trim(), message: '邮箱格式不正确', trigger: 'blur' }],
   sourceChannel: [{ required: true, message: '请选择来源', trigger: 'change' }],
 };
 
@@ -187,6 +191,7 @@ watch(() => form.salaryNegotiable, (negotiable) => {
 });
 watch(() => [form.education, form.educationReferenceDataId], () => { educationError.value = ''; });
 watch(() => form.ownerId, () => { ownerFieldError.value = ''; });
+watch(() => form.email, () => { emailError.value = ''; });
 watch(() => [resumeTask.value, formReady.value && !parsePreparing.value] as const, ([task, ready]) => {
   if (!task || !ready) return;
   if (!resumeSourceFile.value && !recoveringResumeFile.value && !fileError.value) void recoverResumeFile();
@@ -220,12 +225,13 @@ async function onOpen() {
   const generation = loadGeneration;
   const candidateId = props.candidateId;
   resetForm();
+  savedForm = JSON.stringify(form);
   conflict.value = null;
   pendingFiles.value = [];
   fileUploadStates.clear();
   persistedCandidateId.value = null;
   removingFileId.value = ''; fileError.value = '';
-  ownerFieldError.value = ''; educationError.value = '';
+  ownerFieldError.value = ''; educationError.value = ''; emailError.value = '';
   saveError.value = '';
   parseError.value = '';
   resumeEnabled.value = false;
@@ -298,6 +304,7 @@ function fillForm(detail: TalentCandidateDetail) {
     status: detail.status,
   });
   Object.assign(loadedSalary, { min: form.expectSalaryMin, max: form.expectSalaryMax, negotiable: form.salaryNegotiable });
+  savedForm = JSON.stringify(form);
   conflict.value = null;
 }
 
@@ -346,10 +353,30 @@ async function checkPhoneDuplicate() {
   }
 }
 
+async function beforeClose(done: () => void) {
+  if (saving.value || pendingUploading.value || confirmingDiscard) return;
+  if (JSON.stringify(form) === savedForm && pendingFiles.value.length === 0) {
+    done();
+    return;
+  }
+  const generation = loadGeneration, candidateId = props.candidateId;
+  confirmingDiscard = true;
+  try {
+    await ElMessageBox.confirm('当前资料或待传文件尚未保存，是否放弃修改？', '放弃未保存修改？', {
+      confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning', closeOnClickModal: false,
+    });
+    if (isCurrentLoad(generation, candidateId)) done();
+  } catch { /* 继续编辑。 */ }
+  finally { confirmingDiscard = false; }
+}
+
 function openExisting() {
-  if (!conflict.value) return;
-  emit('open-existing', conflict.value.existingId);
-  visible.value = false;
+  const existingId = conflict.value?.existingId;
+  if (!existingId) return;
+  void beforeClose(() => {
+    visible.value = false;
+    emit('open-existing', existingId);
+  });
 }
 
 function onPendingPick(event: Event) {
@@ -549,7 +576,7 @@ function pendingFileKind(file: File): string {
 
 /** 服务端字段错误与版本冲突保留在当前表单，不自动覆盖输入。 */
 function captureConflict(error: unknown) {
-  const response = (error as { response?: { data?: { message?: string; data?: {
+  const response = (error as { response?: { data?: { message?: string | string[]; data?: {
     reason?: string; existingId?: string; existingName?: string; fieldErrors?: Record<string, string>;
   } } } })?.response?.data;
   const data = response?.data;
@@ -559,7 +586,9 @@ function captureConflict(error: unknown) {
   if (data?.reason === 'TALENT_EDIT_CONFLICT') editConflict.value = true;
   educationError.value = data?.fieldErrors?.educationReferenceDataId ?? '';
   ownerFieldError.value = data?.fieldErrors?.ownerId ?? '';
-  const message = typeof response?.message === 'string' ? response.message : '';
+  const messages = Array.isArray(response?.message) ? response.message : typeof response?.message === 'string' ? [response.message] : [];
+  emailError.value = data?.fieldErrors?.email ?? messages.find(message => /邮箱|\bemail\b/i.test(message)) ?? '';
+  const message = messages.join('；');
   if (!ownerFieldError.value && message.includes('负责人')) ownerFieldError.value = message;
   return message;
 }
@@ -580,7 +609,7 @@ async function reloadAfterConflict() {
     if (detail.id !== candidateId) throw new Error('Candidate detail mismatch');
     fillForm(detail); loadedCandidateId.value = candidateId; loadedEditVersion.value = detail.editVersion;
     editFiles.value = detail.files; conflict.value = null; editConflict.value = false;
-    ownerFieldError.value = ''; educationError.value = '';
+    ownerFieldError.value = ''; educationError.value = ''; emailError.value = '';
     parseConflicts.value = []; parseReview.value = []; parseSummary.value = ''; parseError.value = '';
   } catch {
     if (isCurrentLoad(reloadGeneration, targetId)) saveError.value = '最新资料读取失败，当前输入及待传文件已保留，请重试。';
@@ -603,7 +632,7 @@ async function submit() {
   }
   saving.value = true;
   saveError.value = '';
-  educationError.value = ''; ownerFieldError.value = '';
+  educationError.value = ''; ownerFieldError.value = ''; emailError.value = '';
   let savedCandidateId = '';
   const editing = isEdit.value;
   try {
@@ -651,6 +680,7 @@ async function submit() {
     }
     if (!isCurrentLoad(generation, targetId)) return;
     savedCandidateId = candidateId;
+    savedForm = JSON.stringify(form);
     if (pendingFiles.value.length > 0) {
       pendingUploading.value = true;
       for (const file of [...pendingFiles.value]) {
@@ -697,7 +727,7 @@ async function submit() {
 
 <template>
   <BusinessDetailDrawer v-model="visible" :title="isEdit ? '编辑人才' : '新增人才'"
-    :loading="loading" :saving="saving || pendingUploading" variant="standard" class="talent-form-drawer">
+    :loading="loading" :saving="saving || pendingUploading" :before-close="beforeClose" variant="standard" class="talent-form-drawer">
     <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon>
       <el-button link type="primary" @click="onOpen">重新加载</el-button>
     </el-alert>
@@ -784,7 +814,7 @@ async function submit() {
           <el-button link type="primary" @click="openExisting">打开已有记录</el-button>
         </div>
       </el-form-item>
-      <el-form-item label="邮箱">
+      <el-form-item label="邮箱" prop="email" :error="emailError">
         <el-input v-model="form.email" placeholder="选填" maxlength="100" />
       </el-form-item>
       <el-form-item label="性别">
@@ -851,12 +881,12 @@ async function submit() {
           <el-option v-for="t in TALENT_TAGS" :key="t" :label="TALENT_TAG_LABELS[t]" :value="t" />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="isEdit && form.status !== 'hired'" label="状态">
+      <el-form-item v-if="isEdit && form.status !== 'hired'" label="人才库状态">
         <el-select v-model="form.status" data-testid="talent-form-status" class="talent-form__full">
           <el-option v-for="s in editableStatuses" :key="s" :label="TALENT_STATUS_LABELS[s]" :value="s" />
         </el-select>
       </el-form-item>
-      <el-form-item v-else-if="isEdit" label="状态"><span>已入职</span></el-form-item>
+      <el-form-item v-else-if="isEdit" label="人才库状态"><span>已入职</span></el-form-item>
 
       <h4 class="talent-form__group-title">备注</h4>
       <el-form-item label="备注">
@@ -866,7 +896,7 @@ async function submit() {
     </el-form>
     <div v-if="saveError" role="alert" class="talent-form__error">{{ saveError }}</div>
     <template #footer>
-      <el-button :disabled="saving || pendingUploading" @click="visible = false">取消</el-button>
+      <el-button :disabled="saving || pendingUploading" @click="beforeClose(() => { visible = false; })">取消</el-button>
       <el-button type="primary" :loading="saving || pendingUploading" :disabled="saveDisabled" @click="submit">
         {{ isEdit ? '保存修改' : '加入人才库' }}
       </el-button>

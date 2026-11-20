@@ -1,3 +1,4 @@
+import { cancelledFirstHireIdentity } from './cancelled-first-hire-identity';
 import { normalizeEmployeePosition } from './employee-position-reference';
 import { validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
 import { validateContractSubject } from '@/contract-subjects/contract-subject-reference';
@@ -25,7 +26,7 @@ import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { RESIGNATION_BINDING_DISABLED_REASON } from './employee-effective-date.service';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import { assertManualEmploymentBoundary } from './manual-employment-boundary';
-import { lockTalentSource } from './employee-talent-source';
+import { lockTalentSource, resolveTalentApplicationSource } from './employee-talent-source';
 import { employeeDataChangeView } from './employee-data-change-view';
 import { approvedEmploymentSourceWhere, nextBusinessDate, shanghaiBusinessDate } from './employment-timeline';
 
@@ -649,6 +650,8 @@ export class EmployeeDataReviewsService {
       userId: string | null;
       employeeNo: string | null;
       intakeType: OnboardingIntakeType | null;
+      talentCandidateId?: string | null;
+      talentApplicationId?: string | null;
       requiresArrivalConfirmation?: boolean;
       arrivalConfirmedAt?: Date | null;
       revisionHistory?: Prisma.JsonValue;
@@ -662,6 +665,19 @@ export class EmployeeDataReviewsService {
   ): Promise<string> {
     const proposed = this.record(request.proposedValue);
     const employee = this.record(proposed.employee);
+    const firstHireIdentity = this.record(this.record(request.baseValue).firstHireIdentity);
+    const replacementFirstHire = !request.userId && request.intakeType === 'new_hire' && request.requiresArrivalConfirmation
+      && typeof firstHireIdentity.userId === 'string';
+    if (replacementFirstHire) {
+      await resolveTalentApplicationSource(tx, request.talentCandidateId ?? null, undefined, request);
+      const source = await cancelledFirstHireIdentity(tx, request.talentCandidateId ?? null, request.talentApplicationId ?? null, request.id,
+        employee, this.record(proposed.profile));
+      if (!source || source.issue || source.userId !== firstHireIdentity.userId) {
+        throw new ConflictException(source?.issue || '原待入职身份已变化，请核对原档案');
+      }
+      // Establish the archive link only when the original profile review gate succeeds.
+      request = { ...request, userId: source.userId };
+    }
     const baseEmployee = this.record(this.record(request.baseValue).employee);
     const referenceSnapshot = proposed.referenceSnapshotVersion === 1 ? structuredClone(proposed) : {};
     const referenceBase = await normalizeEmployeePosition(tx, employee, baseEmployee, !request.userId, this.record(referenceSnapshot.employee));
@@ -746,14 +762,14 @@ export class EmployeeDataReviewsService {
       }
       const reopened = Array.isArray(request.revisionHistory) && request.revisionHistory
         .some(item => this.record(item).action === 'reopen_cancelled_employee_arrival');
-      if (!reopened || user.employeeNo !== null
+      if ((!reopened && !replacementFirstHire) || user.employeeNo !== null
         || await tx.employmentRecord.findFirst({ where: { userId: request.userId }, select: { id: true } })) {
         throw new ConflictException('待到岗任职不存在或历史已变化，请核对恢复申请');
       }
-      reopenedNewHire = true;
+      reopenedNewHire = reopened;
     }
     await validateContractSubject(tx, employee, baseEmployee, 'companyText');
-    if (request.userId && !reopenedNewHire) {
+    if (request.userId && !reopenedNewHire && !replacementFirstHire) {
       await this.assertProfileBaseStillCurrent(tx, request.userId, request.baseValue, request.proposedValue, directArchiveEdit);
       if (shouldUpdateUserProjection && employeeStatus !== UserStatus.resigned && request.intakeType !== OnboardingIntakeType.new_hire) {
         const current = await tx.user.findUnique({ where: { id: request.userId }, select: { status: true } });
@@ -799,7 +815,9 @@ export class EmployeeDataReviewsService {
       await tx.user.update({ where: { id: request.userId }, data: projection });
     }
 
-    const profile = this.profileUpdate(this.record(proposed.profile));
+    const incomingProfile = this.profileUpdate(this.record(proposed.profile));
+    const profile = replacementFirstHire ? Object.fromEntries(Object.entries(incomingProfile)
+      .filter(([, value]) => value != null && value !== '')) : incomingProfile;
     if (!reopenedNewHire && Object.keys(profile).length > 0) {
       await tx.employeeProfile.upsert({
         where: { userId },
@@ -937,11 +955,19 @@ export class EmployeeDataReviewsService {
       const contracts = Array.isArray(proposed.contracts)
         ? proposed.contracts.map((item) => this.record(item))
         : [];
+      // The first-hire drawer contains only the new contract rows. Keep previously approved rows.
+      if (replacementFirstHire && !contracts.length) return userId;
+      let proposedContracts = contracts;
+      if (replacementFirstHire) {
+        const previous = await tx.employeeContract.findMany({ where: { userId, isActive: true } });
+        const nextSequence = previous.reduce((max, contract) => Math.max(max, contract.sequence + 1), 0);
+        proposedContracts = [...previous, ...contracts.map((contract, index) => ({ ...contract, sequence: nextSequence + index }))];
+      }
       await this.reconcileRosterContracts(
         tx,
         userId,
         employee,
-        contracts,
+        proposedContracts,
         request.sourceBatchId,
         operator,
         request.sourceType,

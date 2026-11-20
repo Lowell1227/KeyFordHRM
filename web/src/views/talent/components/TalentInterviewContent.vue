@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
 import { INTERVIEW_STATUS_LABELS, type TalentInterviewView } from '@/types/talent.types';
 import { formatInterviewTime } from '../interview-time';
+import { interviewApplicationLabel } from '../interview-application';
 import TalentInterviewFeedback from './TalentInterviewFeedback.vue';
 
 const props = defineProps<{ invitation: TalentInterviewView }>();
@@ -32,6 +33,7 @@ async function copy() {
       <el-tag size="small" :type="invitation.status === 'cancelled' ? 'info' : invitation.status === 'completed' ? 'success' : 'primary'">{{ INTERVIEW_STATUS_LABELS[invitation.status] }}</el-tag>
     </div>
     <dl>
+      <template v-if="invitation.application !== undefined"><dt>关联应聘</dt><dd>{{ interviewApplicationLabel(invitation.application) }}</dd></template>
       <dt>面试时间<small>北京时间</small></dt><dd>{{ formatInterviewTime(invitation.startsAt) }} 至 {{ formatInterviewTime(invitation.endsAt) }}</dd>
       <dt>内部参与人</dt><dd>{{ invitation.participantNames.join('、') }}</dd>
     </dl>

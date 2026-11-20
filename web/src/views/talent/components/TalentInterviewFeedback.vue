@@ -7,7 +7,7 @@ import { formatDate } from '@/utils/date';
 
 const props = defineProps<{ interviewId: string; interviewVersion: number }>();
 const data = ref<TalentFeedbackResponse | null>(null), loading = ref(false), busy = ref(false), error = ref('');
-const loadFailed = ref(false), conflict = ref(false), dirty = ref(false), baseInterviewVersion = ref(0);
+const loadFailed = ref(false), conflict = ref(false), dirty = ref(false);
 const form = reactive({ outcome: '' as TalentFeedbackOutcome | '', summary: '' });
 const fieldErrors = reactive({ outcome: '', summary: '' });
 const returningId = ref(''), returnNote = ref(''), returnError = ref('');
@@ -23,13 +23,19 @@ function apply(result: TalentFeedbackResponse, preserve = false) {
 }
 async function load(preserve = false) {
   if (busy.value) return;
-  const token = ++session, id = props.interviewId, version = props.interviewVersion;
+  const token = ++session, id = props.interviewId;
   loading.value = true; error.value = ''; loadFailed.value = false;
   try {
     const result = await talentRecruitmentApi.feedback(id);
     if (!valid(token, id)) return;
-    apply(result, preserve); baseInterviewVersion.value = version; conflict.value = false;
-  } catch (cause) { if (valid(token, id)) { error.value = recruitmentError(cause); loadFailed.value = true; } }
+    apply(result, preserve); conflict.value = false;
+  } catch (cause) {
+    if (valid(token, id)) {
+      error.value = recruitmentError(cause); loadFailed.value = true;
+      const status = (cause as { response?: { status: number } }).response?.status;
+      if (status === 403 || status === 404) { data.value = null; conflict.value = false; }
+    }
+  }
   finally { if (valid(token, id)) loading.value = false; }
 }
 watch(() => props.interviewId, () => {
@@ -42,12 +48,12 @@ watch(() => props.interviewVersion, () => {
 });
 onBeforeUnmount(() => { ++session; });
 async function save(submit: boolean) {
-  if (!canEdit.value || busy.value) return;
+  if (!data.value || !canEdit.value || loading.value || loadFailed.value || conflict.value || busy.value) return;
   fieldErrors.outcome = submit && !form.outcome ? '请选择面试结论' : '';
   fieldErrors.summary = submit && !form.summary.trim() ? '请填写面试意见' : '';
   if (fieldErrors.outcome || fieldErrors.summary) return;
   const token = session, id = props.interviewId;
-  const body = { interviewVersion: baseInterviewVersion.value, expectedRevision: data.value?.own?.revision ?? 0, outcome: form.outcome || undefined, summary: form.summary.trim(), submit };
+  const body = { interviewVersion: data.value.interviewVersion, expectedRevision: data.value.own?.revision ?? 0, outcome: form.outcome || undefined, summary: form.summary.trim(), submit };
   busy.value = true; error.value = '';
   try {
     const result = await talentRecruitmentApi.saveFeedback(id, body);
@@ -58,13 +64,13 @@ async function save(submit: boolean) {
 }
 function beginReturn(item: TalentInterviewFeedbackView) { returningId.value = item.userId; returnNote.value = ''; returnError.value = ''; error.value = ''; }
 async function returnFeedback(item: TalentInterviewFeedbackView) {
-  if (!data.value?.canReturn || busy.value || item.status !== 'submitted') return;
+  if (!data.value?.canReturn || loading.value || loadFailed.value || conflict.value || busy.value || item.status !== 'submitted') return;
   returnError.value = returnNote.value.trim() ? '' : '请填写退回原因';
   if (returnError.value) return;
   const token = session, id = props.interviewId;
   busy.value = true; error.value = '';
   try {
-    const result = await talentRecruitmentApi.returnFeedback(id, item.userId, { interviewVersion: baseInterviewVersion.value, expectedRevision: item.revision, note: returnNote.value.trim() });
+    const result = await talentRecruitmentApi.returnFeedback(id, item.userId, { interviewVersion: data.value.interviewVersion, expectedRevision: item.revision, note: returnNote.value.trim() });
     if (!valid(token, id)) return;
     apply(result, dirty.value); returningId.value = ''; conflict.value = false;
   } catch (cause) { if (valid(token, id)) { error.value = recruitmentError(cause); conflict.value = (cause as { response?: { status: number } }).response?.status === 409; } }
@@ -74,7 +80,7 @@ async function returnFeedback(item: TalentInterviewFeedbackView) {
 
 <template>
   <section v-loading="loading" class="interview-feedback">
-    <header><h4>本人反馈</h4><el-tooltip content="刷新反馈"><el-button :icon="Refresh" aria-label="刷新反馈" size="small" :disabled="busy || dirty || !!returningId" @click="load()" /></el-tooltip></header>
+    <header><h4>本人反馈</h4><el-tooltip content="刷新反馈"><el-button :icon="Refresh" aria-label="刷新反馈" size="small" :disabled="busy || loading" @click="load(dirty || !!returningId)" /></el-tooltip></header>
     <el-alert v-if="error" :title="error" type="error" :closable="false">
       <el-button v-if="conflict" link type="primary" @click="load(true)">刷新反馈，保留输入</el-button>
       <el-button v-else-if="loadFailed" link type="primary" @click="load(dirty)">重试</el-button>
@@ -82,7 +88,7 @@ async function returnFeedback(item: TalentInterviewFeedbackView) {
     <el-form v-if="canEdit" label-position="top" :disabled="busy" class="interview-feedback__form">
       <el-form-item label="面试结论" :error="fieldErrors.outcome"><el-radio-group v-model="form.outcome" @change="dirty = true"><el-radio-button v-for="(label, value) in FEEDBACK_OUTCOME_LABELS" :key="value" :value="value">{{ label }}</el-radio-button></el-radio-group></el-form-item>
       <el-form-item label="面试意见" :error="fieldErrors.summary"><el-input v-model="form.summary" type="textarea" :rows="4" maxlength="4000" show-word-limit @input="dirty = true" /></el-form-item>
-      <div class="interview-feedback__actions"><el-button :loading="busy" @click="save(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="save(true)">提交反馈</el-button></div>
+      <div class="interview-feedback__actions"><el-button :loading="busy" :disabled="conflict || loadFailed || loading" @click="save(false)">保存草稿</el-button><el-button type="primary" :loading="busy" :disabled="conflict || loadFailed || loading" @click="save(true)">提交反馈</el-button></div>
     </el-form>
     <div v-else-if="data?.own" class="interview-feedback__record">
       <div>{{ data.own.status === 'submitted' ? '已提交' : '草稿（当前不可修改）' }} · {{ data.own.outcome ? FEEDBACK_OUTCOME_LABELS[data.own.outcome] : '未填写结论' }}<span v-if="data.own.submittedAt"> · {{ formatDate(data.own.submittedAt) }}</span></div>
@@ -90,15 +96,19 @@ async function returnFeedback(item: TalentInterviewFeedbackView) {
       <el-button v-if="data.canReturn && data.own.status === 'submitted' && !returningId" size="small" @click="beginReturn(data.own)">退回反馈</el-button>
     </div>
     <p v-else-if="data" class="interview-feedback__muted">暂无本人反馈</p>
+    <div v-if="data && dirty && !canEdit" class="interview-feedback__record">
+      <strong>当前已不能提交，以下为本页保留的输入</strong>
+      <p v-if="form.outcome">{{ FEEDBACK_OUTCOME_LABELS[form.outcome] }}</p><p v-if="form.summary">{{ form.summary }}</p>
+    </div>
     <h4 v-if="otherFeedback.length">面试反馈</h4>
     <div v-for="item in otherFeedback" :key="item.userId" class="interview-feedback__record">
       <header><strong>{{ item.userName || '面试参与人' }}</strong><span>{{ item.status === 'submitted' ? '已提交' : '草稿' }} · {{ item.outcome ? FEEDBACK_OUTCOME_LABELS[item.outcome] : '未填写结论' }}</span></header>
       <p>{{ item.summary || '未填写意见' }}</p>
       <el-button v-if="data?.canReturn && item.status === 'submitted' && !returningId" size="small" :disabled="busy" @click="beginReturn(item)">退回反馈</el-button>
     </div>
-    <el-form v-if="returningId" label-position="top" :disabled="busy" class="interview-feedback__return">
+    <el-form v-if="returningId && data" label-position="top" :disabled="busy" class="interview-feedback__return">
       <el-form-item label="退回原因" required :error="returnError"><el-input v-model="returnNote" type="textarea" :rows="2" maxlength="2000" /></el-form-item>
-      <div class="interview-feedback__actions"><el-button @click="returningId = ''">取消退回</el-button><el-button type="primary" :loading="busy" :disabled="!data?.canReturn || data?.items.find(item => item.userId === returningId)?.status !== 'submitted'" @click="returnFeedback(data!.items.find(item => item.userId === returningId)!)">退回修改</el-button></div>
+      <div class="interview-feedback__actions"><el-button @click="returningId = ''">取消退回</el-button><el-button type="primary" :loading="busy" :disabled="conflict || loadFailed || loading || !data?.canReturn || data?.items.find(item => item.userId === returningId)?.status !== 'submitted'" @click="returnFeedback(data!.items.find(item => item.userId === returningId)!)">退回修改</el-button></div>
     </el-form>
     <el-collapse v-if="histories.length" class="interview-feedback__history">
       <el-collapse-item v-for="item in histories" :key="item.userId" :name="item.userId" :title="`${item.userName || '本人'} · 历史反馈（${item.history!.length}）`">

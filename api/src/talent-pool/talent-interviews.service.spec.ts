@@ -41,6 +41,13 @@ function pauseLock(prisma: ReturnType<typeof setup>['prisma'], table: string) {
 }
 
 describe('talent interview safety and access', () => {
+  it('displays only the linked position and batch to talent readers, including explicit unlinked invitations', async () => {
+    const application = { positionName: 'Synthetic role', recruitmentBatch: 'Round 1' };
+    const { sut } = setup({ applicationId: 'application', application });
+    await expect(sut.detail('invite', reviewer)).resolves.toMatchObject({ application });
+    expect(await sut.detail('invite', employee)).not.toHaveProperty('application');
+    await expect(setup({ applicationId: null, application: null }).sut.detail('invite', hr)).resolves.toMatchObject({ application: null });
+  });
   it.each([
     ['create', null], ['create', 'application'], ['update', null], ['update', 'application'],
     ['cancel', null], ['cancel', 'application'], ['complete', null], ['complete', 'application'],

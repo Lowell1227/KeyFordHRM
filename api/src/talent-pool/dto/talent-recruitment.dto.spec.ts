@@ -3,6 +3,15 @@ import { validateSync } from 'class-validator';
 import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './talent-recruitment.dto';
 
 describe('recruitment DTO contract', () => {
+  it('accepts an optional creation UUID only when opening a new application', () => {
+    const options = { whitelist: true, forbidNonWhitelisted: true };
+    const requestId = '880648a3-ddd2-44eb-8bc2-630a2484445c';
+    for (const input of [{ positionName: 'Synthetic' }, { positionName: 'Synthetic', requestId }]) {
+      expect(validateSync(plainToInstance(CreateTalentApplicationDto, input), options)).toEqual([]);
+    }
+    expect(validateSync(plainToInstance(CreateTalentApplicationDto, { positionName: 'Synthetic', requestId: 'invalid' }), options)).not.toEqual([]);
+    expect(validateSync(plainToInstance(UpdateTalentApplicationDto, { expectedRevision: 0, requestId }), options)).not.toEqual([]);
+  });
   it('allows optional standard reserve reasons and rejects unknown, duplicate, non-array and oversized inputs', () => {
     const options = { whitelist: true, forbidNonWhitelisted: true };
     const body = { expectedRevision: 0, action: 'reserve' };

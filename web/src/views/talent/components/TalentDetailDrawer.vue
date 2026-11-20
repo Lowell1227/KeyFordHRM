@@ -14,6 +14,7 @@ import {
   type TalentCandidateDetail,
   type TalentTag,
   type TalentDeleteImpact,
+  type TalentQuery,
   INTERVIEW_STATUS_LABELS,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
@@ -31,12 +32,13 @@ const { canEdit } = useTalentPermissions();
 
 /**
  * 候选人详情抽屉（需求 §5.3）。
- * 头部操作：编辑 / 标记淘汰 / 删除（软删除二次确认）；转发与办理入职由父页补充。
+ * 头部操作：编辑 / 设置人才状态 / 删除（软删除二次确认）；转发与办理入职由父页补充。
  */
 
 const props = defineProps<{
   modelValue: boolean;
   candidateId: string | null;
+  applicationMatch?: { id: string } & Pick<TalentQuery, 'applicationPosition' | 'applicationStage'>;
 }>();
 
 const emit = defineEmits<{
@@ -118,17 +120,17 @@ async function markRejected() {
   const target = detail.value;
   const token = session;
   try { await ElMessageBox.confirm(
-    `把「${target.name}」标记为已淘汰？如需说明原因，建议先在编辑页写好备注。`,
-    '标记淘汰',
-    { confirmButtonText: '标记淘汰', cancelButtonText: '取消', type: 'warning' },
+    `将「${target.name}」的人才库状态设为已淘汰？各条应聘记录分别处理。`,
+    '设置人才状态',
+    { confirmButtonText: '设为已淘汰', cancelButtonText: '取消', type: 'warning' },
   ); } catch { return; }
   if (!active(target.id, token)) return;
   rejecting.value = true; actionError.value = '';
   try {
     await talentPoolApi.update(target.id, { status: 'rejected', editVersion: target.editVersion });
     if (!active(target.id, token)) return;
-    ElMessage.success('已标记为已淘汰'); emit('changed'); await loadDetail();
-  } catch { if (active(target.id, token)) actionError.value = '标记淘汰失败，请核对当前记录后重试。'; }
+    ElMessage.success('人才库状态已设为已淘汰'); emit('changed'); await loadDetail();
+  } catch { if (active(target.id, token)) actionError.value = '设置人才状态失败，请核对当前记录后重试。'; }
   finally { if (active(target.id, token)) rejecting.value = false; }
 }
 
@@ -198,7 +200,7 @@ function onShareChanged(context: { candidateId: string; session: number }) {
         <div class="talent-detail__badges">
           <el-tag :type="TALENT_STATUS_TAG[detail.status].type"
             :effect="TALENT_STATUS_TAG[detail.status].effect ?? 'light'" size="small">
-            {{ TALENT_STATUS_LABELS[detail.status] }}
+            人才库状态：{{ TALENT_STATUS_LABELS[detail.status] }}
           </el-tag>
           <el-tag v-if="detail.employmentStatus" data-testid="talent-current-employment" size="small" effect="plain"
             :type="detail.employmentStatus === 'resigned' || detail.employmentStatus === 'unknown' ? 'warning' : 'info'">
@@ -212,7 +214,7 @@ function onShareChanged(context: { candidateId: string; session: number }) {
           <el-button size="small" plain @click="openShare">转发</el-button>
           <el-button size="small" @click="startEdit">编辑</el-button>
           <el-button v-if="detail.status !== 'rejected' && detail.status !== 'hired'" size="small" type="warning"
-            plain :loading="rejecting" @click="markRejected">标记淘汰</el-button>
+            plain :loading="rejecting" @click="markRejected">设置人才状态</el-button>
           <el-button size="small" type="danger" plain :loading="impactLoading" @click="removeCandidate">删除</el-button>
         </div>
       </div>
@@ -260,7 +262,7 @@ function onShareChanged(context: { candidateId: string; session: number }) {
       <h4 class="talent-detail__section-title">简历文件（{{ detail.files.length }}）</h4>
       <TalentFileList :candidate-id="detail.id" :files="detail.files" :editable="canEdit" @changed="loadDetail" />
 
-      <TalentApplicationPanel :key="detail.id" :candidate-id="detail.id" :editable="canEdit" :converted-user-id="detail.convertedUserId" @changed="onFollowUpChanged" @interview="(id: string) => interviewPanel?.openForApplication(id)" />
+      <TalentApplicationPanel :key="detail.id" :candidate-id="detail.id" :application-match="applicationMatch" :editable="canEdit" :converted-user-id="detail.convertedUserId" @changed="onFollowUpChanged" @interview="application => interviewPanel?.openForApplication(application)" />
       <TalentInterviewPanel ref="interviewPanel" :key="detail.id" :candidate-id="detail.id" :editable="canEdit" @changed="onFollowUpChanged" />
 
       <h4 class="talent-detail__section-title">跟进</h4>

@@ -270,9 +270,9 @@ test('real CAS: stale input survives 409 and cancelled reload; explicit reload r
 
 test('real detail rejection carries the baseline that was read', async ({ fixture: f, sessions }, info) => {
   const page = await sessions.open(), { drawer, row } = await openTalent(page, f);
-  await drawer.getByRole('button', { name: '标记淘汰', exact: true }).click();
+  await drawer.getByRole('button', { name: '设置人才状态', exact: true }).click();
   const response = responseFor(page, f.candidate.id, 'PATCH');
-  await page.getByRole('dialog', { name: '标记淘汰', exact: true }).getByRole('button', { name: '标记淘汰', exact: true }).click();
+  await page.getByRole('dialog', { name: '设置人才状态', exact: true }).getByRole('button', { name: '设为已淘汰', exact: true }).click();
   const rejected = await response;
   expect(rejected.status()).toBe(200);
   expect(rejected.request().postDataJSON()).toEqual({ status: 'rejected', editVersion: row.editVersion });

@@ -1,3 +1,4 @@
+import { cancelledFirstHireIdentity } from './cancelled-first-hire-identity';
 import { normalizeEmployeePosition, requireEmployeePosition } from './employee-position-reference';
 import { assertSubmittedEmployeeCompany, normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
@@ -171,11 +172,21 @@ export class EmployeeArchivesService {
       await validatePersonnelReferences(tx, proposedValue, { employee: referenceBase });
       proposedValue.referenceSnapshotVersion = 1;
       assertValidContractChanges(proposedValue.contracts as Record<string, unknown>[]);
+      const firstHireIdentity = await cancelledFirstHireIdentity(tx, talentCandidateId, talentApplicationId, input.draftId,
+        this.record(proposedValue.employee), this.record(proposedValue.profile));
+      const previousIdentity = this.record(this.record(savedDraft?.baseValue).firstHireIdentity);
+      if (previousIdentity.userId && previousIdentity.userId !== firstHireIdentity?.userId) throw new ConflictException('原待入职身份已变化，请核对原档案');
+      if (firstHireIdentity?.issue) throw new ConflictException(firstHireIdentity.issue);
+      const requiresArrivalConfirmation = !(input.employeeStatus === UserStatus.resigned || (input.effectiveTo && input.effectiveTo < shanghaiBusinessDate()));
+      if (firstHireIdentity && (!requiresArrivalConfirmation || !(['active', 'probation'] as UserStatus[]).includes(input.employeeStatus))) {
+        throw new ConflictException('此待入职身份须按本次录用办理首次入职并确认到岗');
+      }
       await this.assertEmployeeCreateIdentity(
         tx,
         proposedValue,
         input.phoneDuplicateAcknowledged,
         input.draftId,
+        firstHireIdentity?.userId,
       );
       const performanceManagerId = this.nullableString(
         this.record(proposedValue.performance).managerId,
@@ -187,10 +198,11 @@ export class EmployeeArchivesService {
           sourceType: 'manual_employee_create',
           intakeType: 'new_hire',
           onboardingStatus: 'submitted',
-          requiresArrivalConfirmation: !(input.employeeStatus === UserStatus.resigned || (input.effectiveTo && input.effectiveTo < shanghaiBusinessDate())),
+          requiresArrivalConfirmation,
           talentCandidateId,
           talentApplicationId,
           baseValue: this.toJson({
+            ...(firstHireIdentity ? { firstHireIdentity } : {}),
             employee: {},
             profile: {},
             profileExists: false,
@@ -257,7 +269,8 @@ export class EmployeeArchivesService {
     try {
       return await this.prisma.$transaction(run, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
-      if (['P2025', 'P2034'].includes(String(this.record(error).code))) {
+      const { code, meta } = this.record(error);
+      if (['P2025', 'P2034'].includes(String(code)) || (code === 'P2010' && ['40001', '40P01'].includes(String(this.record(meta).code)))) {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '资料已变化，请保留当前输入并重新打开最新草稿核对' });
       }
       throw error;
@@ -312,6 +325,10 @@ export class EmployeeArchivesService {
       await this.normalizeSubjectPayload(tx, proposed, {}, this.record(savedDraft?.proposedValue));
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
       const talentApplicationId = await resolveTalentApplicationSource(tx, talentCandidateId, input.talentApplicationId, savedDraft as any);
+      const firstHireIdentity = await cancelledFirstHireIdentity(tx, talentCandidateId, talentApplicationId, input.draftId,
+        this.record(proposed.employee), this.record(proposed.profile));
+      const previousIdentity = this.record(this.record(savedDraft?.baseValue).firstHireIdentity);
+      if (previousIdentity.userId && previousIdentity.userId !== firstHireIdentity?.userId) throw new ConflictException('原待入职身份已变化，请核对原档案');
       const proposedValue = this.toJson(proposed);
       const performanceManagerId = this.nullableString(
         this.record(proposed.performance).managerId,
@@ -328,7 +345,7 @@ export class EmployeeArchivesService {
         talentCandidateId,
         talentApplicationId,
         ...(savedDraft?.sourceSystem === 'archive_assistant_pilot' ? {} : {
-          baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
+          baseValue: this.toJson({ ...(firstHireIdentity ? { firstHireIdentity } : {}), employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
         }),
         proposedValue,
         profileReviewStatus: 'pending',
@@ -518,6 +535,7 @@ export class EmployeeArchivesService {
     proposedValue: Record<string, unknown>,
     phoneDuplicateAcknowledged = false,
     excludedRequestId?: string,
+    reusableUserId?: string,
   ): Promise<void> {
     const employee = this.record(proposedValue.employee);
     const profile = this.record(proposedValue.profile);
@@ -535,10 +553,11 @@ export class EmployeeArchivesService {
         idNumberFingerprint: idNumberFingerprint ?? undefined,
         excludeRequestId: excludedRequestId,
       });
-      if (identity.outcome === 'identity_match' || identity.outcome === 'conflict') {
+      const matchesOnlyOriginal = reusableUserId && identity.candidates.length === 1 && identity.candidates[0].id === reusableUserId;
+      if ((identity.outcome === 'identity_match' && !matchesOnlyOriginal) || identity.outcome === 'conflict') {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '发现已存在员工，请进入原档案处理再入职或资料维护' });
       }
-      if (identity.outcome === 'phone_candidates' && !phoneDuplicateAcknowledged) {
+      if (identity.outcome === 'phone_candidates' && !matchesOnlyOriginal && (reusableUserId || !phoneDuplicateAcknowledged)) {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该手机号与已有员工相同，请确认不是同一人后再继续' });
       }
     }

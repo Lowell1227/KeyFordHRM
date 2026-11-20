@@ -5,9 +5,10 @@ import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
-import { canWriteRecruitment, isApplicationOpenForInterview } from './talent-recruitment-policy';
+import { canReadRecruitment, canWriteRecruitment, isApplicationOpenForInterview } from './talent-recruitment-policy';
 
-const include = { participants: { orderBy: { userId: 'asc' as const } }, candidate: { select: { deletedAt: true } } } satisfies Prisma.TalentInterviewInclude;
+const include = { participants: { orderBy: { userId: 'asc' as const } }, candidate: { select: { deletedAt: true } },
+  application: { select: { positionName: true, recruitmentBatch: true } } } satisfies Prisma.TalentInterviewInclude;
 type Interview = Prisma.TalentInterviewGetPayload<{ include: typeof include }>;
 
 export function safeTencentMeetingUrl(input?: string | null): string | null {
@@ -52,12 +53,13 @@ export class TalentInterviewsService {
       : query.candidateId && query.scope !== 'mine'
       ? { candidateId: query.candidateId }
       : { participants: { some: { userId: user.id } } };
-    const rows = await this.prisma.talentInterview.findMany({ where, include, orderBy: [{ startsAt: 'desc' }, { id: 'asc' }] });
+    const rows = await this.prisma.talentInterview.findMany({ where, include: { ...include, application: canReadRecruitment(user) && include.application },
+      orderBy: [{ startsAt: 'desc' }, { id: 'asc' }] });
     return rows.map((row) => this.view(row, user));
   }
 
   async detail(id: string, user: AuthUser) {
-    const row = await this.prisma.talentInterview.findUnique({ where: { id }, include });
+    const row = await this.prisma.talentInterview.findUnique({ where: { id }, include: { ...include, application: canReadRecruitment(user) && include.application } });
     if (!row || (!this.canReadTalent(user) && !row.participants.some((p) => p.userId === user.id))) {
       throw new NotFoundException('面试邀约不存在或无权查看');
     }
@@ -73,6 +75,7 @@ export class TalentInterviewsService {
     };
     if (!this.canReadTalent(user)) return minimal;
     return { ...minimal, candidateId: row.candidateId, applicationId: row.applicationId ?? null,
+      ...(canReadRecruitment(user) ? { application: row.application ?? null } : {}),
       participants: row.participants.map(({ userId, userNameSnapshot }) => ({ userId, userNameSnapshot })),
       syncStatus: row.syncStatus, calendarSyncedVersion: row.calendarSyncedVersion };
   }

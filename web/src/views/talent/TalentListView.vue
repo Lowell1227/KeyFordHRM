@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { usePagination } from '@/composables/usePagination';
 import { useExport } from '@/composables/useExport';
@@ -41,6 +41,9 @@ const { loading: exporting, download } = useExport();
 const detailVisible = ref(false);
 const formVisible = ref(false);
 const activeCandidateId = ref<string | null>(null);
+const applicationFilters = ref<Pick<TalentQuery, 'applicationPosition' | 'applicationStage'>>({});
+const hasApplicationFilter = computed(() => Boolean(applicationFilters.value.applicationPosition || applicationFilters.value.applicationStage));
+const activeApplicationMatch = ref<({ id: string } & typeof applicationFilters.value) | undefined>();
 const filters = reactive({
   keyword: '',
   status: '' as TalentStatus | '',
@@ -88,8 +91,10 @@ async function loadList() {
   loading.value = true;
   loadError.value = '';
   try {
-    const res = await talentPoolApi.list(withParams({ ...currentFilters() }));
+    const query = currentFilters();
+    const res = await talentPoolApi.list(withParams({ ...query }));
     if (id !== requestId) return;
+    applicationFilters.value = { applicationPosition: query.applicationPosition, applicationStage: query.applicationStage };
     list.value = res.items;
     total.value = res.total;
   } catch {
@@ -108,9 +113,13 @@ function openCreate() {
   activeCandidateId.value = null;
   formVisible.value = true;
 }
-function openDetail(id: string) {
+function openDetail(id: string, applicationId?: string) {
   activeCandidateId.value = id;
+  activeApplicationMatch.value = applicationId && hasApplicationFilter.value ? { id: applicationId, ...applicationFilters.value } : undefined;
   detailVisible.value = true;
+}
+function openRow(row: TalentCandidateListItem) {
+  openDetail(row.id, row.latestApplication?.id);
 }
 function openEdit(id: string) {
   if (!canEdit.value) return;
@@ -159,7 +168,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         <el-select v-model="filters.applicationStage" aria-label="应聘阶段" data-testid="talent-filter-application-stage" class="talent-filter-bar__select" clearable placeholder="应聘阶段" @change="onSearch">
           <el-option v-for="(label, stage) in APPLICATION_STAGE_LABELS" :key="stage" :label="label" :value="stage" />
         </el-select>
-        <el-select v-model="filters.status" aria-label="人才状态" data-testid="talent-filter-status" class="talent-filter-bar__select" clearable placeholder="人才状态" @change="onSearch">
+        <el-select v-model="filters.status" aria-label="人才库状态" data-testid="talent-filter-status" class="talent-filter-bar__select" clearable placeholder="人才库状态" @change="onSearch">
           <el-option v-for="s in TALENT_STATUSES" :key="s" :label="TALENT_STATUS_LABELS[s]" :value="s" />
         </el-select>
         <el-select v-model="filters.source" data-testid="talent-filter-source" class="talent-filter-bar__select" clearable placeholder="来源" @change="onSearch">
@@ -194,7 +203,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
 
     <template #desktop-list>
       <el-table v-loading="loading" class="app-table" :data="list" height="100%" :empty-text="EMPTY_TEXT"
-        @row-click="(row: unknown) => openDetail(asRow(row).id)">
+        @row-click="(row: unknown) => openRow(asRow(row))">
         <el-table-column label="姓名" min-width="110" fixed>
           <template #default="{ row }">
             <div class="talent-name-cell">
@@ -205,7 +214,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         </el-table-column>
         <el-table-column prop="phone" label="手机" width="120" />
         <el-table-column prop="ownerName" label="负责人" min-width="100" show-overflow-tooltip><template #default="{ row }">{{ asRow(row).ownerName || '未指定' }}</template></el-table-column>
-        <el-table-column :label="filters.applicationPosition || filters.applicationStage ? '匹配应聘' : '最新应聘'" min-width="180" show-overflow-tooltip><template #default="{ row }"><span v-if="asRow(row).latestApplication">{{ asRow(row).latestApplication?.positionName }} · {{ APPLICATION_STAGE_LABELS[asRow(row).latestApplication!.stage] }}</span><span v-else>暂无应聘</span></template></el-table-column>
+        <el-table-column :label="hasApplicationFilter ? '匹配应聘' : '最新应聘'" min-width="180" show-overflow-tooltip><template #default="{ row }"><span v-if="asRow(row).latestApplication">{{ asRow(row).latestApplication?.positionName }} · {{ APPLICATION_STAGE_LABELS[asRow(row).latestApplication!.stage] }}</span><span v-else>暂无应聘</span></template></el-table-column>
         <el-table-column prop="appliedPosition" label="意向岗位" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.appliedPosition || '—' }}</template>
         </el-table-column>
@@ -228,7 +237,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         <el-table-column label="来源" width="100">
           <template #default="{ row }">{{ TALENT_SOURCE_LABELS[asRow(row).sourceChannel] }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="人才库状态" width="110">
           <template #default="{ row }">
             <div class="talent-status-cell">
             <el-tag :type="TALENT_STATUS_TAG[asRow(row).status].type" :effect="TALENT_STATUS_TAG[asRow(row).status].effect ?? 'light'" size="small">
@@ -246,7 +255,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         </el-table-column>
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click.stop="openDetail(asRow(row).id)">打开</el-button>
+            <el-button link type="primary" @click.stop="openRow(asRow(row))">打开</el-button>
             <el-button v-if="canEdit" link type="primary" @click.stop="openEdit(asRow(row).id)">编辑</el-button>
           </template>
         </el-table-column>
@@ -267,14 +276,14 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           ['岗位', item.appliedPosition || item.currentPosition || '—'],
           ['手机', item.phone],
           ['负责人', item.ownerName || '未指定'],
-          [filters.applicationPosition || filters.applicationStage ? '匹配应聘' : '最新应聘', item.latestApplication ? `${item.latestApplication.positionName} · ${APPLICATION_STAGE_LABELS[item.latestApplication.stage]}` : '暂无应聘'],
+          [hasApplicationFilter ? '匹配应聘' : '最新应聘', item.latestApplication ? `${item.latestApplication.positionName} · ${APPLICATION_STAGE_LABELS[item.latestApplication.stage]}` : '暂无应聘'],
           ['下次跟进', formatFollowUpDate(item.nextFollowUpAt)],
         ]" :key="field[0]" class="mobile-result-field">
           <span class="mobile-result-field__label">{{ field[0] }}</span>
           <span class="mobile-result-field__value">{{ field[1] }}</span>
         </div>
         <template #actions>
-          <el-button link type="primary" @click="openDetail(item.id)">打开详情</el-button>
+          <el-button link type="primary" @click="openRow(item)">打开详情</el-button>
         </template>
       </MobileResultCard>
     </template>
@@ -284,7 +293,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
     </template>
 
     <template #detail>
-      <TalentDetailDrawer v-model="detailVisible" :candidate-id="activeCandidateId"
+      <TalentDetailDrawer v-model="detailVisible" :candidate-id="activeCandidateId" :application-match="activeApplicationMatch"
         @edit="openEdit" @removed="onRemoved" @changed="loadList" />
       <TalentFormDrawer v-model="formVisible" :candidate-id="activeCandidateId"
         @saved="onSaved" @open-existing="openDetail" />

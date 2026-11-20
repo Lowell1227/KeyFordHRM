@@ -65,6 +65,8 @@ const saveError = ref('');
 const currentStep = ref(0);
 const draftId = ref<string>();
 const draftVersion = ref<number>();
+const firstHireIdentity = ref<{ userId: string; issue: string; sameApplication: boolean }>();
+const replacementIdentity = computed(() => firstHireIdentity.value?.sameApplication ? undefined : firstHireIdentity.value);
 const sourceTalentId = ref<string>();
 const sourceTalentApplicationId = ref<string>();
 const saveBlocked = ref(false);
@@ -161,7 +163,8 @@ const contractDateErrors = computed(() => Object.fromEntries(form.contracts.flat
   Object.entries(validateContractDates(contract)).map(([field, error]) => [`contracts.${index}.${field}`, error]))));
 
 const hasBlockingIdentityMatch = computed(() => (
-  identityResult.value?.outcome === 'identity_match' || identityResult.value?.outcome === 'conflict'
+  identityResult.value?.outcome === 'conflict' || (identityResult.value?.outcome === 'identity_match'
+    && !identityResult.value.candidates.every(item => replacementIdentity.value && item.id === replacementIdentity.value.userId))
 ));
 const saveStateLabel = computed(() => ({
   idle: form.name.trim() ? '待暂存' : '填写后自动暂存',
@@ -212,6 +215,7 @@ function reset() {
   const profile = proposed.profile ?? {};
   const performance = proposed.performance ?? {};
   const draftMeta = proposed.draftMeta ?? {};
+  firstHireIdentity.value = props.draft?.baseValue?.firstHireIdentity;
   draftId.value = props.draft?.id;
   draftVersion.value = props.draft?.requestVersion;
   sourceTalentId.value = props.draft ? props.draft.talentCandidateId ?? undefined : props.talentCandidateId;
@@ -569,6 +573,7 @@ async function persistDraft() {
     try {
       const request = await employeeArchivesApi.saveEmployeeCreateDraft({ ...requestBody(), saveMode: 'auto' });
       if (session !== generation || !props.modelValue) return false;
+      firstHireIdentity.value = request.baseValue?.firstHireIdentity;
       draftId.value = request.id;
       draftVersion.value = request.requestVersion;
       lastSavedSnapshot = snapshot;
@@ -667,11 +672,14 @@ async function validateStep(step: number, recheckIdentity = false): Promise<bool
     return false;
   }
   if (step === 0) {
+    if (sourceTalentApplicationId.value && !await persistDraft()) return false;
     const identityChecked = !canLookupIdentity() || await lookupIdentity(recheckIdentity);
     if (session !== generation || !props.modelValue) return false;
     if (!identityChecked) { currentStep.value = 0; return false; }
-    if (hasBlockingIdentityMatch.value) fieldErrors.identity = '已找到现有员工，请从匹配结果进入原档案处理';
-    else if (identityResult.value?.outcome === 'phone_candidates' && !phoneDuplicateAcknowledged.value) fieldErrors.identity = '请先核对手机号匹配结果';
+    if (replacementIdentity.value?.issue) fieldErrors.identity = replacementIdentity.value.issue;
+    else if (hasBlockingIdentityMatch.value) fieldErrors.identity = '已找到现有员工，请从匹配结果进入原档案处理';
+    else if (replacementIdentity.value && identityResult.value?.candidates.some(item => item.id !== replacementIdentity.value!.userId)) fieldErrors.identity = '匹配到其他员工或申请，请核对原档案的身份资料';
+    else if (!replacementIdentity.value && identityResult.value?.outcome === 'phone_candidates' && !phoneDuplicateAcknowledged.value) fieldErrors.identity = '请先核对手机号匹配结果';
     if (fieldErrors.identity) { currentStep.value = 0; await focusInvalidField('identity'); return false; }
   }
   if (!validatedSteps.value.includes(step)) validatedSteps.value.push(step);
@@ -842,7 +850,11 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer
             :disabled="savingAction === 'submit' || identityLoading"
             @select="openNamedReentryCandidate"
           />
-          <div v-if="identityResult?.outcome === 'conflict'" class="identity-result identity-result--danger">手机号与身份证号对应不同员工，请核对后再提交。</div>
+          <div v-if="replacementIdentity" class="identity-result" role="status">
+            <strong>沿用原待入职档案办理本次首次入职</strong>
+            <div>{{ replacementIdentity.issue || '原首次入职已取消。本次应聘将单独提交审核，审核通过后由 HR 确认到岗。' }}</div>
+          </div>
+          <div v-else-if="identityResult?.outcome === 'conflict'" class="identity-result identity-result--danger">手机号与身份证号对应不同员工，请核对后再提交。</div>
           <div v-else-if="identityResult?.candidates.length" class="identity-result">
             <strong>{{ identityResult.outcome === 'identity_match' ? '已找到现有员工档案' : '手机号与以下档案相同' }}</strong>
             <div v-for="candidate in identityResult.candidates" :key="candidate.id" class="identity-candidate">

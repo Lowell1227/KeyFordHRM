@@ -2312,6 +2312,8 @@ model TalentInterview {
 
 model TalentApplication {
   id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requestId              String?   @unique @map("request_id") @db.Uuid
+  creationFingerprint    String?   @map("creation_fingerprint") @db.Char(64)
   candidateId            String    @map("candidate_id") @db.Uuid
   positionName           String    @map("position_name") @db.VarChar(100)
   recruitmentBatch       String?   @map("recruitment_batch") @db.VarChar(100)
