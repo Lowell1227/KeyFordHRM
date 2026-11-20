@@ -592,7 +592,7 @@ async function persistDraft() {
   saveState.value = 'saving';
   const save = (async () => {
     try {
-      const request = await employeeArchivesApi.saveEmployeeCreateDraft({ ...requestBody(), saveMode: 'auto' });
+      const request = await employeeArchivesApi.saveEmployeeCreateDraft({ ...requestBody(), saveMode: 'auto' }, { skipErrorMessage: true });
       if (session !== generation || !props.modelValue) return false;
       firstHireIdentity.value = request.baseValue?.firstHireIdentity;
       draftId.value = request.id;

@@ -399,8 +399,8 @@ export const employeeArchivesApi = {
     return http.post('/employee-archives', body) as unknown as Promise<EmployeeDataReview>;
   },
 
-  saveEmployeeCreateDraft(body: EmployeeCreateDraftPayload): Promise<EmployeeDataReview> {
-    return http.post('/employee-archives/drafts', body) as unknown as Promise<EmployeeDataReview>;
+  saveEmployeeCreateDraft(body: EmployeeCreateDraftPayload, options?: { skipErrorMessage: boolean }): Promise<EmployeeDataReview> {
+    return http.post('/employee-archives/drafts', body, options) as unknown as Promise<EmployeeDataReview>;
   },
 
   listDrafts(params: { page?: number; pageSize?: number } = {}): Promise<EmployeeDraftPage> {

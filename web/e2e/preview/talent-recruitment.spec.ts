@@ -268,9 +268,15 @@ for (const restoreEarlier of [false, true]) test(restoreEarlier
         await openTalent(page, name, mobile);
         await panel.locator('.el-select').filter({ has: page.getByRole('combobox', { name: '选择应聘记录' }) }).click();
         await page.getByRole('option', { name: new RegExp('^' + positionName) }).click();
+        await page.evaluate(() => {
+          new MutationObserver(() => {
+            if (document.querySelector('.el-message--error')) document.documentElement.dataset.sawDraftErrorToast = 'yes';
+          }).observe(document, { childList: true, subtree: true });
+        });
         await panel.getByRole('button', { name: '办理入职', exact: true }).click();
         await expect(processing.getByRole('button', { name: '重新办理入职', exact: true })).toBeVisible();
         await expect(page).toHaveURL(new RegExp('requestId=' + reqId));
+        expect(await page.locator('html').getAttribute('data-saw-draft-error-toast')).toBeNull();
       }
       await processing.getByRole('button', { name: '重新办理入职', exact: true }).click();
       const resubmitted = response(page, 'PATCH', '/employee-archives/applications/' + first.id + '/arrival-date');

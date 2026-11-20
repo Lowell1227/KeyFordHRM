@@ -263,13 +263,16 @@ test('new first-hire business conflicts keep inputs retryable while a saved draf
   const issue = '原身份已有任职、工号、到岗记录或其他办理申请，请先核对原档案';
   await page.route('**/employee-archives/drafts', route => {
     saves++;
-    if (saves === 2) return route.fulfill(envelope({ id: 'saved-draft', requestVersion: 1, baseValue: {} }));
+    if (saves === 2) return route.fulfill({ status: 503, json: { message: '暂存服务不可用' } });
+    if (saves === 3) return route.fulfill(envelope({ id: 'saved-draft', requestVersion: 1, baseValue: {} }));
     return route.fulfill({ status: 409, json: { message: saves === 1 ? issue : '草稿已变化或已提交，请保留当前输入并重新打开最新草稿核对' } });
   });
   await page.goto('/entry-exit?talentId=' + candidate.id + '&talentApplicationId=' + old.id);
   const drawer = page.getByRole('dialog', { name: '办理入职', exact: true });
   await expect(drawer.getByText(issue, { exact: true })).toBeVisible({ timeout: 4000 });
   const retry = drawer.getByRole('button', { name: '重试暂存' });
+  await retry.click();
+  await expect(drawer.getByText(/草稿保存失败，输入内容仍保留/)).toBeVisible();
   await retry.click();
   await expect(retry).not.toBeVisible();
   await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue(candidate.name);
@@ -319,6 +322,11 @@ test('legacy same-application draft survives a failed exact original read and ca
 
 test('a pre-existing request of the same recruitment still opens after the first autosave', async ({ page }) => {
   await install(page);
+  await page.addInitScript(() => {
+    new MutationObserver(() => {
+      if (document.querySelector('.el-message--error')) document.documentElement.dataset.sawDraftErrorToast = 'yes';
+    }).observe(document, { childList: true, subtree: true });
+  });
   await page.route('**/talent-recruitment/applications/' + old.id, route => route.fulfill(envelope({ ...old, candidateId: candidate.id, stage: 'accepted' })));
   await page.route('**/employee-archives/drafts', route => route.fulfill({ status: 409, json: { message: '已有申请', data: { applicationId: 'existing' } } }));
   await page.route('**/employee-archives/applications/existing', route => route.fulfill(envelope({ id: 'existing', talentCandidateId: candidate.id, talentApplicationId: old.id,
@@ -326,6 +334,7 @@ test('a pre-existing request of the same recruitment still opens after the first
   await page.goto('/entry-exit?talentId=' + candidate.id + '&talentApplicationId=' + old.id);
   await expect(page).toHaveURL(/requestId=existing/);
   await expect(page.getByRole('dialog', { name: /办理详情$/ })).toBeVisible();
+  expect(await page.locator('html').getAttribute('data-saw-draft-error-toast')).toBeNull();
 });
 
 test('the talent form keeps a normal save failure visible on a phone', async ({ page }) => {
