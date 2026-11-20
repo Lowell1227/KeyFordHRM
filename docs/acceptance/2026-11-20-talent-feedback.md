@@ -8,7 +8,7 @@
 
 原保留分支的并行审计修改和main工作区的人才列表删除实现均未覆盖。本轮固定预览切换到上述分支，保留既有预览库/文件/密钥，仅对预览应用新增迁移；不要把未合入本分支的人才删除工作误认为已包含。
 
-收尾现场复核：预览HTML200且为Vite真实页面，API/DB健康；迁移77条完成、未完成0，AI解析恢复原true、日程和通知关闭。正式API仍`2f11ecc1f329`/Web仍`4dbd41ccdd20`，镜像e0b6b9ec，外网健康JSON正常。临时5186模拟测试服务已关闭，固定5173保留可试用。
+开发交付时（发布前）现场复核：预览HTML200且为Vite真实页面，API/DB健康；迁移77条完成、未完成0，AI解析恢复原true、日程和通知关闭。当时正式API为`2f11ecc1f329`/Web为`4dbd41ccdd20`，镜像e0b6b9ec，外网健康JSON正常。临时5186模拟测试服务已关闭，固定5173保留可试用；最新正式镜像见发布记录。
 
 需求台账：`docs/requirements/2026-11-20-talent-feedback-register.md`。已确认规则见 `docs/superpowers/specs/2026-11-20-talent-feedback-design.md`。
 
