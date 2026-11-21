@@ -1,0 +1,30 @@
+# 人才库跟进与负责范围简化
+
+用户授权：在上轮B1/B2待定规则后明确要求“你认为是什么逻辑请你优化以达到简易好用业务流程清晰”。本设计由我们基于招聘操作给出并执行，不再让用户反复选实现细节；不包含上线授权。
+
+## 业务与交互
+
+- 一个候选人只有一个当前跟进安排，历史沟通与已结束安排保留。招聘阶段、人才库状态、员工状态不随跟进自动变化。
+- 未有跟进记录者仍为未跟进。待跟进包含从未跟进者或存在当前安排者，过去、今天、未来日期全部包含。
+- 有当前安排时显示日期及今天/逾期/未来，主操作“完成并记录”，填写沟通内容，可同时设下次日期；不设则结束当前安排。旁操作“取消安排”。
+- 时间线操作“补充记录”只补沟通历史，不自动完成当前安排。无当前安排时可记录沟通并设置下次日期。补录早于当前安排所依沟通日期的历史不得清掉或替换当前安排。
+- “我的负责”改为选择框：全部、我负责的人才、我负责的应聘。列表人才负责人、应聘详情负责人标明对象。
+- 应聘负责范围、岗位、阶段必须匹配同一次应聘；列表摘要、详情默认目标及Excel使用同一条件。筛选不授予额外权限。
+
+## 数据与契约
+
+沿用TalentFollowUp，不另建待办系统。新增planStatus（none/pending/completed/cancelled/superseded）、planClosedAt、planClosedById，保留原沟通内容及日期。pending候选人唯一部分索引，数据库CHECK保证有日期才可有计划状态。迁移沿原先 occurredAt DESC/createdAt DESC/id DESC 排序，每人原“最新非空日期”承接pending，其余日期标superseded；无日期none，不按后来备注推断完成，不改原沟通或日期。
+
+- 原GET follow-ups保留数组响应，追加上述三个字段。
+- POST follow-ups追加`expectedPlanId?: UUID|null`、`completePlanId?: UUID`。新UI始终发送expectedPlanId（当前ID或null）；服务端锁候选人并核对ID，冲突409保留输入、刷新后人工重试。completePlanId仅明确完成时提供，必须仍是当前pending；历史补录不得隐式完成。保存完成及可选新安排在同一事务。
+- 普通记录无新日期保留当前安排。新日期是明确安排意图；无当前安排则pending，同期/较新记录可替换（旧为superseded），早于当前安排依托沟通日期的历史日期仅作superseded历史。UI有安排时补充模式不显示新日期入口，避免误替换。
+- POST `/talents/:id/follow-ups/:followUpId/cancel` 取消指定当前pending；候选人、记录归属与仍为当前均需核验，409不关闭其他安排。沿实际现有`employee_archive_edit`编辑能力，不扩权限。结束/取消/替换记录操作者时间与既有审计。
+- 列表/Excel nextFollowUpAt只读pending；dueOnly按无记录或pending过滤，不先取全局候选人ID；完成不复活旧安排。
+- GET人才/Excel追加`responsibilityScope?: all|talent|application`，旧mineOnly仍兼容映射talent（显式新范围优先）。talent沿既有ownerId或无owner时createdBy；application仅当前操作者负责的应聘，与岗位阶段合并同一谓词。
+- Web匹配上下文追加`applicationOwnerId?: string`（不是查询指定任意负责人，只用于打开时复核），避免旧页面打开已移交的应聘后误操作。
+
+## 约束与验证
+
+版本0.9.1、现有依赖与权限保持；只用虚构隔离库，不改生产或通知/日程/模型配置。未提交声明及其他工作树保持。严格档，正确结果红灯先行；API相关与全量/构建、Web类型/构建及针对性Playwright、真实迁移PG、固定5173多角色与1440/1024/390验证。固定预览原授权解析开关保留，不执行解析。
+
+不采用“每条普通记录自动结束安排”：会把补录/备注误认成完成。不采用多个平行待办及复杂负责人组合：本轮只需一个当前安排和三种明确范围。
