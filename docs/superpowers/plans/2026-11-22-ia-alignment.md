@@ -53,9 +53,10 @@
 - [x] Converge obsolete menu expectations without weakening role/API boundaries.
 - [x] Use existing isolated backend, fictional role fixtures and real HTTP/page requests for matrix, old URLs, public share and personnel handoff; separately label synthetic notification-read states.
 - [x] Check 1440 / 1024 / 390, default landing, collapse/reload, active state, horizontal reachability; type-check and production build once final sources stabilize. No API full-suite rerun for Web-only scope.
-- [ ] Commit only task files on isolated branch and report hash; final bounded review, fixed preview and evidence are complete. Do not merge/push main or publish without explicit scope.
+- [x] Commit only task files on isolated branch and report hash; final bounded review, fixed preview and evidence are complete. Do not merge/push main or publish without explicit scope.
 
 ## Decisions / Status
 
 - 2026-11-22: Created managed worktree `ia-align-20261122`, branch `codex/ia-align-20261122`; other worktrees unchanged.
 - 2026-11-22: Existing archive edit/review are shared recruitment capabilities. User explicitly confirmed retaining them for this menu-only task.
+- 2026-11-22: Feature commit `51123cb610e57132fed24cdea16e75d42183bf84`; Node74, type-check/build, real role matrix2 and compatibility4 passed. Unusual assessor+HR backend read gap documented separately; no API changes. REC-ACCEPT-01 queued only, not mixed into this implementation.
