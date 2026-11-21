@@ -50,7 +50,7 @@ async function openFollowUp(page: Page, name: string) {
   await page.getByPlaceholder('姓名 / 手机 / 公司 / 职位').press('Enter');
   const row = page.locator('.el-table__row:visible, .mobile-result-card:visible').filter({ hasText: name });
   await row.getByRole('button', { name: /^打开(详情)?$/ }).click();
-  await page.getByRole('button', { name: '记一条', exact: true }).click();
+  await page.getByRole('button', { name: '补充记录', exact: true }).click();
 }
 
 for (const timezoneId of ['Asia/Shanghai', 'America/Los_Angeles']) {
@@ -75,13 +75,13 @@ for (const timezoneId of ['Asia/Shanghai', 'America/Los_Angeles']) {
         expect((await response.json()).data).toMatchObject({ occurredAt: '2026-11-13T00:00:00.000Z', nextFollowUpAt: '2028-02-29T00:00:00.000Z' });
         const timeline = page.locator('.talent-follow-ups__timeline');
         await expect(timeline).toContainText('2026-11-13');
-        await expect(timeline).toContainText('2028-02-29');
+        await expect(page.getByLabel('当前跟进安排', { exact: true })).toContainText('2028-02-29');
         await expect(page.locator('.el-drawer .el-loading-mask:visible')).toHaveCount(0);
         await timeline.scrollIntoViewIfNeeded();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
         expect(errors).toEqual([]);
         await page.screenshot({ path: info.outputPath('followup-beijing-date.png'), fullPage: true });
-        await page.getByRole('button', { name: '记一条', exact: true }).click();
+        await page.getByRole('button', { name: '补充记录', exact: true }).click();
         await expect(form.getByPlaceholder('跟进日期', { exact: true })).toHaveValue('2026-11-13');
       } finally { await candidate.clean(); }
     });

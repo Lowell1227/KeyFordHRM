@@ -31,8 +31,9 @@ async function install(page: Page, employee = false) {
 test('application actions use server revision and refresh the selected record', async ({ page }) => {
   const { writes, calls } = await install(page);
   await page.goto('/talents');
-  await page.getByRole('switch', { name: '我的负责', exact: true }).locator('..').click();
-  await expect.poll(() => calls.some(url => url.includes('mineOnly=true'))).toBe(true);
+  await page.getByRole('combobox', { name: '负责范围', exact: true }).press('ArrowDown');
+  await page.getByRole('option', { name: '我负责的人才', exact: true }).click();
+  await expect.poll(() => calls.some(url => url.includes('responsibilityScope=talent'))).toBe(true);
   await page.getByText(candidate.name, { exact: true }).first().click();
   await expect(page.getByRole('heading', { name: '应聘记录' })).toBeVisible();
   await expect(page.getByRole('button', { name: '确认录用', exact: true })).toHaveCount(0);

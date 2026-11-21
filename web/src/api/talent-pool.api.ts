@@ -88,7 +88,11 @@ export const talentPoolApi = {
 
   /** POST /talents/:id/follow-ups 新增跟进。 */
   addFollowUp(id: string, body: CreateFollowUpBody): Promise<TalentFollowUp> {
-    return http.post(`/talents/${id}/follow-ups`, body) as unknown as Promise<TalentFollowUp>;
+    return http.post(`/talents/${id}/follow-ups`, body, { skipErrorMessage: true }) as unknown as Promise<TalentFollowUp>;
+  },
+
+  cancelFollowUpPlan(id: string, followUpId: string): Promise<TalentFollowUp> {
+    return http.post(`/talents/${id}/follow-ups/${followUpId}/cancel`, undefined, { skipErrorMessage: true }) as unknown as Promise<TalentFollowUp>;
   },
 
   /** GET /talents/:id/follow-ups 跟进列表（倒序，附记录人姓名）。 */

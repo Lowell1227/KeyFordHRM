@@ -743,7 +743,7 @@ test('full UI personnel lifecycle selects active and probation interview partici
   await login(page);
   const candidate = await createTalent(page, info);
   const drawer = page.locator('.talent-detail-drawer');
-  await drawer.getByRole('button', { name: '记一条', exact: true }).click();
+  await drawer.getByRole('button', { name: '补充记录', exact: true }).click();
   await drawer.getByPlaceholder('本次沟通要点（必填）').fill('虚构全程回归，页面保存跟进后安排面试');
   const followUp = responseFor(page, 'POST', `/talents/${candidate.id}/follow-ups`);
   await drawer.getByRole('button', { name: '保存跟进', exact: true }).click();

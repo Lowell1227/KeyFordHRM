@@ -3,6 +3,7 @@ import { computed, ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { usePagination } from '@/composables/usePagination';
 import { useExport } from '@/composables/useExport';
+import { useAuthStore } from '@/stores/auth.store';
 import {
   TALENT_STATUSES,
   TALENT_STATUS_LABELS,
@@ -20,6 +21,7 @@ import {
   type TalentTag,
   type TalentQuery,
   type TalentApplicationStage,
+  type TalentApplicationMatch,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
 import { formatFollowUpDate } from '@/utils/talent-follow-up-date';
@@ -32,6 +34,7 @@ import TalentFormDrawer from './components/TalentFormDrawer.vue';
 import { useTalentPermissions } from './useTalentPermissions';
 
 const { canEdit } = useTalentPermissions();
+const auth = useAuthStore();
 
 const list = ref<TalentCandidateListItem[]>([]);
 const loading = ref(false);
@@ -41,9 +44,9 @@ const { loading: exporting, download } = useExport();
 const detailVisible = ref(false);
 const formVisible = ref(false);
 const activeCandidateId = ref<string | null>(null);
-const applicationFilters = ref<Pick<TalentQuery, 'applicationPosition' | 'applicationStage'>>({});
-const hasApplicationFilter = computed(() => Boolean(applicationFilters.value.applicationPosition || applicationFilters.value.applicationStage));
-const activeApplicationMatch = ref<({ id: string } & typeof applicationFilters.value) | undefined>();
+const applicationFilters = ref<Omit<TalentApplicationMatch, 'id'>>({});
+const hasApplicationFilter = computed(() => Object.values(applicationFilters.value).some(Boolean));
+const activeApplicationMatch = ref<TalentApplicationMatch>();
 const filters = reactive({
   keyword: '',
   status: '' as TalentStatus | '',
@@ -55,7 +58,7 @@ const filters = reactive({
   salaryMax: undefined as number | undefined,
   dueOnly: false,
   staleOnly: false,
-  mineOnly: false,
+  responsibilityScope: 'all' as NonNullable<TalentQuery['responsibilityScope']>,
 });
 const { page, pageSize, total, pageSizeOptions, reset, withParams } = usePagination({ defaultPageSize: 20 });
 let requestId = 0;
@@ -71,7 +74,8 @@ function currentFilters(): TalentQuery {
     keyword: filters.keyword.trim() || undefined, status: filters.status || undefined, source: filters.source || undefined,
     tag: filters.tag || undefined, applicationPosition: filters.applicationPosition || undefined, applicationStage: filters.applicationStage || undefined,
     salaryMinYuan: filters.salaryMin, salaryMaxYuan: filters.salaryMax,
-    dueOnly: filters.dueOnly || undefined, staleOnly: filters.staleOnly || undefined, mineOnly: filters.mineOnly || undefined,
+    dueOnly: filters.dueOnly || undefined, staleOnly: filters.staleOnly || undefined,
+    responsibilityScope: filters.responsibilityScope === 'all' ? undefined : filters.responsibilityScope,
   };
 }
 async function loadApplicationPositions() {
@@ -92,9 +96,10 @@ async function loadList() {
   loadError.value = '';
   try {
     const query = currentFilters();
+    const applicationOwnerId = query.responsibilityScope === 'application' ? auth.user?.id : undefined;
     const res = await talentPoolApi.list(withParams({ ...query }));
     if (id !== requestId) return;
-    applicationFilters.value = { applicationPosition: query.applicationPosition, applicationStage: query.applicationStage };
+    applicationFilters.value = { applicationPosition: query.applicationPosition, applicationStage: query.applicationStage, applicationOwnerId };
     list.value = res.items;
     total.value = res.total;
   } catch {
@@ -132,7 +137,7 @@ function onRemoved() { void loadList(); }
 function onReset() {
   Object.assign(filters, {
     keyword: '', status: '', source: '', tag: '', applicationPosition: '', applicationStage: '',
-    salaryMin: undefined, salaryMax: undefined, dueOnly: false, staleOnly: false, mineOnly: false,
+    salaryMin: undefined, salaryMax: undefined, dueOnly: false, staleOnly: false, responsibilityScope: 'all',
   });
   onSearch();
 }
@@ -184,8 +189,13 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           <el-input-number v-model="filters.salaryMax" :controls="false" placeholder="最高元/月"
             @change="onSearch" />
         </div>
+        <el-select v-model="filters.responsibilityScope" aria-label="负责范围"
+          class="talent-filter-bar__select talent-filter-bar__scope" @change="onSearch">
+          <el-option label="全部" value="all" />
+          <el-option label="我负责的人才" value="talent" />
+          <el-option label="我负责的应聘" value="application" />
+        </el-select>
         <div class="talent-filter-bar__switches">
-          <span class="talent-filter-toggle"><el-switch v-model="filters.mineOnly" aria-label="我的负责" @change="onSearch" /> 我的负责</span>
           <span class="talent-filter-toggle"><el-switch v-model="filters.dueOnly" aria-label="仅看待跟进" @change="onSearch" /> 仅看待跟进</span>
           <span class="talent-filter-toggle"><el-switch v-model="filters.staleOnly" aria-label="超18个月未联系" @change="onSearch" /> 超18个月未联系</span>
         </div>
@@ -213,7 +223,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           </template>
         </el-table-column>
         <el-table-column prop="phone" label="手机" width="120" />
-        <el-table-column prop="ownerName" label="负责人" min-width="100" show-overflow-tooltip><template #default="{ row }">{{ asRow(row).ownerName || '未指定' }}</template></el-table-column>
+        <el-table-column prop="ownerName" label="人才负责人" min-width="110" show-overflow-tooltip><template #default="{ row }">{{ asRow(row).ownerName || '未指定' }}</template></el-table-column>
         <el-table-column :label="hasApplicationFilter ? '匹配应聘' : '最新应聘'" min-width="180" show-overflow-tooltip><template #default="{ row }"><span v-if="asRow(row).latestApplication">{{ asRow(row).latestApplication?.positionName }} · {{ APPLICATION_STAGE_LABELS[asRow(row).latestApplication!.stage] }}</span><span v-else>暂无应聘</span></template></el-table-column>
         <el-table-column prop="appliedPosition" label="意向岗位" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.appliedPosition || '—' }}</template>
@@ -275,7 +285,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         <div v-for="field in [
           ['岗位', item.appliedPosition || item.currentPosition || '—'],
           ['手机', item.phone],
-          ['负责人', item.ownerName || '未指定'],
+          ['人才负责人', item.ownerName || '未指定'],
           [hasApplicationFilter ? '匹配应聘' : '最新应聘', item.latestApplication ? `${item.latestApplication.positionName} · ${APPLICATION_STAGE_LABELS[item.latestApplication.stage]}` : '暂无应聘'],
           ['下次跟进', formatFollowUpDate(item.nextFollowUpAt)],
         ]" :key="field[0]" class="mobile-result-field">
@@ -314,6 +324,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
 }
 .talent-filter-bar__keyword { width: 220px; }
 .talent-filter-bar__select { width: 120px; }
+.talent-filter-bar__scope { width: 142px; }
 .talent-filter-bar__salary {
   display: inline-flex;
   align-items: center;

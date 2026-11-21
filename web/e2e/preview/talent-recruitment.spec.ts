@@ -112,7 +112,7 @@ test('real recruitment pages: interviewer feedback, independent hiring, intake r
   expect((await created).status()).toBe(201);
   await openTalent(page, name, mobile);
   const detail = page.locator('.talent-detail-drawer'), panel = detail.locator('.application-panel');
-  await detail.getByRole('button', { name: '记一条', exact: true }).click();
+  await detail.getByRole('button', { name: '补充记录', exact: true }).click();
   await detail.getByPlaceholder('本次沟通要点（必填）').fill('虚构候选人沟通，准备安排面试');
   await detail.getByRole('button', { name: '保存跟进', exact: true }).click();
   await panel.getByRole('button', { name: '新增应聘', exact: true }).click();

@@ -139,6 +139,72 @@ test('a historical application can still be opened from the withdrawn filter', a
   await expect(panel.getByText(/筛选匹配的应聘记录/)).toHaveCount(0);
 });
 
+test('three responsibility scopes share list and export filters and open the matched application', async ({ page }) => {
+  await install(page);
+  const queries: URLSearchParams[] = [], exports: URLSearchParams[] = [];
+  const owned = { ...old, ownerId: 'hr', ownerName: '虚构HR' };
+  const recent = { ...latest, ownerId: 'other', ownerName: '其他虚构HR' };
+  await page.route('**/api/v1/talents?**', route => {
+    const params = new URL(route.request().url()).searchParams;
+    queries.push(params);
+    if (params.get('responsibilityScope') === 'application' && params.get('applicationPosition') === latest.positionName) {
+      return route.fulfill(envelope({ items: [], total: 0 }));
+    }
+    const matching = params.get('responsibilityScope') === 'application' ? owned : recent;
+    return route.fulfill(envelope({ items: [{ ...candidate, latestApplication: matching }], total: 1 }));
+  });
+  await page.route('**/api/v1/talents/export?**', route => {
+    exports.push(new URL(route.request().url()).searchParams);
+    return route.fulfill({ contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: 'mock-only' });
+  });
+  await page.route('**/api/v1/talent-recruitment/candidates/*/applications', route => route.fulfill(envelope([recent, owned])));
+  await page.goto('/talents');
+  const scope = page.getByRole('combobox', { name: '负责范围' });
+  await expect(page.locator('.el-table:visible')).toContainText('虚构新岗位 · 初筛');
+  expect(queries.at(-1)?.get('responsibilityScope')).toBeNull();
+  await scope.press('ArrowDown');
+  await page.getByRole('option', { name: '我负责的人才', exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('responsibilityScope')).toBe('talent');
+  await scope.press('ArrowDown');
+  await page.getByRole('option', { name: '我负责的应聘', exact: true }).click();
+  await expect(page.locator('.el-table:visible')).toContainText('虚构旧岗位 · 人才储备');
+  await expect(page.getByRole('columnheader', { name: '人才负责人', exact: true })).toBeVisible();
+  const panel = (await openDetail(page, 1440)).locator('.application-panel');
+  await expect(panel.locator('.el-select').first()).toContainText('虚构旧岗位 · 秋季 · 人才储备');
+  await expect(panel).toContainText('应聘负责人');
+  await page.locator('.talent-detail-drawer .el-drawer__close-btn').click();
+  await page.getByTestId('talent-filter-application-position').click();
+  await page.getByRole('option', { name: recent.positionName, exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('applicationPosition')).toBe('虚构新岗位');
+  await expect(page.locator('.el-table__row:visible')).toHaveCount(0);
+  await page.getByTestId('talent-filter-application-stage').click();
+  await page.getByRole('option', { name: '初筛', exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('applicationStage')).toBe('screening');
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出应聘记录', exact: true }).click();
+  await downloaded;
+  expect(Object.fromEntries(exports[0])).toEqual({ responsibilityScope: 'application', applicationPosition: '虚构新岗位', applicationStage: 'screening' });
+  await scope.press('ArrowDown');
+  await page.getByRole('option', { name: '全部', exact: true }).click();
+  await expect.poll(() => queries.at(-1)?.get('responsibilityScope')).toBeNull();
+  await expect(page.locator('.el-table:visible')).toContainText('虚构新岗位 · 初筛');
+});
+
+test('a matched application reassigned after list load requires explicit selection under my applications', async ({ page }) => {
+  await install(page);
+  const reassigned = { ...old, ownerId: 'other' };
+  await page.route('**/api/v1/talents?**', route => route.fulfill(envelope({ items: [{ ...candidate, latestApplication: old }], total: 1 })));
+  await page.route('**/api/v1/talent-recruitment/candidates/*/applications', route => route.fulfill(envelope([latest, reassigned])));
+  await page.goto('/talents');
+  await page.getByRole('combobox', { name: '负责范围' }).press('ArrowDown');
+  await page.getByRole('option', { name: '我负责的应聘', exact: true }).click();
+  await expect(page.getByRole('columnheader', { name: '匹配应聘', exact: true })).toBeVisible();
+  await filterByStage(page);
+  const panel = (await openDetail(page, 1440)).locator('.application-panel');
+  await expect(panel.getByText(/筛选匹配的应聘记录/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: '淘汰本次应聘', exact: true })).toHaveCount(0);
+});
+
 async function openForm(page: Page) {
   await page.getByRole('button', { name: '新增人才', exact: true }).click();
   const drawer = page.locator('.talent-form-drawer');

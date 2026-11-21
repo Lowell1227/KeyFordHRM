@@ -11,7 +11,7 @@ import type { Department } from '@/types/api.types';
 import {
   APPLICATION_ACTION_LABELS, APPLICATION_STAGE_LABELS,
   TALENT_RESERVE_REASON_LABELS,
-  type TalentApplicationAction, type TalentApplicationView, type TalentQuery, type TalentRecruitmentOwner, type TalentReserveReason,
+  type TalentApplicationAction, type TalentApplicationMatch, type TalentApplicationView, type TalentRecruitmentOwner, type TalentReserveReason,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
 
@@ -19,7 +19,7 @@ const props = defineProps<{
   candidateId: string;
   editable: boolean;
   convertedUserId?: string | null;
-  applicationMatch?: { id: string } & Pick<TalentQuery, 'applicationPosition' | 'applicationStage'>;
+  applicationMatch?: TalentApplicationMatch;
 }>();
 const emit = defineEmits<{ changed: []; interview: [application: Pick<TalentApplicationView, 'id' | 'positionName' | 'recruitmentBatch'>] }>();
 const router = useRouter();
@@ -82,7 +82,8 @@ async function loadList() {
     const target = targetId ? result.find(row => row.id === targetId) : result[0];
     if (match && (!target
       || (match.applicationPosition && target.positionName !== match.applicationPosition)
-      || (match.applicationStage && target.stage !== match.applicationStage))) {
+      || (match.applicationStage && target.stage !== match.applicationStage)
+      || (match.applicationOwnerId && target.ownerId !== match.applicationOwnerId))) {
       selectionError.value = '筛选匹配的应聘记录已变化或不可用，请重新选择应聘记录。';
       current.value = null;
       return;
@@ -144,7 +145,7 @@ function openEditor(create: boolean) {
   createRequestId.value = create ? crypto.randomUUID() : '';
   const row = create ? null : current.value;
   Object.assign(form, { positionName: row?.positionName ?? '', recruitmentBatch: row?.recruitmentBatch ?? '', deptId: row?.deptId ?? '', ownerId: row?.ownerId ?? '', expectedEntryDate: row?.expectedEntryDate?.slice(0, 10) ?? '' });
-  owners.value = row ? [{ id: row.ownerId, name: row.ownerName ?? '原负责人', employeeNo: null, deptName: null }] : [];
+  owners.value = row ? [{ id: row.ownerId, name: row.ownerName ?? '原应聘负责人', employeeNo: null, deptName: null }] : [];
   formRef.value?.clearValidate(); void loadOptions();
 }
 function cancelEditor() { editing.value = false; createRequestId.value = ''; error.value = ''; conflict.value = false; ++ownerSearch; ++optionSession; }
@@ -216,14 +217,14 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
         <el-form-item label="岗位名称" prop="positionName"><el-input v-model="form.positionName" maxlength="100" /></el-form-item>
         <el-form-item label="招聘批次" prop="recruitmentBatch"><el-input v-model="form.recruitmentBatch" maxlength="100" /></el-form-item>
         <el-form-item label="部门（选填）" prop="deptId" :error="departmentError"><el-select v-model="form.deptId" clearable filterable @change="departmentError = ''"><el-option v-for="dept in departmentOptions" :key="dept.id" :value="dept.id" :label="dept.name" :disabled="dept.disabled" /></el-select></el-form-item>
-        <el-form-item label="负责人"><el-select v-model="form.ownerId" clearable filterable remote :remote-method="searchOwners" :loading="searching" placeholder="默认当前经办" @focus="searchOwners()"><el-option v-for="owner in owners" :key="owner.id" :value="owner.id" :label="[owner.name, owner.deptName].filter(Boolean).join(' · ')" /></el-select></el-form-item>
+        <el-form-item label="应聘负责人"><el-select v-model="form.ownerId" clearable filterable remote :remote-method="searchOwners" :loading="searching" placeholder="默认当前经办" @focus="searchOwners()"><el-option v-for="owner in owners" :key="owner.id" :value="owner.id" :label="[owner.name, owner.deptName].filter(Boolean).join(' · ')" /></el-select></el-form-item>
         <el-form-item label="预计到岗"><el-date-picker v-model="form.expectedEntryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
       </div>
       <el-alert v-if="optionsError" :title="optionsError" type="error" :closable="false"><el-button link type="primary" @click="loadOptions">重试选项</el-button></el-alert>
       <div class="application-panel__actions"><el-button @click="cancelEditor">取消编辑</el-button><el-button type="primary" :loading="busy" @click="save">保存应聘</el-button></div>
     </el-form>
     <template v-else-if="current">
-      <dl><dt>本次应聘阶段</dt><dd class="application-panel__stage">{{ APPLICATION_STAGE_LABELS[current.stage] }}</dd><dt>负责人</dt><dd>{{ current.ownerName || '未指定' }}</dd><dt>部门</dt><dd>{{ current.departmentNameSnapshot || '未指定' }}</dd><dt>预计到岗</dt><dd>{{ current.expectedEntryDate ? formatDate(current.expectedEntryDate) : '未填写' }}</dd></dl>
+      <dl><dt>本次应聘阶段</dt><dd class="application-panel__stage">{{ APPLICATION_STAGE_LABELS[current.stage] }}</dd><dt>应聘负责人</dt><dd>{{ current.ownerName || '未指定' }}</dd><dt>部门</dt><dd>{{ current.departmentNameSnapshot || '未指定' }}</dd><dt>预计到岗</dt><dd>{{ current.expectedEntryDate ? formatDate(current.expectedEntryDate) : '未填写' }}</dd></dl>
       <p v-if="current.stage === 'hiring_review'" class="application-panel__muted">下一步：由其他有录用确认权限的人员在“人员 → 录用确认”办理，提交人不能确认本人提交的申请。</p>
       <p v-else-if="current.stage === 'offered'" class="application-panel__muted">下一步：由经办记录候选人接受或拒绝；候选人接受后，再办理入职。</p>
       <div v-if="!command" class="application-panel__actions">

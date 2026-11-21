@@ -15,14 +15,13 @@ const history = {
   id: 'follow-up-one', candidateId: candidate.id, occurredAt: '2026-11-18T00:00:00.000Z', channel: 'phone',
   summary: '已经读取的历史沟通', nextFollowUpAt: '2026-12-01T00:00:00.000Z',
   createdById: 'hr-one', createdByName: '虚构经办', createdAt: '2026-11-18T01:00:00Z',
+  planStatus: 'pending', planClosedAt: null, planClosedById: null,
 };
 const envelope = (data: unknown) => ({ contentType: 'application/json', body: JSON.stringify({ code: 0, data }) });
 
-async function install(page: Page) {
-  const state = { history: [history], reads: 0, failReads: 0, writes: [] as Array<Record<string, unknown>>, calls: [] as string[] };
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'mock-followups'); localStorage.setItem('expiresAt', String(Date.now() + 600000));
-  });
+async function install(page: Page, initial = [history]) {
+  const state = { history: initial, reads: 0, failReads: 0, writes: [] as Array<Record<string, unknown>>, calls: [] as string[] };
+  await page.addInitScript(() => localStorage.setItem('token', 'mock-followups'));
   await page.route('**/api/v1/**', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     state.calls.push(path + url.search);
@@ -34,13 +33,20 @@ async function install(page: Page) {
     if (path.endsWith(`/talents/${candidate.id}/follow-ups`)) {
       if (request.method() === 'POST') {
         const body = request.postDataJSON(); state.writes.push(body);
-        const record = { ...history, ...body, id: 'saved-follow-up', occurredAt: `${body.occurredAt}T00:00:00.000Z`, nextFollowUpAt: body.nextFollowUpAt ? `${body.nextFollowUpAt}T00:00:00.000Z` : null };
+        const record = { ...history, ...body, id: `saved-follow-up-${state.writes.length}`, occurredAt: `${body.occurredAt}T00:00:00.000Z`, nextFollowUpAt: body.nextFollowUpAt ? `${body.nextFollowUpAt}T00:00:00.000Z` : null, planStatus: body.nextFollowUpAt ? 'pending' : 'none' };
+        state.history = state.history.map(item => item.id === body.completePlanId ? { ...item, planStatus: 'completed' } : item);
         state.history = [record, ...state.history];
         return route.fulfill({ status: 201, ...envelope(record) });
       }
       ++state.reads;
       if (state.failReads > 0) { --state.failReads; return route.fulfill({ status: 503, ...envelope(null) }); }
       return route.fulfill(envelope(state.history));
+    }
+    if (path.endsWith('/cancel')) {
+      state.calls.push(request.method() + ' ' + path);
+      const planId = path.split('/').at(-2);
+      state.history = state.history.map(item => item.id === planId ? { ...item, planStatus: 'cancelled' } : item);
+      return route.fulfill(envelope(state.history.find(item => item.id === planId)));
     }
     if (path.endsWith(`/talents/${second.id}/follow-ups`)) return route.fulfill(envelope([{ ...history, id: 'second-history', candidateId: second.id, summary: '第二位的沟通记录' }]));
     if (path.endsWith('/owners')) return route.fulfill(envelope({ items: [], total: 0 }));
@@ -90,10 +96,10 @@ for (const width of [1440, 390]) {
 
   test(`saved follow-up survives failed refresh, retry and reopening at ${width}px (mock)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    const state = await install(page); await page.goto('/talents');
+    const state = await install(page, [{ ...history, nextFollowUpAt: null, planStatus: 'none' }]); await page.goto('/talents');
     const timeline = await openDetail(page, width);
     await expect(timeline).toContainText('已经读取的历史沟通');
-    await timeline.getByRole('button', { name: '记一条', exact: true }).click();
+    await timeline.getByRole('button', { name: '补充记录', exact: true }).click();
     const form = timeline.locator('form');
     await form.getByPlaceholder('本次沟通要点（必填）').fill('保存成功但读取暂时失败的沟通');
     await form.getByPlaceholder('跟进日期', { exact: true }).fill('2026-11-20');
@@ -105,7 +111,7 @@ for (const width of [1440, 390]) {
     await expect(timeline.getByRole('alert')).toContainText('跟进记录读取失败');
     await expect(form).toHaveCount(0);
     await expect(timeline).toContainText('已经读取的历史沟通');
-    expect(state.writes).toEqual([{ occurredAt: '2026-11-20', channel: 'phone', summary: '保存成功但读取暂时失败的沟通', nextFollowUpAt: '2028-02-29' }]);
+    expect(state.writes).toEqual([{ occurredAt: '2026-11-20', channel: 'phone', summary: '保存成功但读取暂时失败的沟通', nextFollowUpAt: '2028-02-29', expectedPlanId: null }]);
     await timeline.getByRole('button', { name: '重试', exact: true }).click();
     await expect(timeline).toContainText('保存成功但读取暂时失败的沟通');
     await expect(timeline).toContainText('2028-02-29');
@@ -170,7 +176,7 @@ test('closing a pending follow-up save cannot refresh or notify a different cand
   await mountSwitchableTimeline(page);
   const timeline = page.locator('.talent-follow-ups');
   await expect(timeline).toContainText('已经读取的历史沟通');
-  await timeline.getByRole('button', { name: '记一条', exact: true }).click();
+  await timeline.getByRole('button', { name: '补充记录', exact: true }).click();
   await timeline.getByPlaceholder('本次沟通要点（必填）').fill('尚未返回的保存');
   await timeline.getByRole('button', { name: '保存跟进', exact: true }).click(); await started;
   await page.getByRole('button', { name: '切换候选人', exact: true }).click();
@@ -183,4 +189,90 @@ test('closing a pending follow-up save cannot refresh or notify a different cand
   await expect(page.getByLabel('刷新次数')).toHaveText('0');
   await expect(page.locator('.el-message--success')).toHaveCount(0);
   expect(state.reads).toBe(readsBefore);
+});
+
+test('completing the selected arrangement requires a result and leaves only historical dates', async ({ page }) => {
+  const previous = { ...history, id: 'older', planStatus: 'superseded', nextFollowUpAt: '2026-11-30T00:00:00.000Z' };
+  const state = await install(page, [history, previous]);
+  await page.clock.setFixedTime(new Date('2026-12-01T02:00:00Z'));
+  await page.goto('/talents');
+  const timeline = await openDetail(page, 1440);
+  const current = timeline.getByLabel('当前跟进安排', { exact: true });
+  await expect(current).toContainText('2026-12-01');
+  await expect(current).toContainText('今天');
+  await current.getByRole('button', { name: '完成并记录', exact: true }).click();
+  const form = timeline.locator('form');
+  const save = form.getByRole('button', { name: '完成并保存', exact: true });
+  await save.click();
+  await expect(form).toContainText('请填写跟进内容');
+  expect(state.writes).toHaveLength(0);
+  await form.getByPlaceholder('本次沟通要点（必填）').fill('已与候选人沟通');
+  await save.click();
+  await expect(current).toHaveCount(0);
+  expect(state.writes[0]).toMatchObject({ expectedPlanId: history.id, completePlanId: history.id, nextFollowUpAt: null });
+  await expect(timeline).toContainText('已完成 2026-12-01');
+  await expect(timeline).toContainText('已替换 2026-11-30');
+});
+
+test('supplementing history preserves the pending arrangement, and cancelling creates no record', async ({ page }) => {
+  const state = await install(page);
+  await page.clock.setFixedTime(new Date('2026-12-02T02:00:00Z'));
+  await page.goto('/talents');
+  const timeline = await openDetail(page, 1440);
+  const current = timeline.getByLabel('当前跟进安排', { exact: true });
+  await expect(current).toContainText('逾期');
+  await timeline.getByRole('button', { name: '补充记录', exact: true }).click();
+  const form = timeline.locator('form');
+  await expect(form.getByPlaceholder('不设置', { exact: true })).toHaveCount(0);
+  await form.getByPlaceholder('本次沟通要点（必填）').fill('补录旧沟通');
+  await form.getByRole('button', { name: '保存跟进', exact: true }).click();
+  await expect(timeline).toContainText('补录旧沟通');
+  expect(state.writes[0]).toMatchObject({ expectedPlanId: history.id, nextFollowUpAt: null });
+  expect(state.writes[0]).not.toHaveProperty('completePlanId');
+  await expect(current).toContainText('2026-12-01');
+  await current.getByRole('button', { name: '取消安排', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '取消跟进安排' });
+  await expect(dialog).toContainText('2026-12-01');
+  await dialog.getByRole('button', { name: '取消安排', exact: true }).click();
+  await expect(current).toHaveCount(0);
+  await expect(timeline).toContainText('已取消 2026-12-01');
+  expect(state.writes).toHaveLength(1);
+  expect(state.calls).toContain(`POST /api/v1/talents/${candidate.id}/follow-ups/${history.id}/cancel`);
+});
+
+test('a conflict preserves the draft and a refresh cannot silently retarget completion', async ({ page }) => {
+  const state = await install(page);
+  const conflictingPlan = { ...history, id: 'new-plan', nextFollowUpAt: '2028-12-01T00:00:00.000Z' };
+  const rejected: unknown[] = [];
+  await page.route(`**/api/v1/talents/${candidate.id}/follow-ups`, route => {
+    if (route.request().method() !== 'POST' || rejected.length) return route.fallback();
+    rejected.push(route.request().postDataJSON());
+    state.history = [conflictingPlan, { ...history, planStatus: 'superseded' }];
+    return route.fulfill({ status: 409, json: { message: '当前跟进安排已变化' } });
+  });
+  await page.goto('/talents');
+  const timeline = await openDetail(page, 1440);
+  const current = timeline.getByLabel('当前跟进安排', { exact: true });
+  await expect(current).toBeVisible();
+  await current.getByRole('button', { name: '完成并记录', exact: true }).click();
+  const form = timeline.locator('form');
+  const summary = form.getByPlaceholder('本次沟通要点（必填）');
+  const next = form.getByPlaceholder('不设置', { exact: true });
+  await summary.fill('冲突后保留的沟通记录');
+  await next.fill('2029-01-10');
+  await next.press('Tab');
+  const save = form.getByRole('button', { name: '完成并保存', exact: true });
+  await save.click();
+  await expect(save).toBeDisabled();
+  await timeline.getByRole('button', { name: '刷新安排，保留输入', exact: true }).click();
+  await expect(current).toContainText('2028-12-01');
+  await expect(summary).toHaveValue('冲突后保留的沟通记录');
+  await expect(next).toHaveValue('2029-01-10');
+  await expect(save).toBeDisabled();
+  expect(rejected).toEqual([expect.objectContaining({ expectedPlanId: history.id, completePlanId: history.id })]);
+  expect(state.writes).toHaveLength(0);
+  await current.getByRole('button', { name: '完成并记录', exact: true }).click();
+  await save.click();
+  await expect(current).toContainText('2029-01-10');
+  expect(state.writes[0]).toMatchObject({ expectedPlanId: conflictingPlan.id, completePlanId: conflictingPlan.id, nextFollowUpAt: '2029-01-10', summary: '冲突后保留的沟通记录' });
 });

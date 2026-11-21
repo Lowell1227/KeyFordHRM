@@ -152,6 +152,9 @@ export interface TalentFollowUp {
   channel: FollowUpChannel;
   summary: string;
   nextFollowUpAt: string | null;
+  planStatus: 'none' | 'pending' | 'completed' | 'cancelled' | 'superseded';
+  planClosedAt: string | null;
+  planClosedById: string | null;
   createdById: string;
   createdByName?: string | null;
   createdAt: string;
@@ -201,9 +204,15 @@ export interface TalentQuery {
   dueOnly?: boolean;
   staleOnly?: boolean;
   mineOnly?: boolean;
+  responsibilityScope?: 'all' | 'talent' | 'application';
   page?: number;
   pageSize?: number;
 }
+
+export type TalentApplicationMatch = Pick<TalentQuery, 'applicationPosition' | 'applicationStage'> & {
+  id: string;
+  applicationOwnerId?: string;
+};
 
 /** POST/PATCH /talents 请求体（PATCH 为 Partial）。 */
 export interface TalentCandidateInput {
@@ -256,6 +265,8 @@ export interface CreateFollowUpBody {
   channel: FollowUpChannel;
   summary: string;
   nextFollowUpAt?: string | null;
+  expectedPlanId: string | null;
+  completePlanId?: string;
 }
 
 /** POST /talents/:id/shares 请求体。 */

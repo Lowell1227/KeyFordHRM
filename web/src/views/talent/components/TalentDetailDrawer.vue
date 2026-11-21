@@ -14,7 +14,7 @@ import {
   type TalentCandidateDetail,
   type TalentTag,
   type TalentDeleteImpact,
-  type TalentQuery,
+  type TalentApplicationMatch,
   INTERVIEW_STATUS_LABELS,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
@@ -38,7 +38,7 @@ const { canEdit } = useTalentPermissions();
 const props = defineProps<{
   modelValue: boolean;
   candidateId: string | null;
-  applicationMatch?: { id: string } & Pick<TalentQuery, 'applicationPosition' | 'applicationStage'>;
+  applicationMatch?: TalentApplicationMatch;
 }>();
 
 const emit = defineEmits<{

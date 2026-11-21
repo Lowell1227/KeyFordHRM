@@ -870,7 +870,7 @@ async function submit() {
           <el-option v-for="s in TALENT_SOURCE_CHANNELS" :key="s" :label="TALENT_SOURCE_LABELS[s]" :value="s" />
         </el-select>
       </el-form-item>
-      <el-form-item label="负责人" :error="ownerFieldError || ownerError">
+      <el-form-item label="人才负责人" :error="ownerFieldError || ownerError">
         <el-select v-model="form.ownerId" filterable remote :remote-method="loadOwners" :loading="ownersLoading" class="talent-form__full">
           <el-option v-for="owner in owners" :key="owner.id" :value="owner.id" :label="owner.name" />
         </el-select>

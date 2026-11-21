@@ -228,7 +228,7 @@ test('real talent feedback: exact salary, valid department, independent hiring a
 
     phase = 'create application using active department and save dated follow-up';
     const detail = await openTalent(page, f.name, mobile), panel = detail.locator('.application-panel');
-    await detail.getByRole('button', { name: '记一条', exact: true }).click();
+    await detail.getByRole('button', { name: '补充记录', exact: true }).click();
     await detail.getByPlaceholder('本次沟通要点（必填）').fill(`虚构私密跟进_${f.prefix}`);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
     await detail.getByPlaceholder('不设置', { exact: true }).fill(today);
@@ -559,7 +559,7 @@ test('remaining feedback real preview: scheduled follow-ups, cumulative reserve 
     await page.getByPlaceholder('姓名 / 手机 / 公司 / 职位').fill(f.name);
     await page.getByPlaceholder('姓名 / 手机 / 公司 / 职位').press('Enter');
     const due = page.waitForResponse(r => { const url = new URL(r.url()); return url.pathname === '/api/v1/talents' && url.searchParams.get('dueOnly') === 'true' && url.searchParams.get('keyword') === f.name; });
-    await page.locator('.talent-filter-bar__switches .el-switch').nth(1).click();
+    await page.getByRole('switch', { name: '仅看待跟进', exact: true }).locator('..').click();
     const dueResponse = await due; expect(dueResponse.status()).toBe(200);
     const dueData = (await dueResponse.json()).data;
     expect(dueData.items.map((row: any) => row.id).sort()).toEqual([untouched.id, future.id].sort());
