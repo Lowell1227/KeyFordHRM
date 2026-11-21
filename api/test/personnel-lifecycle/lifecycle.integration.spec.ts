@@ -539,7 +539,7 @@ describe('Personnel lifecycle: isolated real database and HTTP', () => {
 
     it('distinguishes talent due/stale flags without weakening HR-only access', async () => {
       const talentPrefix = `TQ-${randomUUID().slice(0, 6)}`;
-      // SQL due filtering uses the database clock, not Jest's frozen application clock.
+      // Pending plans include future dates as well as overdue ones.
       const [clock] = await app.prisma.$queryRaw<Array<{ day: Date }>>`SELECT CURRENT_DATE AS day`;
       const talents: string[] = [];
       for (let index = 0; index < 3; index += 1) {
@@ -551,12 +551,12 @@ describe('Personnel lifecycle: isolated real database and HTTP', () => {
         talents.push(row.id);
         await app.prisma.talentFollowUp.create({ data: {
           candidateId: row.id, createdById: editor.id, channel: 'other', summary: 'Fictional query fixture',
-          occurredAt: clock.day, nextFollowUpAt: new Date(clock.day.getTime() + (index === 2 ? 86400000 : -86400000)),
+          occurredAt: clock.day, planStatus: 'pending', nextFollowUpAt: new Date(clock.day.getTime() + (index === 2 ? 86400000 : -86400000)),
         } });
       }
       for (const [query, expected] of [
         [{}, talents], [{ dueOnly: 'false', staleOnly: 'false' }, talents],
-        [{ dueOnly: 'true', staleOnly: 'false' }, talents.slice(0, 2)],
+        [{ dueOnly: 'true', staleOnly: 'false' }, talents],
         [{ dueOnly: 'false', staleOnly: 'true' }, [talents[0]]],
         [{ dueOnly: 'true', staleOnly: 'true' }, [talents[0]]],
       ] as Array<[Record<string, string>, string[]]>) {

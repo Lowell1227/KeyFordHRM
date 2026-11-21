@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { Transform } from 'class-transformer';
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength, ValidateBy } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength, ValidateBy, ValidateIf } from 'class-validator';
 import { FOLLOW_UP_CHANNELS } from '../talent.constants';
 
 const DATE_PATTERN = /^(?!0000)\d{4}-\d{2}-\d{2}$/;
@@ -36,6 +36,12 @@ export class CreateFollowUpDto {
   @IsOptional()
   @IsTalentDate('下次跟进日期')
   nextFollowUpAt?: string | null;
+
+  @IsOptional() @IsUUID()
+  expectedPlanId?: string | null;
+
+  @ValidateIf((_object, value) => value !== undefined) @IsUUID()
+  completePlanId?: string;
 }
 
 export class ConvertTalentDto {

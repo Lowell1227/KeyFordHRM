@@ -1,3 +1,4 @@
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { TalentFollowUpsService } from './talent-follow-ups.service';
 import type { AuthUser } from '@/common/types/auth.types';
 
@@ -23,11 +24,65 @@ function setup() {
 describe('TalentFollowUpsService', () => {
   afterEach(() => jest.useRealTimers());
 
+  function pendingPlan() {
+    const { prisma, sut } = setup();
+    const old = { id: 'prior', occurredAt: new Date('2026-11-10'), planStatus: 'pending' };
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'cand-1' }]),
+      talentFollowUp: { findFirst: jest.fn().mockResolvedValue(old),
+        create: jest.fn(async ({ data }) => ({ id: 'saved', ...data })),
+        update: jest.fn(async ({ data }) => ({ ...old, ...data })) },
+      auditLog: { create: jest.fn() }, talentCandidate: { updateMany: jest.fn() },
+    };
+    prisma.$transaction.mockImplementation(fn => fn(tx));
+    const input = { channel: 'phone', summary: 'Synthetic communication', occurredAt: '2026-11-11', expectedPlanId: old.id };
+    return { tx, sut, old, input };
+  }
+
+  it('retains a pending plan when recording an ordinary note or an older dated communication', async () => {
+    const { sut, tx, input } = pendingPlan();
+    await expect(sut.create('cand-1', input, HR)).resolves.toMatchObject({ planStatus: 'none' });
+    await expect(sut.create('cand-1', { ...input, occurredAt: '2026-11-09', nextFollowUpAt: '2026-12-01' }, HR))
+      .resolves.toMatchObject({ planStatus: 'superseded', planClosedAt: expect.any(Date), planClosedById: HR.id });
+    expect(tx.talentFollowUp.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['completed', 'superseded'])('closes the prior plan as %s and creates the new pending plan', async status => {
+    const { sut, tx, old, input } = pendingPlan();
+    const change = { ...input, ...(status === 'completed' ? { completePlanId: old.id } : {}), nextFollowUpAt: '2027-01-01' };
+    await expect(sut.create('cand-1', change, HR)).resolves.toMatchObject({ planStatus: 'pending' });
+    expect(tx.talentFollowUp.update).toHaveBeenCalledWith({ where: { id: old.id }, data: {
+      planStatus: status, planClosedAt: expect.any(Date), planClosedById: HR.id } });
+    expect(tx.auditLog.create).toHaveBeenCalled();
+  });
+
+  it('rejects stale expected IDs including null and outdated completion attempts without writes', async () => {
+    const { sut, tx, input } = pendingPlan();
+    for (const changed of [{ expectedPlanId: null }, { expectedPlanId: 'other' }, { completePlanId: 'wrong' }]) {
+      await expect(sut.create('cand-1', { ...input, ...changed }, HR)).rejects.toBeInstanceOf(ConflictException);
+    }
+    await expect(sut.create('cand-1', { ...input, completePlanId: input.expectedPlanId, occurredAt: '2026-11-09' }, HR))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.talentFollowUp.create).not.toHaveBeenCalled();
+    expect(tx.talentFollowUp.update).not.toHaveBeenCalled();
+  });
+
+  it('cancels only the identified pending plan on an active candidate, without adding communication', async () => {
+    const { sut, tx, old } = pendingPlan();
+    await expect(sut.cancel('cand-1', 'wrong', HR)).rejects.toBeInstanceOf(ConflictException);
+    await expect(sut.cancel('cand-1', old.id, HR)).resolves.toMatchObject({ id: old.id, planStatus: 'cancelled' });
+    tx.$queryRaw.mockResolvedValue([]);
+    await expect(sut.create('cand-1', { channel: 'phone', summary: 'note' }, HR)).rejects.toBeInstanceOf(NotFoundException);
+    expect(tx.talentFollowUp.create).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
   it('新增跟进与 last_follow_up_at 回写在同一事务，occurredAt 缺省为今天', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-11-12T17:00:00.000Z'));
     const { prisma, sut } = setup();
     const tx = {
-      talentFollowUp: { create: jest.fn().mockResolvedValue({ id: 'fu-1' }) },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'cand-1' }]),
+      talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'fu-1' }) },
       talentCandidate: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation((fn: (t: unknown) => unknown) => fn(tx));
@@ -45,7 +100,8 @@ describe('TalentFollowUpsService', () => {
   it('显式日期与下次跟进日期按 YYYY-MM-DD 解析', async () => {
     const { prisma, sut } = setup();
     const tx = {
-      talentFollowUp: { create: jest.fn().mockResolvedValue({ id: 'fu-2' }) },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'cand-1' }]), auditLog: { create: jest.fn() },
+      talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'fu-2' }) },
       talentCandidate: { updateMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation((fn: (t: unknown) => unknown) => fn(tx));

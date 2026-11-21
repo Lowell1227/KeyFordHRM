@@ -155,7 +155,7 @@ describe('TalentsService 列表筛选', () => {
     const where = prisma.talentCandidate.findMany.mock.calls[0][0].where;
     expect(where.AND).toEqual([{ OR: [
       { followUps: { none: {} } },
-      { followUps: { some: { nextFollowUpAt: { not: null } } } },
+      { followUps: { some: { planStatus: 'pending' } } },
     ] }]);
   });
 

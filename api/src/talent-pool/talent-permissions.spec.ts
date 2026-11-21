@@ -50,6 +50,7 @@ describe('人才库权限边界（RolesGuard + 真实路由元数据）', () => 
     ['绑定简历', controller.bindFile],
     ['解绑简历', controller.unbindFile],
     ['记跟进', controller.addFollowUp],
+    ['取消跟进安排', controller.cancelFollowUpPlan],
     ['跟进列表', controller.listFollowUps],
     ['标记已入职', controller.convert],
     ['创建分享', controller.createShare],
@@ -96,7 +97,7 @@ describe('人才库权限边界（RolesGuard + 真实路由元数据）', () => 
     for (const handler of [controller.list, controller.detail, controller.listFollowUps]) {
       expect(guard.canActivate(context(handler, TalentsController, reviewer))).toBe(true);
     }
-    for (const handler of [controller.create, controller.update, controller.remove, controller.deleteImpact, controller.addFollowUp, controller.createShare, controller.revokeShare]) {
+    for (const handler of [controller.create, controller.update, controller.remove, controller.deleteImpact, controller.addFollowUp, controller.cancelFollowUpPlan, controller.createShare, controller.revokeShare]) {
       expect(() => guard.canActivate(context(handler, TalentsController, reviewer))).toThrow(ForbiddenException);
     }
     const interviews = new TalentInterviewsController({} as never);

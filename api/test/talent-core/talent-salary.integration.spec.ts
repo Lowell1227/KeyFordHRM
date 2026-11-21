@@ -73,7 +73,7 @@ describe('talent salary units: disposable migrated PostgreSQL only', () => {
     const [, future, past, finished, hired] = rows;
     for (const [row, nextFollowUpAt] of [[future, new Date('2030-01-01')], [past, new Date('2000-01-01')], [finished, null]] as const) {
       await prisma.talentFollowUp.create({ data: { candidateId: row.id, occurredAt: new Date('2026-11-20'),
-        channel: 'other', summary: '虚构跟进', nextFollowUpAt, createdById: actor.id } });
+        channel: 'other', summary: '虚构跟进', nextFollowUpAt, planStatus: nextFollowUpAt ? 'pending' : 'none', createdById: actor.id } });
     }
     await prisma.talentCandidate.update({ where: { id: hired.id }, data: { status: 'hired' } });
     const result = await talents.list(Object.assign(new TalentQueryDto(), { keyword: '虚构待跟进验收_', dueOnly: true }), actor);

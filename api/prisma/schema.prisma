@@ -2244,6 +2244,9 @@ model TalentFollowUp {
   channel        String    @db.VarChar(20)
   summary        String    @db.Text
   nextFollowUpAt DateTime? @map("next_follow_up_at") @db.Date
+  planStatus     String    @default("none") @map("plan_status") @db.VarChar(16)
+  planClosedAt   DateTime? @map("plan_closed_at") @db.Timestamptz(6)
+  planClosedById String?   @map("plan_closed_by_id") @db.Uuid
   createdById    String    @map("created_by_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 

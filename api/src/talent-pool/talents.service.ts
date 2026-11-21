@@ -40,7 +40,7 @@ type CandidateRow = Prisma.TalentCandidateGetPayload<{ include: typeof listInclu
 type ApplicationSummary = Prisma.TalentApplicationGetPayload<typeof applicationSummary>;
 type OnboardingSummary = Prisma.EmployeeDataChangeRequestGetPayload<typeof onboardingSummary>;
 
-/** 列表项：候选人 + 最新一条非空「下次跟进日期」+ 附件数（需求 §4.3 / §5.1）。 */
+/** 列表项展示候选人当前跟进安排和附件数。 */
 export type TalentListItem = Omit<CandidateRow, '_count' | 'applications' | 'onboardingRequests'> & {
   editVersion: string;
   nextFollowUpAt: Date | null;
@@ -62,7 +62,7 @@ export class TalentsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(query: TalentQueryDto, operator?: AuthUser): Promise<Paginated<TalentListItem>> {
-    const where = await this.buildWhere(query, operator);
+    const { where, applicationWhere } = this.buildFilters(query, operator);
     const [total, items] = await this.prisma.$transaction([
       this.prisma.talentCandidate.count({ where }),
       this.prisma.talentCandidate.findMany({
@@ -70,7 +70,7 @@ export class TalentsService {
         orderBy: listOrder,
         skip: query.skip,
         take: query.take,
-        include: { ...listInclude, applications: { ...listInclude.applications, where: talentApplicationFilter(query) } },
+        include: { ...listInclude, applications: { ...listInclude.applications, where: applicationWhere } },
       }),
     ]);
     const summaries = await this.attachEmployment(await this.attachRecruitmentSummaries(items));
@@ -90,7 +90,7 @@ export class TalentsService {
 
   /** One row per matching application; candidates without applications retain one row without application filters. */
   async exportApplications(query: TalentQueryDto, operator: AuthUser): Promise<StreamableFile> {
-    const where = await this.buildWhere(query, operator), applicationWhere = talentApplicationFilter(query);
+    const { where, applicationWhere, responsibilityScope } = this.buildFilters(query, operator);
     const items = await this.prisma.$transaction(async tx => {
       const applicationCount = await tx.talentApplication.count({ where: { candidate: where, ...applicationWhere } });
       const withoutApplications = applicationWhere ? 0 : await tx.talentCandidate.count({ where: { AND: [where, { applications: { none: {} } }] } });
@@ -116,14 +116,14 @@ export class TalentsService {
         keywordApplied: Boolean(query.keyword), applicationPositionApplied: Boolean(query.applicationPosition), applicationStage: query.applicationStage ?? null,
         status: query.status ?? null, source: query.source ?? null, tag: query.tag ?? null,
         salaryFilterApplied: [query.salaryMin, query.salaryMax, query.salaryMinYuan, query.salaryMaxYuan].some(value => value != null),
-        dueOnly: Boolean(query.dueOnly), staleOnly: Boolean(query.staleOnly), mineOnly: Boolean(query.mineOnly),
+        dueOnly: Boolean(query.dueOnly), staleOnly: Boolean(query.staleOnly), mineOnly: responsibilityScope === 'talent', responsibilityScope,
       } } } });
     const filename = encodeURIComponent(`人才应聘记录-${new Date().toISOString().slice(0, 10)}.xlsx`);
     return new StreamableFile(buffer, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="talent-applications.xlsx"; filename*=UTF-8''${filename}` });
   }
 
-  private async buildWhere(query: TalentQueryDto, operator?: AuthUser): Promise<Prisma.TalentCandidateWhereInput> {
+  private buildFilters(query: TalentQueryDto, operator?: AuthUser) {
     const where: Prisma.TalentCandidateWhereInput = { deletedAt: null };
     const and: Prisma.TalentCandidateWhereInput[] = [];
     if (query.keyword) {
@@ -134,13 +134,15 @@ export class TalentsService {
     if (query.status) where.status = query.status;
     if (query.source) where.sourceChannel = query.source;
     if (query.tag) where.tags = { has: query.tag };
-    const application = talentApplicationFilter(query);
-    if (application) and.push({ applications: { some: application } });
+    const responsibilityScope = query.responsibilityScope ?? (query.mineOnly ? 'talent' : 'all');
+    if (responsibilityScope !== 'all' && !operator?.id) throw new BadRequestException('筛选我的负责范围需要当前登录人');
+    const applicationWhere = talentApplicationFilter(query, responsibilityScope === 'application' ? operator?.id : undefined);
+    if (applicationWhere) and.push({ applications: { some: applicationWhere } });
     const salary = talentSalaryWhere(query);
     if (salary) and.push(salary);
     if (query.dueOnly) and.push({ OR: [
       { followUps: { none: {} } },
-      { followUps: { some: { nextFollowUpAt: { not: null } } } },
+      { followUps: { some: { planStatus: 'pending' } } },
     ] });
     if (query.staleOnly) and.push(this.staleWhere());
     if (query.staleOnly) {
@@ -150,12 +152,11 @@ export class TalentsService {
         { applications: { some: { stage: { notIn: ['hired', 'rejected', 'declined', 'withdrawn'] } } } },
       ] });
     }
-    if (query.mineOnly) {
-      if (!operator?.id) throw new BadRequestException('仅看我的负责需要当前登录人');
+    if (responsibilityScope === 'talent' && operator) {
       and.push({ OR: [{ ownerId: operator.id }, { ownerId: null, createdById: operator.id }] });
     }
     if (and.length > 0) where.AND = and;
-    return where;
+    return { where, applicationWhere, responsibilityScope };
   }
 
   private staleWhere(): Prisma.TalentCandidateWhereInput {
@@ -170,14 +171,13 @@ export class TalentsService {
     };
   }
 
-  /** 给列表项补「最新一条非空下次跟进日期」。 */
+  /** 仅查询本页或本次导出人才的当前安排。 */
   private async attachNextFollowUp<T extends { id: string }>(items: T[], client: Prisma.TransactionClient = this.prisma): Promise<Array<T & { nextFollowUpAt: Date | null }>> {
     if (items.length === 0) return items.map((item) => ({ ...item, nextFollowUpAt: null }));
     const rows = await client.$queryRaw<Array<{ candidate_id: string; next_follow_up_at: Date | null }>>`
-      SELECT DISTINCT ON (candidate_id) candidate_id, next_follow_up_at
+      SELECT candidate_id, next_follow_up_at
       FROM talent_follow_ups
-      WHERE next_follow_up_at IS NOT NULL AND candidate_id::text IN (${Prisma.join(items.map((item) => item.id))})
-      ORDER BY candidate_id, occurred_at DESC, created_at DESC, id DESC
+      WHERE plan_status = 'pending' AND candidate_id IN (${Prisma.join(items.map(item => Prisma.sql`${item.id}::uuid`))})
     `;
     const byId = new Map(rows.map((row) => [row.candidate_id, row.next_follow_up_at]));
     return items.map((item) => ({ ...item, nextFollowUpAt: byId.get(item.id) ?? null }));

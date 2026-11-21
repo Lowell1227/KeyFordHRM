@@ -12,7 +12,7 @@ function setup() {
     talentCandidate: { findFirst: jest.fn().mockResolvedValue(candidate), findUnique: jest.fn().mockResolvedValue(candidate), update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     talentInterview: { findMany: jest.fn().mockResolvedValue([{ id: 'invite', status: 'scheduled', version: 1, startsAt: new Date() }]) },
     employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
-    talentFollowUp: { create: jest.fn().mockResolvedValue({ id: 'followup' }) },
+    talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'followup' }) },
     talentShare: { findUnique: jest.fn().mockResolvedValue({ id: 'share', token: 'secret-share-token', candidateId: candidate.id, revokedAt: null }), update: jest.fn() },
     auditLog: { create: jest.fn() }, user: { findUnique: jest.fn().mockResolvedValue({ id: 'employee' }) },
     $queryRaw: jest.fn().mockResolvedValue([candidate]), $transaction: jest.fn(),

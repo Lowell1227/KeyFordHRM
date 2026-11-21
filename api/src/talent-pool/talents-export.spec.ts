@@ -89,4 +89,20 @@ describe('talent export uses the list scope and all matching applications', () =
     expect(prisma.talentApplication.findMany).toHaveBeenCalledWith({ where: { candidate: { deletedAt: null } },
       select: { positionName: true }, distinct: ['positionName'], orderBy: { positionName: 'asc' } });
   });
+
+  it('uses the signed-in application owner, position and stage together for existence, list summary, export and count', async () => {
+    const { service, prisma } = fixture();
+    const query = { responsibilityScope: 'application', mineOnly: true, applicationPosition: '运营', applicationStage: 'interviewing' } as never;
+    const sameApplication = { ownerId: actor.id, positionName: '运营', stage: 'interviewing' };
+    await service.list(query, actor);
+    const list = prisma.talentCandidate.findMany.mock.calls[0][0];
+    expect(list.where.AND).toEqual([{ applications: { some: sameApplication } }]);
+    expect(list.include.applications.where).toEqual(sameApplication);
+    await service.exportApplications(query, actor);
+    expect(prisma.talentCandidate.findMany.mock.calls[1][0].select.applications.where).toEqual(sameApplication);
+    expect(prisma.talentApplication.count).toHaveBeenCalledWith({ where: { candidate: list.where, ...sameApplication } });
+    await service.list({ responsibilityScope: 'all', mineOnly: true } as never, actor);
+    expect(prisma.talentCandidate.findMany.mock.calls[2][0].where).toEqual({ deletedAt: null });
+    await expect(service.list(query)).rejects.toBeInstanceOf(BadRequestException);
+  });
 });

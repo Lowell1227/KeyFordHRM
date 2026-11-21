@@ -12,7 +12,8 @@ const invalidDates = [
 
 function setup() {
   const tx = {
-    talentFollowUp: { create: jest.fn().mockImplementation(({ data }) => Promise.resolve(data)) },
+    $queryRaw: jest.fn().mockResolvedValue([{ id: 'fictional-candidate' }]), auditLog: { create: jest.fn() },
+    talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockImplementation(({ data }) => Promise.resolve(data)) },
     talentCandidate: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
   };
   const prisma = { $transaction: jest.fn().mockImplementation((run) => run(tx)) };
@@ -63,6 +64,16 @@ describe('follow-up Beijing date and calendar regression (F3/F4)', () => {
 
   it('date parser itself never silently rolls a non-calendar date forward', () => {
     expect(() => parseTalentDate('2026-02-31')).toThrow(BadRequestException);
+  });
+
+  it('allows an explicitly empty expected plan and rejects malformed IDs or null completion', async () => {
+    const pipe = new ValidationPipe({ transform: true, whitelist: true });
+    const base = { channel: 'phone', summary: 'Synthetic plan ID' };
+    const parse = (fields: object) => pipe.transform({ ...base, ...fields }, { type: 'body', metatype: CreateFollowUpDto });
+    await expect(parse({ expectedPlanId: null })).resolves.toMatchObject({ expectedPlanId: null });
+    for (const fields of [{ expectedPlanId: '' }, { expectedPlanId: [] }, { completePlanId: 'none' }, { completePlanId: null }]) {
+      await expect(parse(fields)).rejects.toBeInstanceOf(BadRequestException);
+    }
   });
 
   it('preserves the optional null/omitted next date contract', async () => {

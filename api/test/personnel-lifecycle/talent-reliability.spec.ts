@@ -31,9 +31,9 @@ async function inPreview() {
     const day = shanghaiBusinessDate(), past = new Date(day.getTime() - 86400000), future = new Date(day.getTime() + 86400000);
     const tied = [randomUUID(), randomUUID()].sort();
     await db.talentFollowUp.createMany({ data: [
-      { id: randomUUID(), candidateId: ids[0], occurredAt: day, nextFollowUpAt: past, createdAt: new Date('2020-01-01'), channel: 'other', summary: prefix, createdById: actorId },
-      { id: tied[0], candidateId: ids[0], occurredAt: day, nextFollowUpAt: past, createdAt: new Date('2020-01-02'), channel: 'other', summary: prefix, createdById: actorId },
-      { id: tied[1], candidateId: ids[0], occurredAt: day, nextFollowUpAt: future, createdAt: new Date('2020-01-02'), channel: 'other', summary: prefix, createdById: actorId },
+      { id: randomUUID(), candidateId: ids[0], occurredAt: day, nextFollowUpAt: past, planStatus: 'superseded', createdAt: new Date('2020-01-01'), channel: 'other', summary: prefix, createdById: actorId },
+      { id: tied[0], candidateId: ids[0], occurredAt: day, nextFollowUpAt: past, planStatus: 'superseded', createdAt: new Date('2020-01-02'), channel: 'other', summary: prefix, createdById: actorId },
+      { id: tied[1], candidateId: ids[0], occurredAt: day, nextFollowUpAt: future, planStatus: 'pending', createdAt: new Date('2020-01-02'), channel: 'other', summary: prefix, createdById: actorId },
       { id: randomUUID(), candidateId: ids[0], occurredAt: day, nextFollowUpAt: null, createdAt: new Date('2020-01-03'), channel: 'other', summary: prefix, createdById: actorId },
     ] });
     // A single connection makes this session-zone check apply to the actual raw SQL.
@@ -42,7 +42,7 @@ async function inPreview() {
     const list = await talents.list(query);
     assert.equal(list.items.find(t => t.id === ids[0]).nextFollowUpAt.toISOString(), future.toISOString());
     const due = await talents.list(Object.assign(new TalentQueryDto(), { keyword: prefix, dueOnly: true }));
-    assert.equal(due.items.some(t => t.id === ids[0]), false);
+    assert.equal(due.items.some(t => t.id === ids[0]), true);
     const detail = await talents.detail(ids[0]);
     assert.equal(detail.followUps[0].nextFollowUpAt, null);
     assert.equal(detail.followUps[1].id, tied[1]);

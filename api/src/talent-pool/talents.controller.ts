@@ -128,6 +128,16 @@ export class TalentsController {
     return this.followUps.create(id, input, user);
   }
 
+  @Post(':id/follow-ups/:followUpId/cancel')
+  @HrCapabilities('employee_archive_edit')
+  cancelFollowUpPlan(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('followUpId', new ParseUUIDPipe()) followUpId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.followUps.cancel(id, followUpId, user);
+  }
+
   @Get(':id/follow-ups')
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   listFollowUps(@Param('id', new ParseUUIDPipe()) id: string) {

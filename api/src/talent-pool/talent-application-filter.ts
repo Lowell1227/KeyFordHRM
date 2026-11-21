@@ -6,10 +6,11 @@ export const TALENT_APPLICATION_STAGE_LABELS = {
 } as const;
 export const TALENT_APPLICATION_STAGES = Object.keys(TALENT_APPLICATION_STAGE_LABELS);
 
-/** Position and stage must describe one application, including its historical stages. */
-export function talentApplicationFilter(query: { applicationPosition?: string; applicationStage?: string }): Prisma.TalentApplicationWhereInput | undefined {
-  if (!query.applicationPosition && !query.applicationStage) return undefined;
+/** Apply owner, position and stage to the same application. */
+export function talentApplicationFilter(query: { applicationPosition?: string; applicationStage?: string }, ownerId?: string): Prisma.TalentApplicationWhereInput | undefined {
+  if (!query.applicationPosition && !query.applicationStage && !ownerId) return undefined;
   return {
+    ...(ownerId ? { ownerId } : {}),
     ...(query.applicationPosition ? { positionName: query.applicationPosition } : {}),
     ...(query.applicationStage ? { stage: query.applicationStage } : {}),
   };

@@ -36,12 +36,12 @@ describe('Talent follow-up due and attachment query contracts', () => {
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1); // only selected-page date attachment
     expect(prisma.talentCandidate.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { deletedAt: null, AND: [{ OR: [
-        { followUps: { none: {} } }, { followUps: { some: { nextFollowUpAt: { not: null } } } },
+        { followUps: { none: {} } }, { followUps: { some: { planStatus: 'pending' } } },
       ] }] },
     }));
   });
 
-  it('binds only the selected page IDs and attaches each latest nonempty next date to the right candidate', async () => {
+  it('binds only the selected page IDs and attaches each pending date to the right candidate', async () => {
     const { sut, prisma } = setup();
     prisma.$queryRaw.mockResolvedValue([
       { candidate_id: 'candidate-2', next_follow_up_at: new Date('2035-03-21T00:00:00Z') },
@@ -52,9 +52,8 @@ describe('Talent follow-up due and attachment query contracts', () => {
 
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     const attach = statement(prisma.$queryRaw.mock.calls[0]);
-    expect(attach.sql).toContain('SELECT DISTINCT ON (candidate_id) candidate_id, next_follow_up_at');
-    expect(attach.sql).toContain('WHERE next_follow_up_at IS NOT NULL AND candidate_id::text IN (?,?)');
-    expect(attach.sql).toContain('ORDER BY candidate_id, occurred_at DESC, created_at DESC, id DESC');
+    expect(attach.sql).toContain('SELECT candidate_id, next_follow_up_at');
+    expect(attach.sql).toContain("WHERE plan_status = 'pending' AND candidate_id IN (?::uuid,?::uuid)");
     expect(attach.values).toEqual(['candidate-1', 'candidate-2']);
     expect(result.items.map(({ id, nextFollowUpAt }) => ({ id, nextFollowUpAt }))).toEqual([
       { id: 'candidate-1', nextFollowUpAt: new Date('2035-03-19T00:00:00Z') },

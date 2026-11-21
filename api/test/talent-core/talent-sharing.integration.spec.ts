@@ -192,7 +192,7 @@ describe('talent core: disposable PostgreSQL', () => {
     for (const candidate of [closed, open]) {
       await prisma.talentCandidate.update({ where: { id: candidate.id }, data: { createdAt: new Date('2020-01-01') } });
       await prisma.talentFollowUp.create({ data: { candidateId: candidate.id, occurredAt: new Date('2026-01-01'), nextFollowUpAt: new Date('2026-01-02'),
-        channel: 'phone', summary: 'Synthetic', createdById: actor.id } });
+        channel: 'phone', summary: 'Synthetic', planStatus: 'pending', createdById: actor.id } });
       await prisma.talentApplication.create({ data: { candidateId: candidate.id, positionName: 'Synthetic role', ownerId: actor.id,
         createdById: actor.id, stage: candidate.id === closed.id ? 'withdrawn' : 'screening' } });
     }

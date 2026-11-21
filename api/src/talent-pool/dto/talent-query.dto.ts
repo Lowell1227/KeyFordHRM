@@ -77,4 +77,8 @@ export class TalentQueryDto extends PaginationDto {
   @BooleanQuery()
   @IsBoolean()
   mineOnly?: boolean;
+
+  @IsOptional()
+  @IsIn(['all', 'talent', 'application'])
+  responsibilityScope?: 'all' | 'talent' | 'application';
 }
