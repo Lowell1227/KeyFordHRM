@@ -214,6 +214,27 @@ test('completing the selected arrangement requires a result and leaves only hist
   await expect(timeline).toContainText('已替换 2026-11-30');
 });
 
+test('a mounted arrangement follows Beijing midnight and refreshes when the page becomes visible', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-30T15:59:00Z') });
+  const state = await install(page);
+  await page.goto('/talents');
+  const timeline = await openDetail(page, 1440);
+  const current = timeline.getByLabel('当前跟进安排', { exact: true });
+  await expect(current).toContainText('未来');
+  await page.clock.fastForward(60_000);
+  await expect(current).toContainText('今天');
+
+  // The wall clock has moved while the scheduled callback did not run.
+  await page.clock.setSystemTime(new Date('2026-12-01T16:01:00Z'));
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(current).toContainText('逾期');
+  await expect(current).toContainText('2026-12-01');
+  expect(state.reads).toBe(1);
+});
+
 test('supplementing history preserves the pending arrangement, and cancelling creates no record', async ({ page }) => {
   const state = await install(page);
   await page.clock.setFixedTime(new Date('2026-12-02T02:00:00Z'));

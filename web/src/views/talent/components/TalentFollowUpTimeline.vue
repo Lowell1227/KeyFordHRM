@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, reactive, watch, onBeforeUnmount, nextTick } from 'vue';
+import { computed, ref, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { isAxiosError } from 'axios';
 import { talentPoolApi } from '@/api/talent-pool.api';
@@ -31,8 +31,9 @@ const actionError = ref('');
 const summaryInput = ref<HTMLTextAreaElement>();
 const currentPlan = computed(() => list.value.find(item => item.planStatus === 'pending'));
 const currentDate = computed(() => formatFollowUpDate(currentPlan.value?.nextFollowUpAt));
+const businessDay = ref(beijingFollowUpToday());
 const currentTiming = computed(() => {
-  const today = beijingFollowUpToday();
+  const today = businessDay.value;
   return currentDate.value < today ? '逾期' : currentDate.value === today ? '今天' : '未来';
 });
 const draftPlanChanged = computed(() => Boolean(formMode.value) && expectedPlanId.value !== (currentPlan.value?.id ?? null));
@@ -42,9 +43,10 @@ const showNextDate = computed(() => formMode.value === 'complete' || !expectedPl
 const closedPlanLabels = { completed: '已完成', cancelled: '已取消', superseded: '已替换' };
 let requestId = 0;
 let session = 0;
+let businessDayTimer: number | undefined;
 
 const form = reactive({
-  occurredAt: beijingFollowUpToday(),
+  occurredAt: businessDay.value,
   channel: 'phone' as FollowUpChannel,
   summary: '',
   nextFollowUpAt: '',
@@ -83,6 +85,18 @@ function clearNextDate() {
   errors.nextFollowUpAt = '';
 }
 
+function refreshBusinessDay() {
+  window.clearTimeout(businessDayTimer);
+  const now = new Date();
+  businessDay.value = beijingFollowUpToday(now);
+  const nextMidnight = Date.parse(`${businessDay.value}T00:00:00+08:00`) + 24 * 60 * 60 * 1000;
+  businessDayTimer = window.setTimeout(refreshBusinessDay, nextMidnight - now.getTime());
+}
+
+function refreshBusinessDayOnReturn() {
+  if (document.visibilityState === 'visible') refreshBusinessDay();
+}
+
 watch(() => props.candidateId, () => {
   ++session; ++requestId;
   list.value = [];
@@ -93,7 +107,15 @@ watch(() => props.candidateId, () => {
   saving.value = false;
   void load();
 }, { immediate: true });
-onBeforeUnmount(() => { ++session; ++requestId; });
+onMounted(() => {
+  refreshBusinessDay();
+  document.addEventListener('visibilitychange', refreshBusinessDayOnReturn);
+});
+onBeforeUnmount(() => {
+  ++session; ++requestId;
+  window.clearTimeout(businessDayTimer);
+  document.removeEventListener('visibilitychange', refreshBusinessDayOnReturn);
+});
 
 function active(candidateId: string, token: number) {
   return props.candidateId === candidateId && session === token;

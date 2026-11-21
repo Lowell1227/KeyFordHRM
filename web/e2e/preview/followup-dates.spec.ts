@@ -41,17 +41,53 @@ async function fixture(request: APIRequestContext) {
   };
 }
 
-async function openFollowUp(page: Page, name: string) {
-  await page.goto('/login');
-  await page.getByTestId('preview-login').click();
-  await expect(page).toHaveURL(/\/dashboard$/);
+async function openTalent(page: Page, name: string) {
   await page.goto('/talents');
   await page.getByPlaceholder('姓名 / 手机 / 公司 / 职位').fill(name);
   await page.getByPlaceholder('姓名 / 手机 / 公司 / 职位').press('Enter');
   const row = page.locator('.el-table__row:visible, .mobile-result-card:visible').filter({ hasText: name });
   await row.getByRole('button', { name: /^打开(详情)?$/ }).click();
+}
+
+async function openFollowUp(page: Page, name: string) {
+  await page.goto('/login');
+  await page.getByTestId('preview-login').click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await openTalent(page, name);
   await page.getByRole('button', { name: '补充记录', exact: true }).click();
 }
+
+test('real current arrangement label follows Beijing midnight without reloading', async ({ page, request }, info) => {
+  const candidate = await fixture(request);
+  const blocked: string[] = [];
+  try {
+    await page.route('**/*', route => {
+      const http = route.request(), url = new URL(http.url());
+      if (url.origin !== 'http://localhost:5173' || (url.pathname.startsWith('/api/v1/talent-resume/') && http.method() !== 'GET')) {
+        blocked.push(url.pathname);
+        return route.abort();
+      }
+      return route.continue();
+    });
+    const arranged = await request.post(`/api/v1/talents/${candidate.id}/follow-ups`, {
+      headers: candidate.headers,
+      data: { occurredAt: '2026-11-30', channel: 'phone', summary: '虚构跨日安排', nextFollowUpAt: '2026-12-01', expectedPlanId: null },
+    });
+    expect(arranged.status()).toBe(201);
+    await page.addInitScript(token => localStorage.setItem('token', token), candidate.headers.authorization.slice('Bearer '.length));
+    await page.clock.install({ time: new Date('2026-11-30T15:59:00Z') });
+    await openTalent(page, candidate.name);
+    const current = page.getByLabel('当前跟进安排', { exact: true });
+    await expect(current).toContainText('未来');
+    await page.clock.fastForward(60_000);
+    await expect(current).toContainText('今天');
+    await page.clock.fastForward(86_400_000);
+    await expect(current).toContainText('逾期');
+    await expect(current).toContainText('2026-12-01');
+    expect(blocked).toEqual([]);
+    await current.screenshot({ path: info.outputPath('followup-midnight-label.png'), animations: 'disabled' });
+  } finally { await candidate.clean(); }
+});
 
 for (const timezoneId of ['Asia/Shanghai', 'America/Los_Angeles']) {
   test.describe(timezoneId, () => {
