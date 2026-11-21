@@ -154,4 +154,33 @@ describe('single follow-up plan and responsibility filters on disposable Postgre
     expect(workbook.worksheets[0].getRow(2).values).toContain(row.name);
     expect((await talents.list(query({ keyword: 'Synthetic scope', mineOnly: true }), hr)).items.map(item => item.id)).toEqual([split.id]);
   });
+
+  it('returns a consistent due page while another HR cancels between selecting the page and reading its dates', async () => {
+    const row = await candidate('Synthetic page read');
+    const plan = await service.create(row.id, { ...note, nextFollowUpAt: '2030-06-01', expectedPlanId: null }, hr);
+    let cancellations = 0;
+    const reader = db.$extends({ query: {
+      async $queryRaw({ args, query: readDates }) {
+        await service.cancel(row.id, plan.id, other);
+        cancellations++;
+        return readDates(args);
+      },
+    } });
+    const filters = query({ keyword: row.name, dueOnly: true });
+    const snapshot = await new TalentsService(reader as unknown as PrismaService).list(filters, hr);
+    expect(cancellations).toBe(1);
+    expect(snapshot.total).toBe(1);
+    expect(snapshot.items.map(item => [item.id, item.nextFollowUpAt])).toEqual([[row.id, new Date('2030-06-01')]]);
+    expect(await talents.list(filters, hr)).toMatchObject({ total: 0, items: [] });
+  });
+
+  it('accepts the uppercase spelling of a current UUID in a supplement, completion and cancellation', async () => {
+    const row = await candidate('Synthetic uppercase ID');
+    const first = await service.create(row.id, { ...note, nextFollowUpAt: '2030-06-01' }, hr);
+    await service.create(row.id, { ...note, expectedPlanId: first.id.toUpperCase() }, other);
+    const next = await service.create(row.id, { ...note, expectedPlanId: first.id.toUpperCase(),
+      completePlanId: first.id.toUpperCase(), nextFollowUpAt: '2030-06-02' }, hr);
+    await expect(service.cancel(row.id, next.id.toUpperCase(), other)).resolves.toMatchObject({ id: next.id, planStatus: 'cancelled' });
+    expect((await service.list(row.id)).find(item => item.id === first.id)).toMatchObject({ planStatus: 'completed' });
+  });
 });

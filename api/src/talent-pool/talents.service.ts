@@ -63,23 +63,24 @@ export class TalentsService {
 
   async list(query: TalentQueryDto, operator?: AuthUser): Promise<Paginated<TalentListItem>> {
     const { where, applicationWhere } = this.buildFilters(query, operator);
-    const [total, items] = await this.prisma.$transaction([
-      this.prisma.talentCandidate.count({ where }),
-      this.prisma.talentCandidate.findMany({
+    const { total, items } = await this.prisma.$transaction(async tx => {
+      const total = await tx.talentCandidate.count({ where });
+      const page = await tx.talentCandidate.findMany({
         where,
         orderBy: listOrder,
         skip: query.skip,
         take: query.take,
         include: { ...listInclude, applications: { ...listInclude.applications, where: applicationWhere } },
-      }),
-    ]);
+      });
+      return { total, items: await this.attachNextFollowUp(page, tx) };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
     const summaries = await this.attachEmployment(await this.attachRecruitmentSummaries(items));
-    const withDue = await this.attachNextFollowUp(summaries.map(({ _count, applications: _applications, ...item }, index) => ({
+    const rows = summaries.map(({ _count, applications: _applications, ...item }, index) => ({
       ...serializeTalentSalary(item),
       editVersion: talentEditVersion(items[index]),
       fileCount: _count.files,
-    })));
-    return paginated(withDue as TalentListItem[], total, query);
+    }));
+    return paginated(rows as TalentListItem[], total, query);
   }
 
   async applicationPositions(): Promise<string[]> {
@@ -172,7 +173,7 @@ export class TalentsService {
   }
 
   /** 仅查询本页或本次导出人才的当前安排。 */
-  private async attachNextFollowUp<T extends { id: string }>(items: T[], client: Prisma.TransactionClient = this.prisma): Promise<Array<T & { nextFollowUpAt: Date | null }>> {
+  private async attachNextFollowUp<T extends { id: string }>(items: T[], client: Prisma.TransactionClient): Promise<Array<T & { nextFollowUpAt: Date | null }>> {
     if (items.length === 0) return items.map((item) => ({ ...item, nextFollowUpAt: null }));
     const rows = await client.$queryRaw<Array<{ candidate_id: string; next_follow_up_at: Date | null }>>`
       SELECT candidate_id, next_follow_up_at

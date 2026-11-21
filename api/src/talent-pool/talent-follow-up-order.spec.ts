@@ -10,9 +10,10 @@ function setup() {
       count: jest.fn().mockResolvedValue(2),
       findMany: jest.fn().mockResolvedValue(candidates),
     },
-    $transaction: jest.fn((operations: Promise<unknown>[]) => Promise.all(operations)),
+    $transaction: jest.fn(),
     $queryRaw: jest.fn(),
   };
+  prisma.$transaction.mockImplementation(read => read(prisma));
   const sut = new TalentsService(prisma as never);
   return { sut, prisma };
 }

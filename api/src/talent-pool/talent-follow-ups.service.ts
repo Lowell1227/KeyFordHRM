@@ -39,8 +39,8 @@ export class TalentFollowUpsService {
     const nextFollowUpAt = parseTalentDate(input.nextFollowUpAt, '下次跟进日期');
     return this.prisma.$transaction(async (tx) => {
       const current = await this.lockedCurrentPlan(tx, candidateId);
-      if (input.expectedPlanId !== undefined && input.expectedPlanId !== (current?.id ?? null)) throw this.planConflict();
-      if (input.completePlanId !== undefined && input.completePlanId !== current?.id) throw this.planConflict();
+      if (input.expectedPlanId !== undefined && input.expectedPlanId?.toLowerCase() !== current?.id) throw this.planConflict();
+      if (input.completePlanId !== undefined && input.completePlanId.toLowerCase() !== current?.id) throw this.planConflict();
       const historical = !!current && occurredAt < current.occurredAt;
       if (input.completePlanId && historical) throw new BadRequestException('完成安排的沟通日期不能早于该安排的沟通日期；可改为补充记录');
       if (current && input.completePlanId) await this.closePlan(tx, current.id, 'completed', operator);
@@ -73,7 +73,7 @@ export class TalentFollowUpsService {
   async cancel(candidateId: string, followUpId: string, operator: AuthUser) {
     return this.prisma.$transaction(async tx => {
       const current = await this.lockedCurrentPlan(tx, candidateId);
-      if (current?.id !== followUpId) throw this.planConflict();
+      if (current?.id !== followUpId.toLowerCase()) throw this.planConflict();
       return this.closePlan(tx, current.id, 'cancelled', operator);
     });
   }
