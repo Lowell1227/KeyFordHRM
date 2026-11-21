@@ -71,13 +71,25 @@ for (const timezoneId of ['Asia/Shanghai', 'America/Los_Angeles']) {
       await install(page); await page.goto('/talents');
       const firstCard = page.locator('.mobile-result-card').filter({ hasText: candidate.name });
       await expect(firstCard.locator('.mobile-result-field').filter({ hasText: '下次跟进' })).toHaveText('下次跟进2026-12-01');
-      await expect(page.locator('.mobile-result-card').filter({ hasText: second.name }).locator('.mobile-result-field').filter({ hasText: '下次跟进' })).toHaveText('下次跟进-');
+      await expect(page.locator('.mobile-result-card').filter({ hasText: second.name }).locator('.mobile-result-field').filter({ hasText: '下次跟进' })).toHaveText('下次跟进未跟进');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     });
   });
 }
 
 for (const width of [1440, 390]) {
+  test(`distinguishes no contact from a contact with no arrangement at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await install(page);
+    await page.route('**/api/v1/talents?*', route => route.fulfill(envelope({ items: [
+      { ...candidate, lastFollowUpAt: '2026-11-20', nextFollowUpAt: null }, second,
+    ], total: 2 })));
+    await page.goto('/talents');
+    const rows = page.locator(width === 390 ? '.mobile-result-card:visible' : '.el-table:visible .el-table__row');
+    await expect(rows.filter({ hasText: candidate.name })).toContainText('暂无安排');
+    await expect(rows.filter({ hasText: second.name })).toContainText('未跟进');
+  });
+
   test(`failed history reads offer local retry without claiming no records at ${width}px (mock)`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 900 });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -121,6 +133,59 @@ for (const width of [1440, 390]) {
     expect(state.writes).toHaveLength(1);
   });
 }
+
+test('an uncertain write that did not commit requires a successful history check and an explicit decision before resubmission', async ({ page }) => {
+  const state = await install(page, []);
+  let attempts = 0;
+  await page.route(`**/api/v1/talents/${candidate.id}/follow-ups`, async route => {
+    if (route.request().method() !== 'POST' || ++attempts > 1) return route.fallback();
+    return route.fulfill({ status: 503, json: { message: 'Synthetic unavailable' } });
+  });
+  await page.goto('/talents');
+  const timeline = await openDetail(page, 1440);
+  await timeline.getByRole('button', { name: '补充记录', exact: true }).click();
+  const form = timeline.locator('form'), summary = form.getByPlaceholder('本次沟通要点（必填）');
+  const save = form.getByRole('button', { name: '保存跟进', exact: true });
+  await summary.fill('断网前的记录草稿');
+  await save.click();
+  await expect(timeline).toContainText('保存结果待核对');
+  await expect(summary).toHaveValue('断网前的记录草稿');
+  await expect(save).toBeDisabled();
+  await expect(form.getByRole('button', { name: '取消编辑', exact: true })).toBeDisabled();
+  await form.evaluate(element => (element as HTMLFormElement).requestSubmit());
+  expect(attempts).toBe(1);
+  state.failReads = 1;
+  const refresh = timeline.getByRole('button', { name: '读取最新记录', exact: true });
+  await refresh.click();
+  await expect(timeline).toContainText('跟进记录读取失败');
+  const resume = timeline.getByRole('button', { name: '未保存，继续编辑', exact: true });
+  await expect(resume).toHaveCount(0);
+  await refresh.click();
+  await expect(resume).toBeEnabled();
+  await expect(save).toBeDisabled();
+  await form.evaluate(element => (element as HTMLFormElement).requestSubmit());
+  expect(attempts).toBe(1);
+  await resume.click();
+  await expect(summary).toHaveValue('断网前的记录草稿');
+  await save.click();
+  await expect(form).toHaveCount(0);
+  expect(attempts).toBe(2);
+  expect(state.writes).toHaveLength(1);
+});
+
+test('an uncertain cancellation offers a read-only plan refresh and no draft recovery form', async ({ page }) => {
+  const state = await install(page);
+  await page.route('**/follow-ups/*/cancel', route => route.abort('failed'));
+  await page.goto('/talents');
+  const timeline = await openDetail(page, 1440);
+  await timeline.getByRole('button', { name: '取消安排', exact: true }).click();
+  await page.getByRole('dialog', { name: '取消跟进安排' }).getByRole('button', { name: '取消安排', exact: true }).click();
+  await expect(timeline).toContainText('取消结果未确认');
+  await expect(timeline.getByText('保存结果待核对')).toHaveCount(0);
+  await timeline.getByRole('button', { name: '刷新安排', exact: true }).click();
+  await expect(timeline.getByRole('button', { name: '取消安排', exact: true })).toBeEnabled();
+  expect(state.reads).toBe(2);
+});
 
 // Mount the real component without its parent's candidate key to exercise its own lifetime contract.
 async function mountSwitchableTimeline(page: Page) {

@@ -27,6 +27,7 @@ const saving = ref(false);
 const formMode = ref<'supplement' | 'complete' | null>(null);
 const expectedPlanId = ref<string | null>(null);
 const planConflict = ref(false);
+const saveVerification = ref<'needs-read' | 'awaiting-decision' | null>(null);
 const actionError = ref('');
 const summaryInput = ref<HTMLTextAreaElement>();
 const currentPlan = computed(() => list.value.find(item => item.planStatus === 'pending'));
@@ -37,7 +38,7 @@ const currentTiming = computed(() => {
   return currentDate.value < today ? '逾期' : currentDate.value === today ? '今天' : '未来';
 });
 const draftPlanChanged = computed(() => Boolean(formMode.value) && expectedPlanId.value !== (currentPlan.value?.id ?? null));
-const actionReady = computed(() => props.editable && !loading.value && !loadError.value && !saving.value && !planConflict.value);
+const actionReady = computed(() => props.editable && !loading.value && !loadError.value && !saving.value && !planConflict.value && !saveVerification.value);
 const canChooseMode = computed(() => actionReady.value && (!formMode.value || draftPlanChanged.value));
 const showNextDate = computed(() => formMode.value === 'complete' || !expectedPlanId.value);
 const closedPlanLabels = { completed: '已完成', cancelled: '已取消', superseded: '已替换' };
@@ -103,6 +104,7 @@ watch(() => props.candidateId, () => {
   loadError.value = '';
   formMode.value = null;
   planConflict.value = false;
+  saveVerification.value = null;
   actionError.value = '';
   saving.value = false;
   void load();
@@ -129,10 +131,20 @@ async function load() {
     const result = await talentPoolApi.listFollowUps(candidateId);
     if (id !== requestId || !active(candidateId, token)) return;
     list.value = result;
+    if (saveVerification.value === 'needs-read') saveVerification.value = 'awaiting-decision';
   } catch {
     if (id === requestId && active(candidateId, token)) loadError.value = '跟进记录读取失败，请重试。';
   } finally {
     if (id === requestId && active(candidateId, token)) loading.value = false;
+  }
+}
+
+function finishVerification(alreadySaved: boolean) {
+  if (saveVerification.value !== 'awaiting-decision' || loading.value || loadError.value) return;
+  saveVerification.value = null;
+  if (alreadySaved) {
+    formMode.value = null;
+    emit('changed');
   }
 }
 
@@ -174,6 +186,10 @@ function showActionError(error: unknown, fallback: string) {
   else actionError.value = status === 403 ? '无权限办理跟进。' : typeof messages === 'string' && messages ? messages : fallback;
 }
 
+function writeResultUncertain(error: unknown) {
+  return isAxiosError(error) && (!error.response || error.response.status >= 500 || error.response.status === 408);
+}
+
 async function afterWrite(candidateId: string, token: number, message: string) {
   ElMessage.success(message);
   await load();
@@ -209,7 +225,12 @@ async function submit() {
     formMode.value = null;
     await afterWrite(candidateId, token, mode === 'complete' ? '已完成跟进' : '已记录跟进');
   } catch (error) {
-    if (active(candidateId, token)) showActionError(error, '保存跟进失败，请重试。');
+    if (!active(candidateId, token)) return;
+    if (writeResultUncertain(error)) {
+      saveVerification.value = 'needs-read';
+    } else {
+      showActionError(error, '保存跟进失败，请重试。');
+    }
   } finally {
     if (active(candidateId, token)) saving.value = false;
   }
@@ -231,7 +252,13 @@ async function cancelArrangement() {
     await talentPoolApi.cancelFollowUpPlan(candidateId, plan.id);
     if (active(candidateId, token)) await afterWrite(candidateId, token, '已取消跟进安排');
   } catch (error) {
-    if (active(candidateId, token)) showActionError(error, '取消跟进安排失败，请重试。');
+    if (!active(candidateId, token)) return;
+    if (writeResultUncertain(error)) {
+      planConflict.value = true;
+      actionError.value = '取消结果未确认，请刷新安排核对。';
+    } else {
+      showActionError(error, '取消跟进安排失败，请重试。');
+    }
   } finally {
     if (active(candidateId, token)) saving.value = false;
   }
@@ -257,14 +284,27 @@ async function cancelArrangement() {
       </div>
     </section>
 
-    <el-alert v-if="actionError || draftPlanChanged" :title="actionError || '输入已保留，请重新选择跟进操作。'"
+    <el-alert v-if="saveVerification" title="保存结果待核对" type="warning" :closable="false" class="talent-follow-ups__error">
+      <template v-if="saveVerification === 'needs-read'">
+        <p>请读取最新记录，查看刚才的沟通是否已保存。</p>
+        <el-button size="small" :loading="loading" @click="load">读取最新记录</el-button>
+      </template>
+      <template v-else>
+        <p>请对照下方最新记录，选择本次沟通的保存结果。</p>
+        <div class="talent-follow-ups__verification-actions">
+          <el-button size="small" @click="finishVerification(true)">已保存，结束编辑</el-button>
+          <el-button size="small" @click="finishVerification(false)">未保存，继续编辑</el-button>
+        </div>
+      </template>
+    </el-alert>
+    <el-alert v-else-if="actionError || draftPlanChanged" :title="actionError || '输入已保留，请重新选择跟进操作。'"
       type="warning" :closable="false" class="talent-follow-ups__error">
       <el-button v-if="planConflict" link type="primary" :disabled="loading" @click="refreshArrangement">
         {{ formMode ? '刷新安排，保留输入' : '刷新安排' }}
       </el-button>
     </el-alert>
 
-    <el-form v-if="editable && formMode" :model="form" class="talent-follow-ups__form" @submit.prevent="submit">
+    <el-form v-if="editable && formMode" :model="form" :disabled="saving || Boolean(saveVerification)" class="talent-follow-ups__form" @submit.prevent="submit">
       <div class="talent-follow-ups__form-row">
         <el-form-item prop="occurredAt" :error="errors.occurredAt" @input.capture="captureDateInput('occurredAt', $event)">
           <el-date-picker v-model="form.occurredAt" type="date" value-format="YYYY-MM-DD" placeholder="跟进日期"
@@ -288,7 +328,7 @@ async function cancelArrangement() {
         </el-form-item>
       </div>
       <div class="talent-follow-ups__form-actions">
-        <el-button size="small" :disabled="saving" @click="formMode = null">取消编辑</el-button>
+        <el-button size="small" :disabled="saving || Boolean(saveVerification)" @click="formMode = null">取消编辑</el-button>
         <el-button size="small" type="primary" :loading="saving" :disabled="!actionReady || draftPlanChanged" @click="submit">
           {{ formMode === 'complete' ? '完成并保存' : '保存跟进' }}
         </el-button>
@@ -296,7 +336,7 @@ async function cancelArrangement() {
     </el-form>
 
     <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" class="talent-follow-ups__error">
-      <el-button link type="primary" :disabled="loading" @click="load">重试</el-button>
+      <el-button v-if="!saveVerification" link type="primary" :disabled="loading" @click="load">重试</el-button>
     </el-alert>
     <el-empty v-if="!loading && !loadError && !list.length && !formMode" description="还没有跟进记录" :image-size="60" />
     <el-timeline v-else v-loading="loading" class="talent-follow-ups__timeline">
@@ -324,6 +364,12 @@ async function cancelArrangement() {
   margin-bottom: 10px;
 }
 .talent-follow-ups__error { margin-bottom: 12px; }
+.talent-follow-ups__verification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.talent-follow-ups__verification-actions .el-button { margin: 0; }
 .talent-follow-ups__title {
   margin: 0;
   font-size: 14px;

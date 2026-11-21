@@ -44,7 +44,10 @@ export class TalentFollowUpsService {
       const historical = !!current && occurredAt < current.occurredAt;
       if (input.completePlanId && historical) throw new BadRequestException('完成安排的沟通日期不能早于该安排的沟通日期；可改为补充记录');
       if (current && input.completePlanId) await this.closePlan(tx, current.id, 'completed', operator);
-      else if (current && nextFollowUpAt && !historical) await this.closePlan(tx, current.id, 'superseded', operator);
+      else if (current && nextFollowUpAt && !historical) {
+        if (input.expectedPlanId === undefined) throw new ConflictException('已有当前跟进安排，请刷新页面并核对后再保存');
+        await this.closePlan(tx, current.id, 'superseded', operator);
+      }
       const planStatus = !nextFollowUpAt ? 'none' : historical ? 'superseded' : 'pending';
       const followUp = await tx.talentFollowUp.create({
         data: {

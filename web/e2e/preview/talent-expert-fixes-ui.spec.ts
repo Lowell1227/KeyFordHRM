@@ -49,9 +49,15 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
     const responseFor = (method: string, path: string) => page.waitForResponse(r =>
       r.request().method() === method && new URL(r.url()).pathname === '/api/v1' + path);
     const row = (name: string) => page.locator(mobile ? '.mobile-result-card:visible' : '.el-table:visible .el-table__row').filter({ hasText: name });
-    const choose = async (filter: Locator, label: string) => {
+    const listResponse = (keyword: string, filters: Record<string, string>) => page.waitForResponse(r => {
+      const url = new URL(r.url());
+      return r.request().method() === 'GET' && url.pathname === '/api/v1/talents' && url.searchParams.get('keyword') === keyword
+        && ['responsibilityScope', 'applicationPosition', 'applicationStage', 'dueOnly'].every(key =>
+          url.searchParams.get(key) === (filters[key] ?? null));
+    });
+    const choose = async (filter: Locator, label: string, filters: Record<string, string>) => {
       await filter.click();
-      const response = responseFor('GET', '/talents');
+      const response = listResponse(prefix, filters);
       await page.getByRole('option', { name: label, exact: true }).click();
       const result = await response;
       expect(result.status()).toBe(200);
@@ -67,7 +73,7 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       await page.addInitScript(token => localStorage.setItem('token', token), editor.token);
       await page.route('**/*', route => {
         const request = route.request(), url = new URL(request.url());
-        if (url.origin !== origin || (url.pathname.startsWith('/api/v1/talent-resume/') && request.method() !== 'GET')) {
+        if (url.origin !== origin || (/\/api\/v1\/(?:talent-resume(?:-tasks)?|talents\/resume)(?:\/|$)/.test(url.pathname) && request.method() !== 'GET')) {
           blocked.push(url.pathname);
           return route.abort();
         }
@@ -88,17 +94,20 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       const keyword = page.getByPlaceholder('姓名 / 手机 / 公司 / 职位');
       await keyword.fill(prefix); await keyword.press('Enter');
       await expect(row(followName)).toBeVisible();
+      await expect(row(followName)).toContainText('未跟进');
       await expect(row(appName)).toContainText(newPosition);
       const scope = page.locator('.talent-filter-bar__scope');
-      expect(await choose(scope, '我负责的人才')).toEqual([{ id: follow.id, latestId: undefined }]);
+      const myApplications = { responsibilityScope: 'application' };
+      expect(await choose(scope, '我负责的人才', { responsibilityScope: 'talent' })).toEqual([{ id: follow.id, latestId: undefined }]);
       await expect(row(appName)).toHaveCount(0);
-      expect(await choose(scope, '我负责的应聘')).toEqual([{ id: app.id, latestId: owned.id }]);
+      expect(await choose(scope, '我负责的应聘', myApplications)).toEqual([{ id: app.id, latestId: owned.id }]);
       await expect(row(appName)).toContainText(oldPosition + ' · 人才储备');
       const position = page.getByTestId('talent-filter-application-position'), stage = page.getByTestId('talent-filter-application-stage');
-      expect(await choose(position, newPosition)).toEqual([]);
-      expect(await choose(position, oldPosition)).toEqual([{ id: app.id, latestId: owned.id }]);
-      expect(await choose(stage, '初筛')).toEqual([]);
-      expect(await choose(stage, '人才储备')).toEqual([{ id: app.id, latestId: owned.id }]);
+      const matchingPosition = { ...myApplications, applicationPosition: oldPosition };
+      expect(await choose(position, newPosition, { ...myApplications, applicationPosition: newPosition })).toEqual([]);
+      expect(await choose(position, oldPosition, matchingPosition)).toEqual([{ id: app.id, latestId: owned.id }]);
+      expect(await choose(stage, '初筛', { ...matchingPosition, applicationStage: 'screening' })).toEqual([]);
+      expect(await choose(stage, '人才储备', { ...matchingPosition, applicationStage: 'reserve' })).toEqual([{ id: app.id, latestId: owned.id }]);
       const exportResponse = responseFor('GET', '/talents/export'), downloading = page.waitForEvent('download');
       await page.getByRole('button', { name: '导出应聘记录', exact: true }).click();
       expect((await exportResponse).status()).toBe(200);
@@ -124,7 +133,9 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       await page.getByRole('button', { name: '重置', exact: true }).click();
       await keyword.fill(followName); await keyword.press('Enter');
       const dueSwitch = page.getByRole('switch', { name: '仅看待跟进', exact: true });
+      const dueResponse = listResponse(followName, { dueOnly: 'true' });
       await dueSwitch.locator('..').click();
+      expect((await dueResponse).status()).toBe(200);
       await expect(dueSwitch).toBeChecked();
       await row(followName).getByRole('button', { name: mobile ? '打开详情' : '打开', exact: true }).click();
       const timeline = drawer.locator('.talent-follow-ups'), current = timeline.getByLabel('当前跟进安排', { exact: true });
@@ -148,7 +159,44 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       await expect(current).toContainText('未来');
       const first = (await history()).find(plan => plan.planStatus === 'pending')!;
       expect(first).toBeTruthy();
-      await record('虚构历史补充沟通');
+      const supplement = '虚构历史补充沟通_' + prefix;
+      const recordsBefore = await history();
+      await previewApi(page, other, 'POST', followPath, 409, {
+        occurredAt: today, channel: 'phone', summary: '虚构旧标签页', nextFollowUpAt: dateIn(45),
+      });
+      expect(await history()).toEqual(recordsBefore);
+      let writeAttempts = 0, savedId = '';
+      const followRoute = origin + '/api/v1' + followPath;
+      await page.route(followRoute, async route => {
+        if (route.request().method() !== 'POST') return route.fallback();
+        writeAttempts++;
+        if (writeAttempts > 1) return route.fallback();
+        const committed = await route.fetch({ maxRedirects: 0 });
+        expect(committed.status()).toBe(201);
+        savedId = (await committed.json()).data.id;
+        await route.abort('failed');
+      });
+      await timeline.getByRole('button', { name: '补充记录', exact: true }).click();
+      await summary.fill(supplement);
+      const supplementSave = form.getByRole('button', { name: '保存跟进', exact: true });
+      await supplementSave.click();
+      await expect(timeline).toContainText('保存结果待核对');
+      await expect(supplementSave).toBeDisabled();
+      await expect(summary).toHaveValue(supplement);
+      expect((await history()).filter(item => item.summary === supplement).map(item => item.id)).toEqual([savedId]);
+      await form.evaluate(element => (element as HTMLFormElement).requestSubmit());
+      await timeline.getByRole('button', { name: '读取最新记录', exact: true }).click();
+      await expect(timeline.locator('.talent-follow-ups__summary').filter({ hasText: supplement })).toHaveCount(1);
+      await expect(supplementSave).toBeDisabled();
+      await timeline.getByRole('button', { name: '已保存，结束编辑', exact: true }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: info.outputPath(`follow-up-verified-write-${width}.png`), animations: 'disabled' });
+      await timeline.getByRole('button', { name: '已保存，结束编辑', exact: true }).click();
+      await expect(form).toHaveCount(0);
+      const checked = await history();
+      expect(checked).toHaveLength(recordsBefore.length + 1);
+      expect(checked.filter(item => item.summary === supplement).map(item => item.id)).toEqual([savedId]);
+      expect(writeAttempts).toBe(1);
+      await page.unroute(followRoute);
       expect((await history()).find(plan => plan.planStatus === 'pending')?.id).toBe(first.id);
       const login = await page.request.post('/api/v1/auth/test-login', { data: { employeeNo: 'EMP001' } });
       expect(login.ok()).toBe(true);
@@ -202,6 +250,11 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]] as const) {
       expect(after.find(plan => plan.id === toCancel.id)).toMatchObject({ planStatus: 'cancelled', planClosedById: editor.id });
       expect(after.every(plan => plan.planStatus !== 'pending')).toBe(true);
       expect(await timeline.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+      await drawer.locator('.el-drawer__close-btn').click();
+      const allResponse = listResponse(followName, {});
+      await dueSwitch.locator('..').click();
+      expect((await allResponse).status()).toBe(200);
+      await expect(row(followName)).toContainText('暂无安排');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       expect(blocked).toEqual([]);
       expect(pageErrors).toEqual([]);

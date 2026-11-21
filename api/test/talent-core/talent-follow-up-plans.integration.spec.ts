@@ -183,4 +183,20 @@ describe('single follow-up plan and responsibility filters on disposable Postgre
     await expect(service.cancel(row.id, next.id.toUpperCase(), other)).resolves.toMatchObject({ id: next.id, planStatus: 'cancelled' });
     expect((await service.list(row.id)).find(item => item.id === first.id)).toMatchObject({ planStatus: 'completed' });
   });
+
+  it('refuses a legacy dated write that would replace an unseen current plan, without changing history or audit', async () => {
+    const row = await candidate('Synthetic old tab');
+    const current = await service.create(row.id, { ...note, nextFollowUpAt: '2030-06-02' }, hr);
+    const before = await service.list(row.id);
+    const auditWhere = { entityType: 'talent_follow_up' };
+    const countBefore = await db.auditLog.count({ where: auditWhere });
+    await expect(service.create(row.id, { ...note, nextFollowUpAt: '2030-07-03' }, other)).rejects.toBeInstanceOf(ConflictException);
+    expect(await service.list(row.id)).toEqual(before);
+    expect(await db.auditLog.count({ where: auditWhere })).toBe(countBefore);
+    await expect(service.create(row.id, note, other)).resolves.toMatchObject({ planStatus: 'none' });
+    await expect(service.create(row.id, { ...note, occurredAt: '2030-05-09', nextFollowUpAt: '2030-06-01' }, other))
+      .resolves.toMatchObject({ planStatus: 'superseded' });
+    await expect(service.create(row.id, { ...note, completePlanId: current.id, nextFollowUpAt: '2030-08-01' }, hr))
+      .resolves.toMatchObject({ planStatus: 'pending' });
+  });
 });

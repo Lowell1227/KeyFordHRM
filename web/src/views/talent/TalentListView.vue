@@ -154,6 +154,11 @@ function asRow(row: unknown): TalentCandidateListItem {
   return row as TalentCandidateListItem;
 }
 
+function nextFollowUpLabel(row: TalentCandidateListItem) {
+  if (row.nextFollowUpAt) return formatFollowUpDate(row.nextFollowUpAt);
+  return row.lastFollowUpAt ? '暂无安排' : '未跟进';
+}
+
 const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质简历可以直接拍照上传。';
 </script>
 
@@ -258,7 +263,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           </template>
         </el-table-column>
         <el-table-column label="下次跟进" width="110">
-          <template #default="{ row }">{{ formatFollowUpDate(asRow(row).nextFollowUpAt) }}</template>
+          <template #default="{ row }">{{ nextFollowUpLabel(asRow(row)) }}</template>
         </el-table-column>
         <el-table-column label="更新时间" width="110">
           <template #default="{ row }">{{ formatDate(asRow(row).updatedAt) }}</template>
@@ -287,7 +292,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
           ['手机', item.phone],
           ['人才负责人', item.ownerName || '未指定'],
           [hasApplicationFilter ? '匹配应聘' : '最新应聘', item.latestApplication ? `${item.latestApplication.positionName} · ${APPLICATION_STAGE_LABELS[item.latestApplication.stage]}` : '暂无应聘'],
-          ['下次跟进', formatFollowUpDate(item.nextFollowUpAt)],
+          ['下次跟进', nextFollowUpLabel(item)],
         ]" :key="field[0]" class="mobile-result-field">
           <span class="mobile-result-field__label">{{ field[0] }}</span>
           <span class="mobile-result-field__value">{{ field[1] }}</span>

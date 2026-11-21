@@ -18,10 +18,13 @@
 - 原GET follow-ups保留数组响应，追加上述三个字段。
 - POST follow-ups追加`expectedPlanId?: UUID|null`、`completePlanId?: UUID`。新UI始终发送expectedPlanId（当前ID或null）；服务端锁候选人并核对ID，冲突409保留输入、刷新后人工重试。completePlanId仅明确完成时提供，必须仍是当前pending；历史补录不得隐式完成。保存完成及可选新安排在同一事务。
 - 普通记录无新日期保留当前安排。新日期是明确安排意图；无当前安排则pending，同期/较新记录可替换（旧为superseded），早于当前安排依托沟通日期的历史日期仅作superseded历史。UI有安排时补充模式不显示新日期入口，避免误替换。
+- 旧客户端省略目标ID仅兼容安全的普通补充、首次安排和历史补录；若要替换已有pending，必须提供经核对的expectedPlanId或completePlanId，否则409并要求刷新，不让旧标签页覆盖别人新建的安排。
 - POST `/talents/:id/follow-ups/:followUpId/cancel` 取消指定当前pending；候选人、记录归属与仍为当前均需核验，409不关闭其他安排。沿实际现有`employee_archive_edit`编辑能力，不扩权限。结束/取消/替换记录操作者时间与既有审计。
 - 列表/Excel nextFollowUpAt只读pending；dueOnly按无记录或pending过滤，不先取全局候选人ID；完成不复活旧安排。
 - GET人才/Excel追加`responsibilityScope?: all|talent|application`，旧mineOnly仍兼容映射talent（显式新范围优先）。talent沿既有ownerId或无owner时createdBy；application仅当前操作者负责的应聘，与岗位阶段合并同一谓词。
 - Web匹配上下文追加`applicationOwnerId?: string`（不是查询指定任意负责人，只用于打开时复核），避免旧页面打开已移交的应聘后误操作。
+- POST网络中断或5xx结果不明确时，保留草稿并停止直接重试；先只读刷新时间线，再由经办明确选择已保存结束编辑或未保存重新提交。读取失败不解除限制。明确的400/403/409沿原各自恢复规则，确认写入成功后的读取失败不当作未知写入。
+- PC/手机无下次日期时使用同一展示逻辑：lastFollowUpAt为空显示未跟进，否则暂无安排，已有日期正常显示。
 
 ## 约束与验证
 
