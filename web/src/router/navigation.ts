@@ -14,6 +14,7 @@ export type NavigationUser = {
   canViewAll: boolean;
   businessCapabilities?: BusinessCapabilities;
   hrCapabilities?: HrCapability[];
+  isAssessorOnly?: boolean;
 };
 
 export function canAccessAppealLedger(user: NavigationUser): boolean {
@@ -28,7 +29,7 @@ const moduleDefinitions: Record<
   workbench: { label: '工作台', order: 10 },
   performance: { label: '绩效', order: 20 },
   people: { label: '人员', order: 30 },
-  recruitment: { label: '招聘', order: 40, status: 'paused' },
+  recruitment: { label: '招聘', order: 40 },
   compensation: { label: '薪酬', order: 50, status: 'paused' },
   system: { label: '系统管理', order: 60 },
 };
@@ -37,7 +38,9 @@ export function canAccessRoute(
   route: Pick<RouteRecordRaw, 'meta'>,
   user: NavigationUser,
 ): boolean {
-  if (route.meta?.talentHiringOnly) return user.sysRole === 'hr' || Boolean(user.hrCapabilities?.includes('talent_hiring_confirm'));
+  if (route.meta?.talentHiringOnly) return canConfirmHiring(user);
+  if (route.meta?.talentPoolOnly) return canReadTalent(user);
+  if (route.meta?.recruitmentEntry) return canReadTalent(user) || canConfirmHiring(user);
   if (route.meta?.appealLedgerOnly) return canAccessAppealLedger(user);
   const scopedCapability = route.meta?.scopedCapability;
   if (scopedCapability && user.businessCapabilities?.[scopedCapability]) return true;
@@ -56,6 +59,16 @@ export function canAccessRoute(
   return !roles || roles.includes(user.sysRole);
 }
 
+function canConfirmHiring(user: NavigationUser): boolean {
+  return !user.isAssessorOnly && (user.sysRole === 'hr' || Boolean(user.hrCapabilities?.includes('talent_hiring_confirm')));
+}
+
+function canReadTalent(user: NavigationUser): boolean {
+  return !user.isAssessorOnly && (['hr', 'system_admin'].includes(user.sysRole)
+    || (user.sysRole === 'hr_user' && Boolean(user.hrCapabilities?.some(capability =>
+      capability === 'employee_archive_edit' || capability === 'employee_archive_review'))));
+}
+
 function navigationMeta(route: RouteRecordRaw): NavigationMeta | null {
   const meta = route.meta?.navigation;
   if (!meta || typeof route.name !== 'string') return null;
@@ -72,6 +85,7 @@ export function buildNavigation(routes: readonly RouteRecordRaw[], user: Navigat
   for (const route of routes) {
     const meta = navigationMeta(route);
     if (!meta || !canAccessRoute(route, user)) continue;
+    if (meta.audience === 'recruitment' && !canReadTalent(user)) continue;
 
     const moduleDefinition = moduleDefinitions[meta.module];
     const module = modules.get(meta.module) ?? {

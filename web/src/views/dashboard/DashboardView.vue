@@ -177,8 +177,8 @@ function avatarColor(name: string): string {
     <template v-if="isEmployee">
       <section class="employee-hero">
         <div>
-          <h2>{{ auth.user?.name || '员工' }}，这里是你的绩效工作台</h2>
-          <p>查看各计划任务，继续处理当前待办。</p>
+          <h2>{{ auth.user?.name || '员工' }}，你好</h2>
+          <p>继续处理当前待办。</p>
         </div>
       </section>
     </template>

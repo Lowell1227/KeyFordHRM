@@ -216,7 +216,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
     ]);
     const people = modules.find((module) => module.key === "people");
     expect(people?.groups.map((group) => group.label)).toEqual([
-      "试用期与转正",
+      "试用与转正",
     ]);
     expect(JSON.stringify(modules)).not.toContain("团队绩效");
     expect(JSON.stringify(modules)).not.toContain("考勤");
@@ -234,6 +234,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
       "工作台",
       "绩效",
       "人员",
+      "招聘",
       "系统管理",
     ]);
     const performance = modules.find((module) => module.key === "performance");
@@ -244,11 +245,12 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
         items: group.items.map((item) => item.label),
       })),
     ).toEqual([
-      { label: "绩效工作台", items: ["绩效工作台"] },
+      { label: "绩效任务", items: ["绩效任务"] },
       {
         label: "绩效运营",
         items: [
           "周期与计划",
+          "目标变更授权",
           "部门复核",
           "绩效校准",
           "绩效面谈",
@@ -259,22 +261,39 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
         ],
       },
       { label: "绩效分析", items: ["绩效报表"] },
-      { label: "绩效设置", items: ["考核模板"] },
-      { label: "试用期与转正", items: ["转正管理", "我的转正申请"] },
+      { label: "绩效设置", items: ["指标库", "考核模板"] },
     ]);
     const people = modules.find((module) => module.key === "people");
     expect(
       people?.groups.map((group) => group.label),
-    ).toEqual(["人员档案"]);
+    ).toEqual(["人员档案", "试用与转正"]);
     expect(people?.groups[0].items.map((item) => item.label)).toEqual([
       "员工档案",
       "组织架构",
-      "岗位目录",
-      "人事办理",
+      "人事基础资料",
+      "入离职",
     ]);
+    expect(people?.groups[1].items.map((item) => item.label)).toEqual([
+      "转正管理",
+      "我的转正申请",
+    ]);
+    const recruitment = modules.find((module) => module.key === "recruitment");
+    expect(recruitment?.defaultPath).toBe("/talents");
+    expect(recruitment?.groups.map((group) => ({
+      label: group.label,
+      items: group.items.map((item) => item.label),
+    }))).toEqual([
+      { label: "人才与应聘", items: ["人才库", "应聘与面试"] },
+      { label: "录用与入职衔接", items: ["录用确认"] },
+    ]);
+    expect(routes.find((route) => route.path === "/indicators")?.meta).toMatchObject({
+      title: "指标库",
+      navigation: { module: "performance", label: "指标库", groupLabel: "绩效设置" },
+    });
+    expect(routes.find((route) => route.path === "/dashboard")?.meta?.title).toBe("全局工作台");
   });
 
-  test("system administrator sees paused recruiting and compensation before system management", () => {
+  test("system administrator sees active recruitment and paused compensation before system management", () => {
     const modules = buildNavigation(routes, {
       sysRole: "system_admin",
       canViewAll: true,
@@ -290,9 +309,9 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
       "系统管理",
     ]);
     expect(modules.find((module) => module.key === "recruitment")).toMatchObject({
-      defaultPath: "/recruitment",
-      status: "paused",
+      defaultPath: "/talents",
     });
+    expect(modules.find((module) => module.key === "recruitment")?.status).toBeUndefined();
     expect(modules.find((module) => module.key === "compensation")).toMatchObject({
       defaultPath: "/compensation",
       status: "paused",
@@ -359,12 +378,12 @@ test.describe("11-navigation-entrypoints navigation active state", () => {
     const dashboard = new DashboardPage(page);
 
     await expect(dashboard.module("performance")).toBeVisible();
-    await expect(dashboard.menuItem("绩效工作台")).toHaveClass(/is-active/);
+    await expect(dashboard.menuItem("绩效任务")).toHaveClass(/is-active/);
     await expect(page.locator(".app-main")).toHaveClass(/app-main--workspace/);
-    await expect(page.getByTestId("app-route-title")).toHaveText("绩效工作台");
+    await expect(page.getByTestId("app-route-title")).toHaveText("绩效任务");
   });
 
-  test("keeps the performance workbench parent active across its three local sections", async ({
+  test("keeps the performance tasks parent active across its three local sections", async ({
     page,
   }) => {
     await mockNavigationIdentity(page);
@@ -383,7 +402,7 @@ test.describe("11-navigation-entrypoints navigation active state", () => {
         .click();
       await expect(page).toHaveURL(new RegExp(`${section.path}(?:\\?|$)`));
       await expect(dashboard.module("performance")).toHaveClass(/is-active/);
-      await expect(dashboard.menuItem("绩效工作台")).toHaveClass(/is-active/);
+      await expect(dashboard.menuItem("绩效任务")).toHaveClass(/is-active/);
     }
   });
 
@@ -1068,7 +1087,7 @@ test.describe("11-navigation-entrypoints header", () => {
     ).toHaveCount(0);
     await expect(page.locator(".app-header .header-action")).toHaveCount(0);
     await expect(page.getByTestId("performance-workspace-title")).toHaveCount(0);
-    await expect(page.getByTestId("app-route-title")).toHaveText("绩效工作台");
+    await expect(page.getByTestId("app-route-title")).toHaveText("绩效任务");
     await expect(page.locator("h1")).toHaveCount(1);
     await expect(page.getByTestId("app-notifications")).toBeVisible();
     await expect(page.getByTestId("header-user-menu")).toBeVisible();

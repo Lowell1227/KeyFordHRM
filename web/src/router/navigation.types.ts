@@ -17,6 +17,7 @@ export interface NavigationMeta {
   order: number;
   group?: string;
   groupLabel?: string;
+  audience?: 'recruitment';
 }
 
 export interface NavigationItem {
@@ -52,6 +53,8 @@ declare module 'vue-router' {
     scopedCapability?: BusinessCapabilityKey;
     hrCapabilities?: HrCapability[];
     talentHiringOnly?: boolean;
+    talentPoolOnly?: boolean;
+    recruitmentEntry?: boolean;
     appealLedgerOnly?: boolean;
     navigation?: NavigationMeta;
     activeNavigationPath?: string;

@@ -26,7 +26,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/dashboard/DashboardView.vue'),
     meta: {
       requiresAuth: true,
-      title: '工作台',
+      title: '全局工作台',
       navigation: { module: 'workbench', label: '工作台', order: 10 },
     },
   },
@@ -40,6 +40,15 @@ export const routes: RouteRecordRaw[] = [
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['cycle_plan_edit', 'cycle_plan_review'],
       navigation: { module: 'performance', label: '周期与计划', order: 20, group: 'performance', groupLabel: '绩效运营' },
+    },
+  },
+  {
+    path: '/indicators',
+    name: 'Indicators',
+    component: () => import('@/views/admin/IndicatorLibraryView.vue'),
+    meta: {
+      requiresAuth: true, title: '指标库', roles: ['hr', 'system_admin'],
+      navigation: { module: 'performance', label: '指标库', order: 110, group: 'performance-settings', groupLabel: '绩效设置' },
     },
   },
   {
@@ -152,9 +161,10 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '人才库',
+      talentPoolOnly: true,
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['employee_archive_edit', 'employee_archive_review'],
-      navigation: { module: 'people', label: '人才库', order: 15, group: 'people-archive', groupLabel: '人员档案' },
+      navigation: { module: 'recruitment', label: '人才库', order: 10, group: 'recruitment-candidates', groupLabel: '人才与应聘' },
     },
   },
   {
@@ -163,7 +173,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/talent/TalentHiringReviewView.vue'),
     meta: {
       requiresAuth: true, title: '录用确认', talentHiringOnly: true,
-      navigation: { module: 'people', label: '录用确认', order: 16, group: 'people-archive', groupLabel: '人员档案' },
+      navigation: { module: 'recruitment', label: '录用确认', order: 30, group: 'recruitment-handoff', groupLabel: '录用与入职衔接' },
     },
   },
   {
@@ -192,7 +202,7 @@ export const routes: RouteRecordRaw[] = [
     path: '/basic-data',
     name: 'BasicData',
     component: () => import('@/views/admin/BasicDataView.vue'),
-    meta: { requiresAuth: true, title: '基础资料', roles: ['hr', 'system_admin'], hrCapabilities: ['employee_archive_edit', 'employee_archive_review', 'organization_edit'], navigation: { module: 'people', label: '基础资料', order: 30, group: 'people-archive', groupLabel: '人员档案' } },
+    meta: { requiresAuth: true, title: '人事基础资料', roles: ['hr', 'system_admin'], hrCapabilities: ['employee_archive_edit', 'employee_archive_review', 'organization_edit'], navigation: { module: 'people', label: '人事基础资料', order: 30, group: 'people-archive', groupLabel: '人员档案' } },
   },
   {
     path: '/contract-subjects',
@@ -227,13 +237,16 @@ export const routes: RouteRecordRaw[] = [
     path: '/talent-interviews',
     name: 'TalentInterviews',
     component: () => import('@/views/talent/TalentInterviewView.vue'),
-    meta: { requiresAuth: true, title: '面试邀约' },
+    meta: {
+      requiresAuth: true, title: '应聘与面试',
+      navigation: { module: 'recruitment', label: '应聘与面试', order: 20, group: 'recruitment-candidates', groupLabel: '人才与应聘', audience: 'recruitment' },
+    },
   },
   {
     path: '/talent-interviews/:id',
     name: 'TalentInterviewDetail',
     component: () => import('@/views/talent/TalentInterviewView.vue'),
-    meta: { requiresAuth: true, title: '面试邀约' },
+    meta: { requiresAuth: true, title: '面试邀约', activeNavigationPath: '/talent-interviews' },
   },
   {
     path: '/personnel-processing',
@@ -255,9 +268,16 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/recruitment/RecruitmentOverviewView.vue'),
     meta: {
       requiresAuth: true,
-      title: '招聘（规划中）',
-      roles: ['system_admin'],
-      navigation: { module: 'recruitment', label: '招聘概览', order: 10 },
+      title: '招聘', recruitmentEntry: true,
+    },
+  },
+  {
+    path: '/recruitment/planning',
+    name: 'RecruitmentPlanning',
+    component: () => import('@/views/recruitment/RecruitmentPlanningView.vue'),
+    meta: {
+      requiresAuth: true, title: '招聘建设规划', roles: ['system_admin'],
+      navigation: { module: 'recruitment', label: '建设规划', order: 90, group: 'recruitment-planning', groupLabel: '规划' },
     },
   },
   {
@@ -266,9 +286,9 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/compensation/CompensationOverviewView.vue'),
     meta: {
       requiresAuth: true,
-      title: '薪酬（规划中）',
+      title: '薪酬规划',
       roles: ['system_admin'],
-      navigation: { module: 'compensation', label: '薪酬概览', order: 10 },
+      navigation: { module: 'compensation', label: '薪酬规划', order: 10 },
     },
   },
   {
@@ -320,15 +340,15 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/task/TaskListView.vue'),
     meta: {
       requiresAuth: true,
-      title: '绩效工作台',
-      navigation: { module: 'performance', label: '绩效工作台', order: 10, group: 'performance-workbench', groupLabel: '绩效工作台' },
+      title: '绩效任务',
+      navigation: { module: 'performance', label: '绩效任务', order: 10, group: 'performance-tasks', groupLabel: '绩效任务' },
     },
   },
   {
     path: '/tasks/:id',
     name: 'TaskDetail',
     component: () => import('@/views/task/TaskDetailView.vue'),
-    meta: { requiresAuth: true, title: '任务详情' },
+    meta: { requiresAuth: true, title: '任务详情', activeNavigationPath: '/tasks' },
   },
   {
     path: '/tasks/:id/periods/:periodId',
@@ -360,7 +380,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/goal-changes/GoalChangeGrantView.vue'),
     meta: {
       requiresAuth: true, title: '目标变更授权', roles: ['hr'], hrCapabilities: ['cycle_plan_edit'],
-      navigation: { module: 'performance', label: '目标变更授权', order: 25, group: 'performance', groupLabel: '绩效运营' },
+      navigation: { module: 'performance', label: '目标变更授权', order: 22, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -467,7 +487,7 @@ export const routes: RouteRecordRaw[] = [
       roles: ['hr'],
       hrCapabilities: ['confirmation_manage'],
       scopedCapability: 'canHandleConfirmationApprovals',
-      navigation: { module: 'performance', label: '转正管理', order: 160, group: 'performance-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '转正管理', order: 50, group: 'people-probation', groupLabel: '试用与转正' },
     },
   },
   {
@@ -502,7 +522,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的转正申请',
-      navigation: { module: 'performance', label: '我的转正申请', order: 180, group: 'performance-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '我的转正申请', order: 60, group: 'people-probation', groupLabel: '试用与转正' },
     },
   },
   {

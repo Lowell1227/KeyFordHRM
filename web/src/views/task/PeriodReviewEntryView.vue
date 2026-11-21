@@ -65,7 +65,7 @@ watch([taskId, periodId], load, { immediate: true });
       class="period-review-entry__context"
       data-testid="period-review-entry-context"
     >
-      <el-button link @click="router.push('/tasks')">返回绩效工作台</el-button>
+      <el-button link @click="router.push('/tasks')">返回绩效任务</el-button>
       <div v-if="detail">
         <strong>{{ detail.context.cycleName }}</strong
         ><span>{{ detail.context.employeeName }} · {{ label }}</span>

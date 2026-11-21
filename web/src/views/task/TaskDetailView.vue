@@ -652,7 +652,7 @@ async function handleRemind() {
           <el-alert
             v-if="invalidRequestedPeriod"
             data-testid="performance-period-unavailable"
-            title="该期间不存在或不属于当前绩效任务，请返回绩效工作台选择正确期间。"
+            title="该期间不存在或不属于当前绩效任务，请返回绩效任务选择正确期间。"
             type="warning"
             :closable="false"
             show-icon
