@@ -555,6 +555,10 @@ model PositionChangeRequest {
 }
 
 model User {
+  payrollGrants PayrollGrant[]
+  payrollStandards PayrollStandard[]
+  payrollLines PayrollLine[]
+  payrollOpenings PayrollOpeningBalance[]
   id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   dingtalkId         String?        @unique @map("dingtalk_id") @db.VarChar(64)
   dingtalkUnionId    String?        @unique @map("dingtalk_union_id") @db.VarChar(64)
@@ -763,6 +767,14 @@ model PersonnelReferenceData {
 }
 
 model ContractSubject {
+  payrollGrants PayrollGrant[]
+  payrollPolicies PayrollPolicy[]
+  payrollStandards PayrollStandard[]
+  payrollAttendance PayrollAttendanceSnapshot[]
+  payrollBatches PayrollBatch[]
+  payrollReservations PayrollReservation[]
+  payrollOpenings PayrollOpeningBalance[]
+  payrollEvents PayrollEvent[]
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name String @unique @db.VarChar(150)
   isActive Boolean @default(true) @map("is_active")
@@ -2435,4 +2447,229 @@ model TalentInterviewSync {
   @@unique([interviewId, version])
   @@index([status, nextAttemptAt])
   @@map("talent_interview_syncs")
+}
+
+model PayrollGrant {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  capabilities String[] @default([]) @db.VarChar(40)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  grantedById String @map("granted_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  @@unique([userId, subjectId])
+  @@map("payroll_grants")
+}
+
+model PayrollPolicy {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  domain String @default("validation") @db.VarChar(20)
+  version Int
+  status String @default("draft") @db.VarChar(20)
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  effectiveTo DateTime? @map("effective_to") @db.Date
+  config Json @db.JsonB
+  createdById String @map("created_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  activatedAt DateTime? @map("activated_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  @@unique([subjectId, domain, version])
+  @@index([subjectId, domain, status, effectiveFrom])
+  @@map("payroll_policies")
+}
+
+model PayrollStandard {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  domain String @default("validation") @db.VarChar(20)
+  version Int
+  status String @default("draft") @db.VarChar(20)
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  effectiveTo DateTime? @map("effective_to") @db.Date
+  fixedMonthly Decimal? @map("fixed_monthly") @db.Decimal(16, 4)
+  performanceBase Decimal? @map("performance_base") @db.Decimal(16, 4)
+  performanceMode String? @map("performance_mode") @db.VarChar(20)
+  evidence String @db.VarChar(500)
+  createdById String @map("created_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  activatedAt DateTime? @map("activated_at") @db.Timestamptz(6)
+  employee User @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  @@unique([subjectId, employeeId, domain, version])
+  @@index([subjectId, employeeId, domain, status, effectiveFrom])
+  @@map("payroll_standards")
+}
+
+model PayrollAttendanceSnapshot {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  domain String @default("validation") @db.VarChar(20)
+  month String @db.VarChar(7)
+  version Int
+  status String @default("draft") @db.VarChar(20)
+  sourceKey String @map("source_key") @db.VarChar(100)
+  sourceHash String @map("source_hash") @db.VarChar(64)
+  payload Json @db.JsonB
+  review Json @default("[]") @db.JsonB
+  sealedHash String? @map("sealed_hash") @db.VarChar(64)
+  createdById String @map("created_by_id") @db.Uuid
+  sealedById String? @map("sealed_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  sealedAt DateTime? @map("sealed_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  @@unique([subjectId, domain, month, version])
+  @@unique([subjectId, domain, month, sourceKey])
+  @@index([subjectId, domain, month, status])
+  @@map("payroll_attendance_snapshots")
+}
+
+model PayrollBatch {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  month String @db.VarChar(7)
+  payMonth String @map("pay_month") @db.VarChar(7)
+  purpose String @default("trial") @db.VarChar(20)
+  status String @default("draft") @db.VarChar(20)
+  version Int @default(0)
+  correctionOfId String? @map("correction_of_id") @db.Uuid
+  createdById String @map("created_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  versions PayrollVersion[]
+  @@index([subjectId, month, purpose, status])
+  @@map("payroll_batches")
+}
+
+model PayrollVersion {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId String @map("batch_id") @db.Uuid
+  version Int
+  status String @default("calculated") @db.VarChar(20)
+  sourceHash String @map("source_hash") @db.VarChar(64)
+  sources Json @db.JsonB
+  issues Json @default("[]") @db.JsonB
+  approvalPath String[] @map("approval_path") @db.Uuid
+  reviewerCount Int @map("reviewer_count")
+  approvalStep Int @default(0) @map("approval_step")
+  gross Decimal? @db.Decimal(18, 2)
+  calculatedById String @map("calculated_by_id") @db.Uuid
+  submittedById String? @map("submitted_by_id") @db.Uuid
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
+  approvedAt DateTime? @map("approved_at") @db.Timestamptz(6)
+  voidedAt DateTime? @map("voided_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  batch PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  lines PayrollLine[]
+  decisions PayrollDecision[]
+  exports PayrollExportRecord[]
+  @@unique([batchId, version])
+  @@map("payroll_versions")
+}
+
+model PayrollLine {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionId String @map("version_id") @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  attributionMonth String @map("attribution_month") @db.VarChar(7)
+  itemCode String @map("item_code") @db.VarChar(30)
+  status String @default("ready") @db.VarChar(30)
+  entitlement Decimal? @db.Decimal(16, 2)
+  paidBefore Decimal? @map("paid_before") @db.Decimal(16, 2)
+  amount Decimal? @db.Decimal(16, 2)
+  evidence Json @db.JsonB
+  version PayrollVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  employee User @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  settlements PayrollSettlement[]
+  reservation PayrollReservation?
+  @@unique([versionId, employeeId, attributionMonth, itemCode])
+  @@map("payroll_lines")
+}
+
+model PayrollReservation {
+  subjectId String @map("subject_id") @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  domain String @db.VarChar(20)
+  attributionMonth String @map("attribution_month") @db.VarChar(7)
+  itemCode String @map("item_code") @db.VarChar(30)
+  lineId String @unique @map("line_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  line PayrollLine @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  @@id([subjectId, employeeId, domain, attributionMonth, itemCode])
+  @@map("payroll_reservations")
+}
+
+model PayrollDecision {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionId String @map("version_id") @db.Uuid
+  step Int
+  actorId String @map("actor_id") @db.Uuid
+  action String @db.VarChar(20)
+  note String @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  version PayrollVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  @@unique([versionId, step])
+  @@map("payroll_decisions")
+}
+
+model PayrollSettlement {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  lineId String @map("line_id") @db.Uuid
+  requestId String @unique @map("request_id") @db.Uuid
+  requestHash String @map("request_hash") @db.VarChar(64)
+  amount Decimal @db.Decimal(16, 2)
+  reference String @db.VarChar(200)
+  confirmedById String @map("confirmed_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  line PayrollLine @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  @@index([lineId])
+  @@map("payroll_settlements")
+}
+
+model PayrollOpeningBalance {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  domain String @db.VarChar(20)
+  attributionMonth String @map("attribution_month") @db.VarChar(7)
+  itemCode String @map("item_code") @db.VarChar(30)
+  amount Decimal? @db.Decimal(16, 2)
+  reference String? @db.VarChar(200)
+  confirmedById String? @map("confirmed_by_id") @db.Uuid
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  employee User @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  @@unique([subjectId, employeeId, domain, attributionMonth, itemCode])
+  @@map("payroll_opening_balances")
+}
+
+model PayrollExportRecord {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionId String @map("version_id") @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  checksum String @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  version PayrollVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  @@index([versionId])
+  @@map("payroll_export_records")
+}
+
+model PayrollEvent {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  batchId String? @map("batch_id") @db.Uuid
+  version Int?
+  action String @db.VarChar(40)
+  actorId String @map("actor_id") @db.Uuid
+  metadata Json @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  @@index([subjectId, batchId, createdAt])
+  @@map("payroll_events")
 }
