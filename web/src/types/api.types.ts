@@ -1,3 +1,4 @@
+import type { PayrollAccess } from './payroll.types';
 import type {
   SysRole,
   EmploymentType,
@@ -182,6 +183,7 @@ export interface CurrentUser {
   directManagerName?: string;
   avatarUrl?: string;
   businessCapabilities?: BusinessCapabilities;
+  payrollAccess?: PayrollAccess;
 }
 
 /** 登录响应。 */

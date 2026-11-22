@@ -1,5 +1,6 @@
 import type { RouteRecordName } from 'vue-router';
 import type { BusinessCapabilities, HrCapability } from '@/types/api.types';
+import type { PayrollCapability } from '@/types/payroll.types';
 
 export type NavigationModuleKey =
   | 'workbench'
@@ -56,6 +57,8 @@ declare module 'vue-router' {
     talentPoolOnly?: boolean;
     recruitmentEntry?: boolean;
     appealLedgerOnly?: boolean;
+    payrollOnly?: boolean;
+    payrollCapabilities?: PayrollCapability[];
     navigation?: NavigationMeta;
     activeNavigationPath?: string;
   }

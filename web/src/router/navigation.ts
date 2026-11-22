@@ -1,6 +1,7 @@
 import type { RouteRecordRaw } from 'vue-router';
 import type { SysRole } from '@/types/enums';
 import type { BusinessCapabilities, HrCapability } from '@/types/api.types';
+import type { PayrollAccess } from '@/types/payroll.types';
 import type {
   NavigationGroup,
   NavigationItem,
@@ -15,6 +16,7 @@ export type NavigationUser = {
   businessCapabilities?: BusinessCapabilities;
   hrCapabilities?: HrCapability[];
   isAssessorOnly?: boolean;
+  payrollAccess?: PayrollAccess;
 };
 
 export function canAccessAppealLedger(user: NavigationUser): boolean {
@@ -38,6 +40,13 @@ export function canAccessRoute(
   route: Pick<RouteRecordRaw, 'meta'>,
   user: NavigationUser,
 ): boolean {
+  const access = user.payrollAccess;
+  if (route.meta?.payrollOnly) {
+    return Boolean(access?.enabled && route.meta.payrollCapabilities?.length
+      && access.subjects.some(subject => route.meta!.payrollCapabilities!.some(cap => subject.capabilities.includes(cap))));
+  }
+  if (route.meta?.navigation?.module === 'compensation' && !route.meta.payrollOnly
+    && access?.enabled && access.subjects.some(subject => subject.capabilities.length)) return false;
   if (route.meta?.talentHiringOnly) return canConfirmHiring(user);
   if (route.meta?.talentPoolOnly) return canReadTalent(user);
   if (route.meta?.recruitmentEntry) return canReadTalent(user) || canConfirmHiring(user);
@@ -120,7 +129,7 @@ export function buildNavigation(routes: readonly RouteRecordRaw[], user: Navigat
           items: [...group.items].sort((left, right) => left.order - right.order),
         }))
         .sort((left, right) => left.items[0].order - right.items[0].order);
-      return { ...module, defaultPath: groups[0].items[0].path, groups };
+      return { ...module, status: module.key === 'compensation' && groups.some(group => group.items.some(item => item.path.startsWith('/payroll/'))) ? undefined : module.status, defaultPath: groups[0].items[0].path, groups };
     })
     .sort((left, right) => left.order - right.order);
 }
