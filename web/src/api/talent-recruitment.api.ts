@@ -2,12 +2,15 @@ import http from './http';
 import type { Paginated } from '@/types/api.types';
 import type {
   TalentApplicationAction, TalentApplicationInput, TalentApplicationView, TalentFeedbackOutcome,
-  TalentFeedbackResponse, TalentRecruitmentOwner, TalentReserveReason,
+  TalentFeedbackResponse, TalentRecruitmentOwner, TalentReserveReason, RecruitmentWorkbenchGroup,
 } from '@/types/talent.types';
 
 const base = '/talent-recruitment';
 const localError = { skipErrorMessage: true };
 export const talentRecruitmentApi = {
+  workbench(): Promise<{ groups: RecruitmentWorkbenchGroup[] }> {
+    return http.get(`${base}/workbench`, localError) as unknown as Promise<{ groups: RecruitmentWorkbenchGroup[] }>;
+  },
   hiringReviews(): Promise<TalentApplicationView[]> {
     return http.get(`${base}/hiring-reviews`) as unknown as Promise<TalentApplicationView[]>;
   },

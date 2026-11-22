@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { canAccessAppealLedger } from '@/router/navigation';
 import ChartCard from '@/components/common/ChartCard.vue';
 import DashboardTaskEntries from './DashboardTaskEntries.vue';
-import DashboardInterviews from './DashboardInterviews.vue';
+import DashboardRecruitment from './DashboardRecruitment.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import type { AssessmentCycle, ReportSummary } from '@/types/api.types';
@@ -184,7 +184,7 @@ function avatarColor(name: string): string {
     </template>
 
     <DashboardTaskEntries />
-    <DashboardInterviews />
+    <DashboardRecruitment />
 
     <template v-if="!isEmployee || isDirectManager || roleQuickActions.length">
       <div v-loading="dashboardLoading" class="dashboard-admin">

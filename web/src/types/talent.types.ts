@@ -471,3 +471,17 @@ export interface TalentFeedbackResponse {
   canEdit: boolean;
   canReturn: boolean;
 }
+export type RecruitmentWorkbenchKey = 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding';
+export interface RecruitmentWorkbenchItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  date: string | null;
+  candidateId?: string;
+  applicationId?: string;
+}
+export interface RecruitmentWorkbenchGroup {
+  key: RecruitmentWorkbenchKey;
+  total: number;
+  items: RecruitmentWorkbenchItem[];
+}
