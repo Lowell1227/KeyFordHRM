@@ -197,8 +197,8 @@ async function inPreview() {
             type: 'normal', state: 'effective', hours: '8', unit: 'hour' });
         }
         current = 'fixture-complete-attendance-sync';
-        const snapshot = await data.sync({ subjectId: own.subject, month, sourceKey: `${prefix}:${month}`,
-          input: { month, complete: true, expected, records } }, actor('editor'));
+        const snapshot = await data.sync({ subjectId: own.subject, month, sourceKey: `${prefix}:${month}`, complete: true,
+          input: { month, expected, records } }, actor('editor'));
         current = 'fixture-complete-attendance-seal';
         await data.seal(snapshot.id, snapshot.version, actor('editor'));
         current = 'fixture-opening-confirmation';
