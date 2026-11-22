@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, reactive, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { usePagination } from '@/composables/usePagination';
 import { useExport } from '@/composables/useExport';
@@ -35,10 +36,12 @@ import { useTalentPermissions } from './useTalentPermissions';
 
 const { canEdit } = useTalentPermissions();
 const auth = useAuthStore();
+const route = useRoute();
 
 const list = ref<TalentCandidateListItem[]>([]);
 const loading = ref(false);
 const loadError = ref('');
+const deepLinkError = ref('');
 const exportError = ref(''), positionsError = ref(''), applicationPositions = ref<string[]>([]);
 const { loading: exporting, download } = useExport();
 const detailVisible = ref(false);
@@ -65,9 +68,14 @@ let requestId = 0;
 onBeforeUnmount(() => { ++requestId; });
 
 onMounted(() => {
-  void loadList();
   void loadApplicationPositions();
 });
+watch([() => route.query.responsibilityScope, () => route.query.dueOnly, () => route.query.applicationStage], ([scope, dueOnly, stage]) => {
+  filters.responsibilityScope = scope === 'talent' || scope === 'application' ? scope : 'all';
+  filters.dueOnly = dueOnly === 'true';
+  filters.applicationStage = stage === 'accepted' ? stage : '';
+  reset(); void loadList();
+}, { immediate: true });
 
 function currentFilters(): TalentQuery {
   return {
@@ -126,6 +134,19 @@ function openDetail(id: string, applicationId?: string) {
 function openRow(row: TalentCandidateListItem) {
   openDetail(row.id, row.latestApplication?.id);
 }
+watch([() => route.query.candidateId, () => route.query.applicationId], ([candidateId, applicationId]) => {
+  deepLinkError.value = '';
+  if (candidateId === undefined && applicationId === undefined) { detailVisible.value = false; return; }
+  if (typeof candidateId !== 'string' || !candidateId.trim()
+    || (applicationId !== undefined && (typeof applicationId !== 'string' || !applicationId.trim()))) {
+    detailVisible.value = false; activeCandidateId.value = null; activeApplicationMatch.value = undefined;
+    deepLinkError.value = '人才或应聘链接不完整，请从列表重新选择。';
+    return;
+  }
+  activeCandidateId.value = candidateId;
+  activeApplicationMatch.value = typeof applicationId === 'string' && applicationId ? { id: applicationId } : undefined;
+  detailVisible.value = true;
+}, { immediate: true });
 function openEdit(id: string) {
   if (!canEdit.value) return;
   activeCandidateId.value = id;
@@ -209,6 +230,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
     </template>
 
     <template #feedback>
+      <el-alert v-if="deepLinkError" :title="deepLinkError" type="error" :closable="false" />
       <el-alert v-if="exportError" :title="exportError" type="error" :closable="false" />
       <el-alert v-if="positionsError" :title="positionsError" type="error" :closable="false"><el-button link type="primary" @click="loadApplicationPositions">重试岗位选项</el-button></el-alert>
       <el-alert v-if="loadError" :title="loadError" type="error" :closable="false">

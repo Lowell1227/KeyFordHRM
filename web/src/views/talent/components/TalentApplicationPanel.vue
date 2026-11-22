@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { onBeforeRouteUpdate, useRouter } from 'vue-router';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { type FormInstance, type FormRules } from 'element-plus';
 import { departmentsApi } from '@/api/departments.api';
@@ -58,6 +58,10 @@ const departmentOptions = computed(() => {
 const canOpenHiringReview = computed(() => current.value?.stage === 'hiring_review'
   && current.value.allowedActions.some(action => ['approve_hiring', 'return_hiring'].includes(action))
   && auth.user && canAccessRoute(router.resolve({ name: 'TalentHiringReview' }), auth.user));
+onBeforeRouteUpdate((to, from) => {
+  if ((to.query.candidateId !== from.query.candidateId || to.query.applicationId !== from.query.applicationId)
+    && (busy.value || editing.value || command.value)) return false;
+});
 function active(token: number, candidateId: string, applicationId?: string) {
   return token === session && candidateId === props.candidateId && (!applicationId || applicationId === selectedId.value);
 }
@@ -225,10 +229,10 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
     </el-form>
     <template v-else-if="current">
       <dl><dt>本次应聘阶段</dt><dd class="application-panel__stage">{{ APPLICATION_STAGE_LABELS[current.stage] }}</dd><dt>应聘负责人</dt><dd>{{ current.ownerName || '未指定' }}</dd><dt>部门</dt><dd>{{ current.departmentNameSnapshot || '未指定' }}</dd><dt>预计到岗</dt><dd>{{ current.expectedEntryDate ? formatDate(current.expectedEntryDate) : '未填写' }}</dd></dl>
-      <p v-if="current.stage === 'hiring_review'" class="application-panel__muted">下一步：由其他有录用确认权限的人员在“人员 → 录用确认”办理，提交人不能确认本人提交的申请。</p>
+      <p v-if="current.stage === 'hiring_review'" class="application-panel__muted">待其他有录用确认权限的人员办理，提交人不能确认本人提交的申请。</p>
       <p v-else-if="current.stage === 'offered'" class="application-panel__muted">下一步：由经办记录候选人接受或拒绝；候选人接受后，再办理入职。</p>
       <div v-if="!command" class="application-panel__actions">
-        <el-button v-if="canOpenHiringReview" size="small" :disabled="busy" @click="router.push('/talent-hiring')">前往录用确认</el-button>
+        <el-button v-if="canOpenHiringReview" size="small" :disabled="busy" @click="router.push({ path: '/talent-hiring', query: { applicationId: current.id } })">录用确认</el-button>
         <el-button v-if="canEditRecord" size="small" :disabled="busy" @click="openEditor(false)">修改应聘</el-button>
         <el-button v-for="action in actions" :key="action" size="small" :disabled="busy" :type="['submit_hiring', 'approve_hiring', 'accept_offer'].includes(action) ? 'primary' : 'default'" @click="beginAction(action)">{{ actionLabel(action) }}</el-button>
         <el-button v-if="canArrange" size="small" :disabled="busy" @click="emit('interview', current)">安排面试</el-button>

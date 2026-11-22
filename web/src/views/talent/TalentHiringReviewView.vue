@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { onBeforeRouteUpdate, useRoute } from 'vue-router';
 import { Refresh } from '@element-plus/icons-vue';
 import { recruitmentError, talentRecruitmentApi } from '@/api/talent-recruitment.api';
 import { APPLICATION_ACTION_LABELS, APPLICATION_STAGE_LABELS, type TalentApplicationView } from '@/types/talent.types';
@@ -10,20 +11,24 @@ const loading = ref(false), detailLoading = ref(false), busy = ref(false);
 const queueError = ref(''), detailError = ref(''), conflict = ref(false), detailFailed = ref(false);
 const selectedId = ref(''), command = ref<'approve_hiring' | 'return_hiring' | null>(null), note = ref(''), noteError = ref('');
 const resultMessage = ref('');
+const route = useRoute();
 let queueSession = 0, detailSession = 0;
 const hasEditor = computed(() => command.value !== null);
 const actions = computed(() => (['approve_hiring', 'return_hiring'] as const).filter(action => current.value?.allowedActions.includes(action)));
+const invalidLink = computed(() => route.query.applicationId !== undefined
+  && (typeof route.query.applicationId !== 'string' || !route.query.applicationId.trim()));
 function active(token: number, id: string) { return token === detailSession && selectedId.value === id; }
 async function loadQueue() {
   if (busy.value || hasEditor.value) return;
+  if (invalidLink.value) { detailError.value = '申请链接不完整，请从待确认列表重新选择。'; return; }
   const token = ++queueSession;
   loading.value = true; queueError.value = '';
   try {
     const result = await talentRecruitmentApi.hiringReviews();
     if (token !== queueSession) return;
     rows.value = result;
-    const selected = result.find(row => row.id === selectedId.value) ?? result[0];
-    if (selected) await select(selected.id); else { ++detailSession; current.value = null; selectedId.value = ''; }
+    const targetId = selectedId.value || result[0]?.id;
+    if (targetId) await select(targetId); else { ++detailSession; current.value = null; selectedId.value = ''; }
   } catch (cause) { if (token === queueSession) queueError.value = recruitmentError(cause); }
   finally { if (token === queueSession) loading.value = false; }
 }
@@ -64,7 +69,20 @@ async function execute() {
   } finally { if (active(token, target.id)) busy.value = false; }
 }
 function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as keyof typeof APPLICATION_ACTION_LABELS] ?? ({ create: '新增应聘', update: '修改应聘', submit_feedback: '提交反馈', return_feedback: '退回反馈', start_onboarding: '办理入职', cancel_onboarding: '取消入职', activate_onboarding: '入职生效' } as Record<string, string>)[action] ?? '流程更新'; }
-void loadQueue();
+onBeforeRouteUpdate((to, from) => {
+  if (to.query.applicationId !== from.query.applicationId && (busy.value || hasEditor.value)) return false;
+});
+watch(() => route.query.applicationId, id => {
+  ++queueSession; ++detailSession;
+  current.value = null; selectedId.value = ''; detailError.value = ''; detailFailed.value = false;
+  detailLoading.value = false; command.value = null; note.value = ''; conflict.value = false; resultMessage.value = '';
+  if (id !== undefined && (typeof id !== 'string' || !id.trim())) {
+    rows.value = []; loading.value = false; detailError.value = '申请链接不完整，请从待确认列表重新选择。';
+    return;
+  }
+  selectedId.value = typeof id === 'string' ? id : '';
+  void loadQueue();
+}, { immediate: true });
 onBeforeUnmount(() => { ++queueSession; ++detailSession; });
 </script>
 
