@@ -9,6 +9,7 @@ export type PayrollPerformanceSource =
     }> }>
   | Readonly<{ status: 'unregistered' | 'not_applicable' | 'pending_publication' | 'in_review' | 'fact_conflict' | 'not_found' }>;
 
+/** The caller enforces salary access and approved employment/month scope, including historical dues. */
 export async function readPayrollPerformance(
   prisma: Pick<PrismaService, 'assessmentTask'>,
   input: { employeeId: string; cycleId: string; registeredCycleIds: string[] },
@@ -21,17 +22,16 @@ export async function readPayrollPerformance(
       id: true, employeeId: true, cycleId: true, status: true,
       isExempt: true, participantDisposition: true, publishedAt: true,
       cycle: { select: { type: true } },
-      employee: { select: { archivedAt: true, deletedAt: true } },
       gradeResult: { select: {
         id: true, calibratedGrade: true, rawGrade: true,
-        isPublished: true, publishedAt: true, updatedAt: true,
+        isPublished: true, publishedAt: true, hrCalibratedAt: true, approvedAt: true,
       } },
       appeals: { select: { id: true, status: true, finalResult: true, updatedAt: true }, orderBy: { id: 'asc' } },
     },
   });
   if (!task) return Object.freeze({ status: 'not_found' });
   if (task.cycle.type === 'probation' || task.isExempt || task.status === 'exempted'
-    || task.participantDisposition !== 'active' || task.employee.archivedAt || task.employee.deletedAt) {
+    || task.participantDisposition !== 'active') {
     return Object.freeze({ status: 'not_applicable' });
   }
   // Workflow appeals block pay; the independent HR appeal ledger does not alter result facts.
@@ -58,10 +58,13 @@ export async function readPayrollPerformance(
   };
   const version = createHash('sha256').update(JSON.stringify({
     ...snapshot,
-    status: task.status, taskPublishedAt: task.publishedAt.toISOString(),
+    taskPublishedAt: task.publishedAt.toISOString(),
     gradeResult: {
       id: result.id, calibratedGrade: result.calibratedGrade, rawGrade: result.rawGrade,
-      isPublished: result.isPublished, publishedAt: result.publishedAt.toISOString(), updatedAt: result.updatedAt.toISOString(),
+      isPublished: result.isPublished, publishedAt: result.publishedAt.toISOString(),
+      // Confirmation/closure and the generic updatedAt do not revise the payable result.
+      hrCalibratedAt: result.hrCalibratedAt?.toISOString() ?? null,
+      approvedAt: result.approvedAt?.toISOString() ?? null,
     },
     appeals: [...task.appeals].sort((a, b) => a.id.localeCompare(b.id)).map(appeal => ({
       id: appeal.id, status: appeal.status, finalResult: appeal.finalResult, updatedAt: appeal.updatedAt.toISOString(),

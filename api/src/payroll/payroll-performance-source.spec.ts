@@ -1,4 +1,4 @@
-import { AppealStatus, CycleType, ParticipantDisposition, PerfGrade, TaskStatus } from '@prisma/client';
+import { AppealStatus, CycleType, ParticipantDisposition, PerfGrade, TaskStatus, UserStatus } from '@prisma/client';
 import type { PrismaService } from '@/prisma/prisma.service';
 import { readPayrollPerformance } from './payroll-performance-source';
 
@@ -11,10 +11,13 @@ function publishedTask() {
     status: TaskStatus.published as TaskStatus, isExempt: false, participantDisposition: ParticipantDisposition.active as ParticipantDisposition,
     publishedAt: new Date(publishedAt) as Date | null,
     cycle: { type: CycleType.quarterly as CycleType, status: 'approval', publishedAt: null as Date | null, name: 'Demo test cycle' },
-    employee: { archivedAt: null as Date | null, deletedAt: null as Date | null },
+    employee: { status: UserStatus.active as UserStatus, archivedAt: null as Date | null, deletedAt: null as Date | null },
     gradeResult: {
       id: 'fictional-grade', calibratedGrade: PerfGrade.A as PerfGrade | null, rawGrade: PerfGrade.B as PerfGrade | null,
       isPublished: true, publishedAt: new Date(publishedAt) as Date | null, updatedAt: new Date(publishedAt),
+      hrCalibratedAt: new Date('2026-11-18T08:00:00.000Z') as Date | null,
+      approvedAt: new Date('2026-11-19T08:00:00.000Z') as Date | null,
+      employeeConfirmedAt: null as Date | null,
     },
     appeals: [] as Array<{ id: string; status: AppealStatus; finalResult: 'maintained' | 'modified' | null; updatedAt: Date }>,
   };
@@ -117,11 +120,22 @@ describe('readPayrollPerformance', () => {
     ['exempted status', (t: ReturnType<typeof publishedTask>) => { t.status = TaskStatus.exempted; }],
     ['cycle exemption disposition', (t: ReturnType<typeof publishedTask>) => { t.participantDisposition = ParticipantDisposition.cycle_exempt; }],
     ['leader exemption disposition', (t: ReturnType<typeof publishedTask>) => { t.participantDisposition = ParticipantDisposition.top_leader_exempt; }],
-    ['archived employee', (t: ReturnType<typeof publishedTask>) => { t.employee.archivedAt = publishedAt; }],
-    ['deleted employee', (t: ReturnType<typeof publishedTask>) => { t.employee.deletedAt = publishedAt; }],
   ])('returns not_applicable for %s', async (_name, change) => {
     const task = publishedTask(); change(task);
     expect(await readPayrollPerformance(fixture(task).prisma, input)).toEqual({ status: 'not_applicable' });
+  });
+
+  it.each([
+    ['resigned employee', (t: ReturnType<typeof publishedTask>) => { t.employee.status = UserStatus.resigned; }],
+    ['archived resigned employee', (t: ReturnType<typeof publishedTask>) => { t.employee.status = UserStatus.resigned; t.employee.archivedAt = new Date('2026-11-21'); }],
+    ['soft-deleted employee', (t: ReturnType<typeof publishedTask>) => { t.employee.deletedAt = new Date('2026-11-21'); }],
+  ])('keeps the historical published source ready after later %s lifecycle changes', async (_name, change) => {
+    const task = publishedTask(); const before = await readPayrollPerformance(fixture(task).prisma, input);
+    change(task);
+    const after = await readPayrollPerformance(fixture(task).prisma, input);
+    expect(before.status).toBe('ready'); expect(after).toEqual(before);
+    expect(after).not.toHaveProperty('salary');
+    expect(await readPayrollPerformance(fixture(task).prisma, { ...input, registeredCycleIds: [] })).toEqual({ status: 'unregistered' });
   });
 
   it('uses the officially accepted rawGrade fallback, never a coefficient default', async () => {
@@ -141,10 +155,11 @@ describe('readPayrollPerformance', () => {
     expect(query.where).toEqual({ cycleId_employeeId: { employeeId: 'fictional-employee', cycleId: 'registered-cycle' } });
     expect(query.include).toBeUndefined();
     expect(Object.keys(query.select).sort()).toEqual([
-      'appeals', 'cycle', 'cycleId', 'employee', 'employeeId', 'gradeResult', 'id', 'isExempt', 'participantDisposition', 'publishedAt', 'status',
+      'appeals', 'cycle', 'cycleId', 'employeeId', 'gradeResult', 'id', 'isExempt', 'participantDisposition', 'publishedAt', 'status',
     ].sort());
     expect(query.select.cycle).toEqual({ select: { type: true } });
-    expect(query.select.employee).toEqual({ select: { archivedAt: true, deletedAt: true } });
+    expect(query.select).not.toHaveProperty('employee');
+    expect(query.where).not.toHaveProperty('employee');
     expect(query.select.gradeResult.select).not.toHaveProperty('coefficient');
     expect(query.select.appeals).not.toHaveProperty('where');
     expect(JSON.stringify(task)).toBe(before);
@@ -165,8 +180,8 @@ describe('readPayrollPerformance', () => {
     ['calibrated grade', (t: ReturnType<typeof publishedTask>) => { t.gradeResult.calibratedGrade = PerfGrade.C; }],
     ['raw grade evidence', (t: ReturnType<typeof publishedTask>) => { t.gradeResult.rawGrade = PerfGrade.D; }],
     ['publication time', (t: ReturnType<typeof publishedTask>) => { t.publishedAt = new Date('2026-11-21'); t.gradeResult.publishedAt = new Date(t.publishedAt); }],
-    ['source revision', (t: ReturnType<typeof publishedTask>) => { t.gradeResult.updatedAt = new Date('2026-11-21'); }],
-    ['task publication status', (t: ReturnType<typeof publishedTask>) => { t.status = TaskStatus.closed; }],
+    ['recalibration', (t: ReturnType<typeof publishedTask>) => { t.gradeResult.hrCalibratedAt = new Date('2026-11-21'); }],
+    ['result reapproval', (t: ReturnType<typeof publishedTask>) => { t.gradeResult.approvedAt = new Date('2026-11-21'); }],
     ['resolved appeal', (t: ReturnType<typeof publishedTask>) => { t.appeals = [{ id: 'appeal-1', status: AppealStatus.resolved, finalResult: 'maintained', updatedAt: publishedAt }]; }],
   ])('changes the source version when %s changes', async (_name, change) => {
     const task = publishedTask(); const first = await readPayrollPerformance(fixture(task).prisma, input);
@@ -174,6 +189,31 @@ describe('readPayrollPerformance', () => {
     expect(first.status).toBe('ready'); expect(second.status).toBe('ready');
     if (first.status !== 'ready' || second.status !== 'ready') throw new Error('Expected two published sources');
     expect(second.snapshot.version).not.toBe(first.snapshot.version);
+  });
+
+  it.each([TaskStatus.confirmed, TaskStatus.closed])('keeps the ready semantic fingerprint stable when only the label becomes %s', async status => {
+    const task = publishedTask(); const before = await readPayrollPerformance(fixture(task).prisma, input);
+    task.status = status;
+    if (status === TaskStatus.confirmed) {
+      task.gradeResult.employeeConfirmedAt = new Date('2026-11-21');
+      task.gradeResult.updatedAt = new Date('2026-11-21');
+    }
+    const after = await readPayrollPerformance(fixture(task).prisma, input);
+    expect(before.status).toBe('ready'); expect(after).toEqual(before);
+  });
+
+  it('invalidates the ready source during review and fingerprints a genuine same-grade reapproval', async () => {
+    const task = publishedTask(); const before = await readPayrollPerformance(fixture(task).prisma, input);
+    task.status = TaskStatus.appealing;
+    expect(await readPayrollPerformance(fixture(task).prisma, input)).toEqual({ status: 'in_review' });
+    task.status = TaskStatus.published;
+    task.gradeResult.approvedAt = new Date('2026-11-21');
+    const after = await readPayrollPerformance(fixture(task).prisma, input);
+    expect(before.status).toBe('ready'); expect(after.status).toBe('ready');
+    if (before.status !== 'ready' || after.status !== 'ready') throw new Error('Expected two published sources');
+    expect(after.snapshot.grade).toBe(before.snapshot.grade);
+    expect(after.snapshot.publishedAt).toBe(before.snapshot.publishedAt);
+    expect(after.snapshot.version).not.toBe(before.snapshot.version);
   });
 
   it('uses stable appeal ordering and ignores other employees advancing the cycle', async () => {
