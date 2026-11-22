@@ -19,6 +19,13 @@ function clone<T>(value: T): T {
   return value;
 }
 
+function selectFields(value: any, select: any): any {
+  if (Array.isArray(value)) return value.map(entry => selectFields(entry, select));
+  if (!value || !select) return value;
+  return Object.fromEntries(Object.entries(select).map(([key, field]: [string, any]) =>
+    [key, field === true ? value[key] : selectFields(value[key], field.select)]));
+}
+
 // Only the persistence boundary is doubled; the service and live grant checks are real.
 function database() {
   const state = { batches: [] as any[], versions: [] as any[], lines: [] as any[], decisions: [] as any[],
@@ -33,15 +40,22 @@ function database() {
     settlements: state.settlements.filter(s => s.lineId === l.id), reservation: state.reservations.find(r => r.lineId === l.id) ?? null })),
     decisions: state.decisions.filter(d => d.versionId === v.id).sort((a, b) => a.step - b.step),
     exports: state.exports.filter(e => e.versionId === v.id) });
-  const batch = (b: any, args: any = {}) => b && ({ ...b, versions: state.versions.filter(v => v.batchId === b.id)
-    .sort((a, b) => b.version - a.version).slice(0, args.include?.versions?.take ?? 50).map(version) });
+  const batch = (b: any, args: any = {}) => {
+    if (!b) return null;
+    const versions = args.include?.versions ?? args.select?.versions;
+    const data = { ...b, versions: state.versions.filter(v => v.batchId === b.id &&
+      (!versions?.where?.id?.in || versions.where.id.in.includes(v.id)))
+      .sort((a, b) => b.version - a.version).slice(0, versions?.take ?? 50).map(version) };
+    return args.select ? selectFields(data, args.select) : data;
+  };
   const tx: any = {
     $queryRaw: jest.fn().mockResolvedValue([]),
     payrollGrant: { findMany: jest.fn(async ({ where }) => state.grants.filter(g => g.userId === where.userId &&
       g.subjectId === where.subjectId && g.revokedAt === where.revokedAt)) },
     payrollBatch: {
       findUnique: jest.fn(async (args) => batch(state.batches.find(b => b.id === args.where.id), args)),
-      findMany: jest.fn(async (args) => state.batches.filter(b => b.subjectId === args.where.subjectId)
+      findMany: jest.fn(async (args) => state.batches.filter(b => b.subjectId === args.where.subjectId &&
+        (!args.where.id?.in || args.where.id.in.includes(b.id)))
         .slice(0, args.take).map(b => batch(b, args))),
       create: jest.fn(async ({ data }) => { const b = { id: randomUUID(), version: 0, status: 'draft', correctionOfId: null,
         additionalMonths: [], createdAt: new Date(), updatedAt: new Date(), ...data }; state.batches.push(b); return { ...b }; }),
@@ -68,18 +82,21 @@ function database() {
         const remaining = state.reservations.filter(r => !ids.includes(r.lineId)); const count = state.reservations.length - remaining.length;
         state.reservations = remaining; return { count }; }),
     },
-    payrollOpeningBalance: { findMany: jest.fn(async ({ where }) => state.openings.filter(o => o.subjectId === where.subjectId && o.domain === where.domain)) },
+    payrollOpeningBalance: { findMany: jest.fn(async ({ where }) => state.openings.filter(o => o.subjectId === where.subjectId && o.domain === where.domain &&
+      where.OR.some(key => ['employeeId', 'attributionMonth', 'itemCode'].every(k => o[k] === key[k])))) },
     payrollSettlement: {
       findUnique: jest.fn(async ({ where }) => state.settlements.find(s => s.requestId === where.requestId) ?? null),
       findMany: jest.fn(async ({ where }) => state.settlements.map(s => ({ ...s, line: state.lines.find(l => l.id === s.lineId) }))
         .filter(s => { const b = state.batches.find(b => b.id === state.versions.find(v => v.id === s.line.versionId)?.batchId);
           const scope = where.line?.version?.batch;
-          return !scope || b?.subjectId === scope.subjectId && (typeof scope.purpose === 'string' ? b.purpose === scope.purpose : scope.purpose.in.includes(b.purpose)); })),
+          return !scope || b?.subjectId === scope.subjectId && (typeof scope.purpose === 'string' ? b.purpose === scope.purpose : scope.purpose.in.includes(b.purpose)) &&
+            where.line.OR.some(key => ['employeeId', 'attributionMonth', 'itemCode'].every(k => s.line[k] === key[k])); })),
       create: jest.fn(async ({ data }) => { const s = { id: randomUUID(), createdAt: new Date(), ...data }; state.settlements.push(s); return s; }),
     },
     payrollEvent: {
       create: jest.fn(async ({ data }) => { const e = { id: randomUUID(), createdAt: new Date(), ...data }; state.events.push(e); return e; }),
-      findMany: jest.fn(async ({ where, take }) => state.events.filter(e => e.subjectId === where.subjectId && e.batchId === where.batchId).slice(0, take)),
+      findMany: jest.fn(async ({ where, take }) => state.events.filter(e => e.subjectId === where.subjectId && e.batchId === where.batchId &&
+        (!where.version?.in || where.version.in.includes(e.version))).slice(0, take)),
     },
   };
   const prisma: any = { ...tx, $transaction: jest.fn(async (callback, options) => {
@@ -106,7 +123,20 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
         paidBefore: '0.00', amount: '200.00', evidence: { formula: 'fictional' } }] };
     sources = { capture: jest.fn(async () => clone(capture)) };
     service = new PayrollBatchesService(db.prisma, access, sources);
+    confirmOpening();
   });
+  function confirmOpening(employeeId: string = employee, attributionMonth = '2026-11', itemCode = 'fixed', amount = '0') {
+    const existing = db.state.openings.find(o => o.employeeId === employeeId && o.attributionMonth === attributionMonth && o.itemCode === itemCode);
+    const opening = { subjectId: subject, employeeId, domain: 'validation', attributionMonth, itemCode, amount: new Prisma.Decimal(amount),
+      reference: 'FICTIONAL-OPENING', confirmedAt: new Date(), confirmedById: finance.id };
+    if (existing) Object.assign(existing, opening); else db.state.openings.push(opening);
+  }
+  function clearPrivateReads() { db.tx.payrollBatch.findUnique.mockClear(); db.tx.payrollBatch.findMany.mockClear(); sources.capture.mockClear(); }
+  function expectNoPrivateReads() {
+    const reads = [...db.tx.payrollBatch.findUnique.mock.calls, ...db.tx.payrollBatch.findMany.mock.calls];
+    expect(reads.filter(([args]) => args.include?.versions?.include?.lines || args.select?.versions?.select?.sources)).toHaveLength(0);
+    expect(sources.capture).not.toHaveBeenCalled();
+  }
   async function calculated() {
     const b = await service.create(createInput(), editor);
     await service.calculate(b.id, { expectedVersion: b.version }, editor);
@@ -171,6 +201,7 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
   it('approves explicit not-applicable zeros without reserving or settling those lines', async () => {
     capture.lines.push({ ...clone(capture.lines[0]), itemCode: 'performance', status: 'not_applicable',
       entitlement: '0.00', paidBefore: '0.00', amount: '0.00', evidence: { applicability: 'not_applicable' } });
+    confirmOpening(employee, '2026-11', 'performance');
     const b = await approved();
     expect(db.state.lines).toHaveLength(2); expect(db.state.reservations).toHaveLength(1);
     const nonapplicable = db.state.lines.find(l => l.itemCode === 'performance')!;
@@ -201,14 +232,32 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     expect(db.state.reservations).toHaveLength(0);
   });
   it('checks actual paid totals again in the submitting transaction', async () => {
-    const b = await calculated(); db.state.openings.push({ subjectId: subject, employeeId: employee, domain: 'validation',
-      attributionMonth: '2026-11', itemCode: 'fixed', amount: new Prisma.Decimal(100), confirmedAt: new Date(), confirmedById: finance.id, reference: 'OPEN-1' });
+    const b = await calculated(); confirmOpening(employee, '2026-11', 'fixed', '100');
     await expect(service.submit(b.id, { expectedVersion: b.version }, editor)).rejects.toBeInstanceOf(ConflictException);
     expect(db.state.reservations).toHaveLength(0);
+  });
+  it.each(['0.00', '200.00'])('rejects missing confirmed opening even when the source claims paidBefore zero and delta %s', async amount => {
+    capture.lines[0].entitlement = capture.lines[0].amount = capture.gross = amount;
+    db.state.openings = []; const b = await calculated();
+    await expect(service.submit(b.id, { expectedVersion: b.version }, editor)).rejects.toBeInstanceOf(ConflictException);
+    expect(db.state.reservations).toHaveLength(0); expect(db.state.batches[0].status).toBe('calculated');
+  });
+  it('requires opening confirmation for each key, including explicit not-applicable zeros', async () => {
+    capture.lines.push({ ...clone(capture.lines[0]), itemCode: 'performance', status: 'not_applicable',
+      entitlement: '0.00', paidBefore: '0.00', amount: '0.00', evidence: { applicability: 'not_applicable' } });
+    const b = await calculated();
+    await expect(service.submit(b.id, { expectedVersion: b.version }, editor)).rejects.toBeInstanceOf(ConflictException);
+    expect(db.state.reservations).toHaveLength(0);
+  });
+  it.each(['amount', 'confirmedAt', 'confirmedById', 'reference'])('rejects an opening with unconfirmed %s', async field => {
+    db.state.openings[0][field] = field === 'reference' ? ' ' : null;
+    const b = await calculated();
+    await expect(service.submit(b.id, { expectedVersion: b.version }, editor)).rejects.toBeInstanceOf(ConflictException);
   });
   it('blocks duplicate obligation keys across batches and rolls back every partial reservation', async () => {
     const first = await submitted(); const second = await calculated();
     capture.lines.unshift({ ...clone(capture.lines[0]), employeeId: randomUUID() }); capture.gross = '400.00';
+    confirmOpening(capture.lines[0].employeeId);
     await service.calculate(second.id, { expectedVersion: second.version }, editor);
     await expect(service.submit(second.id, { expectedVersion: second.version }, editor)).rejects.toMatchObject({
       response: expect.objectContaining({ batchId: first.id }),
@@ -266,10 +315,57 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     expect((await service.detail(b.id, editor)).versions).toHaveLength(2);
     expect(db.tx.payrollBatch.findMany.mock.calls.every(([args]) => args.take <= 100)).toBe(true);
   });
+  it.each(['detail', 'calculate', 'decide'])('never fetches private versions before denying an ungranted %s actor', async operation => {
+    const b = await submitted(); clearPrivateReads();
+    const run = operation === 'detail' ? service.detail(b.id, outsider) : operation === 'calculate'
+      ? service.calculate(b.id, { expectedVersion: b.version }, outsider)
+      : service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: '' }, outsider);
+    await expect(run).rejects.toBeInstanceOf(ForbiddenException); expectNoPrivateReads();
+    expect(db.tx.payrollBatch.findUnique.mock.calls[0][0].select).toEqual({ id: true, subjectId: true, purpose: true });
+  });
+  it('rejects a wrong-stage or unassigned reviewer before fetching private sources', async () => {
+    const b = await submitted(); clearPrivateReads();
+    await expect(service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: '' }, approver)).rejects.toBeInstanceOf(ForbiddenException);
+    expectNoPrivateReads();
+    db.state.grants.push({ userId: outsider.id, subjectId: subject, capabilities: ['payroll_review'], revokedAt: null });
+    clearPrivateReads();
+    await expect(service.detail(b.id, outsider)).rejects.toBeInstanceOf(ForbiddenException);
+    expectNoPrivateReads(); expect(await service.list(subject, outsider)).toEqual([]); expectNoPrivateReads();
+  });
+  it('checks effective approval before a finance-only mutation can load private versions', async () => {
+    const b = await submitted(), request = payment(b); clearPrivateReads();
+    await expect(service.settle(b.id, request, finance)).rejects.toBeInstanceOf(ConflictException);
+    expectNoPrivateReads();
+  });
+  it.each(['payroll_export', 'payroll_settle'])('allows %s-only readers only the current effective approved version and its events', async capability => {
+    db.state.grants.find(g => g.userId === finance.id)!.capabilities = [capability];
+    const b = await submitted(); await service.withdraw(b.id, { expectedVersion: b.version, note: 'New calculation' }, editor);
+    await service.calculate(b.id, { expectedVersion: b.version }, editor); await service.submit(b.id, { expectedVersion: b.version }, editor);
+    await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: '' }, reviewer);
+    await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: '' }, approver);
+    const rows = await service.list(subject, finance); expect(rows.map(row => row.id)).toEqual([b.id]);
+    const detail = await service.detail(b.id, finance); expect(detail.versions.map(v => v.version)).toEqual([2]);
+    expect(detail.events.every(e => e.version === 2)).toBe(true);
+    const fullReads = db.tx.payrollBatch.findUnique.mock.calls.filter(([args]) => args.include?.versions?.include?.lines);
+    expect(fullReads.at(-1)?.[0].include.versions.where.id.in).toEqual([db.state.versions[1].id]);
+    expect(db.tx.payrollEvent.findMany.mock.calls.at(-1)?.[0].where.version?.in).toEqual([2]);
+    await expect(service.list(otherSubject, finance)).rejects.toBeInstanceOf(ForbiddenException);
+    db.state.grants.find(g => g.userId === finance.id)!.revokedAt = new Date(); clearPrivateReads();
+    await expect(service.detail(b.id, finance)).rejects.toBeInstanceOf(ForbiddenException); expectNoPrivateReads();
+  });
+  it.each(['draft', 'calculated', 'pending', 'returned', 'withdrawn', 'voided', 'trial', 'incomplete approvals'])
+    ('hides %s wages from final-only readers without any private fetch', async state => {
+      const b = await approved(), version = db.state.versions[0];
+      if (state === 'trial') db.state.batches[0].purpose = 'trial';
+      else if (state === 'incomplete approvals') db.state.decisions.pop();
+      else { db.state.batches[0].status = state; version.status = state; }
+      clearPrivateReads();
+      expect(await service.list(subject, finance)).toEqual([]);
+      await expect(service.detail(b.id, finance)).rejects.toBeInstanceOf(ForbiddenException); expectNoPrivateReads();
+    });
   it('merges quarter attribution months into one version and hashes each source consistently', async () => {
     const months = ['2026-09', '2026-10', '2026-11'];
-    for (const month of months) db.state.openings.push({ subjectId: subject, employeeId: employee, domain: 'validation', attributionMonth: month,
-      itemCode: 'fixed', amount: new Prisma.Decimal(2000), reference: 'OPEN-QUARTER', confirmedAt: new Date(), confirmedById: finance.id });
+    for (const month of months) confirmOpening(employee, month, 'fixed', '2000');
     sources.capture.mockImplementation(async (_tx, _subject, month) => ({ ...clone(capture), sourceHash: month === '2026-09' ? 'b'.repeat(64) : 'a'.repeat(64),
       gross: '400.00', lines: [{ ...clone(capture.lines[0]), attributionMonth: month, entitlement: '2400.00', paidBefore: '2000.00', amount: '400.00' }] }));
     const b = await service.create({ ...createInput(), additionalMonths: ['2026-10', '2026-09'] }, editor);
@@ -322,6 +418,15 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     await service.calculate(correction.id, { expectedVersion: correction.version }, editor);
     await service.submit(correction.id, { expectedVersion: db.state.batches[1].version }, editor);
     expect(db.state.lines[1].amount.toString()).toBe('50'); expect(db.state.reservations).toHaveLength(1);
+  });
+  it('does not substitute actual past settlement records for a missing opening confirmation', async () => {
+    const b = await approved(); await service.settle(b.id, payment(b), finance);
+    await service.cancelRemainder(b.id, { expectedVersion: b.version, lineId: db.state.lines[0].id, reference: 'FICTIONAL-CANCEL' }, finance);
+    db.state.openings = [];
+    capture.sourceHash = 'd'.repeat(64); capture.lines[0].paidBefore = '150.00'; capture.lines[0].amount = capture.gross = '50.00';
+    const next = await calculated();
+    await expect(service.submit(next.id, { expectedVersion: next.version }, editor)).rejects.toBeInstanceOf(ConflictException);
+    expect(db.state.reservations).toHaveLength(0);
   });
   it('tracks negative corrections with the original sign and disallows over-confirmation', async () => {
     capture.gross = capture.lines[0].amount = '-20.00'; capture.lines[0].entitlement = '-20.00';

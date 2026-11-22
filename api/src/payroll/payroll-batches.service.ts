@@ -10,11 +10,21 @@ const versionInclude = {
   lines: { include: { settlements: true, reservation: true } },
   decisions: { orderBy: { step: 'asc' as const } }, exports: true,
 } satisfies Prisma.PayrollVersionInclude;
+const versionScopeSelect = {
+  id: true, version: true, status: true, approvalPath: true, reviewerCount: true, approvalStep: true,
+  submittedById: true, approvedAt: true, voidedAt: true,
+  decisions: { orderBy: { step: 'asc' as const }, select: { step: true, action: true, actorId: true } },
+} satisfies Prisma.PayrollVersionSelect;
+const batchScopeSelect = {
+  id: true, subjectId: true, purpose: true, status: true,
+  versions: { orderBy: { version: 'desc' as const }, take: 1, select: versionScopeSelect },
+} satisfies Prisma.PayrollBatchSelect;
 type Version = Prisma.PayrollVersionGetPayload<{ include: typeof versionInclude }>;
+type VersionScope = Prisma.PayrollVersionGetPayload<{ select: typeof versionScopeSelect }>;
 type VisibleVersion = Version & { needsUpdate?: boolean };
 type Batch = PayrollBatch & { versions: Version[] };
 type ExpectedVersion = { expectedVersion: number };
-type ReadScope = { full: boolean; review: boolean; approve: boolean };
+type ReadScope = { full: boolean; review: boolean; approve: boolean; final: boolean };
 const Decimal = Prisma.Decimal.clone({ precision: 40 });
 const keyOf = (line: { employeeId: string; attributionMonth: string; itemCode: string }) =>
   `${line.employeeId}:${line.attributionMonth}:${line.itemCode}`;
@@ -30,14 +40,20 @@ export class PayrollBatchesService {
   async list(subjectId: string, actor: PayrollActor) {
     return this.transaction(async tx => {
       const scope = await this.readScope(tx, subjectId, actor);
-      const batches = await tx.payrollBatch.findMany({ where: { subjectId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100,
-        include: { versions: { orderBy: { version: 'desc' }, take: 1, include: versionInclude } } });
+      const candidates = await tx.payrollBatch.findMany({ where: { subjectId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100, select: batchScopeSelect });
+      const allowed = candidates.filter(batch => scope.full || batch.versions[0] &&
+        (this.assigned(batch.versions[0], actor, scope) || scope.final && this.isEffective(batch, batch.versions[0])));
+      if (!allowed.length) return [];
+      const domains = new Map<string, PayrollDomain>();
+      for (const batch of allowed) domains.set(batch.id, await this.access.assertDomain(tx, batch.purpose as PayrollPurpose));
+      const latestIds = allowed.flatMap(batch => batch.versions.map(version => version.id));
+      const batches = await tx.payrollBatch.findMany({ where: { subjectId, id: { in: allowed.map(batch => batch.id) } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100,
+        include: { versions: { where: { id: { in: latestIds } }, orderBy: { version: 'desc' }, take: 1, include: versionInclude } } });
       const result: Array<PayrollBatch & { versions: Array<Version & { needsUpdate?: boolean }> }> = [];
       for (const batch of batches) {
         const latest = batch.versions[0];
-        if (!scope.full && (!latest || !this.assigned(latest, actor, scope))) continue;
-        const domain = await this.access.assertDomain(tx, batch.purpose as PayrollPurpose);
-        result.push({ ...batch, versions: latest ? [await this.withFreshness(tx, batch, latest, domain)] : [] });
+        result.push({ ...batch, versions: latest ? [await this.withFreshness(tx, batch, latest, domains.get(batch.id)!)] : [] });
       }
       return result;
     });
@@ -45,14 +61,17 @@ export class PayrollBatchesService {
 
   async detail(id: string, actor: PayrollActor) {
     return this.transaction(async tx => {
-      const batch = await this.load(tx, id, 50);
-      const scope = await this.readScope(tx, batch.subjectId, actor);
-      const latest = batch.versions[0];
-      if (!scope.full && (!latest || !this.assigned(latest, actor, scope))) throw new ForbiddenException('该版本未分配给您');
-      const domain = await this.access.assertDomain(tx, batch.purpose as PayrollPurpose);
-      const visible = scope.full ? batch.versions : batch.versions.filter(v => this.assigned(v, actor, scope));
-      const versions: VisibleVersion[] = await Promise.all(visible.map(v => v.id === latest?.id ? this.withFreshness(tx, batch, v, domain) : v));
-      const history = await tx.payrollEvent.findMany({ where: { subjectId: batch.subjectId, batchId: id },
+      const header = await this.lookup(tx, id);
+      const scope = await this.readScope(tx, header.subjectId, actor);
+      const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
+      const metadata = await this.scopeBatch(tx, id, scope.full || scope.review || scope.approve ? 50 : 1);
+      const latest = metadata.versions[0], assigned = !!latest && this.assigned(latest, actor, scope);
+      if (!scope.full && !assigned && !(scope.final && latest && this.isEffective(metadata, latest))) throw new ForbiddenException('无权查看该工资版本');
+      const visible = scope.full ? metadata.versions : assigned ? metadata.versions.filter(v => this.assigned(v, actor, scope)) : [latest];
+      const batch = await this.load(tx, id, 50, visible.map(version => version.id));
+      const versions: VisibleVersion[] = await Promise.all(batch.versions.map(v => v.id === latest?.id ? this.withFreshness(tx, batch, v, domain) : v));
+      const history = await tx.payrollEvent.findMany({ where: { subjectId: batch.subjectId, batchId: id,
+        ...(scope.full ? {} : { version: { in: visible.map(version => version.version) } }) },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100 });
       const events = scope.full ? history : history.filter(e => e.version !== null && visible.some(v => v.version === e.version));
       return { ...batch, versions, events };
@@ -133,12 +152,18 @@ export class PayrollBatchesService {
 
   async decide(id: string, input: ExpectedVersion & { decision: 'approve' | 'return'; note: string }, actor: PayrollActor) {
     return this.transaction(async tx => {
-      const batch = await this.load(tx, id);
-      const domain = await this.access.assertDomain(tx, batch.purpose as PayrollPurpose);
-      await lockPayrollSubject(tx, batch.subjectId, domain);
-      const version = this.latest(batch);
-      const capability = version.approvalStep < version.reviewerCount ? 'payroll_review' : 'payroll_approve';
-      await this.access.assert(tx, actor, batch.subjectId, capability);
+      const header = await this.lookup(tx, id);
+      if (!await this.has(tx, header.subjectId, actor, 'payroll_review') && !await this.has(tx, header.subjectId, actor, 'payroll_approve')) {
+        throw new ForbiddenException('没有该主体的工资复核或审批权限');
+      }
+      const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
+      await lockPayrollSubject(tx, header.subjectId, domain);
+      const metadata = await this.scopeBatch(tx, id), step = metadata.versions[0];
+      if (!step) throw new ConflictException('请先完成工资核算');
+      const capability = step.approvalStep < step.reviewerCount ? 'payroll_review' : 'payroll_approve';
+      await this.access.assert(tx, actor, header.subjectId, capability);
+      if (step.approvalPath[step.approvalStep] !== actor.id || actor.id === step.submittedById) throw new ForbiddenException('请由当前指定的复核或审批人办理');
+      const batch = await this.load(tx, id), version = this.latest(batch);
       assertPayrollVersion(batch.version, input.expectedVersion);
       if (batch.status !== 'pending' || version.status !== 'pending' || batch.purpose === 'trial') throw new ConflictException('当前批次不在审批中');
       if (version.approvalPath[version.approvalStep] !== actor.id || actor.id === version.submittedById) throw new ForbiddenException('请由当前指定的复核或审批人办理');
@@ -150,10 +175,10 @@ export class PayrollBatchesService {
         await this.assertFresh(tx, batch, version, domain);
       }
       await tx.payrollDecision.create({ data: { versionId: version.id, step: version.approvalStep, actorId: actor.id, action: input.decision, note } });
-      const step = version.approvalStep + 1;
-      const status = input.decision === 'return' ? 'returned' : step === version.approvalPath.length ? 'approved' : 'pending';
+      const nextStep = version.approvalStep + 1;
+      const status = input.decision === 'return' ? 'returned' : nextStep === version.approvalPath.length ? 'approved' : 'pending';
       await tx.payrollVersion.update({ where: { id: version.id }, data: { status,
-        ...(input.decision === 'approve' ? { approvalStep: step } : {}), ...(status === 'approved' ? { approvedAt: new Date() } : {}) } });
+        ...(input.decision === 'approve' ? { approvalStep: nextStep } : {}), ...(status === 'approved' ? { approvedAt: new Date() } : {}) } });
       if (status === 'returned') await this.release(tx, version.lines);
       if (status === 'approved') await this.release(tx, version.lines.filter(line => line.amount?.isZero()));
       await this.event(tx, batch, actor, input.decision === 'return' ? 'returned' : status === 'approved' ? 'approved' : 'reviewed',
@@ -238,17 +263,35 @@ export class PayrollBatchesService {
   private write<T>(id: string, actor: PayrollActor, capability: PayrollCapability,
     work: (tx: Prisma.TransactionClient, batch: Batch, domain: PayrollDomain) => Promise<T>) {
     return this.transaction(async tx => {
+      const header = await this.lookup(tx, id);
+      await this.access.assert(tx, actor, header.subjectId, capability);
+      const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
+      await lockPayrollSubject(tx, header.subjectId, domain);
+      if (capability === 'payroll_settle') {
+        const metadata = await this.scopeBatch(tx, id);
+        if (!metadata.versions[0] || !this.isEffective(metadata, metadata.versions[0])) throw new ConflictException('仅当前有效且全部审批完成的版本可以办理入薪或作废');
+      }
       const batch = await this.load(tx, id);
-      const domain = await this.access.assertDomain(tx, batch.purpose as PayrollPurpose);
-      await lockPayrollSubject(tx, batch.subjectId, domain);
-      await this.access.assert(tx, actor, batch.subjectId, capability);
       return work(tx, batch, domain);
     });
   }
 
-  private async load(tx: Prisma.TransactionClient, id: string, take = 1): Promise<Batch> {
+  private async lookup(tx: Prisma.TransactionClient, id: string) {
+    const batch = await tx.payrollBatch.findUnique({ where: { id }, select: { id: true, subjectId: true, purpose: true } });
+    if (!batch) throw new NotFoundException('工资批次不存在');
+    return batch;
+  }
+
+  private async scopeBatch(tx: Prisma.TransactionClient, id: string, take = 1) {
+    const batch = await tx.payrollBatch.findUnique({ where: { id }, select: { ...batchScopeSelect,
+      versions: { ...batchScopeSelect.versions, take } } });
+    if (!batch) throw new NotFoundException('工资批次不存在');
+    return batch;
+  }
+
+  private async load(tx: Prisma.TransactionClient, id: string, take = 1, versionIds?: string[]): Promise<Batch> {
     const batch = await tx.payrollBatch.findUnique({ where: { id },
-      include: { versions: { orderBy: { version: 'desc' }, take, include: versionInclude } } });
+      include: { versions: { ...(versionIds ? { where: { id: { in: versionIds } } } : {}), orderBy: { version: 'desc' }, take, include: versionInclude } } });
     if (!batch) throw new NotFoundException('工资批次不存在');
     return batch;
   }
@@ -260,13 +303,17 @@ export class PayrollBatchesService {
 
   private effective(batch: Batch): Version {
     const version = this.latest(batch);
-    if (batch.purpose === 'trial' || batch.status !== 'approved' || version.status !== 'approved' || !version.approvedAt || version.voidedAt ||
-      version.approvalStep !== version.approvalPath.length || version.reviewerCount < 1 || version.reviewerCount >= version.approvalPath.length ||
-      version.decisions.length !== version.approvalPath.length || version.decisions.some((decision, step) =>
-        decision.step !== step || decision.action !== 'approve' || decision.actorId !== version.approvalPath[step])) {
+    if (!this.isEffective(batch, version)) {
       throw new ConflictException('仅当前有效且全部复核审批完成的版本可以办理入薪或作废');
     }
     return version;
+  }
+
+  private isEffective(batch: Pick<PayrollBatch, 'purpose' | 'status'>, version: VersionScope): boolean {
+    return batch.purpose !== 'trial' && batch.status === 'approved' && version.status === 'approved' && !!version.approvedAt && !version.voidedAt &&
+      version.approvalStep === version.approvalPath.length && version.reviewerCount >= 1 && version.reviewerCount < version.approvalPath.length &&
+      version.decisions.length === version.approvalPath.length && version.decisions.every((decision, step) =>
+        decision.step === step && decision.action === 'approve' && decision.actorId === version.approvalPath[step]);
   }
 
   private payableLine(version: Version, lineId: string) {
@@ -277,17 +324,20 @@ export class PayrollBatchesService {
   }
 
   private async readScope(tx: Prisma.TransactionClient, subjectId: string, actor: PayrollActor): Promise<ReadScope> {
-    const has = async (capability: PayrollCapability) => {
-      try { await this.access.assert(tx, actor, subjectId, capability); return true; }
-      catch (error) { if (error instanceof ForbiddenException) return false; throw error; }
-    };
+    const has = (capability: PayrollCapability) => this.has(tx, subjectId, actor, capability);
     const full = await has('payroll_view') || await has('payroll_edit');
     const review = !full && await has('payroll_review'), approve = !full && await has('payroll_approve');
-    if (!full && !review && !approve) throw new ForbiddenException('没有该主体的工资查看或指定审批权限');
-    return { full, review, approve };
+    const final = !full && (await has('payroll_export') || await has('payroll_settle'));
+    if (!full && !review && !approve && !final) throw new ForbiddenException('没有该主体的工资查看、指定审批或最终结果权限');
+    return { full, review, approve, final };
   }
 
-  private assigned(version: Version, actor: PayrollActor, scope: ReadScope): boolean {
+  private async has(tx: Prisma.TransactionClient, subjectId: string, actor: PayrollActor, capability: PayrollCapability): Promise<boolean> {
+    try { await this.access.assert(tx, actor, subjectId, capability); return true; }
+    catch (error) { if (error instanceof ForbiddenException) return false; throw error; }
+  }
+
+  private assigned(version: Pick<VersionScope, 'approvalPath' | 'reviewerCount'>, actor: PayrollActor, scope: ReadScope): boolean {
     return scope.review && version.approvalPath.slice(0, version.reviewerCount).includes(actor.id) ||
       scope.approve && version.approvalPath.slice(version.reviewerCount).includes(actor.id);
   }
@@ -404,11 +454,12 @@ export class PayrollBatchesService {
       if (opening.amount === null || !opening.confirmedAt || !opening.confirmedById || !opening.reference?.trim()) throw new ConflictException('期初入薪金额和凭证尚未确认');
       totals.set(keyOf(opening), new Decimal(opening.amount));
     }
+    for (const line of version.lines) if (!totals.has(keyOf(line))) throw new ConflictException('每个工资归属项均须明确确认期初金额和凭证，零金额也不能省略');
     for (const payment of payments) {
       const key = keyOf(payment.line);
-      totals.set(key, (totals.get(key) ?? new Decimal(0)).plus(payment.amount));
+      totals.set(key, totals.get(key)!.plus(payment.amount));
     }
-    for (const line of version.lines) if (!line.paidBefore!.eq(totals.get(keyOf(line)) ?? new Decimal(0))) {
+    for (const line of version.lines) if (!line.paidBefore!.eq(totals.get(keyOf(line))!)) {
       throw new ConflictException('累计已入薪金额已变化，请重新核算差额');
     }
   }
