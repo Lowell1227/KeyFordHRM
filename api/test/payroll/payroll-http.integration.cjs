@@ -1,7 +1,7 @@
 'use strict';
 
-// Run from the host with node. Database access and HTTP stay inside hrm-api-1.
-async function run(guardsOnly) {
+// Run from the host with node; --case draft-read-confidentiality runs only the incremental case.
+async function run(guardsOnly, selectedCase) {
   const { randomUUID, createHash } = require('node:crypto');
   const { PrismaClient, Prisma } = require('@prisma/client');
   const office = require('officecrypto-tool');
@@ -12,7 +12,7 @@ async function run(guardsOnly) {
   const owned = { subjectIds: [], employeeIds: [], cycleIds: [] };
   const tokens = {}, actors = {}, itemCodes = ['fixed', 'absence', 'overtime', 'performance', 'adjustment'];
   const base = 'http://127.0.0.1:3000/api/v1';
-  let marker, baseline, markerCreated = false, failed = 0, passed = 0, phase = 'preview_guards';
+  let marker, baseline, markerCreated = false, failed = 0, passed = 0, executed = 0, phase = 'preview_guards';
   const emit = (name, count) => process.stdout.write(JSON.stringify({ case: name, count }) + '\n');
   const check = (condition, label) => { if (!condition) { const error = new Error(); error.safeCase = label; throw error; } };
   const equalMoney = (value, expected, label) => check(value !== null && value !== undefined && new Prisma.Decimal(String(value)).eq(expected), label);
@@ -217,6 +217,8 @@ async function run(guardsOnly) {
     } finally { plain.fill(0); encrypted.fill(0); }
   }
   async function caseRun(name, work) {
+    if (selectedCase ? name !== selectedCase : name === 'draft_read_confidentiality') return;
+    executed++;
     phase = name;
     try { await work(); passed++; emit(name, 1); }
     catch (error) { failed++; emit(`${name}_failed_${error.safeCase ?? (/^P\d{4}$/.test(error.code ?? '') ? error.code.toLowerCase() : 'execution')}`, 0); }
@@ -286,6 +288,64 @@ async function run(guardsOnly) {
     if (guardsOnly) return;
     await db.systemConfig.create({ data: { key: runKey, value: { fictional: true, runId, ...owned } } }); markerCreated = true;
 
+    await caseRun('draft_read_confidentiality', async () => {
+      const f = await fixture('draft-read');
+      await db.payrollGrant.update({ where: { userId_subjectId: { userId: actors.VP001, subjectId: f.subjectId } },
+        data: { capabilities: ['payroll_approve'] } });
+      for (const [actor, capability] of [['MGR001', 'payroll_review'], ['VP001', 'payroll_approve']]) {
+        const access = await api(actor, 'GET', '/payroll/access');
+        const capabilities = access.subjects.find(subject => subject.id === f.subjectId)?.capabilities;
+        check(Array.isArray(capabilities) && capabilities.length === 1 && capabilities[0] === capability, 'draft_case_has_narrow_live_grants');
+      }
+      await seal(f);
+      let batch = await calculate(f);
+      const noSalaryPayload = value => !value || typeof value !== 'object' || (Array.isArray(value)
+        ? value.every(noSalaryPayload)
+        : Object.entries(value).every(([key, child]) => !['versions', 'lines', 'sources', 'gross', 'entitlement', 'paidBefore', 'amount', 'evidence'].includes(key)
+          && noSalaryPayload(child)));
+      async function draftPrivate() {
+        const version = latest(batch), token = batch.version;
+        check(batch.status === 'calculated' && version.submittedById === null, 'draft_case_is_unsubmitted');
+        for (const actor of ['MGR001', 'VP001']) {
+          const rows = await api(actor, 'GET', `/payroll/batches?subjectId=${f.subjectId}`);
+          check(Array.isArray(rows) && rows.length === 0, 'draft_not_listed_for_approval_path');
+          const denied = await request(actor, 'GET', `/payroll/batches/${batch.id}`, undefined, [403]);
+          check(noSalaryPayload(denied.data), 'draft_detail_denial_has_no_salary_payload');
+          const decision = await request(actor, 'POST', `/payroll/batches/${batch.id}/decide`, {
+            expectedVersion: token, decision: 'approve', note: 'Unsubmitted version must not be reviewable' }, [403]);
+          check(noSalaryPayload(decision.data), 'draft_decision_denial_has_no_salary_payload');
+        }
+        const unchanged = await detail(batch.id);
+        check(unchanged.version === token && latest(unchanged).id === version.id && unchanged.status === 'calculated', 'denied_draft_requests_do_not_mutate_batch');
+        check(await db.payrollDecision.count({ where: { versionId: version.id } }) === 0
+          && await db.payrollReservation.count({ where: { subjectId: f.subjectId } }) === 0, 'denied_draft_requests_create_no_decisions_or_claims');
+      }
+      async function assignedReadable(expectedHistory) {
+        const version = latest(batch);
+        for (const actor of ['MGR001', 'VP001']) {
+          const rows = await api(actor, 'GET', `/payroll/batches?subjectId=${f.subjectId}`);
+          check(rows.length === 1 && rows[0].id === batch.id && rows[0].versions.length === 1
+            && latest(rows[0]).id === version.id && latest(rows[0]).submittedById === actors.HR001, 'submitted_assignment_visible_in_list');
+          const assigned = await api(actor, 'GET', `/payroll/batches/${batch.id}`);
+          check(assigned.versions.length === expectedHistory && latest(assigned).id === version.id
+            && assigned.versions.every(row => row.submittedById === actors.HR001), 'submitted_assignment_and_history_readable');
+        }
+      }
+      await draftPrivate();
+      batch = await action(batch, 'submit');
+      await assignedReadable(1);
+      const historicalId = latest(batch).id;
+      batch = await action(batch, 'withdraw', 'HR001', { note: 'Create a new private calculation draft' });
+      await assignedReadable(1);
+      batch = await action(batch, 'calculate');
+      await draftPrivate();
+      batch = await action(batch, 'submit');
+      await assignedReadable(2);
+      check(batch.versions.find(row => row.id === historicalId)?.status === 'withdrawn', 'previous_submitted_version_is_preserved');
+      batch = await action(batch, 'decide', 'MGR001', { decision: 'approve', note: 'Submitted version review' });
+      batch = await action(batch, 'decide', 'VP001', { decision: 'approve', note: 'Submitted version approval' });
+      check(batch.status === 'approved' && latest(batch).decisions.length === 2, 'submitted_version_decisions_still_work');
+    });
     await caseRun('complete_month_seal_approve_encrypted_excel', async () => {
       const f = await fixture('full-month');
       const uncompleted = await sync(f, 'normal', true, marker.month, false);
@@ -433,6 +493,7 @@ async function run(guardsOnly) {
       batch = await approve(batch); await excel(batch, '1200', 3);
       check(digest(await db.assessmentTask.findMany({ where: { cycleId: f.cycleId }, include: { gradeResult: true } })) === sourceBefore, 'payroll_does_not_write_performance');
     });
+    check(executed === (selectedCase ? 1 : 8), 'case_selection_exact_count');
   } catch (error) {
     failed++; emit(`${phase}_failed_${error.safeCase ?? 'execution'}`, 0);
   } finally {
@@ -441,7 +502,7 @@ async function run(guardsOnly) {
     catch { failed++; emit('demo_ledger_changed', 0); }
     for (const key of Object.keys(tokens)) tokens[key] = '';
     await db.$disconnect();
-    emit('passed', passed); emit('failed', failed);
+    emit('executed', executed); emit('passed', passed); emit('failed', failed);
     if (failed) process.exitCode = 1;
   }
 }
@@ -450,14 +511,16 @@ function launch() {
   const { spawnSync } = require('node:child_process');
   const emit = (name, count) => process.stdout.write(JSON.stringify({ case: name, count }) + '\n');
   try {
-    const guardsOnly = process.argv.includes('--guards-only');
-    if (process.argv.slice(2).some(arg => arg !== '--guards-only')) throw new Error();
+    const args = process.argv.slice(2);
+    const guardsOnly = args.length === 1 && args[0] === '--guards-only';
+    const selectedCase = args.length === 2 && args[0] === '--case' && args[1] === 'draft-read-confidentiality' ? 'draft_read_confidentiality' : null;
+    if (args.length && !guardsOnly && !selectedCase) throw new Error();
     const format = '{"name":{{json .Name}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"running":{{json .State.Running}},"cwd":{{json .Config.WorkingDir}}}';
     const inspection = spawnSync('docker', ['inspect', '--format', format, 'hrm-api-1'], { encoding: 'utf8', timeout: 15000 });
     if (inspection.status !== 0) throw new Error();
     const container = JSON.parse(inspection.stdout);
     if (container.name !== '/hrm-api-1' || container.project !== 'hrm' || container.service !== 'api' || !container.running || container.cwd !== '/app') throw new Error();
-    const source = `(${run.toString()})(${guardsOnly}).catch(() => { process.stdout.write(JSON.stringify({case:'runner_failed',count:0})+String.fromCharCode(10)); process.exitCode=1; });`;
+    const source = `(${run.toString()})(${guardsOnly},${JSON.stringify(selectedCase)}).catch(() => { process.stdout.write(JSON.stringify({case:'runner_failed',count:0})+String.fromCharCode(10)); process.exitCode=1; });`;
     const execution = spawnSync('docker', ['exec', '-i', '-w', '/app', 'hrm-api-1', 'node'], {
       input: source, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 900000, maxBuffer: 1024 * 1024,
     });
