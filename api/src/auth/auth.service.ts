@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AccountType, ExternalIdentityProvider, ExternalIdentityStatus, User, UserStatus } from '@prisma/client';
@@ -17,6 +17,8 @@ import type { HrCapability } from './hr-capabilities';
 import { EmployeeEffectiveDateService, RESIGNATION_BINDING_DISABLED_REASON } from '../employee-archives/employee-effective-date.service';
 import { CURRENT_WORKER_STATUSES } from '../common/personnel/current-worker';
 import { approvedEmploymentSourceWhere, shanghaiBusinessDate } from '../employee-archives/employment-timeline';
+import { PayrollAccessService } from '../payroll/payroll-access.service';
+import { PayrollAccess } from '../payroll/payroll-access';
 
 type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
@@ -45,6 +47,7 @@ export interface LoginResponse {
     canViewAll: boolean;
     businessCapabilities: BusinessCapabilities;
     hrCapabilities: HrCapability[];
+    payrollAccess?: PayrollAccess;
   };
 }
 
@@ -57,6 +60,7 @@ export class AuthService {
     private readonly dingtalk: DingtalkService,
     private readonly businessCapabilities: BusinessCapabilitiesService,
     private readonly effectiveDates?: EmployeeEffectiveDateService,
+    @Optional() private readonly payroll?: PayrollAccessService,
   ) {}
 
   /** 工号+密码登录。 */
@@ -220,6 +224,7 @@ export class AuthService {
       avatarUrl: user.avatarUrl,
       businessCapabilities,
       hrCapabilities: user.hrCapabilities as HrCapability[],
+      ...(this.payroll?.enabled() ? { payrollAccess: await this.payroll.getAccess(user) } : {}),
     };
   }
 
@@ -406,6 +411,7 @@ export class AuthService {
         canViewAll: user.canViewAll,
         businessCapabilities,
         hrCapabilities: user.hrCapabilities as HrCapability[],
+        ...(this.payroll?.enabled() ? { payrollAccess: await this.payroll.getAccess(user) } : {}),
       },
     };
   }

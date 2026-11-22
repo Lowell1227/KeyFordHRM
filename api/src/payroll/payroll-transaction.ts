@@ -5,6 +5,13 @@ import { createHash } from 'node:crypto';
 export function payrollHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
+export function payrollDecimal(value: unknown, nullable = false, signed = false): Prisma.Decimal | null {
+  if (nullable && value == null) return null;
+  if (typeof value !== 'string' || !/^-?\d{1,12}(\.\d{1,4})?$/.test(value)) throw new BadRequestException('金额或数量须为有效定点小数');
+  const amount = new Prisma.Decimal(value);
+  if (!amount.isFinite() || (!signed && amount.lt(0))) throw new BadRequestException('金额或数量不正确');
+  return amount;
+}
 export function payrollMonth(value: string): { start: Date; end: Date } {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value) || Number(value.slice(0, 4)) < 2000) throw new BadRequestException('请选择有效的自然月');
   const start = new Date(`${value}-01T00:00:00.000Z`);
@@ -20,5 +27,5 @@ export function assertPayrollVersion(actual: number, expected: number) {
   if (!Number.isInteger(expected) || actual !== expected) throw new ConflictException('记录已更新，请读取最新版本后重试');
 }
 export async function lockPayrollSubject(tx: Prisma.TransactionClient, subjectId: string, domain: string): Promise<void> {
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`payroll:${domain}:${subjectId}`}, 0))`;
+  await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${`payroll:${domain}:${subjectId}`}, 0))`;
 }

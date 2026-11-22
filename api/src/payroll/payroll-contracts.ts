@@ -6,13 +6,14 @@ export const PAYROLL_ITEM_CODES = ['fixed', 'absence', 'overtime', 'performance'
 export type PayrollItemCode = typeof PAYROLL_ITEM_CODES[number];
 export interface PayrollPolicyConfig {
   rounding: 'item_half_up' | null;
+  monthlyUnits: Record<string, string>;
   normalHourly: string | null;
   paidHourly: Partial<Record<'unpaid_leave' | 'sick_leave' | 'absence', string>>;
   overtime: { hourlyBase: string | null; weekday: string | null; restday: string | null; holiday: string | null };
   reviewers: string[];
   approvers: string[];
   cutoverMonth: string | null;
-  performance: Record<string, { cycleIds: string[]; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>> }>;
+  performance: Record<string, { cycleIds: string[]; sourceKind?: 'official' | 'fictional' | null; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>> }>;
 }
 export interface PayrollCapturedLine {
   employeeId: string;

@@ -42,6 +42,7 @@ import { AiProgressModule } from './ai-progress/ai-progress.module';
 import { PersonnelReferenceDataModule } from './personnel-reference-data/personnel-reference-data.module';
 import { TalentPoolModule } from './talent-pool/talent-pool.module';
 import { PersonnelConfigModule } from './personnel-config/personnel-config.module';
+import { PayrollModule } from './payroll/payroll.module';
 
 /**
  * 根模块。
@@ -100,6 +101,7 @@ import { PersonnelConfigModule } from './personnel-config/personnel-config.modul
     PersonnelReferenceDataModule,
     TalentPoolModule,
     PersonnelConfigModule,
+    PayrollModule,
     AiProgressModule,
   ],
   providers: [

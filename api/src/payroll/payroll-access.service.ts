@@ -15,12 +15,14 @@ export class PayrollAccessService {
   }
   async getAccess(actor: PayrollActor) {
     if (!this.enabled() || actor.isAssessorOnly) return payrollAccess(actor, [], false);
-    const grants = await this.prisma.payrollGrant.findMany({ where: { userId: actor.id, revokedAt: null }, include: { subject: { select: { name: true } } } });
+    const grants = await this.prisma.payrollGrant.findMany({ where: { userId: actor.id, revokedAt: null,
+      user: { status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null, isAssessorOnly: false } }, include: { subject: { select: { name: true } } } });
     return payrollAccess(actor, grants, true);
   }
   async assert(tx: Prisma.TransactionClient | PrismaService, actor: PayrollActor, subjectId: string, capability: PayrollCapability) {
     if (!this.enabled()) throw new ForbiddenException('薪酬功能尚未启用');
-    const grants = await tx.payrollGrant.findMany({ where: { userId: actor.id, subjectId, revokedAt: null } });
+    const grants = await tx.payrollGrant.findMany({ where: { userId: actor.id, subjectId, revokedAt: null,
+      user: { status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null, isAssessorOnly: false } } });
     assertPayrollGrant(actor, grants, subjectId, capability, true);
   }
   async assertDomain(tx: Prisma.TransactionClient | PrismaService, purpose: PayrollPurpose): Promise<PayrollDomain> {
