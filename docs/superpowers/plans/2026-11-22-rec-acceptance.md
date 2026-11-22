@@ -98,4 +98,4 @@ Ruling: follow-up plans are candidate-level in the current schema, so workbench 
 
 ## Progress
 
-- Tasks 1-4 technical work complete; preview updated, implementation locally committed. Production untouched; user/business acceptance and release authorization remain pending. See `docs/acceptance/2026-11-22-rec-acceptance.md`.
+- Tasks 1-4 technical work complete and preview verified. Subsequently the user explicitly authorized release; fixed revision6309cb0e was fast-forwarded to origin/main and released API/Web only. Human business acceptance remains pending. See `docs/acceptance/2026-11-22-rec-release.md`; original development constraints above describe the earlier preview phase.
