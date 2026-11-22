@@ -126,6 +126,13 @@ async function activate(type: 'standard' | 'rule', id: string) {
   catch (cause) { error.value = await payrollError(cause); }
   finally { busy.value = false; }
 }
+async function disable(type: 'standard' | 'rule', id: string) {
+  try { await ElMessageBox.confirm('停用后，待审工资需重新核对来源；已批准版本不变。', '停用版本', { confirmButtonText: '停用', cancelButtonText: '取消' }); } catch { return; }
+  busy.value = true; error.value = '';
+  try { if (type === 'standard') await payrollApi.disableStandard(id); else await payrollApi.disableRule(id); await load(); }
+  catch (cause) { error.value = await payrollError(cause); }
+  finally { busy.value = false; }
+}
 </script>
 <template>
   <BusinessListPage variant="record" :loading="loading">
@@ -142,11 +149,21 @@ async function activate(type: 'standard' | 'rule', id: string) {
         <el-table-column prop="version" label="版本" width="70" /><el-table-column label="状态" width="100"><template #default="{ row }">{{ row.status === 'active' ? '已启用' : row.status === 'draft' ? '草稿' : '历史' }}</template></el-table-column>
         <el-table-column prop="effectiveFrom" label="生效日期" min-width="120" /><el-table-column prop="effectiveTo" label="结束日期" min-width="120" />
         <el-table-column v-if="tab === 'standards'" label="月标准" min-width="120"><template #default="{ row }">{{ row.fixedMonthly ?? '待配置' }}</template></el-table-column>
-        <el-table-column label="操作" min-width="230" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="showHistory(row)">版本依据</el-button><el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy" @click="edit(tab === 'standards' ? 'standard' : 'rule', row)">复制草稿</el-button><el-button v-if="has('payroll_edit') && row.status === 'draft'" link type="primary" :disabled="busy" @click="activate(tab === 'standards' ? 'standard' : 'rule', row.id)">启用</el-button></template></el-table-column>
+        <el-table-column label="操作" min-width="250" fixed="right"><template #default="{ row }">
+          <el-button link type="primary" @click="showHistory(row)">版本依据</el-button>
+          <el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy" @click="edit(tab === 'standards' ? 'standard' : 'rule', row)">复制草稿</el-button>
+          <el-button v-if="has('payroll_edit') && row.status === 'draft'" link type="primary" :disabled="busy" @click="activate(tab === 'standards' ? 'standard' : 'rule', row.id)">启用</el-button>
+          <el-button v-if="has('payroll_edit') && row.status === 'active'" link type="danger" :disabled="busy" @click="disable(tab === 'standards' ? 'standard' : 'rule', row.id)">停用</el-button>
+        </template></el-table-column>
       </el-table>
     </template>
     <template #mobile-list>
-      <MobileResultCard v-for="row in (tab === 'standards' ? standards : rules)" :key="row.id"><template #title>{{ 'employeeId' in row ? employeeName(row.employeeId) : '工资规则' }} · V{{ row.version }}</template><template #status>{{ row.status === 'active' ? '已启用' : row.status === 'draft' ? '草稿' : '历史' }}</template><div>{{ row.effectiveFrom }} 至 {{ row.effectiveTo || '长期' }}</div><div v-if="'fixedMonthly' in row">月标准：{{ row.fixedMonthly ?? '待配置' }}</div><template #actions><el-button link type="primary" @click="history = row">版本依据</el-button><el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy" @click="edit(tab === 'standards' ? 'standard' : 'rule', row)">复制草稿</el-button><el-button v-if="has('payroll_edit') && row.status === 'draft'" link type="primary" :disabled="busy" @click="activate(tab === 'standards' ? 'standard' : 'rule', row.id)">启用</el-button></template></MobileResultCard>
+      <MobileResultCard v-for="row in (tab === 'standards' ? standards : rules)" :key="row.id"><template #title>{{ 'employeeId' in row ? employeeName(row.employeeId) : '工资规则' }} · V{{ row.version }}</template><template #status>{{ row.status === 'active' ? '已启用' : row.status === 'draft' ? '草稿' : '历史' }}</template><div>{{ row.effectiveFrom }} 至 {{ row.effectiveTo || '长期' }}</div><div v-if="'fixedMonthly' in row">月标准：{{ row.fixedMonthly ?? '待配置' }}</div><template #actions>
+        <el-button link type="primary" @click="history = row">版本依据</el-button>
+        <el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy" @click="edit(tab === 'standards' ? 'standard' : 'rule', row)">复制草稿</el-button>
+        <el-button v-if="has('payroll_edit') && row.status === 'draft'" link type="primary" :disabled="busy" @click="activate(tab === 'standards' ? 'standard' : 'rule', row.id)">启用</el-button>
+        <el-button v-if="has('payroll_edit') && row.status === 'active'" link type="danger" :disabled="busy" @click="disable(tab === 'standards' ? 'standard' : 'rule', row.id)">停用</el-button>
+      </template></MobileResultCard>
       <el-empty v-if="!(tab === 'standards' ? standards : rules).length" description="尚未配置" />
     </template>
     <template #detail>

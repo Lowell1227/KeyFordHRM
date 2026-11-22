@@ -50,3 +50,16 @@ test('submitted-by self cannot decide and cancelled payment arrangements do not 
   const cancelled = { ...b, status: 'approved', versions: [{ ...b.versions[0], status: 'approved' }], events: [{ action: 'remainder_cancelled', version: 1 }] };
   assert.ok(!batchActions(cancelled, ['payroll_export'], 'r').includes('export'));
 });
+
+test('void requires settlement authority, not only payroll editing', () => {
+  const { batchActions } = load();
+  const batch = { status: 'approved', purpose: 'validation', versions: [{ status: 'approved', version: 1, approvalPath: [], approvalStep: 0 }] };
+  assert.ok(!batchActions(batch, ['payroll_edit'], 'operator').includes('void'));
+  assert.ok(batchActions(batch, ['payroll_settle'], 'finance').includes('void'));
+});
+
+test('default payroll month follows Beijing business time across month boundary', () => {
+  const { payrollBusinessMonth } = load();
+  assert.equal(payrollBusinessMonth(new Date('2026-10-31T16:01:00Z')), '2026-11');
+  assert.equal(payrollBusinessMonth(new Date('2026-10-31T15:59:00Z')), '2026-10');
+});

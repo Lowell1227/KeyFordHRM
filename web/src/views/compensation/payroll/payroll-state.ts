@@ -1,5 +1,10 @@
 import type { PayrollAccess, PayrollBatch, PayrollStatus } from '@/types/payroll.types';
 
+export function payrollBusinessMonth(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).formatToParts(now);
+  return `${parts.find(part => part.type === 'year')!.value}-${parts.find(part => part.type === 'month')!.value}`;
+}
+
 export function subjectCapabilities(access: PayrollAccess | undefined, subjectId: string): string[] {
   return access?.enabled ? access.subjects.find(subject => subject.id === subjectId)?.capabilities ?? [] : [];
 }
@@ -16,8 +21,8 @@ export function batchActions(batch: PayrollBatch, capabilities: string[], actorI
       && version && version.gross !== null && !version.issues?.length && version.lines?.every(line => ['ready', 'not_applicable'].includes(line.status))) actions.push('submit');
     if (batch.status === 'pending') actions.push('withdraw');
     if (['approved', 'closed', 'voided'].includes(batch.status)) actions.push('correct');
-    if (batch.status === 'approved') actions.push('void');
   }
+  if (batch.status === 'approved' && can('payroll_settle')) actions.push('void');
   if (version && version.approvalPath[version.approvalStep] === actorId && version.submittedById !== actorId && batch.status === 'pending'
     && (version.approvalStep < version.reviewerCount ? can('payroll_review') : can('payroll_approve'))) {
     if (!needsUpdate(batch)) actions.push('approve');

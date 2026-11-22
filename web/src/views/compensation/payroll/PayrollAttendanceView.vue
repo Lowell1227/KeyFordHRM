@@ -23,6 +23,8 @@ const detail = ref<AttendanceDay>();
 const sourceOpen = ref(false);
 const sourceText = ref('');
 const sourceKey = ref('');
+const sourceComplete = ref(false), partial = ref(false);
+const partialEmployees = ref<string[]>([]), partialDates = ref<string[]>([]);
 const sourceError = ref('');
 const note = ref('');
 const noteError = ref('');
@@ -51,7 +53,7 @@ onMounted(refresh);
 function openDay(day: unknown) { detail.value = day as AttendanceDay; note.value = ''; noteError.value = ''; }
 async function loadFixture(corrected: boolean) {
   sourceError.value = ''; busy.value = true;
-  try { const value = await payrollApi.fixture(subjectId.value, month.value, corrected); sourceKey.value = value.sourceKey; sourceText.value = JSON.stringify(value.input, null, 2); }
+  try { const value = await payrollApi.fixture(subjectId.value, month.value, corrected); sourceKey.value = value.sourceKey; sourceText.value = JSON.stringify(value.input, null, 2); sourceComplete.value = value.complete === true; }
   catch (cause) { sourceError.value = await payrollError(cause); }
   finally { busy.value = false; }
 }
@@ -61,8 +63,28 @@ async function sync() {
   try { input = JSON.parse(sourceText.value); if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error(); }
   catch { sourceError.value = '请输入有效的考勤 JSON 对象'; return; }
   if (!sourceKey.value.trim()) { sourceError.value = '请填写来源标识'; return; }
+  let scope: { employeeIds: string[]; from: string; to: string } | undefined;
+  if (partial.value) {
+    if (!partialEmployees.value.length || partialDates.value?.length !== 2 || partialDates.value.some(date => !date.startsWith(month.value))) {
+      sourceError.value = '请选择本月的员工与补同步日期'; return;
+    }
+    scope = { employeeIds: [...partialEmployees.value].sort(), from: partialDates.value[0]!, to: partialDates.value[1]! };
+    const included = (row: unknown) => {
+      const value = row as { employeeId?: string; workDate?: string };
+      return scope!.employeeIds.includes(value.employeeId ?? '') && !!value.workDate && value.workDate >= scope!.from && value.workDate <= scope!.to;
+    };
+    for (const key of ['expected', 'records']) if (Array.isArray(input[key])) input[key] = input[key].filter(included);
+  }
   busy.value = true;
-  try { await payrollApi.syncAttendance(subjectId.value, month.value, { sourceKey: sourceKey.value.trim(), input }); sourceOpen.value = false; await load(); feedback.value = '考勤已接收，请核对异常后封账'; }
+  try {
+    let key = sourceKey.value.trim();
+    if (scope) {
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ key, scope })));
+      key = `query:${[...new Uint8Array(hash)].map(value => value.toString(16).padStart(2, '0')).join('')}`;
+    }
+    await payrollApi.syncAttendance(subjectId.value, month.value, { sourceKey: key, input, complete: sourceComplete.value, scope });
+    sourceOpen.value = false; await load(); feedback.value = '考勤已接收，请核对异常后封账';
+  }
   catch (cause) { sourceError.value = await payrollError(cause); }
   finally { busy.value = false; }
 }
@@ -90,7 +112,7 @@ async function seal() {
   <BusinessListPage variant="record" :loading="loading">
     <template #filters>
       <PayrollScope v-model:subject="subjectId" v-model:month="month" :subjects="subjects" :disabled="busy" @refresh="refresh">
-        <el-button v-if="has('attendance_edit')" :disabled="loading" @click="sourceOpen = true; sourceError = ''">接收考勤</el-button>
+        <el-button v-if="has('attendance_edit')" :disabled="loading" @click="sourceOpen = true; sourceError = ''; sourceComplete = false; partial = false">接收考勤</el-button>
         <el-button v-if="has('attendance_seal') && current && current.status !== 'sealed'" type="primary" :loading="busy" @click="seal">封账当前版本</el-button>
       </PayrollScope>
       <el-tabs v-model="tab"><el-tab-pane label="月度汇总" name="summary" /><el-tab-pane label="异常核对" name="issues" /><el-tab-pane label="封账记录" name="history" /></el-tabs>
@@ -116,6 +138,14 @@ async function seal() {
       </BusinessDetailDrawer>
       <BusinessDetailDrawer v-model="sourceOpen" title="接收考勤" :saving="busy">
         <el-form label-position="top"><el-form-item label="来源标识" :error="!sourceKey ? sourceError : ''"><el-input v-model="sourceKey" /></el-form-item><el-form-item label="考勤来源 JSON" :error="sourceKey ? sourceError : ''"><el-input v-model="sourceText" type="textarea" :rows="14" /></el-form-item></el-form>
+        <el-form label-position="top">
+          <el-form-item><el-checkbox v-model="partial">按人和日期补同步</el-checkbox></el-form-item>
+          <template v-if="partial">
+            <el-form-item label="补同步员工"><el-select v-model="partialEmployees" multiple filterable><el-option v-for="person in employees" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item>
+            <el-form-item label="补同步日期"><el-date-picker v-model="partialDates" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" style="max-width: 100%" /></el-form-item>
+          </template>
+          <el-form-item><el-checkbox v-model="sourceComplete">来源分页已全部完成</el-checkbox></el-form-item>
+        </el-form>
         <div v-if="isLocalPreview" class="fixture-actions"><el-button :disabled="busy" @click="loadFixture(false)">载入虚构考勤</el-button><el-button :disabled="busy" @click="loadFixture(true)">载入虚构更正</el-button></div>
         <template #footer><el-button :disabled="busy" @click="sourceOpen = false">取消</el-button><el-button type="primary" :loading="busy" @click="sync">接收并核对</el-button></template>
       </BusinessDetailDrawer>

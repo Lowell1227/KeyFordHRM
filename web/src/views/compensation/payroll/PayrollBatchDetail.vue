@@ -114,7 +114,10 @@ async function run() {
       case 'approve': updated = await payrollApi.decide(target.id, target.version, 'approve', note.value.trim()); break;
       case 'return': updated = await payrollApi.decide(target.id, target.version, 'return', note.value.trim()); break;
       case 'withdraw': updated = await payrollApi.withdraw(target.id, target.version, note.value.trim()); break;
-      case 'void': updated = await payrollApi.void(target.id, target.version, note.value.trim(), confirmedUnpaid.value); break;
+      case 'void':
+        await payrollApi.void(target.id, target.version, note.value.trim(), confirmedUnpaid.value);
+        batch.value = undefined;
+        break;
       case 'settle': {
         settlementAttempt.value ??= { batchId: target.id, expectedVersion: target.version, lineId: lineId.value, amount: amount.value, reference: reference.value.trim(), requestId: crypto.randomUUID() };
         const attempt = settlementAttempt.value;
