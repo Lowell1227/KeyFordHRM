@@ -310,11 +310,32 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     await service.calculate(b.id, { expectedVersion: b.version }, editor);
     expect(await service.list(subject, reviewer)).toEqual([]);
     await expect(service.detail(b.id, reviewer)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.detail(b.id, { id: next })).rejects.toBeInstanceOf(ForbiddenException);
+    await service.submit(b.id, { expectedVersion: b.version }, editor);
     const assigned = await service.detail(b.id, { id: next }); expect(assigned.versions).toHaveLength(1);
     expect(assigned.events.every(e => e.version === assigned.versions[0].version)).toBe(true);
     expect((await service.detail(b.id, editor)).versions).toHaveLength(2);
     expect(db.tx.payrollBatch.findMany.mock.calls.every(([args]) => args.take <= 100)).toBe(true);
   });
+  it.each([{ label: 'review', actor: reviewer }, { label: 'approval', actor: approver }])
+    ('keeps unsubmitted wages private from path-configured $label-only actors while retaining submitted history', async ({ actor }) => {
+      const b = await calculated(); clearPrivateReads();
+      expect(await service.list(subject, actor)).toEqual([]);
+      await expect(service.detail(b.id, actor)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: 'Draft must not be reviewable' }, actor))
+        .rejects.toBeInstanceOf(ForbiddenException);
+      expectNoPrivateReads();
+      await service.submit(b.id, { expectedVersion: b.version }, editor);
+      await service.withdraw(b.id, { expectedVersion: b.version, note: 'New draft needed' }, editor);
+      expect((await service.detail(b.id, actor)).versions[0].status).toBe('withdrawn');
+      await service.calculate(b.id, { expectedVersion: b.version }, editor); clearPrivateReads();
+      expect(await service.list(subject, actor)).toEqual([]);
+      await expect(service.detail(b.id, actor)).rejects.toBeInstanceOf(ForbiddenException); expectNoPrivateReads();
+      await service.submit(b.id, { expectedVersion: b.version }, editor);
+      const history = (await service.detail(b.id, actor)).versions;
+      expect(history.map(v => [v.version, v.status])).toEqual([[2, 'pending'], [1, 'withdrawn']]);
+      expect(history.every(v => v.submittedById === editor.id)).toBe(true);
+    });
   it.each(['detail', 'calculate', 'decide'])('never fetches private versions before denying an ungranted %s actor', async operation => {
     const b = await submitted(); clearPrivateReads();
     const run = operation === 'detail' ? service.detail(b.id, outsider) : operation === 'calculate'

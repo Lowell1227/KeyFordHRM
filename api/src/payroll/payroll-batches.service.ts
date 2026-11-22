@@ -162,7 +162,7 @@ export class PayrollBatchesService {
       if (!step) throw new ConflictException('请先完成工资核算');
       const capability = step.approvalStep < step.reviewerCount ? 'payroll_review' : 'payroll_approve';
       await this.access.assert(tx, actor, header.subjectId, capability);
-      if (step.approvalPath[step.approvalStep] !== actor.id || actor.id === step.submittedById) throw new ForbiddenException('请由当前指定的复核或审批人办理');
+      if (!step.submittedById || step.approvalPath[step.approvalStep] !== actor.id || actor.id === step.submittedById) throw new ForbiddenException('请由当前指定的复核或审批人办理');
       const batch = await this.load(tx, id), version = this.latest(batch);
       assertPayrollVersion(batch.version, input.expectedVersion);
       if (batch.status !== 'pending' || version.status !== 'pending' || batch.purpose === 'trial') throw new ConflictException('当前批次不在审批中');
@@ -337,7 +337,8 @@ export class PayrollBatchesService {
     catch (error) { if (error instanceof ForbiddenException) return false; throw error; }
   }
 
-  private assigned(version: Pick<VersionScope, 'approvalPath' | 'reviewerCount'>, actor: PayrollActor, scope: ReadScope): boolean {
+  private assigned(version: Pick<VersionScope, 'approvalPath' | 'reviewerCount' | 'submittedById'>, actor: PayrollActor, scope: ReadScope): boolean {
+    if (!version.submittedById) return false;
     return scope.review && version.approvalPath.slice(0, version.reviewerCount).includes(actor.id) ||
       scope.approve && version.approvalPath.slice(version.reviewerCount).includes(actor.id);
   }
