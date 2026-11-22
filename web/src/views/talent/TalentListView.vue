@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { Delete } from '@element-plus/icons-vue';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { usePagination } from '@/composables/usePagination';
 import { useExport } from '@/composables/useExport';
@@ -32,6 +33,7 @@ import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import TalentDetailDrawer from './components/TalentDetailDrawer.vue';
 import TalentFormDrawer from './components/TalentFormDrawer.vue';
+import TalentDeleteDialog from './components/TalentDeleteDialog.vue';
 import { useTalentPermissions } from './useTalentPermissions';
 
 const { canEdit } = useTalentPermissions();
@@ -47,6 +49,10 @@ const { loading: exporting, download } = useExport();
 const detailVisible = ref(false);
 const formVisible = ref(false);
 const activeCandidateId = ref<string | null>(null);
+const selectedIds = ref<string[]>([]);
+const deleteVisible = ref(false);
+const deleteTargets = ref<Array<{ id: string; name: string }>>([]);
+const allSelected = computed(() => list.value.length > 0 && list.value.every(item => selectedIds.value.includes(item.id)));
 const applicationFilters = ref<Omit<TalentApplicationMatch, 'id'>>({});
 const hasApplicationFilter = computed(() => Object.values(applicationFilters.value).some(Boolean));
 const activeApplicationMatch = ref<TalentApplicationMatch>();
@@ -100,6 +106,7 @@ async function exportApplications() {
 
 async function loadList() {
   const id = ++requestId;
+  selectedIds.value = [];
   loading.value = true;
   loadError.value = '';
   try {
@@ -110,6 +117,10 @@ async function loadList() {
     applicationFilters.value = { applicationPosition: query.applicationPosition, applicationStage: query.applicationStage, applicationOwnerId };
     list.value = res.items;
     total.value = res.total;
+    if (!res.items.length && page.value > 1) {
+      page.value = Math.max(1, Math.ceil(res.total / pageSize.value));
+      void loadList();
+    }
   } catch {
     if (id !== requestId) return;
     list.value = [];
@@ -155,6 +166,19 @@ function openEdit(id: string) {
 }
 function onSaved() { void loadList(); }
 function onRemoved() { void loadList(); }
+function toggleSelected(id: string) {
+  if (!canEdit.value || loading.value) return;
+  selectedIds.value = selectedIds.value.includes(id) ? selectedIds.value.filter(value => value !== id) : [...selectedIds.value, id];
+}
+function toggleAll() {
+  if (!canEdit.value || loading.value) return;
+  selectedIds.value = allSelected.value ? [] : list.value.map(item => item.id);
+}
+function openDelete(rows: Array<{ id: string; name: string }>) {
+  if (!canEdit.value || loading.value || !rows.length) return;
+  deleteTargets.value = rows.map(({ id, name }) => ({ id, name }));
+  deleteVisible.value = true;
+}
 function onReset() {
   Object.assign(filters, {
     keyword: '', status: '', source: '', tag: '', applicationPosition: '', applicationStage: '',
@@ -236,11 +260,24 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
       <el-alert v-if="loadError" :title="loadError" type="error" :closable="false">
         <el-button link type="primary" @click="loadList">重试</el-button>
       </el-alert>
+      <div v-if="canEdit" class="talent-list__selection">
+        <el-checkbox :model-value="allSelected" :indeterminate="selectedIds.length > 0 && !allSelected"
+          :disabled="loading || !list.length" aria-label="全选本页" @change="toggleAll">全选本页</el-checkbox>
+        <span v-if="selectedIds.length">已选 {{ selectedIds.length }} 项</span>
+        <el-button type="danger" plain :icon="Delete" :disabled="loading || !selectedIds.length"
+          @click="openDelete(list.filter(item => selectedIds.includes(item.id)))">批量删除</el-button>
+      </div>
     </template>
 
     <template #desktop-list>
       <el-table v-loading="loading" class="app-table" :data="list" height="100%" :empty-text="EMPTY_TEXT"
         @row-click="(row: unknown) => openRow(asRow(row))">
+        <el-table-column v-if="canEdit" width="44" fixed>
+          <template #default="{ row }">
+            <el-checkbox :model-value="selectedIds.includes(row.id)" :aria-label="`选择${row.name}`"
+              :disabled="loading" @click.stop @change="toggleSelected(row.id)" />
+          </template>
+        </el-table-column>
         <el-table-column label="姓名" min-width="110" fixed>
           <template #default="{ row }">
             <div class="talent-name-cell">
@@ -290,10 +327,11 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         <el-table-column label="更新时间" width="110">
           <template #default="{ row }">{{ formatDate(asRow(row).updatedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="110" fixed="right">
+        <el-table-column label="操作" :width="canEdit ? 164 : 70" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click.stop="openRow(asRow(row))">打开</el-button>
             <el-button v-if="canEdit" link type="primary" @click.stop="openEdit(asRow(row).id)">编辑</el-button>
+            <el-button v-if="canEdit" link type="danger" :disabled="loading" @click.stop="openDelete([asRow(row)])">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -302,7 +340,13 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
     <template #mobile-list>
       <el-empty v-if="!loading && !list.length && !loadError" :description="EMPTY_TEXT" />
       <MobileResultCard v-for="item in list" :key="item.id">
-        <template #title>{{ item.name }}</template>
+        <template #title>
+          <div class="talent-list__mobile-name">
+            <el-checkbox v-if="canEdit" :model-value="selectedIds.includes(item.id)" :aria-label="`选择${item.name}`"
+              :disabled="loading" @change="toggleSelected(item.id)" />
+            <span>{{ item.name }}</span>
+          </div>
+        </template>
         <template #status>
           <el-tag :type="TALENT_STATUS_TAG[item.status].type" :effect="TALENT_STATUS_TAG[item.status].effect ?? 'light'" size="small">
             {{ TALENT_STATUS_LABELS[item.status] }}
@@ -321,6 +365,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         </div>
         <template #actions>
           <el-button link type="primary" @click="openRow(item)">打开详情</el-button>
+          <el-button v-if="canEdit" link type="danger" :disabled="loading" @click="openDelete([item])">删除</el-button>
         </template>
       </MobileResultCard>
     </template>
@@ -334,15 +379,15 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         @edit="openEdit" @removed="onRemoved" @changed="loadList" />
       <TalentFormDrawer v-model="formVisible" :candidate-id="activeCandidateId"
         @saved="onSaved" @open-existing="openDetail" />
+      <TalentDeleteDialog v-model="deleteVisible" :targets="deleteTargets" @removed="onRemoved" />
     </template>
   </BusinessListPage>
 </template>
 
 <style scoped>
-.talent-list__header-hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
+.talent-list__selection { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px; font-size: 13px; }
+.talent-list__mobile-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.talent-list__mobile-name span { overflow-wrap: anywhere; }
 .talent-filter-bar {
   display: flex;
   flex-wrap: wrap;
