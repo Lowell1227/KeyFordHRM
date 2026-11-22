@@ -2,6 +2,8 @@
 
 日期：2026-11-22。产品版本保持 0.9.1。本轮不发布生产。
 
+本报告保留开发交付时的状态。用户随后另行授权上线，代码与表结构的发布、正式功能关闭状态见[后续发布记录](2026-11-22-payroll-foundation-release.md)。
+
 ## 范围与基线
 
 - 需求依据：`docs/requirements/2026-11-22-payroll-requirements.md`，实施拆分见 `docs/superpowers/plans/2026-11-22-payroll-first.md`。
