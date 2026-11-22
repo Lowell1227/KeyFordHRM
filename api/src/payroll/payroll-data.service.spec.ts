@@ -85,6 +85,34 @@ function setup() {
 }
 
 describe('PayrollDataService focused regressions', () => {
+  it('quarantines a cross-month source move without rewriting the sealed original month', async () => {
+    const { service, state } = setup(), november = attendance();
+    const overnight = { sourceId: 'cross-month-night', sourceVersion: 1, employeeId: 'employee-a',
+      workDate: '2026-11-30', startsAt: '2026-11-30T23:00:00+08:00', endsAt: '2026-12-01T01:00:00+08:00',
+      type: 'overtime' as const, state: 'effective' as const, hours: '2', unit: 'hour' as const, overtimeKind: 'weekday' as const };
+    november.records.push(overnight);
+    const original = await service.sync(request('november-night', november), actor);
+    await service.seal(original.id, original.version, actor);
+    const frozen = clone(state.snapshots[0]);
+    const dates = Array.from({ length: 31 }, (_, index) => `2026-12-${String(index + 1).padStart(2, '0')}`);
+    const december = { ...attendance(['employee-a', 'employee-b'], dates), month: '2026-12' };
+    december.records.push({ ...overnight, sourceVersion: 2, workDate: '2026-12-01' });
+    const moved = await service.sync({ ...request('december-night', december), month: '2026-12' }, actor);
+    expect((moved.payload as any).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'CROSS_MONTH_SOURCE_CONFLICT' })]));
+    await expect(service.seal(moved.id, moved.version, actor)).rejects.toBeInstanceOf(ConflictException);
+    expect(state.snapshots[0]).toEqual(frozen);
+    expect(state.locked).toEqual([{ id: 'locked', sources: { original: true }, status: 'approved' }]);
+  });
+
+  it('does not seal an older draft after the same source appears in another month', async () => {
+    const { service, state } = setup();
+    const original = await service.sync(request(), actor);
+    state.snapshots.push({ ...clone(original), id: 'december-copy', month: '2026-12',
+      payload: { days: [{ records: [{ sourceId: 'employee-a:2026-11-30' }] }] } });
+    await expect(service.seal(original.id, original.version, actor)).rejects.toBeInstanceOf(ConflictException);
+    expect(state.snapshots[0].status).toBe('draft');
+  });
+
   it('allows an explicitly authorized settlement operator to read only effective subject employee identities', async () => {
     const { service, state } = setup();
     state.employments.push(employment('outside', { contractSubjectId: other }));

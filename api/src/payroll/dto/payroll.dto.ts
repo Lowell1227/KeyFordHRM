@@ -4,6 +4,9 @@ import { BooleanQuery } from '@/common/dto/boolean-query';
 import type { PayrollAttendanceInput, PayrollAttendanceType, PayrollOvertimeKind } from '../payroll-attendance-normalizer';
 
 export class PayrollSubjectDto { @IsUUID() subjectId!: string; }
+export class PayrollBatchQueryDto extends PayrollSubjectDto {
+  @IsOptional() @Matches(/^[2-9]\d{3}-(0[1-9]|1[0-2])$/) month?: string;
+}
 export class PayrollMonthDto extends PayrollSubjectDto { @Matches(/^\d{4}-(0[1-9]|1[0-2])$/) month!: string; }
 export class PayrollFixtureDto extends PayrollMonthDto { @IsOptional() @BooleanQuery() @IsBoolean() corrected = false; }
 export class PayrollVersionDto { @IsInt() @Min(0) expectedVersion!: number; }

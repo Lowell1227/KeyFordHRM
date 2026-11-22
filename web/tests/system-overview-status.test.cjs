@@ -6,6 +6,20 @@ const Module = require('node:module');
 const ts = require('typescript');
 const vue = require('vue');
 const { parse, compileScript, compileTemplate } = require('@vue/compiler-sfc');
+const root = path.resolve(__dirname, '../..');
+const readJson = file => JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
+const productVersion = readJson('web/package.json').version;
+
+test('product version agrees across API, Web, lockfiles, README and agent guidance', () => {
+  for (const directory of ['api', 'web']) {
+    assert.equal(readJson(`${directory}/package.json`).version, productVersion);
+    const lock = readJson(`${directory}/package-lock.json`);
+    assert.equal(lock.version, productVersion);
+    assert.equal(lock.packages[''].version, productVersion);
+  }
+  assert.ok(fs.readFileSync(path.join(root, 'README.md'), 'utf8').includes(`当前产品版本：**${productVersion}**`));
+  assert.ok(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8').includes(`当前源码版本为 \`${productVersion}\`，包版本为 \`${productVersion}\``));
+});
 
 const filename = path.resolve(__dirname, '../src/views/system/SystemOverviewView.vue');
 const { descriptor } = parse(fs.readFileSync(filename, 'utf8'));
@@ -90,7 +104,7 @@ test('mount reads once and shows reading, never a guessed switch state', async t
   assert.equal(view.calls.length, 1);
   assert.equal(runtimeText(view), '读取中');
   assert.equal(view.retry().props.disabled, true);
-  assert.match(view.text(), /0\.9\.1/);
+  assert.ok(view.text().includes(productVersion));
   pending.resolve(enabled);
   await flush();
 });
@@ -230,4 +244,14 @@ test('capability copy separates implementation, runtime, personnel and paused re
   assert.doesNotMatch(recruitment, /日程未启用/);
   assert.match(row('招聘编制、职位发布与 Offer'), /已暂缓.*编制.*职位发布.*Offer.*薪资审批/);
   assert.doesNotMatch(view.text(), /钉钉待办与消息|全局字典与基础配置/);
+});
+
+test('payroll capability distinguishes implemented preview from unopened formal operations', async t => {
+  const view = mount(t, async () => disabled);
+  await flush();
+  const salary = view.rows().find(item => textContent(item.children[0]) === '薪酬核算与独立权限');
+  assert.ok(salary, 'the implemented payroll domain must not be described as paused HR role planning');
+  assert.match(textContent(salary), /隔离预览/);
+  assert.match(textContent(salary), /正式.*未启用/);
+  assert.match(textContent(salary), /主体.*独立授权/);
 });

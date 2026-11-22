@@ -1,13 +1,14 @@
 <script setup lang="ts">
 const futureScope = [
-  '考勤结果与最终工资结果的只读分析',
-  '部门奖金与调薪分析的需求边界',
+  '适用主体、人员范围、正式工资结构及计薪规则',
+  '复核审批人员、财务授权、期初及入薪凭据',
+  '钉钉实际取数、身份匹配及自然月覆盖验收',
 ];
 
 const excludedScope = [
-  '工资项目、公式和核算流程',
-  '工资发放、银行代发与个税申报',
-  '员工薪资数据录入、查询或导出',
+  '部门奖金、调薪审批和自由公式编辑',
+  '银行代发、个税申报及税后实发',
+  '员工工资条与通用 OA 审批引擎',
 ];
 </script>
 
@@ -15,31 +16,31 @@ const excludedScope = [
   <main class="overview-page" data-testid="compensation-overview">
     <header class="overview-hero">
       <div>
-        <p class="eyebrow">业务模块规划</p>
+        <p class="eyebrow">薪酬建设状态</p>
         <p class="hero-copy">
-          该入口用于保留后续建设方向，当前不开发工资核算与发放能力，也不接入或展示任何员工薪资数据。
+          首批税前核算已实现，当前仅在隔离预览使用虚构数据。本页不展示员工薪资，不开放正式算薪或工资发放。
         </p>
       </div>
-      <span class="status-tag">已暂缓</span>
+      <span class="status-tag">正式算薪未启用</span>
     </header>
 
     <section class="boundary-card boundary-card--notice">
       <h2>当前结论</h2>
       <p>
-        薪酬模块尚未立项和排期。本页没有业务操作，不代表工资核算流程已经确定，也不改变现有线下薪酬处理方式。考勤核算周期已确认为自然月 1 日至月底；封账、跨月、补差、奖金和复核规则尚未确认。
+        考勤核算周期为自然月 1 日至月底。隔离预览已接通考勤核对封账、自动核算、复核审批、最终加密工资表及更正补差；代码部署不代表已接入真实钉钉考勤或已核定正式工资规则，现有线下薪酬处理方式不变。
       </p>
     </section>
 
     <div class="scope-grid">
       <section class="boundary-card">
-        <h2>后续可讨论的方向</h2>
+        <h2>正式启用前待确认</h2>
         <ul>
           <li v-for="item in futureScope" :key="item">{{ item }}</li>
         </ul>
       </section>
 
       <section class="boundary-card">
-        <h2>当前明确不建设</h2>
+        <h2>本批不包含</h2>
         <ul>
           <li v-for="item in excludedScope" :key="item">{{ item }}</li>
         </ul>
@@ -47,7 +48,7 @@ const excludedScope = [
     </div>
 
     <p class="permission-note">
-      当前仅系统管理员可见；面向指定 HR 主管的独立薪酬权限尚未建设。
+      本页仅系统管理员可见。算薪页面按用工主体独立授权，HR、管理员及主管均不自动获得工资权限；正式授权另行确认。
     </p>
   </main>
 </template>

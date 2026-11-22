@@ -63,3 +63,17 @@ test('default payroll month follows Beijing business time across month boundary'
   assert.equal(payrollBusinessMonth(new Date('2026-10-31T16:01:00Z')), '2026-11');
   assert.equal(payrollBusinessMonth(new Date('2026-10-31T15:59:00Z')), '2026-10');
 });
+
+test('a held partially paid version permits stopping the remaining arrangement but not new money or export', () => {
+  const { batchActions } = load();
+  const version = { version: 1, status: 'approved', approvalPath: ['r', 'p'], reviewerCount: 1, approvalStep: 2,
+    lines: [{ status: 'ready', amount: '200.00', reservation: { lineId: 'line' }, settlements: [{ amount: '150.00' }] }] };
+  const batch = { status: 'approved', purpose: 'validation', needsUpdate: true, versions: [version] };
+  const actions = batchActions(batch, ['payroll_settle', 'payroll_export'], 'finance');
+  assert.ok(actions.includes('cancel-remainder'));
+  assert.ok(!actions.includes('settle'));
+  assert.ok(!actions.includes('export'));
+  assert.ok(!batchActions(batch, ['payroll_view'], 'reader').includes('cancel-remainder'));
+  assert.ok(!batchActions({ ...batch, purpose: 'trial' }, ['payroll_settle'], 'finance').includes('cancel-remainder'));
+  assert.ok(!batchActions({ ...batch, versions: [{ ...version, lines: [{ ...version.lines[0], reservation: null }] }] }, ['payroll_settle'], 'finance').includes('cancel-remainder'));
+});

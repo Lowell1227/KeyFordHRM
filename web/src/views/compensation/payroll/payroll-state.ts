@@ -22,7 +22,7 @@ export function batchActions(batch: PayrollBatch, capabilities: string[], actorI
     if (batch.status === 'pending') actions.push('withdraw');
     if (['approved', 'closed', 'voided'].includes(batch.status)) actions.push('correct');
   }
-  if (batch.status === 'approved' && can('payroll_settle')) actions.push('void');
+  if (batch.status === 'approved' && can('payroll_settle') && !version?.lines?.some(line => line.settlements?.length)) actions.push('void');
   if (version && version.approvalPath[version.approvalStep] === actorId && version.submittedById !== actorId && batch.status === 'pending'
     && (version.approvalStep < version.reviewerCount ? can('payroll_review') : can('payroll_approve'))) {
     if (!needsUpdate(batch)) actions.push('approve');
@@ -34,8 +34,10 @@ export function batchActions(batch: PayrollBatch, capabilities: string[], actorI
       return value.action === 'remainder_cancelled' && value.version === version.version;
     });
     if (batch.purpose !== 'trial' && !cancelled && can('payroll_export')) actions.push('export');
-    if (batch.status === 'approved' && batch.purpose !== 'trial' && can('payroll_settle')) actions.push('settle', 'cancel-remainder');
+    if (batch.status === 'approved' && batch.purpose !== 'trial' && can('payroll_settle')) actions.push('settle');
   }
+  if (version?.status === 'approved' && batch.status === 'approved' && batch.purpose !== 'trial' && can('payroll_settle')
+    && version.lines?.some(line => line.status === 'ready' && line.reservation)) actions.push('cancel-remainder');
   return actions;
 }
 export const statusLabels: Record<PayrollStatus, string> = { draft: '草稿', calculated: '待提交复核', blocked: '待核对 / 待配置', pending: '复核 / 审批中', approved: '已批准', returned: '已退回', withdrawn: '已撤回', voided: '已作废', closed: '已结清' };
@@ -47,12 +49,14 @@ export const purposeLabels = { trial: '试算', validation: '测试环境', form
 export const itemLabels: Record<string, string> = { fixed: '固定工资', absence: '假勤差额', overtime: '加班工资', performance: '个人绩效', adjustment: '授权调整' };
 export function isDecimal(value: string, signed = false) { return (signed ? /^-?\d+(\.\d+)?$/ : /^\d+(\.\d+)?$/).test(value); }
 export const attendanceIssueLabels: Record<string, string> = {
+  CROSS_MONTH_SOURCE_CONFLICT: '同一来源存在跨月归属冲突，请先核对原月及已入薪差异',
   MISSING_RECORD: '应核日期没有来源记录，请补同步', MISSING_REGULAR_COVERAGE: '只有加班记录，缺少正常出勤依据',
   UNEXPECTED_RECORD: '记录不在本主体应核人员或日期范围', INVALID_WORK_DATE: '工作日无效', OUTSIDE_MONTH: '记录超出本自然月',
   INVALID_SOURCE_VERSION: '来源版本无效', SOURCE_VERSION_CONFLICT: '相同来源版本内容冲突', INVALID_SOURCE_ID: '来源标识缺失',
   INVALID_EMPLOYEE_ID: '员工身份未匹配', INVALID_INTERVAL: '时间段无效', INVALID_HOURS: '时长无效',
   INVALID_EXPECTED_UNITS: '计薪单位无效', EXPECTED_CONFLICT: '应核日期配置冲突', INVALID_REQUIREMENT: '考勤要求尚未确认',
   INVALID_RECORD_TYPE: '考勤类型待核对', INVALID_RECORD_STATE: '来源状态无效', PENDING_APPROVAL: '原考勤审批尚未生效',
+  HOURS_EXCEED_INTERVAL: '计价时长超过来源时间区间，请核对原始时长',
   REVOKED_RECORD: '来源已撤销，请核对计薪影响', DAY_CONVERSION_REQUIRED: '天与小时换算未配置', UNKNOWN_UNIT: '时长单位不明',
   OVERTIME_KIND_REQUIRED: '加班类型未确认', MISSING_PUNCH: '缺卡尚未被有效补卡或假勤覆盖', REQUIREMENT_CONFLICT: '无需考勤与来源记录冲突', INTERVAL_CONFLICT: '有效考勤时段重叠',
 };

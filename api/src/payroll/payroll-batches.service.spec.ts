@@ -6,6 +6,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { PayrollAccessService } from './payroll-access.service';
 import { PayrollCapture } from './payroll-contracts';
 import { PayrollBatchesService } from './payroll-batches.service';
+import { PayrollController } from './payroll.controller';
+import { PayrollExceptionFilter } from './payroll-exception.filter';
 
 const subject = randomUUID(), otherSubject = randomUUID(), employee = randomUUID();
 const editor = { id: randomUUID() }, reviewer = { id: randomUUID() }, approver = { id: randomUUID() };
@@ -55,7 +57,8 @@ function database() {
     payrollBatch: {
       findUnique: jest.fn(async (args) => batch(state.batches.find(b => b.id === args.where.id), args)),
       findMany: jest.fn(async (args) => state.batches.filter(b => b.subjectId === args.where.subjectId &&
-        (!args.where.id?.in || args.where.id.in.includes(b.id)))
+        (!args.where.month || b.month === args.where.month) && (!args.where.id?.in || args.where.id.in.includes(b.id)))
+        .sort((a, b) => +b.createdAt - +a.createdAt || b.id.localeCompare(a.id))
         .slice(0, args.take).map(b => batch(b, args))),
       create: jest.fn(async ({ data }) => { const b = { id: randomUUID(), version: 0, status: 'draft', correctionOfId: null,
         additionalMonths: [], createdAt: new Date(), updatedAt: new Date(), ...data }; state.batches.push(b); return { ...b }; }),
@@ -100,7 +103,7 @@ function database() {
     },
   };
   const prisma: any = { ...tx, $transaction: jest.fn(async (callback, options) => {
-    expect(options.isolationLevel).toBe('Serializable'); const before = clone(state);
+    expect(['Serializable', 'ReadCommitted']).toContain(options.isolationLevel); const before = clone(state);
     try { return await callback(tx); } catch (error) { Object.assign(state, before); throw error; }
   }) };
   return { state, tx, prisma };
@@ -151,6 +154,12 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
   const payment = (b: any, amount = '150.00', requestId = randomUUID()) => ({ expectedVersion: b.version,
     lineId: db.state.lines.find(l => l.versionId === db.state.versions.filter(v => v.batchId === b.id).at(-1)!.id)!.id,
     amount, reference: 'FICTIONAL-RECEIPT-1', requestId });
+  function httpFailure(error: unknown) {
+    let status: number, body: any;
+    const res = { status: (value: number) => { status = value; return res; }, json: (value: unknown) => { body = value; } };
+    new PayrollExceptionFilter().catch(error, { switchToHttp: () => ({ getResponse: () => res }) } as any);
+    return { status: status!, body };
+  }
 
   it('denies HR/admin, cross-subject, assessor-only, disabled and domain bypasses without writing', async () => {
     for (const actor of [outsider, { ...editor, isAssessorOnly: true }]) await expect(service.create(createInput(), actor)).rejects.toBeInstanceOf(ForbiddenException);
@@ -260,10 +269,32 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     confirmOpening(capture.lines[0].employeeId);
     await service.calculate(second.id, { expectedVersion: second.version }, editor);
     await expect(service.submit(second.id, { expectedVersion: second.version }, editor)).rejects.toMatchObject({
-      response: expect.objectContaining({ batchId: first.id }),
+      response: expect.objectContaining({ data: { batchId: first.id } }),
     });
     expect(db.state.reservations).toHaveLength(1); expect(db.state.batches.find(b => b.id === second.id)!.status).toBe('calculated');
     expect(first.id).not.toBe(second.id);
+  });
+  it('delivers an authorized obligation conflict ID through the real exception filter without taking any new claims', async () => {
+    const first = await submitted(), second = await calculated();
+    const error = await service.submit(second.id, { expectedVersion: second.version }, editor).catch(error => error);
+    expect(error).toBeInstanceOf(ConflictException);
+    const response = httpFailure(error);
+    expect(response.status).toBe(409); expect(response.body.data).toEqual({ batchId: first.id });
+    expect(JSON.stringify(response.body)).not.toContain(employee);
+    expect(db.state.reservations).toHaveLength(1); expect(db.state.batches[1].status).toBe('calculated');
+  });
+  it.each(['other subject', 'other domain'])('does not reveal an original batch ID from an inconsistent %s reservation', async kind => {
+    const first = await submitted(), second = await calculated();
+    // The reservation FK alone does not guarantee that the original batch shares its subject/domain.
+    if (kind === 'other subject') db.state.batches[0].subjectId = otherSubject;
+    else db.state.batches[0].purpose = 'formal';
+    const error = await service.submit(second.id, { expectedVersion: second.version }, editor).catch(error => error);
+    expect(error).toBeInstanceOf(ConflictException);
+    const response = httpFailure(error);
+    expect(response.status).toBe(409); expect(response.body.data).toBeNull();
+    expect(JSON.stringify(error)).not.toContain(first.id);
+    expect(JSON.stringify(response.body)).not.toContain(first.id);
+    expect(db.state.reservations).toHaveLength(1); expect(db.state.batches[1].status).toBe('calculated');
   });
   it.each(['P2002', 'P2034'])('maps %s to conflict without retrying the write', async (code) => {
     const b = await calculated(); db.tx.payrollReservation.createMany.mockRejectedValue({ code });
@@ -302,7 +333,7 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     await service.withdraw(b.id, { expectedVersion: b.version, note: 'Read failed' }, editor);
     expect(db.state.reservations).toHaveLength(0); expect(db.state.batches[0].status).toBe('withdrawn');
   });
-  it('returns latest-only bounded lists and assignment-filtered histories, never old-assignment access', async () => {
+  it('returns latest-only lists and assignment-filtered histories, never old-assignment access', async () => {
     const b = await submitted(); expect((await service.list(subject, reviewer))[0].versions).toHaveLength(1);
     await service.withdraw(b.id, { expectedVersion: b.version, note: 'Change reviewers' }, editor);
     const next = randomUUID(); db.state.grants.push({ userId: next, subjectId: subject, capabilities: ['payroll_review'], revokedAt: null });
@@ -315,7 +346,34 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     const assigned = await service.detail(b.id, { id: next }); expect(assigned.versions).toHaveLength(1);
     expect(assigned.events.every(e => e.version === assigned.versions[0].version)).toBe(true);
     expect((await service.detail(b.id, editor)).versions).toHaveLength(2);
-    expect(db.tx.payrollBatch.findMany.mock.calls.every(([args]) => args.take <= 100)).toBe(true);
+  });
+  it.each(['reviewer', 'exporter'])('keeps an older matching batch visible to its %s behind 100 newer private drafts', async kind => {
+    const b = kind === 'reviewer' ? await submitted() : await approved();
+    db.state.batches[0].createdAt = new Date('2026-11-01T00:00:00Z');
+    db.state.grants.find(g => g.userId === finance.id)!.capabilities = ['payroll_export'];
+    for (let i = 0; i < 100; i++) await service.create({ ...createInput(), purpose: 'trial' }, editor);
+    clearPrivateReads();
+    const rows = await service.list(subject, kind === 'reviewer' ? reviewer : finance);
+    expect(rows.map(row => row.id)).toEqual([b.id]);
+    const privateReads = db.tx.payrollBatch.findMany.mock.calls.filter(([args]) => args.include?.versions?.include?.lines);
+    expect(privateReads).toHaveLength(1); expect(privateReads[0][0].where.id.in).toEqual([b.id]);
+  });
+  it('returns every authorized match rather than silently dropping the 101st batch', async () => {
+    for (let i = 0; i < 101; i++) await service.create({ ...createInput(), purpose: 'trial' }, editor);
+    const rows = await service.list(subject, editor);
+    expect(rows).toHaveLength(101);
+    expect(new Set(rows.map(row => row.id)).size).toBe(101);
+  });
+  it('filters the optional HTTP month before loading wages and preserves the old subject-only array caller', async () => {
+    const october = await service.create({ ...createInput(), month: '2026-10', purpose: 'trial' }, editor);
+    const november = await service.create({ ...createInput(), purpose: 'trial' }, editor);
+    const controller = new PayrollController(access, {} as any, service, {} as any);
+    clearPrivateReads();
+    const rows = await controller.list({ subjectId: subject, month: '2026-10' } as any, editor as any);
+    expect(rows.map(row => row.id)).toEqual([october.id]);
+    expect(db.tx.payrollBatch.findMany.mock.calls.every(([args]) => args.where.month === '2026-10')).toBe(true);
+    expect((await controller.list({ subjectId: subject }, editor as any)).map(row => row.id).sort()).toEqual([october.id, november.id].sort());
+    expect(await controller.list({ subjectId: subject, month: '2026-12' } as any, editor as any)).toEqual([]);
   });
   it.each([{ label: 'review', actor: reviewer }, { label: 'approval', actor: approver }])
     ('keeps unsubmitted wages private from path-configured $label-only actors while retaining submitted history', async ({ actor }) => {
@@ -472,5 +530,29 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: '' }, approver);
     await expect(service.settle(b.id, { ...oldRequest, expectedVersion: b.version }, finance)).rejects.toBeInstanceOf(BadRequestException);
     expect(db.state.settlements).toHaveLength(0); expect(db.state.versions[0].status).toBe('voided');
+  });
+
+  it('marks approved cross-month conflicts and blocks new payments while preserving exact previous-payment replay', async () => {
+    const others: any[] = [];
+    (db.tx as any).payrollAttendanceSnapshot = { findMany: jest.fn(async () => others) };
+    capture.sources = { attendance: { payload: { days: [{ records: [{ sourceId: 'night' }] }] } } };
+    const b = await approved(), paid = payment(b);
+    await service.settle(b.id, paid, finance);
+    others.push({ month: '2026-12', version: 1, sourceHash: 'moved', payload: { days: [{ records: [{ sourceId: 'night' }] }] } });
+    const frozen = clone(db.state.lines);
+    expect((await service.detail(b.id, editor)).versions[0].needsUpdate).toBe(true);
+    await expect(service.settle(b.id, payment(b, '50.00'), finance)).rejects.toBeInstanceOf(ConflictException);
+    await service.settle(b.id, paid, finance);
+    expect(db.state.settlements).toHaveLength(1);
+    expect(db.state.lines).toEqual(frozen);
+  });
+
+  it('uses lock-protected read-committed only for settlement and keeps approval/cancellation serializable', async () => {
+    const b = await approved();
+    expect(db.prisma.$transaction.mock.calls.every(([, options]) => options.isolationLevel === 'Serializable')).toBe(true);
+    await service.settle(b.id, payment(b), finance);
+    expect(db.prisma.$transaction.mock.calls.at(-1)![1].isolationLevel).toBe('ReadCommitted');
+    await service.cancelRemainder(b.id, { expectedVersion: b.version, lineId: db.state.lines[0].id, reference: 'Cancel remaining fictional balance' }, finance);
+    expect(db.prisma.$transaction.mock.calls.at(-1)![1].isolationLevel).toBe('Serializable');
   });
 });

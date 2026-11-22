@@ -131,15 +131,26 @@ test('share drawer blocks concurrent submit and never attaches an old response t
   assert.equal(state.createdUrl.value, '');
 });
 
-test('overview separates available recruitment flow from unfinished publishing and Offer documents, retaining version 0.8', async () => {
+test('overview separates recruitment from planned publishing and shows the package product version', async () => {
   const component = load('views/system/SystemOverviewView.vue', {}, true).default;
   const html = await renderToString(vue.createSSRApp(component));
   assert.match(html, /人才库与招聘流转/);
-  assert.match(html, /面试反馈、录用确认及入职衔接可用/);
-  assert.match(html, /招聘职位发布与 Offer 文书/);
-  assert.match(html, /职位发布、招聘编制、Offer 文书与薪资审批尚未建设/);
-  assert.match(html, /建设清单/);
-  assert.match(html, /非实时.*健康/);
-  assert.match(html, /版本 0\.8/);
+  assert.match(html, /面试安排与反馈、录用确认及入职衔接可用/);
+  assert.match(html, /招聘编制、职位发布与 Offer/);
+  assert.match(html, /招聘编制、职位发布、Offer 文书与薪资审批暂缓建设/);
+  assert.match(html, /能力清单/);
+  assert.match(html, /运行状态/);
+  assert.ok(html.includes(`版本 ${JSON.parse(fs.readFileSync(path.join(root, '../package.json'), 'utf8')).version}`));
   assert.doesNotMatch(html, /未建设候选人/);
+});
+
+test('payroll overview keeps formal operations closed without claiming its implemented preview is unplanned', async () => {
+  const component = load('views/compensation/CompensationOverviewView.vue', {}, true).default;
+  const html = await renderToString(vue.createSSRApp(component));
+  assert.match(html, /正式.*未启用/);
+  assert.match(html, /隔离预览/);
+  assert.match(html, /自然月 1 日至月底/);
+  assert.match(html, /主体.*独立授权/);
+  assert.doesNotMatch(html, /尚未立项|当前不开发工资核算|独立薪酬权限尚未建设/);
+  assert.doesNotMatch(html, /<(button|input|select|textarea)\b/);
 });

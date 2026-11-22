@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { cyclesApi } from '@/api/cycles.api';
 
-const productVersion = '0.9.1';
+const productVersion = '0.9.2';
 
 type NotificationStatus = 'loading' | 'enabled' | 'disabled' | 'unavailable' | 'error';
 const notificationStatus = ref<NotificationStatus>('loading');
@@ -144,10 +144,10 @@ const capabilities: CapabilityItem[] = [
     note: '招聘编制、职位发布、Offer 文书与薪资审批暂缓建设。',
   },
   {
-    name: '薪酬指定 HR 主管权限',
-    status: 'paused',
-    statusLabel: '已暂缓',
-    note: '薪酬模块暂缓，本期仅系统管理员可见规划入口。',
+    name: '薪酬核算与独立权限',
+    status: 'partial',
+    statusLabel: '隔离预览',
+    note: '已实现按用工主体的独立授权、考勤封账、税前核算与审批导出；仅隔离预览使用虚构数据，正式算薪未启用。',
   },
 ];
 </script>

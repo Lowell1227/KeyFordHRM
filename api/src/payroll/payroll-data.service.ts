@@ -25,6 +25,35 @@ const orderAttendance = (a: { employeeId: string; workDate: string }, b: { emplo
   attendanceKey(a) < attendanceKey(b) ? -1 : attendanceKey(a) > attendanceKey(b) ? 1 : 0;
 
 export const payrollJson = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
+
+export async function payrollAttendanceConflicts(tx: Prisma.TransactionClient, subjectId: string, domain: PayrollDomain,
+  month: string, payload: unknown) {
+  const sourceIds = (value: unknown): string[] => {
+    const days = (value as Partial<PayrollAttendanceResult> | null)?.days;
+    return Array.isArray(days) ? days.flatMap(day => Array.isArray(day.records)
+      ? day.records.flatMap(record => typeof record.sourceId === 'string' && record.sourceId.trim() ? [record.sourceId] : []) : []) : [];
+  };
+  const ids = new Set(sourceIds(payload));
+  if (!ids.size) return [];
+  const rows = await tx.payrollAttendanceSnapshot.findMany({ where: { subjectId, domain, month: { not: month } },
+    orderBy: [{ month: 'asc' }, { version: 'desc' }], distinct: ['month'],
+    select: { month: true, version: true, sourceHash: true, payload: true } });
+  const latest = new Map<string, typeof rows[number]>();
+  for (const row of rows) if (!latest.has(row.month) || row.version > latest.get(row.month)!.version) latest.set(row.month, row);
+  return [...latest.values()].sort((a, b) => a.month.localeCompare(b.month)).flatMap(row => {
+    const shared = [...new Set(sourceIds(row.payload).filter(id => ids.has(id)))].sort();
+    return shared.length ? [{ month: row.month, sourceHash: row.sourceHash, sourceIds: shared }] : [];
+  });
+}
+
+export async function assertPayrollFrozenAttendance(tx: Prisma.TransactionClient, subjectId: string, domain: PayrollDomain, frozen: unknown) {
+  const months = (frozen as { months?: Array<{ month: string; sources?: { attendance?: { payload?: unknown } } }> } | null)?.months;
+  if (!Array.isArray(months)) return;
+  // Recheck only source ownership: ordinary settlement changes must not invalidate a locked amount.
+  for (const entry of months) if ((await payrollAttendanceConflicts(tx, subjectId, domain, entry.month, entry.sources?.attendance?.payload)).length) {
+    throw new ConflictException('批准版本的考勤来源存在跨月归属冲突，请先核对原月及已入薪差异');
+  }
+}
 export function payrollDays(month: string): string[] {
   const { start, end } = payrollMonth(month), days: string[] = [];
   for (let day = start.getTime(); day <= end.getTime(); day += 86400000) days.push(new Date(day).toISOString().slice(0, 10));
@@ -185,6 +214,17 @@ export class PayrollDataService {
       }
       const latest = await tx.payrollAttendanceSnapshot.findFirst({ where: { subjectId: input.subjectId, domain, month: input.month }, orderBy: { version: 'desc' } });
       const normalized = mergedAttendance(input, scope, eligible, latest?.payload as unknown as AttendancePayload | undefined, incoming, requestHash);
+      const conflicts = await payrollAttendanceConflicts(tx, input.subjectId, domain, input.month, normalized);
+      if (conflicts.length) {
+        const ids = new Set(conflicts.flatMap(row => row.sourceIds));
+        for (const day of normalized.days) if (day.records.some(record => ids.has(record.sourceId))) {
+          const code = 'CROSS_MONTH_SOURCE_CONFLICT';
+          if (!day.issues.includes(code)) day.issues.push(code);
+          normalized.issues.push({ employeeId: day.employeeId, workDate: day.workDate, code,
+            message: '同一考勤来源存在跨月归属冲突，请先核对原月、更正及已入薪差异；本次不能封账' });
+        }
+        normalized.version = payrollHash({ version: normalized.version, conflicts });
+      }
       const sourceHash = payrollHash(normalized);
       const row = await tx.payrollAttendanceSnapshot.create({ data: { subjectId: input.subjectId, month: input.month, domain, version: (latest?.version ?? 0) + 1,
         sourceKey: input.sourceKey, sourceHash, payload: payrollJson(normalized), createdById: actor.id } });
@@ -209,8 +249,12 @@ export class PayrollDataService {
   async seal(id: string, expectedVersion: number, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
       const row = await this.attendanceForWrite(tx, id, actor, 'attendance_seal');
+      await lockPayrollSubject(tx, row.subjectId, row.domain as PayrollDomain);
       assertPayrollVersion(row.version, expectedVersion);
       const payload = row.payload as unknown as AttendancePayload;
+      if ((await payrollAttendanceConflicts(tx, row.subjectId, row.domain as PayrollDomain, row.month, payload)).length) {
+        throw new ConflictException('同一考勤来源存在跨月归属冲突，请核对原月及已入薪差异后再封账');
+      }
       if (row.status !== 'draft' || !Array.isArray(payload?.issues) || payload.issues.length || payload.sync?.complete !== true ||
         !Array.isArray(payload.sync.coverage) || !payload.sync.coverage.length || payload.sync.coverage.some(day => day.complete !== true)) {
         throw new ConflictException('仍有影响计薪的考勤问题或查询覆盖未完整，需修正来源并补同步后封账');

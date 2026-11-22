@@ -62,8 +62,12 @@ describe('locked payroll export', () => {
   });
   it('rechecks grants and effective version after encryption, not only before a slow worker', async () => {
     const setup = fixture();
-    setup.access.assert.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new ForbiddenException());
+    setup.crypto.encryptWorkbook.mockImplementation(async plain => {
+      setup.access.assert.mockRejectedValueOnce(new ForbiddenException());
+      return Buffer.from(plain);
+    });
     await expect(setup.service.download('batch', { expectedVersion: 4, filePassword: randomBytes(8).toString('hex') }, actor)).rejects.toThrow(ForbiddenException);
+    expect(setup.crypto.encryptWorkbook).toHaveBeenCalledTimes(1);
     expect(setup.tx.payrollExportRecord.create).not.toHaveBeenCalled();
   });
   it('does not re-export an arrangement whose unpaid remainder was cancelled', async () => {
@@ -80,5 +84,20 @@ describe('locked payroll export', () => {
   it('refuses to export a total different from the approved version', async () => {
     const setup = fixture(); setup.version.gross = new Prisma.Decimal('1');
     await expect(setup.service.download('batch', { expectedVersion: 4, filePassword: randomBytes(8).toString('hex') }, actor)).rejects.toThrow(ConflictException);
+  });
+
+  it.each([false, true])('rechecks cross-month attendance ownership before returning a file, lateConflict=%s', async lateConflict => {
+    const setup = fixture(), others: any[] = [];
+    (setup.version as any).sources = { months: [{ month: '2026-11', sources: { attendance: {
+      payload: { days: [{ records: [{ sourceId: 'night' }] }] },
+    } } }] };
+    (setup.tx as any).payrollAttendanceSnapshot = { findMany: jest.fn(async () => others) };
+    const conflict = { month: '2026-12', version: 1, sourceHash: 'moved', payload: { days: [{ records: [{ sourceId: 'night' }] }] } };
+    if (lateConflict) setup.crypto.encryptWorkbook.mockImplementation(async plain => { others.push(conflict); return Buffer.from(plain); });
+    else others.push(conflict);
+    await expect(setup.service.download('batch', { expectedVersion: 4, filePassword: 'fictional-file-password' }, actor)).rejects.toBeInstanceOf(ConflictException);
+    expect(setup.tx.payrollExportRecord.create).not.toHaveBeenCalled();
+    expect(setup.tx.payrollSettlement.create).not.toHaveBeenCalled();
+    expect(setup.crypto.encryptWorkbook).toHaveBeenCalledTimes(lateConflict ? 1 : 0);
   });
 });

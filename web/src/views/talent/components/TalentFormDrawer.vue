@@ -369,6 +369,13 @@ async function beforeClose(done: () => void) {
   finally { confirmingDiscard = false; }
 }
 
+async function prepareToLeave(): Promise<boolean> {
+  let allowed = false;
+  await beforeClose(() => { allowed = true; });
+  return allowed;
+}
+defineExpose({ prepareToLeave });
+
 function openExisting() {
   const existingId = conflict.value?.existingId;
   if (!existingId) return;

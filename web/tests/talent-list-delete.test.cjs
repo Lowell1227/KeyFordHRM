@@ -5,7 +5,8 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const vue = require('vue');
-const { parse, compileScript } = require('@vue/compiler-sfc');
+const { parse, compileScript, compileTemplate } = require('@vue/compiler-sfc');
+const { renderToString } = require('@vue/server-renderer');
 
 const renderer = vue.createRenderer({
   createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
@@ -32,7 +33,19 @@ function dialog(t, api = {}, allowed = true) {
     } },
     '../useTalentPermissions': { useTalentPermissions: () => ({ canEdit: vue.ref(allowed) }) },
   };
-  loaded.require = id => deps[id] ?? require(id);
+  loaded.require = id => {
+    if (id in deps) return deps[id];
+    if (id === '@/types/talent.types' || id === '../interview-time') {
+      const dependency = path.resolve(path.dirname(filename), id === '../interview-time'
+        ? '../interview-time.ts' : '../../../types/talent.types.ts');
+      const compiled = new Module(dependency, module);
+      compiled._compile(ts.transpileModule(fs.readFileSync(dependency, 'utf8'), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText, dependency);
+      return compiled.exports;
+    }
+    return require(id);
+  };
   loaded._compile(ts.transpileModule(compileScript(descriptor, { id: 'delete-test' }).content, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, filename);
@@ -43,7 +56,22 @@ function dialog(t, api = {}, allowed = true) {
     return () => null;
   } });
   app.mount({}); t.after(() => app.unmount());
-  return { props, state, writes, events };
+  async function html() {
+    const template = compileTemplate({ source: descriptor.template.content, filename, id: 'delete-render',
+      compilerOptions: { mode: 'function' } });
+    assert.deepEqual(template.errors, []);
+    const render = new Function('Vue', ts.transpileModule(template.code, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+    }).outputText)(vue);
+    const component = { setup: () => () => render(vue.proxyRefs(state), []) };
+    const output = vue.createSSRApp(component);
+    const slotContainer = { setup: (_, { slots }) => () => vue.h('div', [...(slots.default?.() ?? []), ...(slots.footer?.() ?? [])]) };
+    output.component('el-dialog', slotContainer);
+    output.component('el-button', slotContainer);
+    output.directive('loading', {});
+    return renderToString(output);
+  }
+  return { props, state, writes, events, html };
 }
 async function open(panel) { panel.props.modelValue = true; await flush(); }
 
@@ -94,6 +122,54 @@ test('partial success reports only successful IDs and retries only failures with
   assert.deepEqual(calls.map(x => x.id), ['A', 'B', 'B']);
   assert.deepEqual(calls[2].body, { impactVersion: 'v2', force: true });
   assert.ok(panel.events.some(x => x[0] === 'update:modelValue' && x[1] === false));
+});
+
+test('409 renders changed interview time and intake identity and status before a second explicit delete', async t => {
+  const first = { ...impact('B'), requiresForce: true,
+    interviews: [{ id: 'I', status: 'scheduled', version: 1, startsAt: '2035-01-01T02:00:00Z' }],
+    requests: [{ id: 'request-12345678', onboardingStatus: 'draft', recordStatus: 'draft' }] };
+  const latest = { ...first, version: 'v2',
+    interviews: [{ ...first.interviews[0], version: 2, startsAt: '2035-01-02T07:00:00Z' }],
+    requests: [{ ...first.requests[0], onboardingStatus: 'submitted', recordStatus: 'submitted' }] };
+  const calls = [];
+  const panel = dialog(t, { deleteImpact: async () => first, remove: async (id, body) => {
+    calls.push({ id, body });
+    if (calls.length === 1) throw { response: { status: 409, data: { data: { impact: latest } } } };
+    return { id, deleted: true };
+  } });
+  panel.props.targets = [{ id: 'B', name: '虚构乙' }];
+  await open(panel);
+  const initial = await panel.html();
+  assert.match(initial, /2035-01-01 10:00:00/);
+  assert.match(initial, /北京时间/);
+  assert.match(initial, /待面试/);
+  assert.match(initial, /入职申请.*request-.*草稿/s);
+  await panel.state.confirmDelete(); await flush();
+  assert.equal(calls.length, 1);
+  const conflict = await panel.html();
+  assert.match(conflict, /2035-01-02 15:00:00/);
+  assert.doesNotMatch(conflict, /2035-01-01 10:00:00/);
+  assert.match(conflict, /入职申请.*request-.*审核中/s);
+  assert.match(conflict, /重新核对/);
+  assert.equal(panel.state.ready.value, true);
+  assert.deepEqual(panel.events.filter(event => event[0] === 'removed'), []);
+  await panel.state.confirmDelete();
+  assert.deepEqual(calls, [
+    { id: 'B', body: { impactVersion: 'v1', force: true } },
+    { id: 'B', body: { impactVersion: 'v2', force: true } },
+  ]);
+});
+
+test('delete impact renders pending arrival and legacy record status without guessing an intake subtype', async t => {
+  const panel = dialog(t, { deleteImpact: async () => ({ ...impact('A'), requests: [
+    { id: 'arrival-request', onboardingStatus: 'pending_entry', recordStatus: 'submitted' },
+    { id: 'legacy-request', onboardingStatus: null, recordStatus: 'legacy-state' },
+  ] }) });
+  panel.props.targets = [{ id: 'A', name: '虚构甲' }]; await open(panel);
+  const html = await panel.html();
+  assert.match(html, /入职申请.*arrival-.*待到岗/s);
+  assert.match(html, /入职申请.*legacy-r.*legacy-state/s);
+  assert.deepEqual(panel.writes, []);
 });
 
 test('failed transport preserves original impact for idempotent DELETE retry and blocks double submit', async t => {

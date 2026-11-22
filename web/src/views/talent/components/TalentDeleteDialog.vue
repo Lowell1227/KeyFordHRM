@@ -2,8 +2,9 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
-import type { TalentDeleteImpact } from '@/types/talent.types';
+import { INTERVIEW_STATUS_LABELS, type TalentDeleteImpact } from '@/types/talent.types';
 import { useTalentPermissions } from '../useTalentPermissions';
+import { formatInterviewTime } from '../interview-time';
 
 const props = defineProps<{ modelValue: boolean; targets: Array<{ id: string; name: string }> }>();
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; removed: [ids: string[]] }>();
@@ -95,6 +96,10 @@ async function confirmDelete() {
         <strong>{{ item.name }}</strong>
         <div v-if="item.impact" class="talent-delete__hint">
           待进行面试 {{ item.impact.interviews.length }} 项 · 办理中入职 {{ item.impact.requests.length }} 项
+          <ul v-if="item.impact.interviews.length || item.impact.requests.length" class="talent-delete__details">
+            <li v-for="interview in item.impact.interviews" :key="interview.id">面试：{{ formatInterviewTime(interview.startsAt) }}（北京时间） · {{ INTERVIEW_STATUS_LABELS[interview.status] }}</li>
+            <li v-for="request in item.impact.requests" :key="request.id">入职申请 {{ request.id.slice(0, 8) }}：{{ ({ draft: '草稿', submitted: '审核中', pending_entry: '待到岗' } as Record<string, string>)[request.onboardingStatus] ?? request.recordStatus }}</li>
+          </ul>
         </div>
         <div v-if="item.error" class="talent-delete__error" role="alert">{{ item.error }}</div>
       </div>
@@ -110,6 +115,7 @@ async function confirmDelete() {
 <style scoped>
 .talent-delete__list { max-height: 45vh; overflow-y: auto; }
 .talent-delete__item { padding: 10px 0; border-bottom: 1px solid var(--el-border-color-lighter); overflow-wrap: anywhere; }
+.talent-delete__details { margin: 6px 0 0; padding-left: 20px; }
 .talent-delete__hint { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
 .talent-delete__error { color: var(--el-color-danger); font-size: 13px; }
 </style>

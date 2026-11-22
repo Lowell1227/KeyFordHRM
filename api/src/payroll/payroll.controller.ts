@@ -7,7 +7,7 @@ import { PayrollBatchesService } from './payroll-batches.service';
 import { PayrollExportService } from './payroll-export.service';
 import { PayrollExceptionFilter } from './payroll-exception.filter';
 import { PayrollResponseInterceptor } from './payroll-response.interceptor';
-import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSyncDto, PayrollCreateDto, PayrollDecisionDto, PayrollExportDto,
+import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSyncDto, PayrollBatchQueryDto, PayrollCreateDto, PayrollDecisionDto, PayrollExportDto,
   PayrollFixtureDto, PayrollMonthDto, PayrollNoteDto, PayrollOpeningDto, PayrollRemainderDto, PayrollRuleDto,
   PayrollSettlementDto, PayrollStandardDto, PayrollSubjectDto, PayrollVersionDto, PayrollVoidDto } from './dto/payroll.dto';
 
@@ -51,7 +51,7 @@ export class PayrollController {
   openings(@Query() query: PayrollMonthDto, @CurrentUser() actor: AuthUser) { return this.data.openings(query.subjectId, query.month, actor); }
   @Post('opening-balances') opening(@Body() input: PayrollOpeningDto, @CurrentUser() actor: AuthUser) { return this.data.confirmOpening(input, actor); }
   @Get('batches') @Header('Cache-Control', 'no-store, private')
-  list(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.batches.list(query.subjectId, actor); }
+  list(@Query() query: PayrollBatchQueryDto, @CurrentUser() actor: AuthUser) { return this.batches.list(query.subjectId, actor, query.month); }
   @Get('batches/:id') @Header('Cache-Control', 'no-store, private')
   detail(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthUser) { return this.batches.detail(id, actor); }
   @Post('batches') async create(@Body() input: PayrollCreateDto, @CurrentUser() actor: AuthUser) {

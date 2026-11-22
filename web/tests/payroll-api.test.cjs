@@ -36,3 +36,14 @@ test('download errors decode locally and salary UI has no client money engine or
   const source = fs.readdirSync(dir).map(name => fs.readFileSync(path.join(dir, name), 'utf8')).join('\n');
   assert.doesNotMatch(source, /parseFloat|toFixed\(|Math\.round|eval\(|localStorage|sessionStorage/);
 });
+
+test('batch queries send the selected month and conflict links accept only a structured server UUID', async () => {
+  const { payrollApi, payrollConflictBatchId, calls } = load();
+  await payrollApi.batches('subject', '2026-11');
+  assert.deepEqual(calls[0][2].params, { subjectId: 'subject', month: '2026-11' });
+  const id = '11111111-1111-4111-8111-111111111111';
+  assert.equal(payrollConflictBatchId({ response: { status: 409, data: { data: { batchId: id } } } }), id);
+  assert.equal(payrollConflictBatchId({ response: { status: 403, data: { data: { batchId: id } } } }), '');
+  assert.equal(payrollConflictBatchId({ response: { status: 409, data: { data: { batchId: 'https://example.invalid' } } } }), '');
+  assert.equal(payrollConflictBatchId(new Error('network')), '');
+});

@@ -23,9 +23,10 @@ describe('payroll source capture', () => {
         user: { id: employeeId, name: '虚构核算人员', employeeNo: 'PAY_FIXTURE' } }],
       openings: ['fixed', 'absence', 'overtime', 'performance', 'adjustment'].map(itemCode => ({ id: `opening-${itemCode}`, employeeId, itemCode, amount: new Prisma.Decimal(0), confirmedAt: new Date('2026-01-01'), confirmedById: 'finance', reference: 'Fictional opening verification' })),
       settlements: [] as any[], adjustments: [] as any[],
+      otherAttendance: [] as any[],
     };
     const tx = {
-      payrollAttendanceSnapshot: { findFirst: jest.fn(async () => data.attendance) },
+      payrollAttendanceSnapshot: { findFirst: jest.fn(async () => data.attendance), findMany: jest.fn(async () => data.otherAttendance) },
       payrollPolicy: { findMany: jest.fn(async () => data.policies) },
       payrollStandard: { findMany: jest.fn(async () => data.standards) },
       employmentRecord: { findMany: jest.fn(async () => data.employments) },
@@ -42,6 +43,31 @@ describe('payroll source capture', () => {
       ['fixed', '17400.00'], ['absence', '-200.00'], ['overtime', '300.00'], ['performance', '0.00'], ['adjustment', '0.00'],
     ]);
     expect((await capture()).sourceHash).toBe(result.sourceHash);
+  });
+
+  it.each([false, true])('another month claiming the same source blocks prior approval regardless of settled=%s', async settled => {
+    const { data, capture } = fixture();
+    Object.assign(data.attendance.payload.days[0].records[1], { sourceId: 'cross-month-night' });
+    if (settled) data.settlements.push({ id: 'already-paid', amount: new Prisma.Decimal('300'), line: { employeeId, itemCode: 'overtime' } });
+    const original = await capture(), frozen = JSON.stringify(data.attendance);
+    data.otherAttendance.push({ id: 'other-month', month: '2026-12', version: 1, sourceHash: 'changed-work-day',
+      payload: { days: [{ records: [{ sourceId: 'cross-month-night' }] }] } });
+    const changed = await capture();
+    expect(changed.issues.join()).toContain('跨月');
+    expect(changed.gross).toBeNull();
+    expect(changed.lines.every(line => line.amount === null)).toBe(true);
+    expect(changed.sourceHash).not.toBe(original.sourceHash);
+    expect(JSON.stringify(data.attendance)).toBe(frozen);
+    expect(data.settlements.length).toBe(settled ? 1 : 0);
+  });
+
+  it('unrelated records in other months do not change the source fingerprint', async () => {
+    const { data, capture } = fixture();
+    Object.assign(data.attendance.payload.days[0].records[1], { sourceId: 'this-month-night' });
+    const original = await capture();
+    data.otherAttendance.push({ id: 'unrelated', month: '2026-12', version: 3, sourceHash: 'unrelated',
+      payload: { days: [{ records: [{ sourceId: 'different-night' }] }] } });
+    expect((await capture()).sourceHash).toBe(original.sourceHash);
   });
   it('does not infer missing opening amounts as zero', async () => {
     const { data, capture } = fixture(); data.openings = [];

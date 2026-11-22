@@ -7,6 +7,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { PayrollAccessService } from './payroll-access.service';
 import { assertPayrollVersion, lockPayrollSubject } from './payroll-transaction';
 import { PAYROLL_ITEM_CODES } from './payroll-contracts';
+import { assertPayrollFrozenAttendance } from './payroll-data.service';
 import { createHash } from 'node:crypto';
 
 const Decimal = Prisma.Decimal.clone({ precision: 40 });
@@ -22,7 +23,7 @@ export class PayrollExportService {
   constructor(private readonly prisma: PrismaService, private readonly access: PayrollAccessService, private readonly crypto: RosterSensitiveExportService) {}
   async download(id: string, input: { expectedVersion: number; filePassword: string }, actor: AuthUser) {
     if (typeof input.filePassword !== 'string' || input.filePassword.length < 4 || input.filePassword.length > 64 || !input.filePassword.trim()) throw new BadRequestException('Excel打开密码须为4至64位');
-    const approved = await this.prisma.$transaction(tx => this.approved(tx, id, input.expectedVersion, actor), { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    const approved = await this.prisma.$transaction(tx => this.approved(tx, id, input.expectedVersion, actor), { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'HRM'; workbook.created = approved.version.approvedAt!;
     const sheet = workbook.addWorksheet('税前应发');
@@ -58,17 +59,21 @@ export class PayrollExportService {
         await tx.payrollExportRecord.create({ data: { versionId: approved.version.id, actorId: actor.id, checksum } });
         await tx.payrollEvent.create({ data: { subjectId: approved.batch.subjectId, batchId: id, version: approved.version.version,
           actorId: actor.id, action: 'final_export', metadata: { versionId: approved.version.id, checksum } } });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     } catch (error) { encrypted.fill(0); throw error; }
     return new StreamableFile(encrypted, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="payroll-validation-${approved.batch.month}-v${approved.version.version}.xlsx"` });
   }
   private async approved(tx: Prisma.TransactionClient, id: string, expected: number, actor: AuthUser) {
+    const header = await tx.payrollBatch.findUnique({ where: { id }, select: { id: true, subjectId: true, purpose: true } });
+    if (!header) throw new NotFoundException('工资批次不存在');
+    await this.access.assert(tx, actor, header.subjectId, 'payroll_export');
+    if (header.purpose !== 'validation') throw new ForbiddenException('试算或未开放的正式通道不能下载最终工资表');
+    await this.access.assertDomain(tx, 'validation'); await lockPayrollSubject(tx, header.subjectId, 'validation');
     const batch = await tx.payrollBatch.findUnique({ where: { id } });
-    if (!batch) throw new NotFoundException('工资批次不存在');
+    if (!batch || batch.subjectId !== header.subjectId || batch.purpose !== header.purpose) throw new ConflictException('批次归属已变化，请重新读取');
     await this.access.assert(tx, actor, batch.subjectId, 'payroll_export');
-    if (batch.purpose !== 'validation') throw new ForbiddenException('试算或未开放的正式通道不能下载最终工资表');
-    await this.access.assertDomain(tx, 'validation'); await lockPayrollSubject(tx, batch.subjectId, 'validation'); assertPayrollVersion(batch.version, expected);
+    await this.access.assertDomain(tx, 'validation'); assertPayrollVersion(batch.version, expected);
     const version = await tx.payrollVersion.findFirst({ where: { batchId: id }, orderBy: { version: 'desc' },
       include: { lines: { orderBy: [{ employeeId: 'asc' }, { attributionMonth: 'asc' }, { itemCode: 'asc' }] }, decisions: { orderBy: { step: 'asc' } } } });
     if (batch.status !== 'approved' || !version || version.status !== 'approved' || version.voidedAt || !version.approvedAt
@@ -81,6 +86,7 @@ export class PayrollExportService {
     }
     const cancelled = await tx.payrollEvent.findFirst({ where: { batchId: id, version: version.version, action: 'remainder_cancelled' }, select: { id: true } });
     if (cancelled) throw new ConflictException('该支付安排已有余款取消，请核对补差批次；原版本保留在历史中');
+    await assertPayrollFrozenAttendance(tx, batch.subjectId, 'validation', version.sources);
     const subject = await tx.contractSubject.findUniqueOrThrow({ where: { id: batch.subjectId }, select: { name: true } });
     return { batch, version, subject };
   }

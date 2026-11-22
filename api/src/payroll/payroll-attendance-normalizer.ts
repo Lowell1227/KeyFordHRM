@@ -84,6 +84,7 @@ const messages = {
   INVALID_EMPLOYEE_ID: 'A nonempty HRM employee identity is required.',
   INVALID_INTERVAL: 'The interval must have real offset-qualified ISO timestamps and a positive duration.',
   INVALID_HOURS: 'The source duration must be a nonnegative plain decimal string.',
+  HOURS_EXCEED_INTERVAL: 'The source hours exceed the elapsed absolute interval and require reconciliation.',
   INVALID_EXPECTED_UNITS: 'The HRM schedule units must be a nonnegative plain decimal string.',
   EXPECTED_CONFLICT: 'The HRM coverage contains conflicting expectations for this employee/work day.',
   INVALID_REQUIREMENT: 'The HRM attendance requirement must be an explicit boolean.',
@@ -176,6 +177,16 @@ function compareTime(a: string, b: string): number {
   return compare(af.padEnd(width, '0'), bf.padEnd(width, '0'));
 }
 
+function exceedsInterval(hours: string, startsAt: string, endsAt: string): boolean {
+  const Decimal = Prisma.Decimal.clone({ precision: hours.length + startsAt.length + endsAt.length + 20 });
+  const milliseconds = (value: string) => {
+    const [seconds, fraction] = value.slice(0, -1).split('.');
+    // Parse only whole seconds with Date; retain all source fractional digits in Decimal.
+    return new Decimal(Date.parse(`${seconds}Z`)).plus(new Decimal(`0.${fraction}`).times(1000));
+  };
+  return new Decimal(hours).times(3600000).gt(milliseconds(endsAt).minus(milliseconds(startsAt)));
+}
+
 function sanitize(source: PayrollAttendanceRecord): Candidate {
   const problems: IssueCode[] = [];
   const hours = decimal(source.hours);
@@ -191,6 +202,9 @@ function sanitize(source: PayrollAttendanceRecord): Candidate {
   if (typeof source.employeeId !== 'string' || !source.employeeId.trim()) problems.push('INVALID_EMPLOYEE_ID');
   if (hours === null) problems.push('INVALID_HOURS');
   if (!startsAt || !endsAt || compareTime(startsAt, endsAt) >= 0) problems.push('INVALID_INTERVAL');
+  else if (source.state === 'effective' && source.unit === 'hour' && hours !== null && exceedsInterval(hours, startsAt, endsAt)) {
+    problems.push('HOURS_EXCEED_INTERVAL');
+  }
   if (!types.includes(source.type)) problems.push('INVALID_RECORD_TYPE');
   if (!['effective', 'pending', 'revoked'].includes(source.state)) problems.push('INVALID_RECORD_STATE');
   if (source.type === 'overtime' && hours !== null && new Prisma.Decimal(hours).gt(0) && !overtimeKind) {

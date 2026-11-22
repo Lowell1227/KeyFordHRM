@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { calculatePayroll, PayrollAbsence, PayrollOvertime, PayrollSegment } from './payroll-calculator';
 import { readPayrollPerformance, PayrollPerformanceSource } from './payroll-performance-source';
 import { PayrollCapture, PayrollCapturedLine, PayrollDomain, PayrollPolicyConfig, PayrollSourceReader, PAYROLL_ITEM_CODES } from './payroll-contracts';
-import { isPayrollEmployment, payrollDays, payrollEmployments, payrollJson } from './payroll-data.service';
+import { isPayrollEmployment, payrollAttendanceConflicts, payrollDays, payrollEmployments, payrollJson } from './payroll-data.service';
 import { selectEmploymentAt } from '@/employee-archives/employment-timeline';
 import { payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
 
@@ -23,6 +23,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
   async capture(tx: Prisma.TransactionClient, subjectId: string, month: string, domain: PayrollDomain): Promise<PayrollCapture> {
     const { start, end } = payrollMonth(month), issues: string[] = [], lines: PayrollCapturedLine[] = [];
     const attendance = await tx.payrollAttendanceSnapshot.findFirst({ where: { subjectId, month, domain }, orderBy: { version: 'desc' } });
+    const attendanceConflicts = await payrollAttendanceConflicts(tx, subjectId, domain, month, attendance?.payload);
+    if (attendanceConflicts.length) issues.push('考勤来源存在跨月归属冲突，请先核对原月、更正及已入薪差异');
     const policies = await tx.payrollPolicy.findMany({ where: { subjectId, domain, status: 'active', effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] }, orderBy: { id: 'asc' } });
     const employments = await payrollEmployments(tx, subjectId, month);
     const employees = [...new Set(employments.filter(row => row.contractSubjectId === subjectId).map(row => row.userId))].sort();
@@ -134,7 +136,7 @@ export class PayrollSourcesService implements PayrollSourceReader {
       if (personal.length) issues.push(`${employeeId}：${[...new Set(personal)].join('；')}`);
     }
     if (issues.length) for (const line of lines) if (line.status === 'ready' || line.status === 'not_applicable') { line.status = 'blocked_batch'; line.amount = null; }
-    const sources = payrollJson({ subjectId, month, domain, attendance, policies, standards,
+    const sources = payrollJson({ subjectId, month, domain, attendance, ...(attendanceConflicts.length ? { attendanceConflicts } : {}), policies, standards,
       employments: employments.filter(row => row.contractSubjectId === subjectId).map(row => ({ ...row,
         user: { id: row.user.id, name: row.user.name } })), scopeIssues: [...new Set(issues)], openings,
       settlements, adjustments, performance: performanceFacts.sort((a, b) => `${a.employeeId}:${a.cycleId}`.localeCompare(`${b.employeeId}:${b.cycleId}`)) });

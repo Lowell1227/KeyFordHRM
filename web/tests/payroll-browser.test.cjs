@@ -152,3 +152,49 @@ test('pending return then recalculate/resubmit uses successive optimistic tokens
   assert.equal(calls.find(call => call.path.endsWith('/calculate')).body.expectedVersion, 9);
   assert.equal(calls.find(call => call.path.endsWith('/submit')).body.expectedVersion, 10);
 });
+
+test('submit conflict offers the protected original batch without resubmitting or overwriting it', async t => {
+  const ready = batch(); ready.versions[0].lines = ready.versions[0].lines.slice(0, 1);
+  const originalId = '11111111-1111-4111-8111-111111111111';
+  const { page, calls } = await pageFor(t, { batch: ready, handle: async ({ path: p }) => {
+    if (p.endsWith('/submit')) return { status: 409, body: JSON.stringify({ code: 4090, message: '原批次已占用，请核对', data: { batchId: originalId } }) };
+    if (p === `/payroll/batches/${originalId}`) return { data: batch('pending', 'validation', { id: originalId }) };
+  } });
+  await page.goto(`${origin}payroll/batches/batch?month=2026-11`);
+  await page.getByRole('button', { name: '提交复核', exact: true }).click();
+  await expect(page.getByTestId('payroll-action-error')).toContainText('原批次已占用');
+  await page.getByRole('button', { name: '查看冲突批次', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/payroll/batches/${originalId}`));
+  assert.equal(calls.filter(call => call.path.endsWith('/submit')).length, 1);
+  assert.ok(calls.some(call => call.method === 'GET' && call.path === `/payroll/batches/${originalId}`));
+});
+
+test('an approved cross-month hold explains the financial pause without requesting an impossible withdrawal', async t => {
+  const { page } = await pageFor(t, { batch: batch('approved', 'validation', { needsUpdate: true }) });
+  await page.goto(`${origin}payroll/results/batch?month=2026-11`);
+  await expect(page.getByText('考勤来源存在跨月归属冲突，下载和新增入薪已暂停。请核对原月及已入薪差异，原批准记录保留。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '下载加密工资表', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '确认入薪', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '撤回重算', exact: true })).toHaveCount(0);
+});
+
+test('the held partial-payment page can cancel the remainder without changing the original amount or paid history', async t => {
+  const held = batch('approved', 'validation', { needsUpdate: true });
+  held.versions[0].lines = [{ ...held.versions[0].lines[0], amount: '200.00', reservation: { lineId: 'line' },
+    settlements: [{ id: 'paid', amount: '150.00', reference: 'fictional-original-payment' }] }];
+  const { page, calls } = await pageFor(t, { batch: held, handle: async ({ path: p }) => p.endsWith('/cancel-remainder')
+    ? { data: { ...held, versions: [{ ...held.versions[0], lines: [{ ...held.versions[0].lines[0], reservation: null }] }] } } : undefined });
+  await page.goto(`${origin}payroll/results/batch?month=2026-11`);
+  await page.getByRole('button', { name: '取消剩余支付安排', exact: true }).click();
+  const form = page.locator('.action-form');
+  await form.locator('.el-select').click(); await page.getByRole('option').filter({ hasText: '固定工资' }).click();
+  await form.getByRole('textbox').fill('fictional-stop-remainder');
+  await form.getByRole('button', { name: '取消剩余支付安排', exact: true }).click();
+  await page.getByRole('dialog', { name: '取消剩余安排', exact: true }).getByRole('button', { name: '取消剩余安排', exact: true }).click();
+  await expect(page.getByText('取消剩余支付安排已完成', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '确认入薪', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '下载加密工资表', exact: true })).toHaveCount(0);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.equal(held.versions[0].lines[0].amount, '200.00');
+  assert.equal(held.versions[0].lines[0].settlements[0].amount, '150.00');
+});

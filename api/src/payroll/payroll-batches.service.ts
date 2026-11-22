@@ -5,6 +5,7 @@ import { PayrollActor, PayrollCapability } from './payroll-access';
 import { PayrollAccessService } from './payroll-access.service';
 import { PAYROLL_ITEM_CODES, PayrollCapture, PayrollDomain, PayrollPurpose, PayrollSourceReader } from './payroll-contracts';
 import { assertPayrollVersion, lockPayrollSubject, payrollHash, payrollMonth } from './payroll-transaction';
+import { assertPayrollFrozenAttendance } from './payroll-data.service';
 
 const versionInclude = {
   lines: { include: { settlements: true, reservation: true } },
@@ -37,18 +38,20 @@ export class PayrollBatchesService {
     @Inject('PAYROLL_SOURCE_READER') private readonly sources: PayrollSourceReader,
   ) {}
 
-  async list(subjectId: string, actor: PayrollActor) {
+  async list(subjectId: string, actor: PayrollActor, month?: string) {
     return this.transaction(async tx => {
       const scope = await this.readScope(tx, subjectId, actor);
-      const candidates = await tx.payrollBatch.findMany({ where: { subjectId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100, select: batchScopeSelect });
+      if (month !== undefined) payrollMonth(month);
+      const where = { subjectId, ...(month !== undefined ? { month } : {}) };
+      const candidates = await tx.payrollBatch.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: batchScopeSelect });
       const allowed = candidates.filter(batch => scope.full || batch.versions[0] &&
         (this.assigned(batch.versions[0], actor, scope) || scope.final && this.isEffective(batch, batch.versions[0])));
       if (!allowed.length) return [];
       const domains = new Map<string, PayrollDomain>();
       for (const batch of allowed) domains.set(batch.id, await this.access.assertDomain(tx, batch.purpose as PayrollPurpose));
       const latestIds = allowed.flatMap(batch => batch.versions.map(version => version.id));
-      const batches = await tx.payrollBatch.findMany({ where: { subjectId, id: { in: allowed.map(batch => batch.id) } },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100,
+      const batches = await tx.payrollBatch.findMany({ where: { ...where, id: { in: allowed.map(batch => batch.id) } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: { versions: { where: { id: { in: latestIds } }, orderBy: { version: 'desc' }, take: 1, include: versionInclude } } });
       const result: Array<PayrollBatch & { versions: Array<Version & { needsUpdate?: boolean }> }> = [];
       for (const batch of batches) {
@@ -139,7 +142,14 @@ export class PayrollBatchesService {
         const conflicts = await tx.payrollReservation.findMany({ where: { subjectId: batch.subjectId, domain,
           OR: claimLines.map(({ employeeId, attributionMonth, itemCode }) => ({ employeeId, attributionMonth, itemCode })) }, take: 1,
           select: { line: { select: { version: { select: { batchId: true } } } } } });
-        if (conflicts.length) throw new ConflictException({ message: '工资归属项已有有效支付安排，请核对原批次', batchId: conflicts[0].line.version.batchId });
+        if (conflicts.length) {
+          const original = await this.lookup(tx, conflicts[0].line.version.batchId);
+          // payroll_edit already permits full subject reads; the reservation FK alone does not bind its batch to that scope.
+          const visible = original.subjectId === batch.subjectId && (domain === 'formal'
+            ? original.purpose === 'formal' : ['trial', 'validation'].includes(original.purpose));
+          throw new ConflictException({ message: '工资归属项已有有效支付安排，请核对原批次',
+            ...(visible ? { data: { batchId: original.id } } : {}) });
+        }
         await tx.payrollReservation.createMany({ data: claimLines.map(line => ({ subjectId: batch.subjectId,
           employeeId: line.employeeId, domain, attributionMonth: line.attributionMonth, itemCode: line.itemCode, lineId: line.id })) });
       }
@@ -213,7 +223,7 @@ export class PayrollBatchesService {
   }
 
   async settle(id: string, input: ExpectedVersion & { lineId: string; amount: string; reference: string; requestId: string }, actor: PayrollActor) {
-    return this.write(id, actor, 'payroll_settle', async (tx, batch) => {
+    return this.write(id, actor, 'payroll_settle', async (tx, batch, domain) => {
       const version = this.effective(batch);
       const reference = this.text(input.reference, 200), amount = this.money(input.amount);
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestId)) throw new BadRequestException('入薪请求标识不正确');
@@ -225,6 +235,7 @@ export class PayrollBatchesService {
         const { versions: _versions, ...record } = batch;
         return record;
       }
+      await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
       assertPayrollVersion(batch.version, input.expectedVersion);
       const line = this.payableLine(version, input.lineId);
       const paid = line.settlements.reduce((total, payment) => total.plus(payment.amount), new Decimal(0));
@@ -235,7 +246,7 @@ export class PayrollBatchesService {
       if (amount.eq(remainder)) await this.release(tx, [line]);
       await this.event(tx, batch, actor, 'settled', { lineId: line.id, requestId: input.requestId, reference }, version.version);
       return this.advance(tx, batch, 'approved');
-    });
+    }, Prisma.TransactionIsolationLevel.ReadCommitted);
   }
 
   async cancelRemainder(id: string, input: ExpectedVersion & { lineId: string; reference: string }, actor: PayrollActor) {
@@ -249,9 +260,10 @@ export class PayrollBatchesService {
     });
   }
 
-  private async transaction<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  private async transaction<T>(work: (tx: Prisma.TransactionClient) => Promise<T>,
+    isolationLevel: Prisma.TransactionIsolationLevel = Prisma.TransactionIsolationLevel.Serializable): Promise<T> {
     try {
-      return await this.prisma.$transaction(work, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 5000, timeout: 60000 });
+      return await this.prisma.$transaction(work, { isolationLevel, maxWait: 5000, timeout: 60000 });
     } catch (error) {
       const code = (error as { code?: string })?.code;
       if (code === 'P2002') throw new ConflictException('工资归属项已被其他批次占用，或该操作已提交；请重新读取并核对原批次');
@@ -261,19 +273,26 @@ export class PayrollBatchesService {
   }
 
   private write<T>(id: string, actor: PayrollActor, capability: PayrollCapability,
-    work: (tx: Prisma.TransactionClient, batch: Batch, domain: PayrollDomain) => Promise<T>) {
+    work: (tx: Prisma.TransactionClient, batch: Batch, domain: PayrollDomain) => Promise<T>,
+    isolationLevel: Prisma.TransactionIsolationLevel = Prisma.TransactionIsolationLevel.Serializable) {
     return this.transaction(async tx => {
       const header = await this.lookup(tx, id);
       await this.access.assert(tx, actor, header.subjectId, capability);
       const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
       await lockPayrollSubject(tx, header.subjectId, domain);
+      if (isolationLevel === Prisma.TransactionIsolationLevel.ReadCommitted) {
+        const current = await this.lookup(tx, id);
+        if (current.subjectId !== header.subjectId || current.purpose !== header.purpose) throw new ConflictException('批次归属已变化，请重新读取');
+        await this.access.assert(tx, actor, current.subjectId, capability);
+        await this.access.assertDomain(tx, current.purpose as PayrollPurpose);
+      }
       if (capability === 'payroll_settle') {
         const metadata = await this.scopeBatch(tx, id);
         if (!metadata.versions[0] || !this.isEffective(metadata, metadata.versions[0])) throw new ConflictException('仅当前有效且全部审批完成的版本可以办理入薪或作废');
       }
       const batch = await this.load(tx, id);
       return work(tx, batch, domain);
-    });
+    }, isolationLevel);
   }
 
   private async lookup(tx: Prisma.TransactionClient, id: string) {
@@ -344,9 +363,10 @@ export class PayrollBatchesService {
   }
 
   private async withFreshness(tx: Prisma.TransactionClient, batch: PayrollBatch, version: Version, domain: PayrollDomain): Promise<VisibleVersion> {
-    if (version.status !== 'pending') return version;
+    if (version.status !== 'pending' && version.status !== 'approved') return version;
     try {
-      await this.assertFresh(tx, batch, version, domain);
+      if (version.status === 'approved') await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+      else await this.assertFresh(tx, batch, version, domain);
       return { ...version, needsUpdate: false };
     } catch (error) {
       if (!(error instanceof ConflictException)) throw error;

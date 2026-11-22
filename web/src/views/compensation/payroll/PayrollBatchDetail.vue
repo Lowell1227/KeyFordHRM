@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 import { Refresh, Download } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
-import { payrollApi, payrollError } from '@/api/payroll.api';
+import { payrollApi, payrollConflictBatchId, payrollError } from '@/api/payroll.api';
 import type { PayrollAccess, PayrollBatch, PayrollEmployee, PayrollOperator } from '@/types/payroll.types';
 import { batchActions, currentVersion, subjectCapabilities, statusLabels, purposeLabels, batchStatus, needsUpdate, itemLabels, isDecimal, type BatchAction } from './payroll-state';
 
 const props = defineProps<{ access?: PayrollAccess; allowExport?: boolean }>();
 const emit = defineEmits<{ changed: []; busy: [boolean]; correct: [batch: PayrollBatch] }>();
-const auth = useAuthStore(), route = useRoute();
+const auth = useAuthStore(), route = useRoute(), router = useRouter();
 const batch = ref<PayrollBatch>();
 const employees = ref<PayrollEmployee[]>([]), operators = ref<PayrollOperator[]>([]);
 const error = ref(''), success = ref(''), loading = ref(false), busy = ref(false);
@@ -19,6 +19,7 @@ const action = ref<BatchAction>();
 const note = ref(''), filePassword = ref(''), confirmedUnpaid = ref(false);
 const lineId = ref(''), amount = ref(''), reference = ref('');
 const fields = ref<Record<string, string>>({});
+const conflictingBatchId = ref('');
 const settlementAttempt = ref<{ batchId: string; expectedVersion: number; lineId: string; amount: string; reference: string; requestId: string }>();
 let sequence = 0;
 const capabilities = computed(() => subjectCapabilities(props.access, batch.value?.subjectId ?? ''));
@@ -65,7 +66,13 @@ async function load() {
   finally { if (request === sequence) loading.value = false; }
 }
 watch(() => route.params.id, () => { clearAction(); void load(); }, { immediate: true });
-function clearAction() { action.value = undefined; note.value = ''; filePassword.value = ''; confirmedUnpaid.value = false; lineId.value = ''; amount.value = ''; reference.value = ''; settlementAttempt.value = undefined; fields.value = {}; }
+function clearAction() { action.value = undefined; note.value = ''; filePassword.value = ''; confirmedUnpaid.value = false; lineId.value = ''; amount.value = ''; reference.value = ''; settlementAttempt.value = undefined; fields.value = {}; conflictingBatchId.value = ''; }
+async function openConflictingBatch() {
+  const id = conflictingBatchId.value;
+  if (!id || !await mayLeave()) return;
+  clearAction();
+  await router.push({ path: `/payroll/batches/${encodeURIComponent(id)}`, query: route.query });
+}
 async function selectAction(value: BatchAction) {
   if (settlementAttempt.value) return;
   if (value === 'correct') { if (batch.value) emit('correct', batch.value); return; }
@@ -132,17 +139,21 @@ async function run() {
     clearAction(); emit('changed');
   } catch (cause) {
     error.value = await payrollError(cause);
+    conflictingBatchId.value = selectedAction === 'submit' ? payrollConflictBatchId(cause) : '';
   } finally { filePassword.value = ''; busy.value = false; }
 }
 </script>
 <template>
   <div v-loading="loading" class="payroll-detail" :aria-busy="busy">
     <el-alert v-if="error" :title="error" type="error" :closable="false" data-testid="payroll-action-error" />
+    <el-button v-if="conflictingBatchId" link type="primary" :disabled="busy" @click="openConflictingBatch">查看冲突批次</el-button>
     <el-alert v-if="success" :title="success" type="success" :closable="false" />
     <div class="detail-toolbar"><el-tooltip content="刷新批次与来源状态"><el-button :icon="Refresh" aria-label="刷新批次" :disabled="busy" @click="refresh" /></el-tooltip><el-select v-if="batch && readable" v-model="selectedVersion" aria-label="计算版本" :disabled="busy || !!action || !!settlementAttempt"><el-option v-for="row in batch.versions" :key="row.id" :value="row.version" :label="`第 ${row.version} 版 · ${statusLabels[row.status]}`" /></el-select></div>
     <template v-if="batch && readable">
       <dl class="summary-grid"><div><dt>用工主体</dt><dd>{{ access?.subjects.find(subject => subject.id === batch?.subjectId)?.name || batch.subjectId }}</dd></div><div><dt>工资归属月</dt><dd>{{ batch.month }}</dd></div><div><dt>发放月</dt><dd>{{ batch.payMonth }}</dd></div><div><dt>用途</dt><dd>{{ purposeLabels[batch.purpose] }}</dd></div><div><dt>状态</dt><dd>{{ batchStatus(batch) }}</dd></div><div><dt>税前应发</dt><dd>{{ version?.gross ?? '待核算' }}</dd></div><div v-if="batch.status === 'pending'"><dt>当前办理人</dt><dd>{{ currentActor ? operatorName(currentActor) : '待分配' }}</dd></div></dl>
-      <el-alert v-if="needsUpdate(batch)" title="来源已更新，当前审批暂停。经办撤回或当前办理人退回后，重新核算并提交新版。" type="warning" :closable="false" />
+      <el-alert v-if="needsUpdate(batch)" :title="batch.status === 'approved'
+        ? '考勤来源存在跨月归属冲突，下载和新增入薪已暂停。请核对原月及已入薪差异，原批准记录保留。'
+        : '来源已更新，当前审批暂停。经办撤回或当前办理人退回后，重新核算并提交新版。'" type="warning" :closable="false" />
       <el-alert v-if="!isCurrent" title="历史版本，只读" type="info" :closable="false" />
       <ul v-if="version?.issues.length" class="issue-list"><li v-for="(issue, index) in version.issues" :key="index">{{ issue }}</li></ul>
       <div class="payroll-lines-desktop"><el-table :data="version?.lines ?? []" row-key="id" empty-text="尚未核算"><el-table-column type="expand"><template #default="{ row }"><h4>入薪记录</h4><div v-for="record in row.settlements ?? []" :key="record.id" class="settlement-record">{{ record.amount }} · {{ record.reference }} · {{ record.createdAt }}</div><h4>计算与调整依据</h4><pre>{{ JSON.stringify(row.evidence, null, 2) }}</pre></template></el-table-column><el-table-column label="员工" min-width="130"><template #default="{ row }">{{ employeeName(row.employeeId) }}</template></el-table-column><el-table-column prop="attributionMonth" label="归属月" width="105" /><el-table-column label="工资项" width="110"><template #default="{ row }">{{ itemLabels[row.itemCode] || row.itemCode }}</template></el-table-column><el-table-column label="状态" min-width="110"><template #default="{ row }">{{ lineStatus(row.status) }}</template></el-table-column><el-table-column prop="entitlement" label="核定应发" min-width="110"><template #default="{ row }">{{ row.entitlement ?? '待配置' }}</template></el-table-column><el-table-column label="已确认入薪" min-width="110"><template #default="{ row }">{{ row.paidBefore ?? '待确认' }}</template></el-table-column><el-table-column label="本批待结" min-width="130"><template #default="{ row }">{{ amountText(row) }}</template></el-table-column></el-table></div>

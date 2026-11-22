@@ -46,7 +46,7 @@ describe('normalizeAttendance', () => {
 
   it('keeps schedule units independent from source hours and sanitizes unknown/private fields', () => {
     const raw = {
-      ...record({ hours: '08.2500' }),
+      ...record({ hours: '08.2500', endsAt: '2026-11-02T17:15:00+08:00' }),
       position: 'private',
       photo: 'private',
       device: { id: 'private' },
@@ -62,7 +62,7 @@ describe('normalizeAttendance', () => {
       ...record({
         hours: '8.25',
         startsAt: '2026-11-02T01:00:00.000Z',
-        endsAt: '2026-11-02T09:00:00.000Z',
+        endsAt: '2026-11-02T09:15:00.000Z',
       }),
       kind: 'regular',
       resolution: 'usable',
@@ -366,6 +366,65 @@ describe('normalizeAttendance', () => {
       ),
     ).toEqual([]);
     expect(codes(input([record({ type: 'not_required', hours: '0' })]))).toContain('REQUIREMENT_CONFLICT');
+  });
+
+  it.each(['normal', 'unpaid_leave', 'absence', 'makeup', 'overtime'] as const)(
+    'blocks effective %s hours beyond the absolute interval without correcting the source',
+    (type) => {
+      const result = normalizeAttendance(input([record({
+        type, overtimeKind: 'weekday', hours: '20', endsAt: '2026-11-02T11:00:00+08:00',
+      })], { expected: [expected('fictional-1', '2026-11-02', false, '0')] }));
+      expect(result.days[0].issues).toEqual(['HOURS_EXCEED_INTERVAL']);
+      expect(result.days[0].records[0]).toMatchObject({
+        hours: '20', resolution: 'unresolved', effectiveHours: null,
+      });
+      expect(result.issues[0].message).toBeTruthy();
+    },
+  );
+
+  it.each(['0', '1.5', '2'])(
+    'keeps valid %s hours, including deducted breaks, inside a two-hour interval',
+    (hours) => {
+      const result = normalizeAttendance(input([record({ hours, endsAt: '2026-11-02T11:00:00+08:00' })]));
+      expect(result.issues).toEqual([]);
+      expect(result.days[0].records[0]).toMatchObject({ hours, resolution: 'usable', effectiveHours: hours });
+    },
+  );
+
+  it.each([
+    ['2026-11-30T23:00:00+08:00', '2026-12-01T01:00:00+08:00', '2', false],
+    ['2026-11-30T23:00:00+08:00', '2026-12-01T01:00:00+08:00', '2.0001', true],
+    ['2026-11-30T18:00:00+08:00', '2026-11-30T14:00:00+02:00', '2', false],
+    ['2026-11-30T18:00:00+08:00', '2026-11-30T14:00:00+02:00', '3', true],
+    ['2026-11-30T00:00:00Z', '2026-12-01T08:00:00Z', '32', false],
+    ['2026-11-30T00:00:00Z', '2026-12-01T08:00:00Z', '32.0001', true],
+    ['2026-11-30T09:00:00Z', '2026-11-30T11:00:00Z', '2.00000000000000000001', true],
+    ['2026-11-30T09:00:00.0001Z', '2026-11-30T09:00:00.0002Z', '0.00000001', false],
+    ['2026-11-30T09:00:00.0001Z', '2026-11-30T09:00:00.0002Z', '0.00000003', true],
+  ] as const)('compares %s to %s against %s hours without losing date, offset or decimal precision', (startsAt, endsAt, hours, exceeds) => {
+    const result = normalizeAttendance(input([record({ workDate: '2026-11-30', startsAt, endsAt, hours })], {
+      expected: [expected('fictional-1', '2026-11-30')],
+    }));
+    expect(result.days[0].issues).toEqual(exceeds ? ['HOURS_EXCEED_INTERVAL'] : []);
+    expect(result.days[0].records[0]).toMatchObject({
+      hours, resolution: exceeds ? 'unresolved' : 'usable', effectiveHours: exceeds ? null : hours,
+    });
+  });
+
+  it.each(['pending', 'revoked'] as const)('keeps the existing %s issue without pricing inactive overlong hours', (state) => {
+    const result = normalizeAttendance(input([record({ state, hours: '20' })]));
+    expect(result.days[0].issues).toEqual([state === 'pending' ? 'PENDING_APPROVAL' : 'REVOKED_RECORD']);
+    expect(result.days[0].records[0]).toMatchObject({ hours: '20', resolution: 'inactive', effectiveHours: null });
+  });
+
+  it('does not compare duration against an invalid interval', () => {
+    expect(codes(input([record({ startsAt: 'invalid', hours: '20' })]))).toEqual(['INVALID_INTERVAL']);
+  });
+
+  it.each(['day', 'unknown'] as const)('keeps %s duration unresolved instead of guessing its conversion for an interval check', (unit) => {
+    const result = normalizeAttendance(input([record({ unit, hours: '20', endsAt: '2026-11-02T11:00:00+08:00' })]));
+    expect(result.days[0].issues).toEqual([unit === 'day' ? 'DAY_CONVERSION_REQUIRED' : 'UNKNOWN_UNIT']);
+    expect(result.days[0].records[0]).toMatchObject({ unit, hours: '20', resolution: 'unresolved', effectiveHours: null });
   });
 
   it.each(['day', 'unknown'] as const)('retains raw %s units and never invents an eight-hour conversion', (unit) => {

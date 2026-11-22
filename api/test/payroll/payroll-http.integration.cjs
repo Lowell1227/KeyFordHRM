@@ -1,6 +1,6 @@
 'use strict';
 
-// Run from the host with node; --case draft-read-confidentiality runs only the incremental case.
+// Run from the host with node; --case selects one guarded, run-owned regression.
 async function run(guardsOnly, selectedCase) {
   const { randomUUID, createHash } = require('node:crypto');
   const { PrismaClient, Prisma } = require('@prisma/client');
@@ -267,7 +267,7 @@ async function run(guardsOnly, selectedCase) {
 
   try {
     marker = await guarded();
-    check(require(process.cwd() + '/package.json').version === '0.9.1', 'preview_package_version');
+    check(require(process.cwd() + '/package.json').version === '0.9.2', 'preview_package_version');
     const health = await api(null, 'GET', '/health', undefined, [200]);
     check(health.status === 'ok' && health.db === 'ok', 'preview_http_database_health');
     for (const employeeNo of ['ADMIN', 'HR001', 'MGR001', 'VP001', 'EMP001', 'EMP002', 'EMP003']) {
@@ -288,6 +288,79 @@ async function run(guardsOnly, selectedCase) {
     if (guardsOnly) return;
     await db.systemConfig.create({ data: { key: runKey, value: { fictional: true, runId, ...owned } } }); markerCreated = true;
 
+    await caseRun('review_cross_month_source', async () => {
+      for (const stage of ['sealed', 'pending', 'paid']) {
+        const f = await fixture(`cross-month-${stage}`, { months: ['2026-10', marker.month] });
+        f.revision++;
+        const input = attendanceInput(f, '2026-10');
+        const overnight = { sourceId: `cross-night:${f.employeeId}`, sourceVersion: f.revision, employeeId: f.employeeId,
+          workDate: '2026-10-31', startsAt: '2026-10-31T23:00:00+08:00', endsAt: '2026-11-01T01:00:00+08:00',
+          type: 'overtime', state: 'effective', hours: '2', unit: 'hour', overtimeKind: 'weekday' };
+        input.records.push(overnight);
+        const original = await api('HR001', 'POST', '/payroll/attendance/sync', {
+          subjectId: f.subjectId, month: '2026-10', sourceKey: randomUUID(), complete: true, input });
+        await api('HR001', 'POST', `/payroll/attendance/${original.id}/seal`, { expectedVersion: original.version });
+        const frozenAttendance = digest(await db.payrollAttendanceSnapshot.findUnique({ where: { id: original.id } }));
+        let batch, frozenLines, settlementId, settlementInput;
+        if (stage !== 'sealed') {
+          batch = await api('HR001', 'POST', '/payroll/batches', { subjectId: f.subjectId, month: '2026-10', payMonth: marker.month, purpose: 'validation' });
+          batch = await action(batch, 'calculate'); batch = await action(batch, 'submit');
+          if (stage === 'paid') {
+            batch = await action(batch, 'decide', 'MGR001', { decision: 'approve', note: 'Run-owned review' });
+            batch = await action(batch, 'decide', 'VP001', { decision: 'approve', note: 'Run-owned approval' });
+            const line = latest(batch).lines.find(row => row.itemCode === 'overtime');
+            settlementInput = { lineId: line.id, amount: new Prisma.Decimal(line.amount).minus('50').toFixed(2), reference: 'Run-owned partial payment before date correction', requestId: randomUUID() };
+            batch = await action(batch, 'settlements', 'VP001', settlementInput);
+            settlementId = (await db.payrollSettlement.findFirst({ where: batchWhere(f.subjectId) })).id;
+          }
+          frozenLines = digest(immutableLines(latest(batch)));
+        }
+        f.revision++;
+        const changed = attendanceInput(f, marker.month);
+        changed.records.push({ ...overnight, sourceVersion: f.revision, workDate: `${marker.month}-01` });
+        const moved = await api('HR001', 'POST', '/payroll/attendance/sync', {
+          subjectId: f.subjectId, month: marker.month, sourceKey: randomUUID(), complete: true, input: changed });
+        check(moved.payload.issues.some(issue => issue.code === 'CROSS_MONTH_SOURCE_CONFLICT'), 'cross_month_source_quarantined');
+        await request('HR001', 'POST', `/payroll/attendance/${moved.id}/seal`, { expectedVersion: moved.version }, [409]);
+        check(digest(await db.payrollAttendanceSnapshot.findUnique({ where: { id: original.id } })) === frozenAttendance, 'old_sealed_attendance_immutable');
+        if (batch) {
+          const after = await detail(batch.id);
+          check(latest(after).needsUpdate === true && digest(immutableLines(latest(after))) === frozenLines, 'old_batch_stale_without_rewriting_amounts');
+          if (stage === 'pending') await request('MGR001', 'POST', `/payroll/batches/${batch.id}/decide`, { expectedVersion: batch.version, decision: 'approve', note: '' }, [409]);
+          if (settlementId) {
+            check(await db.payrollSettlement.count({ where: { id: settlementId } }) === 1, 'existing_payment_preserved');
+            await request('VP001', 'POST', `/payroll/batches/${batch.id}/export`, { expectedVersion: batch.version, filePassword: randomUUID() }, [409]);
+            await request('VP001', 'POST', `/payroll/batches/${batch.id}/settlements`, { expectedVersion: batch.version,
+              ...settlementInput, amount: '50.00', requestId: randomUUID() }, [409]);
+            await action(batch, 'settlements', 'VP001', settlementInput);
+            check(await db.payrollSettlement.count({ where: batchWhere(f.subjectId) }) === 1, 'cross_month_payment_replay_is_not_second_payment');
+            batch = await action(batch, 'cancel-remainder', 'VP001', { lineId: settlementInput.lineId, reference: 'Stop disputed remaining payment' });
+            check(await db.payrollReservation.count({ where: { lineId: settlementInput.lineId } }) === 0, 'cross_month_hold_allows_remainder_cancellation');
+            check(await db.payrollSettlement.count({ where: { id: settlementId } }) === 1, 'cancellation_retains_original_payment');
+          }
+        }
+      }
+    });
+    await caseRun('review_list_conflict', async () => {
+      const f = await fixture('list-conflict'); await seal(f);
+      let original = await calculate(f); original = await action(original, 'submit');
+      await db.payrollBatch.createMany({ data: Array.from({ length: 101 }, () => ({ id: randomUUID(), subjectId: f.subjectId,
+        month: marker.month, payMonth: '2026-12', purpose: 'validation', status: 'draft', createdById: actors.HR001 })) });
+      const reviewerRows = await api('MGR001', 'GET', `/payroll/batches?subjectId=${f.subjectId}&month=${marker.month}`);
+      check(reviewerRows.length === 1 && reviewerRows[0].id === original.id, 'older_assignment_not_hidden_by_new_drafts');
+      const absentMonth = await api('HR001', 'GET', `/payroll/batches?subjectId=${f.subjectId}&month=2026-10`);
+      check(absentMonth.length === 0, 'month_filter_is_server_side');
+      original = await action(original, 'decide', 'MGR001', { decision: 'approve', note: '' });
+      original = await action(original, 'decide', 'VP001', { decision: 'approve', note: '' });
+      const finalRows = await api('VP001', 'GET', `/payroll/batches?subjectId=${f.subjectId}&month=${marker.month}`);
+      check(finalRows.length === 1 && finalRows[0].id === original.id, 'older_final_result_not_hidden_by_new_drafts');
+      const second = await calculate(f), before = second.version;
+      const conflict = await request('HR001', 'POST', `/payroll/batches/${second.id}/submit`, { expectedVersion: before }, [409]);
+      check(conflict.data?.batchId === original.id, 'structured_conflict_points_to_authorized_original');
+      const unchanged = await detail(second.id);
+      check(unchanged.version === before && unchanged.status === 'calculated', 'conflict_does_not_submit_second_batch');
+      check(await db.payrollReservation.count({ where: { subjectId: f.subjectId, line: { version: { batchId: second.id } } } }) === 0, 'conflict_creates_no_second_claim');
+    });
     await caseRun('draft_read_confidentiality', async () => {
       const f = await fixture('draft-read');
       await db.payrollGrant.update({ where: { userId_subjectId: { userId: actors.VP001, subjectId: f.subjectId } },
@@ -493,7 +566,7 @@ async function run(guardsOnly, selectedCase) {
       batch = await approve(batch); await excel(batch, '1200', 3);
       check(digest(await db.assessmentTask.findMany({ where: { cycleId: f.cycleId }, include: { gradeResult: true } })) === sourceBefore, 'payroll_does_not_write_performance');
     });
-    check(executed === (selectedCase ? 1 : 8), 'case_selection_exact_count');
+    check(executed === (selectedCase ? 1 : 10), 'case_selection_exact_count');
   } catch (error) {
     failed++; emit(`${phase}_failed_${error.safeCase ?? 'execution'}`, 0);
   } finally {
@@ -513,7 +586,9 @@ function launch() {
   try {
     const args = process.argv.slice(2);
     const guardsOnly = args.length === 1 && args[0] === '--guards-only';
-    const selectedCase = args.length === 2 && args[0] === '--case' && args[1] === 'draft-read-confidentiality' ? 'draft_read_confidentiality' : null;
+    const caseNames = { 'draft-read-confidentiality': 'draft_read_confidentiality',
+      'review-cross-month-source': 'review_cross_month_source', 'review-list-conflict': 'review_list_conflict' };
+    const selectedCase = args.length === 2 && args[0] === '--case' ? caseNames[args[1]] ?? null : null;
     if (args.length && !guardsOnly && !selectedCase) throw new Error();
     const format = '{"name":{{json .Name}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"running":{{json .State.Running}},"cwd":{{json .Config.WorkingDir}}}';
     const inspection = spawnSync('docker', ['inspect', '--format', format, 'hrm-api-1'], { encoding: 'utf8', timeout: 15000 });

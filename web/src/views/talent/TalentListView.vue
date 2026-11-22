@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { onBeforeRouteUpdate, useRoute } from 'vue-router';
 import { Delete } from '@element-plus/icons-vue';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { usePagination } from '@/composables/usePagination';
@@ -48,6 +48,7 @@ const exportError = ref(''), positionsError = ref(''), applicationPositions = re
 const { loading: exporting, download } = useExport();
 const detailVisible = ref(false);
 const formVisible = ref(false);
+const formDrawer = ref<InstanceType<typeof TalentFormDrawer>>();
 const activeCandidateId = ref<string | null>(null);
 const selectedIds = ref<string[]>([]);
 const deleteVisible = ref(false);
@@ -145,7 +146,12 @@ function openDetail(id: string, applicationId?: string) {
 function openRow(row: TalentCandidateListItem) {
   openDetail(row.id, row.latestApplication?.id);
 }
+onBeforeRouteUpdate(async (to, from) => {
+  if ((to.query.candidateId !== from.query.candidateId || to.query.applicationId !== from.query.applicationId)
+    && formVisible.value && !await formDrawer.value?.prepareToLeave()) return false;
+});
 watch([() => route.query.candidateId, () => route.query.applicationId], ([candidateId, applicationId]) => {
+  formVisible.value = false;
   deepLinkError.value = '';
   if (candidateId === undefined && applicationId === undefined) { detailVisible.value = false; return; }
   if (typeof candidateId !== 'string' || !candidateId.trim()
@@ -377,7 +383,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
     <template #detail>
       <TalentDetailDrawer v-model="detailVisible" :candidate-id="activeCandidateId" :application-match="activeApplicationMatch"
         @edit="openEdit" @removed="onRemoved" @changed="loadList" />
-      <TalentFormDrawer v-model="formVisible" :candidate-id="activeCandidateId"
+      <TalentFormDrawer ref="formDrawer" v-model="formVisible" :candidate-id="activeCandidateId"
         @saved="onSaved" @open-existing="openDetail" />
       <TalentDeleteDialog v-model="deleteVisible" :targets="deleteTargets" @removed="onRemoved" />
     </template>

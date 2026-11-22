@@ -35,7 +35,7 @@ async function load() {
   error.value = '';
   loading.value = true;
   try {
-    const data = await payrollApi.batches(subjectId.value);
+    const data = await payrollApi.batches(subjectId.value, month.value);
     if (request !== sequence) return;
     batches.value = data;
     if ((props.mode === 'batches' && has('payroll_edit')) || (props.mode === 'results' && has('payroll_settle'))) {

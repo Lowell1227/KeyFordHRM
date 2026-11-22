@@ -26,7 +26,7 @@ export const payrollApi = {
   createRule: (body: PayrollRuleInput) => post<PayrollRule>('/rules', body),
   activateRule: (id: string) => post<PayrollRule>(`/rules/${encodeURIComponent(id)}/activate`, {}),
   disableRule: (id: string) => post<PayrollRule>(`/rules/${encodeURIComponent(id)}/disable`, {}),
-  batches: (subjectId: string) => get<PayrollBatch[]>('/batches', { subjectId }),
+  batches: (subjectId: string, month?: string) => get<PayrollBatch[]>('/batches', { subjectId, ...(month ? { month } : {}) }),
   batch: (id: string) => get<PayrollBatch>(`/batches/${encodeURIComponent(id)}`),
   createBatch: (body: PayrollBatchInput) => post<PayrollBatch>('/batches', body),
   calculate: (id: string, version: number) => batchWrite(id, 'calculate', version),
@@ -42,6 +42,12 @@ export const payrollApi = {
   createOpening: (body: PayrollOpeningInput) => post<PayrollOpening>('/opening-balances', body),
   export: (id: string, expectedVersion: number, filePassword: string) => http.post<never, AxiosResponse<Blob>>(`${root}/batches/${encodeURIComponent(id)}/export`, { expectedVersion, filePassword }, { ...localErrors, responseType: 'blob', timeout: 60000 }),
 };
+
+export function payrollConflictBatchId(error: unknown): string {
+  const response = (error as { response?: { status?: number; data?: { data?: { batchId?: unknown } } } })?.response;
+  const id = response?.data?.data?.batchId;
+  return response?.status === 409 && typeof id === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id) ? id : '';
+}
 
 export async function payrollError(error: unknown): Promise<string> {
   const response = (error as { response?: { data?: unknown } })?.response;
