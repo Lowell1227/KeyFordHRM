@@ -94,10 +94,22 @@ async function runNotificationAtomicityInPreview() {
     assert.equal(updated.interview.version, 2);
     assert.deepEqual(updated.interview.participants.map((p: any) => p.userId), [ids.second]);
     assert.deepEqual(updated.syncs.map((s: any) => [s.version, s.status]), [[1, 'superseded'], [2, 'unconfigured']]);
-    assert.equal(updated.audit.length, 2); assert.equal(updated.notifications.length, 3);
+    assert.equal(updated.audit.length, 2); assert.equal(updated.notifications.length, 4);
     const latest = updated.notifications.filter((log: any) => log.extraData.version === 2);
-    assert.deepEqual(latest.map((log: any) => log.userId), [ids.second]);
-    assert.equal(latest[0].dedupeKey, `talent_interview:${ids.interview}:2:${ids.second}`);
+    assert.deepEqual(latest.map((log: any) => log.userId).sort(), [ids.first, ids.second].sort());
+    const retainedNotice = latest.find((log: any) => log.userId === ids.second);
+    assert.equal(retainedNotice.title, '面试邀约已更新');
+    assert.equal(retainedNotice.dedupeKey, `talent_interview:${ids.interview}:2:${ids.second}`);
+    assert.deepEqual(retainedNotice.extraData, { invitationId: ids.interview, version: 2 });
+    const removedNotice = latest.find((log: any) => log.userId === ids.first);
+    assert.equal(removedNotice.title, '面试参与已取消');
+    assert.equal(removedNotice.content, '你已不再参与此面试，无需参加或填写反馈。');
+    assert.equal(removedNotice.dedupeKey, `talent_interview:${ids.interview}:2:${ids.first}`);
+    assert.deepEqual(removedNotice.extraData, { invitationId: ids.interview, version: 2, action: 'participant_removed' });
+    assert.equal(removedNotice.senderId, ids.actor);
+    assert.equal(removedNotice.type, 'talent_interview');
+    assert.equal(removedNotice.channel, 'system'); assert.equal(removedNotice.status, 'sent');
+    assert.equal(removedNotice.isRead, false); assert.equal(removedNotice.readAt, null); assert.ok(removedNotice.sentAt);
     evidence.notificationsAfterUpdate = updated.notifications.length;
     inject = true;
     await service.retrySync(ids.interview, { version: 2 }, actor);
@@ -105,6 +117,9 @@ async function runNotificationAtomicityInPreview() {
     assert.equal(retried.interview.version, 3);
     assert.equal(retried.interview.calendarSyncedVersion, 0);
     assert.deepEqual(retried.notifications, updated.notifications);
+    assert.deepEqual(retried.notifications.filter((log: any) => log.userId === ids.first
+      && log.extraData.action === 'participant_removed'), [removedNotice]);
+    assert.equal(retried.notifications.filter((log: any) => log.extraData.version === 3).length, 0);
     evidence.notificationsAfterCalendarRetry = retried.notifications.length;
     evidence.injectedFailures = injectedFailures;
     assert.equal(injectedFailures, 4);
@@ -161,7 +176,7 @@ describe('Talent interview notifications: isolated real PostgreSQL atomicity', (
     }
     const result = JSON.parse(output);
     expect(result).toEqual({ ok: true, evidence: { database: 'hrm_preview', role: 'hrm_preview', injectedFailures: 4,
-      notificationsAfterCreate: 2, notificationsAfterReplay: 2, notificationsAfterUpdate: 3, notificationsAfterCalendarRetry: 3,
+      notificationsAfterCreate: 2, notificationsAfterReplay: 2, notificationsAfterUpdate: 4, notificationsAfterCalendarRetry: 4,
       rolledBack: ['create', 'update', 'cancel', 'complete'],
       cleanup: { users: 0, candidates: 0, interviews: 0, participants: 0, syncs: 0, notifications: 0, audit: 0 } } });
     console.info('Talent notification atomicity evidence:', JSON.stringify(result));

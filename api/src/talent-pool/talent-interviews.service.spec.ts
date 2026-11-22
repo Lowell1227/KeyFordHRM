@@ -323,7 +323,101 @@ describe('talent interview safety and access', () => {
       newValue: expect.objectContaining({ startsAt: '2026-12-02T02:00:00.000Z' }),
     }) }));
   });
-  it('commits the entire recipient set before returning, then notifies only current participants and reauthorizes old links', async () => {
+  it.each([
+    [['participant'], ['participant', 'added'], ['participant', 'added'], []],
+    [['participant', 'retained'], ['retained', 'participant'], ['retained', 'participant'], []],
+    [['participant', 'removed'], ['participant'], ['participant'], ['removed']],
+    [['removed', 'participant', 'removed-too'], ['added', 'participant'], ['added', 'participant'], ['removed', 'removed-too']],
+  ])('notifies current and removed participants exactly once when changing %j to %j', async (oldIds, newIds, currentIds, removedIds) => {
+    const { sut, prisma, tx } = setup({ participants: oldIds.map(userId => ({ userId, userNameSnapshot: `Synthetic ${userId}` })) });
+    prisma.user.findMany.mockResolvedValue(newIds.map(id => ({ id, name: `Synthetic ${id}` })));
+    await sut.update('invite', { version: 1, participantIds: newIds }, hr);
+    const notifications = tx.notificationLog.createMany.mock.calls[0][0].data;
+    expect(notifications.map(log => [log.userId, log.title])).toEqual([
+      ...currentIds.map(id => [id, '面试邀约已更新']),
+      ...removedIds.map(id => [id, '面试参与已取消']),
+    ]);
+    expect(notifications.map(log => log.dedupeKey)).toEqual([...currentIds, ...removedIds].map(id => `talent_interview:invite:2:${id}`));
+    expect(new Set(notifications.map(log => log.dedupeKey)).size).toBe(notifications.length);
+    for (const id of removedIds) {
+      expect(notifications.find(log => log.userId === id)).toMatchObject({
+        senderId: hr.id, type: 'talent_interview', content: '你已不再参与此面试，无需参加或填写反馈。',
+        extraData: { invitationId: 'invite', version: 2, action: 'participant_removed' },
+        status: 'sent', channel: 'system', isRead: false, readAt: null, sentAt: expect.any(Date),
+      });
+    }
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      oldValue: expect.objectContaining({ participantIds: oldIds }),
+      newValue: expect.objectContaining({ participantIds: newIds }),
+    }) }));
+    expect(prisma.talentInterviewSync.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ participantIds: newIds }) }));
+    const serialized = JSON.stringify(notifications);
+    for (const privateValue of [draft.invitationText, draft.meetingUrl, draft.note, 'Synthetic Candidate']) expect(serialized).not.toContain(privateValue);
+    expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
+  });
+  it('aborts the transaction on a removal-notification failure and retries with the same dedupe keys', async () => {
+    const { sut, prisma, tx, row } = setup({ participants: [
+      { userId: 'participant', userNameSnapshot: 'First' }, { userId: 'removed', userNameSnapshot: 'Second' },
+    ] });
+    const failure = new Error('Synthetic removed-participant inbox failure');
+    let commits = 0;
+    prisma.$transaction.mockImplementation(async fn => {
+      const result = await fn(tx);
+      commits++;
+      return result;
+    });
+    tx.notificationLog.createMany.mockImplementationOnce(async ({ data }) => {
+      expect(data).toHaveLength(2);
+      expect(data[1]).toMatchObject({ userId: 'removed', extraData: { action: 'participant_removed' } });
+      throw failure;
+    });
+    const input = { version: 1, participantIds: ['participant'] };
+    await expect(sut.update('invite', input, hr)).rejects.toBe(failure);
+    await expect(prisma.$transaction.mock.results[0].value).rejects.toBe(failure);
+    expect(commits).toBe(0);
+    const result = await sut.update('invite', input, hr);
+    expect(commits).toBe(1);
+    expect(tx.notificationLog.createMany.mock.calls.map(([{ data }]) => data.map(log => log.dedupeKey))).toEqual([
+      ['talent_interview:invite:2:participant', 'talent_interview:invite:2:removed'],
+      ['talent_interview:invite:2:participant', 'talent_interview:invite:2:removed'],
+    ]);
+    Object.assign(row, { version: result.version, participants: [{ userId: 'participant', userNameSnapshot: 'First' }] });
+    await expect(sut.update('invite', input, hr)).rejects.toThrow(ConflictException);
+    expect(tx.notificationLog.createMany).toHaveBeenCalledTimes(2);
+    expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
+  });
+  it.each(['update', 'cancel', 'retrySync'] as const)('%s after removal does not notify the removed participant again', async action => {
+    const { sut, tx, row } = setup({ participants: [
+      { userId: 'participant', userNameSnapshot: 'First' }, { userId: 'removed', userNameSnapshot: 'Second' },
+    ] });
+    const updated = await sut.update('invite', { version: 1, participantIds: ['participant'] }, hr);
+    Object.assign(row, { version: updated.version, participants: [{ userId: 'participant', userNameSnapshot: 'First' }] });
+    const result = await sut[action]('invite', { version: 2 }, hr);
+    expect(result).toMatchObject({ version: 3, status: action === 'cancel' ? 'cancelled' : 'scheduled' });
+    const notifications = tx.notificationLog.createMany.mock.calls.flatMap(([{ data }]) => data);
+    expect(notifications.filter(log => log.userId === 'removed')).toEqual([expect.objectContaining({
+      dedupeKey: 'talent_interview:invite:2:removed', title: '面试参与已取消',
+    })]);
+    expect(tx.notificationLog.createMany).toHaveBeenCalledTimes(action === 'retrySync' ? 1 : 2);
+    if (action !== 'retrySync') expect(notifications[2]).toMatchObject({
+      userId: 'participant', dedupeKey: 'talent_interview:invite:3:participant',
+      title: action === 'cancel' ? '面试邀约已取消' : '面试邀约已更新',
+      extraData: { invitationId: 'invite', version: 3 },
+    });
+  });
+  it('removing HR participation does not revoke independent talent-reader access', async () => {
+    const { sut, tx, row } = setup({ participants: [
+      { userId: hr.id, userNameSnapshot: 'HR' }, { userId: 'participant', userNameSnapshot: 'First' },
+    ] });
+    const updated = await sut.update('invite', { version: 1, participantIds: ['participant'] }, hr);
+    Object.assign(row, { version: updated.version, participants: [{ userId: 'participant', userNameSnapshot: 'First' }] });
+    expect(tx.notificationLog.createMany.mock.calls[0][0].data).toContainEqual(expect.objectContaining({
+      userId: hr.id, extraData: { invitationId: 'invite', version: 2, action: 'participant_removed' },
+    }));
+    await expect(sut.detail('invite', hr)).resolves.toMatchObject({ candidateId: 'candidate', version: 2 });
+    await expect(sut.detail('invite', reviewer)).resolves.toMatchObject({ candidateId: 'candidate', version: 2 });
+  });
+  it('commits the entire recipient set before returning, then cancels removed participation and reauthorizes old links', async () => {
     const { sut, prisma, tx, row } = setup({ participants: [
       { userId: 'participant', userNameSnapshot: 'First' }, { userId: 'removed', userNameSnapshot: 'Second' },
     ] });
@@ -365,11 +459,18 @@ describe('talent interview safety and access', () => {
       expect.stringContaining('talent_candidates'), expect.stringContaining('talent_interviews'),
     ]);
     expect(tx.notificationLog.createMany).toHaveBeenCalledTimes(2);
-    expect(tx.notificationLog.createMany.mock.calls[1][0].data.map((log) => [log.userId, log.extraData.version])).toEqual([['participant', 2]]);
+    expect(tx.notificationLog.createMany.mock.calls[1][0].data.map((log) => [log.userId, log.extraData.version])).toEqual([['participant', 2], ['removed', 2]]);
     expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
     row.version = updated.version;
     row.participants = [{ userId: 'participant', userNameSnapshot: 'First' }];
-    await expect(sut.detail('invite', { ...employee, id: 'removed' })).rejects.toThrow(NotFoundException);
+    const removedUser = { ...employee, id: 'removed' };
+    const removedNotice = tx.notificationLog.createMany.mock.calls[1][0].data.find(log => log.userId === 'removed')!;
+    await expect(sut.detail(removedNotice.extraData.invitationId, removedUser)).rejects.toThrow(NotFoundException);
+    prisma.talentInterview.findMany.mockImplementation(async ({ where }) => row.participants.some(participant => participant.userId === where.participants.some.userId) ? [row] : []);
+    await expect(sut.list({ scope: 'mine' }, removedUser)).resolves.toEqual([]);
+    expect(prisma.talentInterview.findMany).toHaveBeenLastCalledWith(expect.objectContaining({ where: { participants: { some: { userId: 'removed' } } } }));
+    await expect(sut.list({ candidateId: 'candidate' }, removedUser)).rejects.toThrow(ForbiddenException);
+    await expect(sut.list({ scope: 'created' }, removedUser)).rejects.toThrow(ForbiddenException);
     await expect(sut.detail('invite', employee)).resolves.toMatchObject({ version: 2 });
   });
 });

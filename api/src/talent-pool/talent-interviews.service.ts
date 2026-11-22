@@ -217,13 +217,20 @@ export class TalentInterviewsService {
       newValue: { version: row.version, status: row.status, startsAt: row.startsAt.toISOString(), endsAt: row.endsAt.toISOString(), participantIds: row.participants.map((p) => p.userId) } } });
     if (action !== 'retry') {
       const sentAt = new Date();
-      await tx.notificationLog.createMany({ data: row.participants.map((participant) => ({
-        userId: participant.userId, senderId: user.id, type: 'talent_interview',
-        dedupeKey: `talent_interview:${row.id}:${row.version}:${participant.userId}`,
-        title: row.status === 'cancelled' ? '面试邀约已取消' : row.status === 'completed' ? '面试已完成' : '面试邀约已更新',
-        content: '请查看面试邀约的最新安排。', extraData: { invitationId: row.id, version: row.version },
-        status: 'sent', channel: 'system', isRead: false, readAt: null, sentAt,
-      })) });
+      const currentParticipantIds = new Set(row.participants.map(participant => participant.userId));
+      const removedParticipants = action === 'update'
+        ? before?.participants.filter(participant => !currentParticipantIds.has(participant.userId)) ?? [] : [];
+      await tx.notificationLog.createMany({ data: [...row.participants, ...removedParticipants].map((participant) => {
+        const removed = !currentParticipantIds.has(participant.userId);
+        return {
+          userId: participant.userId, senderId: user.id, type: 'talent_interview',
+          dedupeKey: `talent_interview:${row.id}:${row.version}:${participant.userId}`,
+          title: removed ? '面试参与已取消' : row.status === 'cancelled' ? '面试邀约已取消' : row.status === 'completed' ? '面试已完成' : '面试邀约已更新',
+          content: removed ? '你已不再参与此面试，无需参加或填写反馈。' : '请查看面试邀约的最新安排。',
+          extraData: { invitationId: row.id, version: row.version, ...(removed ? { action: 'participant_removed' } : {}) },
+          status: 'sent', channel: 'system', isRead: false, readAt: null, sentAt,
+        };
+      }) });
     }
   }
 }

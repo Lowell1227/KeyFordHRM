@@ -15,6 +15,9 @@ export function resolveNotificationTarget(
     return null;
   }
 
+  if (notification.type === 'talent_interview' && notification.extraData?.action === 'participant_removed') {
+    return { path: '/talent-interviews' };
+  }
   if (notification.type === 'talent_interview' && typeof notification.extraData?.invitationId === 'string') {
     return { path: `/talent-interviews/${encodeURIComponent(notification.extraData.invitationId)}` };
   }
