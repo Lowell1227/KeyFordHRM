@@ -1,6 +1,6 @@
 import http from './http';
 import type { AxiosResponse } from 'axios';
-import type { PayrollAccess, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollAttendance, PayrollSourceInput, PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollBatch, PayrollBatchInput, PayrollAdjustment, PayrollAdjustmentInput, PayrollOpening, PayrollOpeningInput } from '@/types/payroll.types';
+import type { PayrollAccess, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollAttendance, PayrollSourceInput, PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollBatch, PayrollBatchInput, PayrollAdjustment, PayrollAdjustmentInput, PayrollOpening, PayrollOpeningInput, PayrollDeductionsPreviewInput, PayrollDeductionsPreviewResult } from '@/types/payroll.types';
 
 const root = '/payroll';
 const localErrors = { skipErrorMessage: true };
@@ -30,6 +30,7 @@ export const payrollApi = {
   batch: (id: string) => get<PayrollBatch>(`/batches/${encodeURIComponent(id)}`),
   createBatch: (body: PayrollBatchInput) => post<PayrollBatch>('/batches', body),
   calculate: (id: string, version: number) => batchWrite(id, 'calculate', version),
+  deductionsPreview: (id: string, body: PayrollDeductionsPreviewInput) => post<PayrollDeductionsPreviewResult>(`/batches/${encodeURIComponent(id)}/deductions-preview`, body),
   submit: (id: string, version: number) => batchWrite(id, 'submit', version),
   decide: (id: string, version: number, decision: 'approve' | 'return', note: string) => batchWrite(id, 'decide', version, { decision, note }),
   withdraw: (id: string, version: number, note: string) => batchWrite(id, 'withdraw', version, { note }),

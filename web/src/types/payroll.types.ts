@@ -29,6 +29,19 @@ export interface PayrollLine { id: string; employeeId: string; attributionMonth:
 export interface PayrollVersion { id: string; version: number; status: PayrollStatus; needsUpdate?: boolean; submittedById?: string | null; sourceHash: string; sources: unknown; issues: string[]; approvalPath: string[]; reviewerCount: number; approvalStep: number; gross: string | null; lines: PayrollLine[]; decisions: unknown[]; exports: unknown[] }
 export interface PayrollBatch { id: string; subjectId: string; month: string; payMonth: string; purpose: PayrollPurpose; status: PayrollStatus; version: number; needsUpdate?: boolean; versions: PayrollVersion[]; events?: unknown[]; correctionOfId?: string | null; additionalMonths?: string[] }
 export interface PayrollBatchInput { subjectId: string; month: string; payMonth: string; purpose: PayrollPurpose; correctionOfId?: string; additionalMonths?: string[] }
+export type PayrollDeductionsPreviewMode = 'complete' | 'missing';
+export interface PayrollDeductionsPreviewInput { expectedVersion: number; payDate: string; mode: PayrollDeductionsPreviewMode }
+export interface PayrollDeductionsAmounts { gross: string; socialInsurance: string; housingFund: string; incomeTax: string; net: string }
+export interface PayrollDeductionsPreviewRow {
+  employeeId: string; employeeName: string; status: 'ready' | 'needs_configuration' | 'needs_review'; issues: string[];
+  gross: string | null; socialInsurance: string | null; housingFund: string | null; incomeTax: string | null; net: string | null;
+  evidence: { sourceHash: string | null; input: unknown; [key: string]: unknown };
+}
+export interface PayrollDeductionsPreviewResult {
+  batchId: string; batchVersion: number; calculationVersion: number; calculationVersionId: string; subjectId: string; sourceHash: string;
+  payDate: string; payMonth: string; mode: PayrollDeductionsPreviewMode; basis: 'fictional'; approvalStatus: 'not_submitted';
+  rows: PayrollDeductionsPreviewRow[]; totals: PayrollDeductionsAmounts | null;
+}
 export interface PayrollAdjustmentInput { subjectId: string; employeeId: string; month: string; itemCode: PayrollItemCode; amount: string; reason: string; reference: string }
 export interface PayrollAdjustment extends PayrollAdjustmentInput { id: string; createdAt?: string }
 export interface PayrollOpeningInput { subjectId: string; employeeId: string; month: string; itemCode: PayrollItemCode; amount: string; reference: string }

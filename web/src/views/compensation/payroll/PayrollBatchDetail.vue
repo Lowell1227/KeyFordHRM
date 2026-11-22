@@ -7,13 +7,15 @@ import { useAuthStore } from '@/stores/auth.store';
 import { payrollApi, payrollConflictBatchId, payrollError } from '@/api/payroll.api';
 import type { PayrollAccess, PayrollBatch, PayrollEmployee, PayrollOperator } from '@/types/payroll.types';
 import { batchActions, currentVersion, subjectCapabilities, statusLabels, purposeLabels, batchStatus, needsUpdate, itemLabels, isDecimal, type BatchAction } from './payroll-state';
+import PayrollDeductionsPreview from './PayrollDeductionsPreview.vue';
 
 const props = defineProps<{ access?: PayrollAccess; allowExport?: boolean }>();
 const emit = defineEmits<{ changed: []; busy: [boolean]; correct: [batch: PayrollBatch] }>();
 const auth = useAuthStore(), route = useRoute(), router = useRouter();
 const batch = ref<PayrollBatch>();
 const employees = ref<PayrollEmployee[]>([]), operators = ref<PayrollOperator[]>([]);
-const error = ref(''), success = ref(''), loading = ref(false), busy = ref(false);
+const error = ref(''), success = ref(''), loading = ref(false), actionBusy = ref(false), deductionsBusy = ref(false);
+const busy = computed(() => actionBusy.value || deductionsBusy.value);
 const selectedVersion = ref<number>();
 const action = ref<BatchAction>();
 const note = ref(''), filePassword = ref(''), confirmedUnpaid = ref(false);
@@ -26,6 +28,10 @@ const capabilities = computed(() => subjectCapabilities(props.access, batch.valu
 const readable = computed(() => capabilities.value.some(cap => ['payroll_edit', 'payroll_view', 'payroll_review', 'payroll_approve', 'payroll_export', 'payroll_settle'].includes(cap)));
 const version = computed(() => batch.value?.versions.find(value => value.version === selectedVersion.value));
 const isCurrent = computed(() => selectedVersion.value === (batch.value ? currentVersion(batch.value)?.version : undefined));
+const showDeductionsPreview = computed(() => import.meta.env.VITE_PREVIEW_MODE === 'true' && capabilities.value.includes('payroll_edit')
+  && batch.value && batch.value.purpose !== 'formal' && isCurrent.value && ['calculated', 'pending', 'approved'].includes(batch.value.status)
+  && !needsUpdate(batch.value) && version.value && version.value.gross !== null && !version.value.issues.length
+  && version.value.lines.length > 0 && version.value.lines.every(line => ['ready', 'not_applicable'].includes(line.status) && (line.status === 'not_applicable' || line.amount !== null)));
 const actions = computed(() => batch.value && isCurrent.value && readable.value ? batchActions(batch.value, capabilities.value, auth.user?.id ?? '') : []);
 const currentActor = computed(() => version.value?.approvalPath[version.value.approvalStep]);
 const candidates = computed(() => (version.value?.lines ?? []).filter(line => line.status === 'ready' && line.amount !== null && line.reservation !== null));
@@ -36,7 +42,7 @@ const lineStatus = (status: string) => status === 'not_applicable' ? '不适用'
 function amountText(value: unknown) { const line = value as { status: string; amount: string | null }; return line.status === 'not_applicable' ? '不适用' : line.amount ?? '待核对 / 待配置'; }
 const actionLabels: Record<BatchAction, string> = { calculate: '自动核算', submit: '提交复核', approve: '通过当前环节', return: '退回经办', withdraw: '撤回重算', export: '下载加密工资表', settle: '确认入薪', 'cancel-remainder': '取消剩余支付安排', void: '作废未付款版本', correct: '发起更正 / 补差' };
 
-watch(busy, value => emit('busy', value));
+watch(busy, value => emit('busy', value), { flush: 'sync' });
 async function mayLeave() {
   if (busy.value) return false;
   if (settlementAttempt.value) {
@@ -112,7 +118,7 @@ async function run() {
   if (selectedAction === 'cancel-remainder') {
     try { await ElMessageBox.confirm('取消所选工资行的剩余支付安排？已确认入薪记录将保留。', '取消剩余安排', { confirmButtonText: '取消剩余安排', cancelButtonText: '返回' }); } catch { return; }
   }
-  busy.value = true;
+  actionBusy.value = true;
   try {
     let updated: PayrollBatch | undefined;
     switch (selectedAction) {
@@ -140,7 +146,7 @@ async function run() {
   } catch (cause) {
     error.value = await payrollError(cause);
     conflictingBatchId.value = selectedAction === 'submit' ? payrollConflictBatchId(cause) : '';
-  } finally { filePassword.value = ''; busy.value = false; }
+  } finally { filePassword.value = ''; actionBusy.value = false; }
 }
 </script>
 <template>
@@ -159,6 +165,7 @@ async function run() {
       <div class="payroll-lines-desktop"><el-table :data="version?.lines ?? []" row-key="id" empty-text="尚未核算"><el-table-column type="expand"><template #default="{ row }"><h4>入薪记录</h4><div v-for="record in row.settlements ?? []" :key="record.id" class="settlement-record">{{ record.amount }} · {{ record.reference }} · {{ record.createdAt }}</div><h4>计算与调整依据</h4><pre>{{ JSON.stringify(row.evidence, null, 2) }}</pre></template></el-table-column><el-table-column label="员工" min-width="130"><template #default="{ row }">{{ employeeName(row.employeeId) }}</template></el-table-column><el-table-column prop="attributionMonth" label="归属月" width="105" /><el-table-column label="工资项" width="110"><template #default="{ row }">{{ itemLabels[row.itemCode] || row.itemCode }}</template></el-table-column><el-table-column label="状态" min-width="110"><template #default="{ row }">{{ lineStatus(row.status) }}</template></el-table-column><el-table-column prop="entitlement" label="核定应发" min-width="110"><template #default="{ row }">{{ row.entitlement ?? '待配置' }}</template></el-table-column><el-table-column label="已确认入薪" min-width="110"><template #default="{ row }">{{ row.paidBefore ?? '待确认' }}</template></el-table-column><el-table-column label="本批待结" min-width="130"><template #default="{ row }">{{ amountText(row) }}</template></el-table-column></el-table></div>
       <div class="payroll-lines-mobile"><section v-for="line in version?.lines ?? []" :key="line.id" class="mobile-line"><strong>{{ employeeName(line.employeeId) }}</strong><span>{{ line.attributionMonth }} · {{ itemLabels[line.itemCode] || line.itemCode }}</span><span>{{ lineStatus(line.status) }} · 本批 {{ amountText(line) }}</span><span>核定 {{ line.entitlement ?? '待配置' }} · 已入薪 {{ line.paidBefore ?? '待确认' }}</span><div v-for="record in line.settlements ?? []" :key="record.id">已确认入薪 {{ record.amount }} · {{ record.reference }}</div><details><summary>计算与调整依据</summary><pre>{{ JSON.stringify(line.evidence, null, 2) }}</pre></details></section></div>
       <el-collapse class="trace-details"><el-collapse-item title="来源快照" name="sources"><div>校验标识：{{ version?.sourceHash }}</div><pre>{{ JSON.stringify(version?.sources, null, 2) }}</pre></el-collapse-item><el-collapse-item title="复核与审批记录" name="decisions"><ol><li v-for="(id, index) in version?.approvalPath ?? []" :key="index">{{ index < (version?.reviewerCount ?? 0) ? '复核' : '审批' }}：{{ operatorName(id) }}</li></ol><pre>{{ JSON.stringify(version?.decisions ?? [], null, 2) }}</pre></el-collapse-item><el-collapse-item title="导出记录（不代表已入薪）" name="exports"><pre>{{ JSON.stringify(version?.exports ?? [], null, 2) }}</pre></el-collapse-item><el-collapse-item title="更正与结算记录" name="events"><pre>{{ JSON.stringify(batch.events ?? [], null, 2) }}</pre></el-collapse-item></el-collapse>
+      <PayrollDeductionsPreview v-if="showDeductionsPreview" :batch="batch" :disabled="actionBusy || loading || !!action || !!settlementAttempt" @busy="deductionsBusy = $event" />
       <section v-if="action" class="action-form">
         <h3>{{ actionLabels[action] }}</h3>
         <el-form label-position="top">

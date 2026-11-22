@@ -4,8 +4,11 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { PayrollActor, PayrollCapability } from './payroll-access';
 import { PayrollAccessService } from './payroll-access.service';
 import { PAYROLL_ITEM_CODES, PayrollCapture, PayrollDomain, PayrollPurpose, PayrollSourceReader } from './payroll-contracts';
-import { assertPayrollVersion, lockPayrollSubject, payrollHash, payrollMonth } from './payroll-transaction';
+import { assertPayrollVersion, lockPayrollSubject, payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
 import { assertPayrollFrozenAttendance } from './payroll-data.service';
+import { PayrollDeductionsPreviewDto } from './dto/payroll.dto';
+import { calculatePayrollDeductions, PayrollTaxDeductions } from './payroll-deductions-calculator';
+import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
 
 const versionInclude = {
   lines: { include: { settlements: true, reservation: true } },
@@ -125,6 +128,109 @@ export class PayrollBatchesService {
       await this.event(tx, batch, actor, 'calculated', { sourceHash: captured.sourceHash }, version.version);
       return this.advance(tx, batch, 'calculated');
     });
+  }
+
+  async deductionsPreview(id: string, input: PayrollDeductionsPreviewDto, actor: PayrollActor) {
+    let employeeNames = new Map<string, string>();
+    return this.write(id, actor, 'payroll_edit', async (tx, batch, domain) => {
+      assertPayrollVersion(batch.version, input.expectedVersion);
+      const version = this.latest(batch);
+      if (!['calculated', 'pending', 'approved'].includes(batch.status) || batch.status !== version.status || version.voidedAt) {
+        throw new ConflictException('仅当前已核算、审批中或已批准的完整版本可以进行虚构扣缴试算');
+      }
+      this.assertReady(version);
+      const groups = new Map<string, Set<string>>(), grossByEmployee = new Map<string, Prisma.Decimal>();
+      const keys = new Set<string>(), months = [batch.month, ...batch.additionalMonths];
+      const frozen = version.sources as { months?: Array<{ month: string; sources?: {
+        subjectId?: string; month?: string; domain?: string;
+        employments?: Array<{ userId?: string; contractSubjectId?: string }>;
+      } }> } | null;
+      const expectedGroups = new Set<string>(), frozenMonths = new Set<string>();
+      if (!Array.isArray(frozen?.months) || frozen.months.length !== months.length) {
+        throw new ConflictException('冻结来源缺少完整归属月及应核人员范围');
+      }
+      for (const entry of frozen.months) {
+        const scope = entry?.sources;
+        if (!months.includes(entry?.month) || frozenMonths.has(entry.month) || scope?.subjectId !== batch.subjectId ||
+          scope.month !== entry.month || scope.domain !== domain || !Array.isArray(scope.employments) || !scope.employments.length) {
+          throw new ConflictException('冻结来源的主体、月份或应核人员范围不完整');
+        }
+        frozenMonths.add(entry.month);
+        for (const employment of scope.employments) {
+          if (!employment || typeof employment.userId !== 'string' || !employment.userId || employment.contractSubjectId !== batch.subjectId) {
+            throw new ConflictException('冻结任职范围与工资主体不一致');
+          }
+          expectedGroups.add(`${employment.userId}:${entry.month}`);
+        }
+      }
+      for (const line of version.lines) {
+        const key = keyOf(line), group = `${line.employeeId}:${line.attributionMonth}`;
+        if (!employeeNames.has(line.employeeId) || !months.includes(line.attributionMonth) ||
+          !(PAYROLL_ITEM_CODES as readonly string[]).includes(line.itemCode) || keys.has(key)) {
+          throw new ConflictException('核算版本的员工、归属月或五项工资明细不完整或重复');
+        }
+        keys.add(key);
+        const items = groups.get(group) ?? new Set<string>(); items.add(line.itemCode); groups.set(group, items);
+        const entitlement = this.money(line.entitlement!.toString()), paid = this.money(line.paidBefore!.toString());
+        const amount = this.money(line.amount!.toString());
+        if (!entitlement.minus(paid).eq(amount)) throw new ConflictException('工资应发、已入薪和本批差额不一致');
+        grossByEmployee.set(line.employeeId, (grossByEmployee.get(line.employeeId) ?? new Decimal(0)).plus(amount));
+      }
+      const gross = [...grossByEmployee.values()].reduce((total, amount) => total.plus(amount), new Decimal(0));
+      if (groups.size !== expectedGroups.size || [...expectedGroups].some(group => !groups.has(group)) ||
+        [...groups.values()].some(items => items.size !== PAYROLL_ITEM_CODES.length) ||
+        !gross.eq(this.money(version.gross!.toString(), 18))) throw new ConflictException('完整五项工资明细与核算合计不一致');
+      if (batch.status === 'approved') await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+      else await this.assertFresh(tx, batch, version, domain);
+      const rows = [...grossByEmployee.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([employeeId, amount], index) => {
+        const facts = fictionalDeductionsInput({ subjectId: batch.subjectId, employeeId, month: batch.month,
+          payDate: input.payDate, gross: amount.toFixed(2) });
+        if (input.mode === 'missing' && index === 0) delete (facts.tax.current as Partial<PayrollTaxDeductions>).specialDeduction;
+        return { employeeId, employeeName: employeeNames.get(employeeId)!, ...calculatePayrollDeductions(facts) };
+      });
+      const sum = (field: 'gross' | 'socialInsurance' | 'housingFund' | 'incomeTax' | 'net') =>
+        rows.reduce((total, row) => total.plus(row[field]!), new Decimal(0)).toFixed(2);
+      return { batchId: batch.id, batchVersion: batch.version, calculationVersion: version.version, calculationVersionId: version.id,
+        subjectId: batch.subjectId, sourceHash: version.sourceHash, payDate: input.payDate, payMonth: batch.payMonth, mode: input.mode,
+        basis: 'fictional' as const, approvalStatus: 'not_submitted' as const, rows,
+        totals: rows.every(row => row.status === 'ready') ? { gross: sum('gross'), socialInsurance: sum('socialInsurance'),
+          housingFund: sum('housingFund'), incomeTax: sum('incomeTax'), net: sum('net') } : null };
+    }, Prisma.TransactionIsolationLevel.ReadCommitted, async (tx, header) => {
+      if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.keys(input).some(key => !['expectedVersion', 'payDate', 'mode'].includes(key)) ||
+        !['complete', 'missing'].includes(input.mode) || typeof input.payDate !== 'string') {
+        throw new BadRequestException('虚构试算仅接受批次版本、明确发薪日和完整参数或缺项检查模式');
+      }
+      const metadata = await tx.payrollBatch.findUnique({ where: { id }, select: { version: true, payMonth: true,
+        versions: { orderBy: { version: 'desc' }, take: 1, select: { lines: { select: { employeeId: true } } } } } });
+      if (!metadata) throw new NotFoundException('工资批次不存在');
+      assertPayrollVersion(metadata.version, input.expectedVersion);
+      payrollDate(input.payDate);
+      if (input.payDate.slice(0, 7) !== metadata.payMonth) throw new BadRequestException('试算发薪日必须属于该批次发放月');
+      const employeeIds = [...new Set(metadata.versions[0]?.lines.map(line => line.employeeId) ?? [])];
+      if (!employeeIds.length) throw new ConflictException('请先完成包含全部员工五项明细的工资核算');
+      employeeNames = await this.deductionsPreviewEmployees(tx, header.subjectId, employeeIds);
+    });
+  }
+
+  private async deductionsPreviewEmployees(tx: Prisma.TransactionClient, subjectId: string, employeeIds: string[]) {
+    const marker = async (key: string) => (await tx.systemConfig.findUnique({ where: { key } }))?.value as
+      { fictional?: boolean; state?: string; subjectIds?: unknown; employeeIds?: unknown } | null | undefined;
+    const local = await marker('local_preview_fixture_v1'), base = await marker('payroll_preview_fixture_v1');
+    if (local?.fictional !== true || base?.fictional !== true) throw new ForbiddenException('仅允许已登记的虚构薪酬预览');
+    const dedicated = await marker('payroll_deductions_preview_fixture_v1');
+    const fixtures = [base, ...(dedicated?.fictional === true && dedicated.state === 'ready' ? [dedicated] : [])];
+    if (!fixtures.some(({ subjectIds, employeeIds: registered }) => Array.isArray(subjectIds) && subjectIds.includes(subjectId) &&
+      Array.isArray(registered) && employeeIds.every(id => registered.includes(id)))) {
+      throw new ForbiddenException('主体及全部工资人员必须在同一虚构预览夹具中明确登记');
+    }
+    const subject = await tx.contractSubject.findUnique({ where: { id: subjectId }, select: { name: true } });
+    const employees = await tx.user.findMany({ where: { id: { in: employeeIds } },
+      select: { id: true, name: true, employeeNo: true, dingtalkId: true, dingtalkUnionId: true } });
+    if (!subject?.name.includes('虚构') || employees.length !== employeeIds.length || employees.some(employee =>
+      !employee.name.includes('虚构') || !/^(PAY-DEMO-|PAY-DEDUCT-)/.test(employee.employeeNo ?? '') ||
+      employee.dingtalkId || employee.dingtalkUnionId)) throw new ForbiddenException('虚构预览登记与实际主体或员工记录不匹配');
+    return new Map(employees.map(employee => [employee.id, employee.name]));
   }
 
   async submit(id: string, input: ExpectedVersion, actor: PayrollActor) {
@@ -274,10 +380,12 @@ export class PayrollBatchesService {
 
   private write<T>(id: string, actor: PayrollActor, capability: PayrollCapability,
     work: (tx: Prisma.TransactionClient, batch: Batch, domain: PayrollDomain) => Promise<T>,
-    isolationLevel: Prisma.TransactionIsolationLevel = Prisma.TransactionIsolationLevel.Serializable) {
+    isolationLevel: Prisma.TransactionIsolationLevel = Prisma.TransactionIsolationLevel.Serializable,
+    previewGuard?: (tx: Prisma.TransactionClient, header: Pick<PayrollBatch, 'id' | 'subjectId' | 'purpose'>) => Promise<void>) {
     return this.transaction(async tx => {
       const header = await this.lookup(tx, id);
       await this.access.assert(tx, actor, header.subjectId, capability);
+      if (previewGuard && header.purpose === 'formal') throw new ForbiddenException('扣缴试算仅限虚构预览，不接受正式批次');
       const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
       await lockPayrollSubject(tx, header.subjectId, domain);
       if (isolationLevel === Prisma.TransactionIsolationLevel.ReadCommitted) {
@@ -286,6 +394,7 @@ export class PayrollBatchesService {
         await this.access.assert(tx, actor, current.subjectId, capability);
         await this.access.assertDomain(tx, current.purpose as PayrollPurpose);
       }
+      if (previewGuard) await previewGuard(tx, header);
       if (capability === 'payroll_settle') {
         const metadata = await this.scopeBatch(tx, id);
         if (!metadata.versions[0] || !this.isEffective(metadata, metadata.versions[0])) throw new ConflictException('仅当前有效且全部审批完成的版本可以办理入薪或作废');

@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsObject, IsOptional, IsString, IsUUID, Length, Matches, MaxLength, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsObject, IsOptional, IsString, IsUUID, Length, Matches, MaxLength, Min, ValidateNested } from 'class-validator';
 import { BooleanQuery } from '@/common/dto/boolean-query';
 import type { PayrollAttendanceInput, PayrollAttendanceType, PayrollOvertimeKind } from '../payroll-attendance-normalizer';
 
@@ -10,6 +10,10 @@ export class PayrollBatchQueryDto extends PayrollSubjectDto {
 export class PayrollMonthDto extends PayrollSubjectDto { @Matches(/^\d{4}-(0[1-9]|1[0-2])$/) month!: string; }
 export class PayrollFixtureDto extends PayrollMonthDto { @IsOptional() @BooleanQuery() @IsBoolean() corrected = false; }
 export class PayrollVersionDto { @IsInt() @Min(0) expectedVersion!: number; }
+export class PayrollDeductionsPreviewDto extends PayrollVersionDto {
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) payDate!: string;
+  @IsIn(['complete', 'missing']) mode!: 'complete' | 'missing';
+}
 export class PayrollNoteDto extends PayrollVersionDto { @IsString() @Length(1, 500) note!: string; }
 export class PayrollDecisionDto extends PayrollVersionDto {
   @IsIn(['approve', 'return']) decision!: 'approve' | 'return';

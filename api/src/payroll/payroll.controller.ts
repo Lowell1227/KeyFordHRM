@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post, Query, UseFilters, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post, Query, UseFilters, UseInterceptors, ValidationPipe } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { PayrollAccessService } from './payroll-access.service';
@@ -8,7 +8,7 @@ import { PayrollExportService } from './payroll-export.service';
 import { PayrollExceptionFilter } from './payroll-exception.filter';
 import { PayrollResponseInterceptor } from './payroll-response.interceptor';
 import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSyncDto, PayrollBatchQueryDto, PayrollCreateDto, PayrollDecisionDto, PayrollExportDto,
-  PayrollFixtureDto, PayrollMonthDto, PayrollNoteDto, PayrollOpeningDto, PayrollRemainderDto, PayrollRuleDto,
+  PayrollDeductionsPreviewDto, PayrollFixtureDto, PayrollMonthDto, PayrollNoteDto, PayrollOpeningDto, PayrollRemainderDto, PayrollRuleDto,
   PayrollSettlementDto, PayrollStandardDto, PayrollSubjectDto, PayrollVersionDto, PayrollVoidDto } from './dto/payroll.dto';
 
 @Controller('payroll')
@@ -59,6 +59,13 @@ export class PayrollController {
   }
   @Post('batches/:id/calculate') async calculate(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollVersionDto, @CurrentUser() actor: AuthUser) {
     await this.batches.calculate(id, input, actor); return this.batches.detail(id, actor);
+  }
+  @Post('batches/:id/deductions-preview') @Header('Cache-Control', 'no-store, private')
+  deductionsPreview(@Param('id', new ParseUUIDPipe()) id: string,
+    // Keep the global whitelist from silently stripping attempted fact overrides first.
+    @Body(new ValidationPipe({ expectedType: PayrollDeductionsPreviewDto, whitelist: true, forbidNonWhitelisted: true, transform: true })) input: unknown,
+    @CurrentUser() actor: AuthUser) {
+    return this.batches.deductionsPreview(id, input as PayrollDeductionsPreviewDto, actor);
   }
   @Post('batches/:id/submit') async submit(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollVersionDto, @CurrentUser() actor: AuthUser) {
     await this.batches.submit(id, input, actor); return this.batches.detail(id, actor);
