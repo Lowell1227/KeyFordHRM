@@ -6,22 +6,24 @@ import { isResultPublished } from '@/tasks/result-publication';
 export type PayrollPerformanceSource =
   | Readonly<{ status: 'ready'; snapshot: Readonly<{
       employeeId: string; taskId: string; cycleId: string; grade: PerfGrade; publishedAt: string; version: string;
+      attributionMonth?: string; periodStart?: string; periodEnd?: string;
     }> }>
-  | Readonly<{ status: 'unregistered' | 'not_applicable' | 'pending_publication' | 'in_review' | 'fact_conflict' | 'not_found' }>;
+  | Readonly<{ status: 'unregistered' | 'not_applicable' | 'pending_publication' | 'in_review' | 'fact_conflict' | 'not_found' | 'unsupported_cycle' | 'wrong_period' }>;
 
 /** The caller enforces salary access and approved employment/month scope, including historical dues. */
 export async function readPayrollPerformance(
   prisma: Pick<PrismaService, 'assessmentTask'>,
-  input: { employeeId: string; cycleId: string; registeredCycleIds: string[] },
+  input: { employeeId: string; cycleId: string; registeredCycleIds: string[]; requiredMonth?: string },
 ): Promise<PayrollPerformanceSource> {
   if (!input.registeredCycleIds.includes(input.cycleId)) return Object.freeze({ status: 'unregistered' });
+  if (input.requiredMonth !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(input.requiredMonth)) return Object.freeze({ status: 'wrong_period' });
 
   const task = await prisma.assessmentTask.findUnique({
     where: { cycleId_employeeId: { employeeId: input.employeeId, cycleId: input.cycleId } },
     select: {
       id: true, employeeId: true, cycleId: true, status: true,
       isExempt: true, participantDisposition: true, publishedAt: true,
-      cycle: { select: { type: true } },
+      cycle: { select: { type: true, startDate: true, endDate: true } },
       gradeResult: { select: {
         id: true, calibratedGrade: true, rawGrade: true,
         isPublished: true, publishedAt: true, hrCalibratedAt: true, approvedAt: true,
@@ -33,6 +35,17 @@ export async function readPayrollPerformance(
   if (task.cycle.type === 'probation' || task.isExempt || task.status === 'exempted'
     || task.participantDisposition !== 'active') {
     return Object.freeze({ status: 'not_applicable' });
+  }
+  let period: { attributionMonth: string; periodStart: string; periodEnd: string } | undefined;
+  if (input.requiredMonth !== undefined) {
+    if (task.cycle.type !== 'monthly') return Object.freeze({ status: 'unsupported_cycle' });
+    const { startDate, endDate } = task.cycle;
+    if (!(startDate instanceof Date) || !(endDate instanceof Date) || !Number.isFinite(startDate.getTime())
+      || !Number.isFinite(endDate.getTime()) || endDate < startDate
+      || startDate.toISOString().slice(0, 7) !== input.requiredMonth || endDate.toISOString().slice(0, 7) !== input.requiredMonth) {
+      return Object.freeze({ status: 'wrong_period' });
+    }
+    period = { attributionMonth: input.requiredMonth, periodStart: startDate.toISOString().slice(0, 10), periodEnd: endDate.toISOString().slice(0, 10) };
   }
   // Workflow appeals block pay; the independent HR appeal ledger does not alter result facts.
   if (task.status === 'appealing' || task.appeals.some(appeal => appeal.status !== 'resolved')) {
@@ -54,7 +67,7 @@ export async function readPayrollPerformance(
 
   const snapshot = {
     employeeId: task.employeeId, taskId: task.id, cycleId: task.cycleId,
-    grade, publishedAt: result.publishedAt.toISOString(),
+    grade, publishedAt: result.publishedAt.toISOString(), ...period,
   };
   const version = createHash('sha256').update(JSON.stringify({
     ...snapshot,

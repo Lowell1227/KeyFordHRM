@@ -188,8 +188,11 @@ export class PayrollDataService {
     const domain = await this.domain(this.prisma);
     if (domain !== 'validation') return [];
     const fixture = await this.prisma.systemConfig.findUnique({ where: { key: 'payroll_preview_fixture_v1' } });
-    const ids = (fixture?.value as { cycleIds?: string[] } | null)?.cycleIds ?? [];
-    return this.prisma.assessmentCycle.findMany({ where: { id: { in: ids } }, select: { id: true, name: true }, orderBy: { id: 'asc' } });
+    const monthly = await this.prisma.systemConfig.findUnique({ where: { key: 'payroll_monthly_rules_preview_v1' } });
+    const base = fixture?.value as { cycleIds?: string[] } | null;
+    const extra = monthly?.value as { fictional?: boolean; cycleIds?: string[] } | null;
+    const ids = [...new Set([...(base?.cycleIds ?? []), ...(extra?.fictional === true ? extra.cycleIds ?? [] : [])])];
+    return this.prisma.assessmentCycle.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, type: true, startDate: true, endDate: true }, orderBy: { id: 'asc' } });
   }
   async attendance(subjectId: string, month: string, actor: AuthUser) {
     const scopes = await this.access.getAccess(actor), scope = scopes.subjects.find(row => row.id === subjectId);

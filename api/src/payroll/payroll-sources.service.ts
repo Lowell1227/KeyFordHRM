@@ -6,6 +6,7 @@ import { PayrollCapture, PayrollCapturedLine, PayrollDomain, PayrollPolicyConfig
 import { isPayrollEmployment, payrollAttendanceConflicts, payrollDays, payrollEmployments, payrollJson } from './payroll-data.service';
 import { selectEmploymentAt } from '@/employee-archives/employment-timeline';
 import { payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
+import { normalizePayrollWorkCalendar, PayrollWorkCalendar } from './payroll-work-calendar';
 
 type AttendanceDay = { employeeId: string; workDate: string; units: string | null; required: boolean | null;
   records: Array<{ type: string; state: string; hours: string; effectiveHours: string | null; resolution: string; unit: string; overtimeKind?: string }>; issues: string[] };
@@ -45,16 +46,20 @@ export class PayrollSourcesService implements PayrollSourceReader {
     const approvalPath = first ? [...first.reviewers, ...first.approvers] : [];
     if (new Set(approvalPath).size !== approvalPath.length) issues.push('复核与审批身份存在重复，需核对回避规则');
     const cache = new Map<string, PayrollPerformanceSource>();
+    const calendars = new Map<string, PayrollWorkCalendar | null>();
     for (const employeeId of employees) {
       const personal: string[] = [], segments: PayrollSegment[] = [], absences: PayrollAbsence[] = [], overtime: PayrollOvertime[] = [];
       const history = employments.filter(row => row.userId === employeeId);
       const employmentNumbers = new Set<string>();
       const days = Array.isArray(payload?.days) ? payload.days.filter(row => row.employeeId === employeeId) : [];
       const denominators = new Set<string>();
+      const calendarVersions = new Set<string>(), bases = new Set<string>(), coefficientTables = new Set<string>();
+      let employedDates = 0;
       for (const date of payrollDays(month)) {
         const selection = selectEmploymentAt(history, payrollDate(date));
         if (selection.matches.length > 1) { personal.push('任职时间重叠'); continue; }
         if (!isPayrollEmployment(selection.current, subjectId, date)) continue;
+        employedDates++;
         if (selection.current?.employeeNo?.trim()) employmentNumbers.add(selection.current.employeeNo.trim());
         else personal.push('当期任职工号待核对');
         const dayMatches = days.filter(row => row.workDate === date);
@@ -64,7 +69,29 @@ export class PayrollSourcesService implements PayrollSourceReader {
         const matches = covering(standards.filter(row => row.employeeId === employeeId), date), ruleMatches = covering(policies, date);
         if (matches.length !== 1 || ruleMatches.length !== 1) { personal.push('工资标准或规则缺失/生效区间冲突'); continue; }
         const standard = matches[0], policy = ruleMatches[0], config = policy.config as unknown as PayrollPolicyConfig;
-        const denominator = quantity(config?.monthlyUnits?.[month], true), units = quantity(day.units);
+        const strict = domain === 'formal' || config?.fixedSalaryBasis === 'monthly_workdays';
+        bases.add(strict ? 'monthly_workdays' : 'legacy_validation');
+        let denominator = quantity(config?.monthlyUnits?.[month], true), units = quantity(day.units);
+        if (strict) {
+          if (config?.fixedSalaryBasis !== 'monthly_workdays') { personal.push('固定工资须配置已确认的工作日折算依据'); continue; }
+          if (!calendars.has(policy.id)) {
+            try { calendars.set(policy.id, normalizePayrollWorkCalendar(month, config.workCalendars?.[month])); }
+            catch { calendars.set(policy.id, null); }
+          }
+          const calendar = calendars.get(policy.id);
+          if (!calendar) { personal.push('完整月工作日日历、来源版本或确认依据待配置'); continue; }
+          calendarVersions.add(payrollHash(calendar));
+          const fullMonth = calendar.days.reduce((sum, row) => sum.plus(row.units), new D(0));
+          if (config.monthlyUnits?.[month] !== undefined && (!denominator || !fullMonth.eq(denominator))) {
+            personal.push('计薪分母须等于同一日历的完整月应出勤工作日'); continue;
+          }
+          denominator = fullMonth.toString();
+          const scheduled = calendar.days.find(row => row.workDate === date)!;
+          if (units === null || !new D(units).eq(scheduled.units) || day.required !== new D(scheduled.units).gt(0)) {
+            personal.push('考勤应出勤单位与工作日日历不一致，请核对，不能按实打卡折算'); continue;
+          }
+          units = scheduled.units;
+        }
         if (!denominator || units === null || config?.rounding !== 'item_half_up' || !config.cutoverMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(config.cutoverMonth)) {
           personal.push('当月计薪单位、启用切点或舍入规则待配置'); continue;
         }
@@ -72,17 +99,35 @@ export class PayrollSourcesService implements PayrollSourceReader {
         let coefficient: string | null = null;
         if (standard.performanceMode !== 'none') {
           const mapping = config.performance?.[month];
+          if (strict) {
+            if (!mapping?.coefficientVersion?.trim() || !mapping.evidenceRef?.trim()) personal.push('统一绩效系数表版本与确认依据待配置');
+            else coefficientTables.add(payrollHash({ version: mapping.coefficientVersion, evidenceRef: mapping.evidenceRef,
+              coefficients: mapping.coefficients }));
+            if (standard.performanceMode !== 'additional') personal.push('首版个人绩效须在固定月薪之外另计');
+          }
           if (!mapping || !Array.isArray(mapping.cycleIds) || mapping.cycleIds.length !== 1
             || mapping.sourceKind !== (domain === 'validation' ? 'fictional' : 'official')) personal.push('个人绩效计薪周期未登记或存在多个来源');
           else {
-            const cycleId = mapping.cycleIds[0], key = `${employeeId}:${cycleId}`;
+            const cycleId = mapping.cycleIds[0], key = `${employeeId}:${cycleId}:${strict ? month : 'legacy_validation'}`;
             let source = cache.get(key);
             if (!source) {
-              source = await readPayrollPerformance(tx, { employeeId, cycleId, registeredCycleIds: mapping.cycleIds });
+              source = await readPayrollPerformance(tx, { employeeId, cycleId, registeredCycleIds: mapping.cycleIds,
+                ...(strict ? { requiredMonth: month } : {}) });
               cache.set(key, source); performanceFacts.push({ employeeId, cycleId, result: source });
             }
-            if (source.status !== 'ready') personal.push(`个人绩效来源待核对：${source.status}`);
-            else { coefficient = quantity(mapping.coefficients?.[source.snapshot.grade]); if (coefficient === null) personal.push('薪酬侧等级系数待配置'); }
+            if (source.status !== 'ready') {
+              const labels: Partial<Record<PayrollPerformanceSource['status'], string>> = {
+                unsupported_cycle: '须使用正式月度考核结果，不能使用季度过程评分', wrong_period: '考核期间与工资归属月不一致',
+                pending_publication: '个人结果尚未公示', in_review: '个人结果仍在审核或申诉中',
+                fact_conflict: '个人公示记录不一致', not_found: '未找到该员工的考核结果',
+                not_applicable: '该考核结果不适用于计薪', unregistered: '考核来源尚未登记',
+              };
+              personal.push(`个人绩效来源待核对：${labels[source.status] ?? source.status}`);
+            }
+            else {
+              if (!strict || mapping.coefficientVersion?.trim() && mapping.evidenceRef?.trim()) coefficient = quantity(mapping.coefficients?.[source.snapshot.grade]);
+              if (coefficient === null) personal.push('薪酬侧等级系数待配置');
+            }
           }
         }
         if (!['included', 'additional', 'none'].includes(standard.performanceMode ?? '')) personal.push('工资结构待配置');
@@ -105,6 +150,14 @@ export class PayrollSourcesService implements PayrollSourceReader {
             else overtime.push({ hours, hourlyBase: base, multiplier: rate });
           }
         }
+      }
+      if (calendarVersions.size > 1 || bases.size > 1) personal.push('当月固定工资折算依据或工作日日历存在冲突');
+      if (coefficientTables.size > 1) personal.push('当月统一绩效系数表版本存在冲突');
+      if (bases.has('monthly_workdays') && segments.some(segment => segment.performanceMode !== 'none')
+        && (employedDates !== payrollDays(month).length || new Set(segments.map(segment =>
+          JSON.stringify([segment.performanceMode, segment.performanceBase]))).size > 1)) {
+        personal.push('月中入离职或绩效基数变更的绩效计发比例待确认');
+        for (const segment of segments) if (segment.performanceMode !== 'none') segment.coefficient = null;
       }
       if (denominators.size !== 1) personal.push('当月计薪单位缺失或规则间不一致');
       if (employmentNumbers.size !== 1) personal.push('当期任职工号缺失或存在多个值');

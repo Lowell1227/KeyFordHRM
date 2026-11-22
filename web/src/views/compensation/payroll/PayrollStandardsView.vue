@@ -9,6 +9,7 @@ import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { payrollApi, payrollError } from '@/api/payroll.api';
 import type { PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollPerformanceMapping } from '@/types/payroll.types';
 import PayrollScope from './PayrollScope.vue';
+import PayrollWorkCalendarEditor from './PayrollWorkCalendarEditor.vue';
 import { usePayrollScope } from './usePayrollScope';
 import { isDecimal } from './payroll-state';
 
@@ -29,7 +30,7 @@ const reviewerOptions = computed(() => operators.value.filter(person => person.c
 const approverOptions = computed(() => operators.value.filter(person => person.capabilities.includes('payroll_approve')));
 const employeeName = (id: string) => employees.value.find(person => person.id === id)?.name ?? id;
 function emptyStandard(): PayrollStandardInput { return { subjectId: '', employeeId: '', effectiveFrom: '', fixedMonthly: null, performanceBase: null, performanceMode: null, evidence: '' }; }
-function emptyRule(): PayrollRuleInput { return { subjectId: '', effectiveFrom: '', config: { monthlyUnits: {}, rounding: null, normalHourly: null, paidHourly: {}, overtime: { hourlyBase: null, weekday: null, restday: null, holiday: null }, reviewers: [], approvers: [], cutoverMonth: null, performance: {} } }; }
+function emptyRule(): PayrollRuleInput { return { subjectId: '', effectiveFrom: '', config: { fixedSalaryBasis: 'monthly_workdays', workCalendars: {}, monthlyUnits: {}, rounding: null, normalHourly: null, paidHourly: {}, overtime: { hourlyBase: null, weekday: null, restday: null, holiday: null }, reviewers: [], approvers: [], cutoverMonth: null, performance: {} } }; }
 function serialized() { return JSON.stringify({ standard: standard.value, rule: rule.value, mappings: mappings.value }); }
 async function mayClose() {
   if (busy.value) return false;
@@ -72,6 +73,7 @@ function edit(type: 'standard' | 'rule', row?: unknown) {
     value.effectiveTo = value.effectiveTo?.slice(0, 10);
   }
   rule.value.config.monthlyUnits ??= {};
+  rule.value.config.workCalendars ??= {};
   mappings.value = Object.entries(rule.value.config.performance).map(([key, value]) => ({ ...clone(value), month: key }));
   baseline = serialized(); open.value = true;
 }
@@ -90,6 +92,12 @@ async function save() {
     }
   } else {
     const config = rule.value.config;
+    if (config.fixedSalaryBasis === 'monthly_workdays') {
+      const calendar = config.workCalendars?.[month.value];
+      if (!calendar?.sourceVersion.trim() || !calendar.evidenceRef.trim() || !calendar.days.some(day => Number(day.units) > 0)) {
+        fields.calendar = '请填写日历版本、确认依据并选择应出勤日期';
+      }
+    }
     if (config.monthlyUnits[month.value] && !isDecimal(config.monthlyUnits[month.value])) fields.monthlyUnits = '请填写非负十进制计薪单位';
     const values = [config.normalHourly, ...Object.values(config.paidHourly), ...Object.values(config.overtime), ...Object.values(config.monthlyUnits)];
     if (values.some(value => value && !isDecimal(value))) formError.value = '计价参数应为非负十进制数，未确认项请留空';
@@ -98,6 +106,11 @@ async function save() {
       if (!mapping.month || seen.has(mapping.month)) { formError.value = '绩效归属月不能为空或重复'; break; }
       seen.add(mapping.month);
       if (Object.values(mapping.coefficients).some(value => value && !isDecimal(value))) formError.value = '绩效系数应为非负十进制数';
+      if (config.fixedSalaryBasis === 'monthly_workdays') {
+        if (!mapping.coefficientVersion?.trim() || !mapping.evidenceRef?.trim()) fields.performance = '请填写统一系数表版本和确认依据';
+        if (mapping.cycleIds.length !== 1 || !cycles.value.some(cycle => cycle.id === mapping.cycleIds[0] && cycle.type === 'monthly'
+          && cycle.startDate?.slice(0, 7) === mapping.month && cycle.endDate?.slice(0, 7) === mapping.month)) fields.performance = '请选择该归属月唯一的月度考核周期';
+      }
     }
   }
   if (Object.keys(fields).length || formError.value) return;
@@ -110,6 +123,9 @@ async function save() {
       const r = rule.value, config = clone(r.config);
       config.normalHourly ||= null; config.cutoverMonth ||= null; config.rounding ||= null;
       config.monthlyUnits = Object.fromEntries(Object.entries(config.monthlyUnits).filter(([, value]) => value !== ''));
+      if (config.fixedSalaryBasis === 'monthly_workdays' && config.workCalendars?.[month.value]) {
+        config.monthlyUnits[month.value] = String(config.workCalendars[month.value]!.days.reduce((sum, day) => sum + Math.round(Number(day.units) * 10000), 0) / 10000);
+      }
       config.paidHourly = Object.fromEntries(Object.entries(config.paidHourly).filter(([, value]) => value !== ''));
       for (const key of ['hourlyBase', 'weekday', 'restday', 'holiday'] as const) config.overtime[key] ||= null;
       config.performance = Object.fromEntries(mappings.value.map(({ month: key, ...mapping }) => [key, { ...mapping, coefficients: Object.fromEntries(Object.entries(mapping.coefficients).filter(([, value]) => value !== '')) }]));
@@ -181,14 +197,17 @@ async function disable(type: 'standard' | 'rule', id: string) {
           </template>
           <template v-else>
             <h3>计薪参数</h3>
-            <div class="form-grid"><el-form-item :label="`${month} 计薪单位`" :error="fields.monthlyUnits"><el-input v-model="rule.config.monthlyUnits[month]" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="舍入规则"><el-select v-model="rule.config.rounding" clearable><el-option label="按员工工资项汇总后四舍五入到分" value="item_half_up" /></el-select></el-form-item><el-form-item label="正常计薪小时单价"><el-input v-model="rule.config.normalHourly" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="正式启用归属月切点"><el-date-picker v-model="rule.config.cutoverMonth" type="month" value-format="YYYY-MM" clearable /></el-form-item></div>
+            <el-form-item label="固定工资折算"><el-select v-model="rule.config.fixedSalaryBasis"><el-option label="按当月应出勤工作日" value="monthly_workdays" /></el-select></el-form-item>
+            <PayrollWorkCalendarEditor v-if="rule.config.fixedSalaryBasis === 'monthly_workdays'" v-model="rule.config.workCalendars![month]" :month="month" :error="fields.calendar" @update:model-value="fields.calendar = ''" />
+            <div class="form-grid"><el-form-item v-if="rule.config.fixedSalaryBasis !== 'monthly_workdays'" :label="`${month} 计薪单位`" :error="fields.monthlyUnits"><el-input v-model="rule.config.monthlyUnits[month]" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="舍入规则"><el-select v-model="rule.config.rounding" clearable><el-option label="按员工工资项汇总后四舍五入到分" value="item_half_up" /></el-select></el-form-item><el-form-item label="正常计薪小时单价"><el-input v-model="rule.config.normalHourly" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="正式启用归属月切点"><el-date-picker v-model="rule.config.cutoverMonth" type="month" value-format="YYYY-MM" clearable /></el-form-item></div>
             <h3>假勤小时待遇</h3><div class="form-grid"><el-form-item label="事假"><el-input v-model="rule.config.paidHourly.unpaid_leave" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="病假"><el-input v-model="rule.config.paidHourly.sick_leave" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="确认旷工"><el-input v-model="rule.config.paidHourly.absence" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
             <h3>加班</h3><div class="form-grid"><el-form-item label="小时基数"><el-input v-model="rule.config.overtime.hourlyBase" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="工作日倍率"><el-input v-model="rule.config.overtime.weekday" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="休息日倍率"><el-input v-model="rule.config.overtime.restday" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="节假日倍率"><el-input v-model="rule.config.overtime.holiday" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
             <h3>复核与审批</h3><div class="form-grid"><el-form-item label="复核人（按选择顺序）"><el-select v-model="rule.config.reviewers" multiple filterable><el-option v-for="person in reviewerOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item><el-form-item label="审批人（按选择顺序）"><el-select v-model="rule.config.approvers" multiple filterable><el-option v-for="person in approverOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item></div>
             <h3>个人绩效归属</h3>
             <section v-for="(mapping, index) in mappings" :key="index" class="mapping-row">
               <div class="form-grid"><el-form-item label="归属月"><el-date-picker v-model="mapping.month" type="month" value-format="YYYY-MM" /></el-form-item><el-form-item label="来源类型"><el-select v-model="mapping.sourceKind" clearable><el-option label="正式公示结果" value="official" /><el-option label="虚构验收来源" value="fictional" /></el-select></el-form-item></div>
-              <el-form-item label="绩效周期"><el-select v-model="mapping.cycleIds" multiple filterable><el-option v-for="cycle in cycles" :key="cycle.id" :value="cycle.id" :label="cycle.name" /></el-select></el-form-item>
+              <el-form-item label="绩效周期" :error="fields.performance"><el-select v-model="mapping.cycleIds" multiple filterable><el-option v-for="cycle in cycles" :key="cycle.id" :value="cycle.id" :label="cycle.name" :disabled="rule.config.fixedSalaryBasis === 'monthly_workdays' && (cycle.type !== 'monthly' || cycle.startDate?.slice(0, 7) !== mapping.month || cycle.endDate?.slice(0, 7) !== mapping.month)" /></el-select></el-form-item>
+              <div class="form-grid"><el-form-item label="统一系数表版本" :error="fields.performance"><el-input v-model="mapping.coefficientVersion" maxlength="200" /></el-form-item><el-form-item label="系数确认依据"><el-input v-model="mapping.evidenceRef" maxlength="200" /></el-form-item></div>
               <div class="coefficient-grid"><el-form-item v-for="grade in (['A','B','C','D'] as const)" :key="grade" :label="`${grade} 等系数`"><el-input v-model="mapping.coefficients[grade]" inputmode="decimal" placeholder="未确认" /></el-form-item><el-tooltip content="删除归属月"><el-button :icon="Delete" aria-label="删除归属月" @click="mappings.splice(index, 1)" /></el-tooltip></div>
             </section>
             <el-button :icon="Plus" @click="addMapping">添加绩效归属月</el-button>

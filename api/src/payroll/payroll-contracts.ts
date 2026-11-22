@@ -1,10 +1,13 @@
 import { Prisma } from '@prisma/client';
+import type { PayrollWorkCalendar } from './payroll-work-calendar';
 
 export type PayrollDomain = 'validation' | 'formal';
 export type PayrollPurpose = 'trial' | PayrollDomain;
 export const PAYROLL_ITEM_CODES = ['fixed', 'absence', 'overtime', 'performance', 'adjustment'] as const;
 export type PayrollItemCode = typeof PAYROLL_ITEM_CODES[number];
 export interface PayrollPolicyConfig {
+  fixedSalaryBasis?: 'monthly_workdays' | null;
+  workCalendars?: Record<string, PayrollWorkCalendar>;
   rounding: 'item_half_up' | null;
   monthlyUnits: Record<string, string>;
   normalHourly: string | null;
@@ -13,7 +16,9 @@ export interface PayrollPolicyConfig {
   reviewers: string[];
   approvers: string[];
   cutoverMonth: string | null;
-  performance: Record<string, { cycleIds: string[]; sourceKind?: 'official' | 'fictional' | null; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>> }>;
+  performance: Record<string, { cycleIds: string[]; sourceKind?: 'official' | 'fictional' | null;
+    coefficientVersion?: string | null; evidenceRef?: string | null;
+    coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>> }>;
 }
 export interface PayrollCapturedLine {
   employeeId: string;

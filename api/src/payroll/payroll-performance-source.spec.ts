@@ -38,6 +38,31 @@ function fixture(task: unknown = publishedTask()) {
 }
 
 describe('readPayrollPerformance', () => {
+  it('requires a formal monthly cycle for an explicit payroll month, not quarterly process scores', async () => {
+    expect(await readPayrollPerformance(fixture().prisma, { ...input, requiredMonth: '2026-11' })).toEqual({ status: 'unsupported_cycle' });
+  });
+  it('checks both cycle boundaries against the attribution month and fingerprints the period', async () => {
+    const task = { ...publishedTask(), cycle: { ...publishedTask().cycle, type: CycleType.monthly,
+      startDate: new Date('2026-11-01'), endDate: new Date('2026-11-30') } };
+    const strict = { ...input, requiredMonth: '2026-11' };
+    const first = await readPayrollPerformance(fixture(task).prisma, strict);
+    expect(first).toMatchObject({ status: 'ready', snapshot: { attributionMonth: '2026-11' } });
+    task.cycle.startDate = new Date('2026-11-02');
+    const second = await readPayrollPerformance(fixture(task).prisma, strict);
+    expect(second.status).toBe('ready');
+    if (first.status === 'ready' && second.status === 'ready') expect(second.snapshot.version).not.toBe(first.snapshot.version);
+    task.cycle.endDate = new Date('2026-12-01');
+    expect(await readPayrollPerformance(fixture(task).prisma, strict)).toEqual({ status: 'wrong_period' });
+    task.cycle.startDate = new Date('2026-10-01'); task.cycle.endDate = new Date('2026-10-31');
+    expect(await readPayrollPerformance(fixture(task).prisma, strict)).toEqual({ status: 'wrong_period' });
+  });
+  it('does not infer missing or malformed monthly period evidence', async () => {
+    const task = publishedTask(); task.cycle.type = CycleType.monthly;
+    const { prisma, findUnique } = fixture(task);
+    expect(await readPayrollPerformance(prisma, { ...input, requiredMonth: '2026-13' })).toEqual({ status: 'wrong_period' });
+    expect(findUnique).not.toHaveBeenCalled();
+    expect(await readPayrollPerformance(prisma, { ...input, requiredMonth: '2026-11' })).toEqual({ status: 'wrong_period' });
+  });
   it('reads an individually published result before the rest of the cycle is published', async () => {
     const { prisma } = fixture();
     const result = await readPayrollPerformance(prisma, input);
@@ -157,7 +182,7 @@ describe('readPayrollPerformance', () => {
     expect(Object.keys(query.select).sort()).toEqual([
       'appeals', 'cycle', 'cycleId', 'employeeId', 'gradeResult', 'id', 'isExempt', 'participantDisposition', 'publishedAt', 'status',
     ].sort());
-    expect(query.select.cycle).toEqual({ select: { type: true } });
+    expect(query.select.cycle).toEqual({ select: { type: true, startDate: true, endDate: true } });
     expect(query.select).not.toHaveProperty('employee');
     expect(query.where).not.toHaveProperty('employee');
     expect(query.select.gradeResult.select).not.toHaveProperty('coefficient');

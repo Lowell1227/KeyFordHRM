@@ -3,15 +3,18 @@ export interface PayrollSubject { id: string; name: string; capabilities: string
 export interface PayrollAccess { enabled: boolean; subjects: PayrollSubject[] }
 export interface PayrollEmployee { id: string; name: string; employeeNo: string }
 export interface PayrollOperator { id: string; name: string; capabilities: string[] }
-export interface PayrollCycle { id: string; name: string }
+export interface PayrollCycle { id: string; name: string; type?: string; startDate?: string; endDate?: string }
 export interface AttendanceIssue { employeeId?: string; workDate?: string; code: string; message: string }
 export interface AttendanceDay { employeeId: string; workDate: string; units: unknown; required: unknown; records: unknown[]; issues: Array<AttendanceIssue | string> }
 export interface PayrollAttendance { id: string; month: string; version: number; status: string; payload: { month: string; days: AttendanceDay[]; issues: AttendanceIssue[]; version: string }; review: unknown[]; sealedAt: string | null }
 export interface PayrollSourceInput { sourceKey: string; input: Record<string, unknown>; complete?: boolean; scope?: { employeeIds: string[]; from: string; to: string } }
 export interface PayrollStandardInput { subjectId: string; employeeId: string; effectiveFrom: string; effectiveTo?: string; fixedMonthly: string | null; performanceBase: string | null; performanceMode: 'included' | 'additional' | 'none' | null; evidence: string }
 export interface PayrollStandard extends PayrollStandardInput { id: string; version: number; status: string }
-export interface PayrollPerformanceMapping { cycleIds: string[]; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>>; sourceKind?: 'official' | 'fictional' | null }
+export interface PayrollPerformanceMapping { cycleIds: string[]; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>>; sourceKind?: 'official' | 'fictional' | null; coefficientVersion?: string | null; evidenceRef?: string | null }
+export interface PayrollWorkCalendar { sourceVersion: string; evidenceRef: string; days: Array<{ workDate: string; units: string }> }
 export interface PayrollRuleConfig {
+  fixedSalaryBasis?: 'monthly_workdays' | null;
+  workCalendars?: Record<string, PayrollWorkCalendar>;
   monthlyUnits: Record<string, string>;
   rounding: 'item_half_up' | null;
   normalHourly: string | null;

@@ -112,6 +112,17 @@ describe('PayrollBatchesService deductions preview boundary', () => {
     expect(s.prisma.$transaction.mock.calls[0][1].isolationLevel).toBe('ReadCommitted');
     expect(s.tx.$queryRaw).toHaveBeenCalledTimes(1);
   });
+  it('accepts only a ready, explicitly owned monthly fictional fixture, not arbitrary preview employees', async () => {
+    s.markers.payroll_preview_fixture_v1.subjectIds = [];
+    s.markers.payroll_monthly_rules_preview_v1 = { fictional: true, state: 'ready', subjectIds: [s.batch.subjectId], employeeIds: s.employees.map(row => row.id) };
+    s.employees.forEach((row, i) => { row.employeeNo = `PAY-MONTH-${i}`; });
+    expect((await s.preview()).totals.gross).toBe('15000.00');
+    s.markers.payroll_monthly_rules_preview_v1.state = 'preparing';
+    await expect(s.preview()).rejects.toThrow(ForbiddenException);
+    s.markers.payroll_monthly_rules_preview_v1.state = 'ready';
+    s.employees[0].dingtalkId = 'external-bound' as any;
+    await expect(s.preview()).rejects.toThrow(ForbiddenException);
+  });
 
   it('omits exactly one current tax fact for the first employee and never reports partial totals', async () => {
     const result = await s.preview({ ...input, mode: 'missing' });

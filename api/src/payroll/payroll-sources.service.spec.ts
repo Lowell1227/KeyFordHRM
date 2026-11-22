@@ -34,8 +34,64 @@ describe('payroll source capture', () => {
       payrollSettlement: { findMany: jest.fn(async () => data.settlements) },
       payrollAdjustment: { findMany: jest.fn(async () => data.adjustments) },
     };
-    return { data, capture: () => new PayrollSourcesService().capture(tx as any, subjectId, month, 'validation') };
+    return { data, tx, capture: (domain: 'validation' | 'formal' = 'validation') => new PayrollSourcesService().capture(tx as any, subjectId, month, domain) };
   }
+  function workdayFixture() {
+    const value = fixture();
+    Object.assign(value.data.policies[0].config, { fixedSalaryBasis: 'monthly_workdays', workCalendars: { [month]: {
+      sourceVersion: 'fictional-v1', evidenceRef: 'Fictional full-month calendar',
+      days: value.data.attendance.payload.days.map(({ workDate, units }) => ({ workDate, units })),
+    } } });
+    return value;
+  }
+  it('uses full-month workdays for a mid-month hire, with absence deducted only once', async () => {
+    const { data, capture } = workdayFixture(); data.employments[0].effectiveFrom = new Date('2026-11-11');
+    data.attendance.payload.days = data.attendance.payload.days.slice(10);
+    data.attendance.payload.days[0].records = [{ type: 'unpaid_leave', state: 'effective', hours: '2', effectiveHours: '2', resolution: 'usable', unit: 'hour' }];
+    const result = await capture();
+    expect(result.issues).toEqual([]);
+    expect(result.lines.find(row => row.itemCode === 'fixed')?.amount).toBe('8700.00');
+    expect(result.lines.find(row => row.itemCode === 'absence')?.amount).toBe('-200.00');
+    expect(result.gross).toBe('8500.00');
+  });
+  it('does not accept an employed-window divisor, incomplete calendar or attendance unit reduction', async () => {
+    const { data, capture } = workdayFixture();
+    data.policies[0].config.monthlyUnits[month] = '10';
+    expect((await capture()).issues.join()).toContain('完整月');
+    data.policies[0].config.monthlyUnits[month] = '20';
+    data.attendance.payload.days[0].units = '0';
+    expect((await capture()).issues.join()).toContain('日历');
+    data.attendance.payload.days[0].units = '1';
+    (data.policies[0].config as any).workCalendars[month].days.pop();
+    expect((await capture()).gross).toBeNull();
+  });
+  it('keeps old validation examples compatible but blocks formal calculation without the confirmed basis', async () => {
+    expect((await fixture().capture()).gross).not.toBeNull();
+    const result = await fixture().capture('formal');
+    expect(result.gross).toBeNull(); expect(result.issues.join()).toContain('固定工资');
+  });
+  it('a calendar source revision invalidates the source fingerprint even if the amounts stay the same', async () => {
+    const { data, capture } = workdayFixture(); const before = await capture();
+    (data.policies[0].config as any).workCalendars[month].sourceVersion = 'fictional-v2';
+    const after = await capture(); expect(after.gross).toBe(before.gross); expect(after.sourceHash).not.toBe(before.sourceHash);
+  });
+  it('does not silently prorate additional performance for a mid-month hire', async () => {
+    const { data, capture, tx } = workdayFixture();
+    data.employments[0].effectiveFrom = new Date('2026-11-11');
+    Object.assign(data.standards[0], { performanceMode: 'additional', performanceBase: new Prisma.Decimal('2000') });
+    data.policies[0].config.performance = { [month]: { cycleIds: ['monthly'], sourceKind: 'fictional', coefficients: { A: '1.2' }, coefficientVersion: 'approved-v1', evidenceRef: 'Fictional coefficient approval' } };
+    Object.assign(tx, { assessmentTask: { findUnique: jest.fn(async () => ({
+      id: 'task', employeeId, cycleId: 'monthly', status: 'published', participantDisposition: 'active', isExempt: false,
+      publishedAt: new Date('2026-11-20'), cycle: { type: 'monthly', startDate: new Date('2026-11-01'), endDate: new Date('2026-11-30') },
+      gradeResult: { id: 'grade', calibratedGrade: 'A', rawGrade: 'A', isPublished: true, publishedAt: new Date('2026-11-20') }, appeals: [],
+    })) } });
+    const result = await capture(); expect(result.gross).toBeNull(); expect(result.issues.join()).toContain('绩效计发比例');
+    data.employments[0].effectiveFrom = new Date('2026-11-01');
+    const full = await capture(); expect(full.issues).toEqual([]);
+    expect(full.lines.find(row => row.itemCode === 'performance')?.amount).toBe('2400.00');
+    (data.policies[0].config.performance[month] as any).coefficientVersion = '';
+    expect((await capture()).issues.join()).toContain('系数表');
+  });
   it('uses the sealed source and exact money, preserving each obligation', async () => {
     const { capture } = fixture(), result = await capture();
     expect(result.issues).toEqual([]); expect(result.gross).toBe('17500.00');

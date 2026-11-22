@@ -219,7 +219,8 @@ export class PayrollBatchesService {
     const local = await marker('local_preview_fixture_v1'), base = await marker('payroll_preview_fixture_v1');
     if (local?.fictional !== true || base?.fictional !== true) throw new ForbiddenException('仅允许已登记的虚构薪酬预览');
     const dedicated = await marker('payroll_deductions_preview_fixture_v1');
-    const fixtures = [base, ...(dedicated?.fictional === true && dedicated.state === 'ready' ? [dedicated] : [])];
+    const monthly = await marker('payroll_monthly_rules_preview_v1');
+    const fixtures = [base, ...[dedicated, monthly].filter((value): value is NonNullable<typeof value> => value?.fictional === true && value.state === 'ready')];
     if (!fixtures.some(({ subjectIds, employeeIds: registered }) => Array.isArray(subjectIds) && subjectIds.includes(subjectId) &&
       Array.isArray(registered) && employeeIds.every(id => registered.includes(id)))) {
       throw new ForbiddenException('主体及全部工资人员必须在同一虚构预览夹具中明确登记');
@@ -228,7 +229,7 @@ export class PayrollBatchesService {
     const employees = await tx.user.findMany({ where: { id: { in: employeeIds } },
       select: { id: true, name: true, employeeNo: true, dingtalkId: true, dingtalkUnionId: true } });
     if (!subject?.name.includes('虚构') || employees.length !== employeeIds.length || employees.some(employee =>
-      !employee.name.includes('虚构') || !/^(PAY-DEMO-|PAY-DEDUCT-)/.test(employee.employeeNo ?? '') ||
+      !employee.name.includes('虚构') || !/^(PAY-DEMO-|PAY-DEDUCT-|PAY-MONTH-)/.test(employee.employeeNo ?? '') ||
       employee.dingtalkId || employee.dingtalkUnionId)) throw new ForbiddenException('虚构预览登记与实际主体或员工记录不匹配');
     return new Map(employees.map(employee => [employee.id, employee.name]));
   }
