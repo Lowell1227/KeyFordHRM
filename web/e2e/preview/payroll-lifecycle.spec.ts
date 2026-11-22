@@ -1,11 +1,12 @@
 import { test, expect, type Locator, type Page, type Response, type TestInfo } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 
 // Opt in only after the owner has prepared and released the fixed preview fixture.
 // Run with playwright.preview.config.ts (one worker, no ordinary global setup).
 test.skip(process.env.HRM_PAYROLL_UI_ACCEPTANCE !== '1', 'Await payroll fixture and preview-owner authorization');
-test.use({ trace: 'off', video: 'off' });
+test.use({ trace: 'off', video: 'off', actionTimeout: 15000 });
 test.setTimeout(240000);
 
 const origin = 'http://localhost:5173';
@@ -22,6 +23,14 @@ type Batch = {
 type Fixture = { subjectId: string; actors: Record<Actor, string>; baseline: string };
 const latest = (batch: Batch) => [...batch.versions].sort((a, b) => b.version - a.version)[0]!;
 const apiPath = (response: Response) => new URL(response.url()).pathname;
+const touchPages = new WeakMap<Page, boolean>();
+
+async function activate(control: Locator) {
+  const page = control.page();
+  if (!touchPages.has(page)) touchPages.set(page, await page.evaluate(() => navigator.maxTouchPoints > 0));
+  if (touchPages.get(page)) await control.tap();
+  else await control.click();
+}
 
 function database<T>(body: string): T {
   const result = execFileSync('docker', ['exec', '-i', 'hrm-api-1', 'node'], {
@@ -46,7 +55,7 @@ function database<T>(body: string): T {
         if(!marker.subjectIds.includes(subject.id))throw Error('Subject not owned by payroll fixture');
         ${body}
       })().then(value=>process.stdout.write(JSON.stringify(value))).finally(()=>db.$disconnect())
-        .catch(()=>{process.stderr.write('Isolated payroll fixture guard or cleanup failed');process.exitCode=1});`,
+        .catch(error=>{process.stderr.write('Isolated payroll fixture refused: '+(error.code||error.name||'unknown'));process.exitCode=1});`,
   });
   return JSON.parse(result) as T;
 }
@@ -71,6 +80,8 @@ function preflight(info: TestInfo): Fixture {
       throw Error('Preserve existing payroll batches; owner must provide an empty fixture');
     if(await db.payrollReservation.count({where:{subjectId:subject.id,attributionMonth:'2026-11'}}))
       throw Error('Do not compete with existing payroll reservations');
+    if(await db.payrollAttendanceSnapshot.count({where:{subjectId:subject.id,month:'2026-11'}}))
+      throw Error('Preserve existing attendance; this UI run requires an empty fictional month');
     return {subjectId:subject.id,actors:marker.actors,baseline:await fingerprint(subject.id)};
   `);
 }
@@ -92,11 +103,13 @@ async function changed<T>(page: Page, path: string, click: () => Promise<unknown
 
 async function login(page: Page, actor: Actor, fixture: Fixture) {
   await page.goto('/login');
+  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+  await page.goto('/login');
   await expect(page.getByRole('heading', { name: '预览系统', exact: true })).toBeVisible();
-  await page.getByTestId('preview-account').click();
-  await page.getByRole('option', { name: new RegExp(`\\(${actor}\\)$`) }).click();
+  await activate(page.getByTestId('preview-account'));
+  await activate(page.getByRole('option', { name: new RegExp(`\\(${actor}\\)$`) }));
   const result = await changed<{ user: { id: string; payrollAccess: { enabled: boolean } } }>(
-    page, '/api/v1/auth/test-login', () => page.getByTestId('preview-login').click(),
+    page, '/api/v1/auth/test-login', () => activate(page.getByTestId('preview-login')),
   );
   // The app handles its session. The test neither extracts nor injects tokens.
   expect(result.data.user.id).toBe(fixture.actors[actor]);
@@ -106,8 +119,8 @@ async function login(page: Page, actor: Actor, fixture: Fixture) {
 }
 
 async function payrollMenu(page: Page, label: string, path: string) {
-  await page.getByTestId('nav-module-compensation').click();
-  await page.locator('.menu-panel').getByRole('button', { name: label, exact: true }).click();
+  await activate(page.getByTestId('nav-module-compensation'));
+  await activate(page.locator('.menu-panel').getByRole('button', { name: label, exact: true }));
   await expect(page).toHaveURL(new RegExp(`${path}$`));
 }
 
@@ -121,10 +134,10 @@ async function selectMonth(input: Locator, value: string, chineseFormat = false)
 
 async function selectScope(page: Page) {
   const scope = page.locator('.payroll-scope');
-  await scope.locator('.subject-select').click();
-  await page.getByRole('option', { name: subjectName, exact: true }).click();
+  await activate(scope.locator('.subject-select'));
+  await activate(page.getByRole('option', { name: subjectName, exact: true }));
   await selectMonth(scope.locator('.el-date-editor input'), month, true);
-  await scope.getByRole('button', { name: '刷新', exact: true }).click();
+  await activate(scope.getByRole('button', { name: '刷新', exact: true }));
   await expect(page.getByTestId('business-list-page')).toHaveAttribute('aria-busy', 'false');
 }
 
@@ -141,44 +154,49 @@ async function noOverflow(page: Page, info: TestInfo, name: string) {
 }
 
 async function syncAttendance(page: Page, corrected: boolean, sourceKey: string) {
-  await page.getByRole('button', { name: '接收考勤', exact: true }).click();
+  await activate(page.getByRole('button', { name: '接收考勤', exact: true }));
   const drawer = page.getByRole('dialog', { name: '接收考勤', exact: true });
   const loaded = page.waitForResponse(response => apiPath(response) === '/api/v1/payroll/attendance/fixture-response'
     && new URL(response.url()).searchParams.get('corrected') === String(corrected));
-  await drawer.getByRole('button', { name: corrected ? '载入虚构更正' : '载入虚构考勤', exact: true }).click();
-  expect((await loaded).ok()).toBe(true);
+  await activate(drawer.getByRole('button', { name: corrected ? '载入虚构更正' : '载入虚构考勤', exact: true }));
+  const fixtureResponse = await loaded;
+  expect(fixtureResponse.ok()).toBe(true);
+  const fixture = (await fixtureResponse.json()).data;
+  expect(fixture.complete).toBe(true);
   const source = field(drawer, '考勤来源 JSON').getByRole('textbox');
-  await expect(source).not.toHaveValue('');
+  await expect(source).toHaveValue(JSON.stringify(fixture.input, null, 2));
+  await expect(drawer.getByRole('checkbox', { name: '来源分页已全部完成', exact: true })).toBeChecked();
   expect(JSON.parse(await source.inputValue()).month).toBe(month);
   await field(drawer, '来源标识').getByRole('textbox').fill(sourceKey);
   const result = await changed<{ id: string; version: number; payload: { issues: Array<{ code: string }> } }>(
-    page, '/api/v1/payroll/attendance/sync', () => drawer.getByRole('button', { name: '接收并核对', exact: true }).click(),
+    page, '/api/v1/payroll/attendance/sync', () => activate(drawer.getByRole('button', { name: '接收并核对', exact: true })),
   );
   expect(result.response.request().postDataJSON().sourceKey).toBe(sourceKey);
+  expect(result.response.request().postDataJSON().complete).toBe(true);
   await expect(drawer).not.toBeVisible();
   return result.data;
 }
 
 async function reviewAttendance(page: Page, mobile: boolean, snapshotId: string, run: string) {
-  await page.getByRole('tab', { name: '异常核对', exact: true }).click();
+  await activate(page.getByRole('tab', { name: '异常核对', exact: true }));
   const results = page.locator(mobile ? '.mobile-result-list' : '.desktop-result-table');
   await expect(results.getByText('缺卡尚未被有效补卡或假勤覆盖', { exact: false }).first()).toBeVisible();
-  await results.getByRole('button', { name: '日明细', exact: true }).first().click();
+  await activate(results.getByRole('button', { name: '日明细', exact: true }).first());
   const drawer = page.locator('.business-detail-drawer:visible');
-  await drawer.getByRole('button', { name: '保存核对记录', exact: true }).click();
+  await activate(drawer.getByRole('button', { name: '保存核对记录', exact: true }));
   await expect(drawer.getByText('请填写核对结论与依据', { exact: true })).toBeVisible();
   await field(drawer, '核对结论与依据').getByRole('textbox').fill(`${run}：虚构缺卡待补同步，不将核对备注代替有效来源。`);
-  await changed(page, `/api/v1/payroll/attendance/${snapshotId}/review`, () => drawer.getByRole('button', { name: '保存核对记录', exact: true }).click());
+  await changed(page, `/api/v1/payroll/attendance/${snapshotId}/review`, () => activate(drawer.getByRole('button', { name: '保存核对记录', exact: true })));
   await expect(drawer.getByRole('textbox')).toHaveValue('');
-  await drawer.getByRole('button', { name: /关闭|close/i }).click();
+  await activate(drawer.getByRole('button', { name: /关闭|close/i }));
   await expect(drawer).not.toBeVisible();
 }
 
 async function sealAttendance(page: Page, id: string, succeeds: boolean) {
-  await page.getByRole('button', { name: '封账当前版本', exact: true }).click();
+  await activate(page.getByRole('button', { name: '封账当前版本', exact: true }));
   const confirmation = page.getByRole('dialog', { name: '考勤封账', exact: true });
   const sealed = page.waitForResponse(response => apiPath(response) === `/api/v1/payroll/attendance/${id}/seal`);
-  await confirmation.getByRole('button', { name: '封账', exact: true }).click();
+  await activate(confirmation.getByRole('button', { name: '封账', exact: true }));
   const response = await sealed;
   if (!succeeds) {
     expect(response.status()).toBe(409);
@@ -193,14 +211,14 @@ async function sealAttendance(page: Page, id: string, succeeds: boolean) {
 async function createBatch(page: Page, own: { batchId?: string }): Promise<Batch> {
   await payrollMenu(page, '月度工资核算', '/payroll/batches');
   await selectScope(page);
-  await page.getByRole('button', { name: '新建核算', exact: true }).click();
+  await activate(page.getByRole('button', { name: '新建核算', exact: true }));
   const dialog = page.getByRole('dialog', { name: '新建工资核算', exact: true });
-  await dialog.getByRole('button', { name: '创建核算批次', exact: true }).click();
+  await activate(dialog.getByRole('button', { name: '创建核算批次', exact: true }));
   await expect(dialog.getByText('请选择发放月', { exact: true })).toBeVisible();
   await selectMonth(field(dialog, '发放月').locator('input'), '2026-12');
-  await field(dialog, '用途').locator('.el-select').click();
-  await page.getByRole('option', { name: '测试环境验收', exact: true }).click();
-  const result = await changed<Batch>(page, '/api/v1/payroll/batches', () => dialog.getByRole('button', { name: '创建核算批次', exact: true }).click());
+  await activate(field(dialog, '用途').locator('.el-select'));
+  await activate(page.getByRole('option', { name: '测试环境验收', exact: true }));
+  const result = await changed<Batch>(page, '/api/v1/payroll/batches', () => activate(dialog.getByRole('button', { name: '创建核算批次', exact: true })));
   own.batchId = result.data.id;
   expect(result.data.purpose).toBe('validation');
   expect(result.data.month).toBe(month);
@@ -213,17 +231,17 @@ async function openBatch(page: Page, kind: 'approvals' | 'results', batchId: str
   await selectScope(page);
   const results = page.locator((page.viewportSize()?.width ?? 1440) <= 768 ? '.mobile-result-list' : '.desktop-result-table');
   await expect(results.getByRole('button', { name: '查看办理', exact: true })).toHaveCount(1);
-  await results.getByRole('button', { name: '查看办理', exact: true }).click();
+  await activate(results.getByRole('button', { name: '查看办理', exact: true }));
   await expect(page).toHaveURL(new RegExp(`/payroll/${kind}/${batchId}(?:\\?|$)`));
   await expect(page.locator('.payroll-detail .summary-grid').getByText(subjectName, { exact: true })).toBeVisible();
 }
 
 async function approve(page: Page, batch: Batch, note: string): Promise<Batch> {
   const detail = page.locator('.payroll-detail');
-  await detail.getByRole('button', { name: '通过当前环节', exact: true }).click();
+  await activate(detail.getByRole('button', { name: '通过当前环节', exact: true }));
   const form = detail.locator('.action-form');
   await field(form, '办理意见与依据').getByRole('textbox').fill(note);
-  const result = await changed<Batch>(page, `/api/v1/payroll/batches/${batch.id}/decide`, () => form.getByRole('button', { name: '通过当前环节', exact: true }).click());
+  const result = await changed<Batch>(page, `/api/v1/payroll/batches/${batch.id}/decide`, () => activate(form.getByRole('button', { name: '通过当前环节', exact: true })));
   expect(result.response.request().postDataJSON().expectedVersion).toBe(batch.version);
   return result.data;
 }
@@ -235,25 +253,27 @@ async function releaseThroughUi(page: Page, id: string, fixture: Fixture, run: s
     return {status:batch.status};
   `);
   if (!['pending', 'approved'].includes(state.status)) return;
-  // Teardown uses the same real HR forms, including explicit confirmation of no payment.
-  await page.goto('/login');
-  await page.getByTestId('preview-account').click();
-  await page.getByRole('option', { name: /\(HR001\)$/ }).click();
-  await changed(page, '/api/v1/auth/test-login', () => page.getByTestId('preview-login').click());
-  await page.goto(`/payroll/batches/${id}?subjectId=${fixture.subjectId}&month=${month}`);
+  // Approved payment arrangements require the explicit finance capability, not HR editing rights.
+  const actor = state.status === 'pending' ? 'HR001' : 'VP001';
+  await login(page, actor, fixture);
+  const section = state.status === 'pending' ? 'batches' : 'results';
+  await page.goto(`/payroll/${section}/${id}?subjectId=${fixture.subjectId}&month=${month}`);
   const detail = page.locator('.payroll-detail');
   const label = state.status === 'pending' ? '撤回重算' : '作废未付款版本';
-  await detail.getByRole('button', { name: label, exact: true }).click();
+  await activate(detail.getByRole('button', { name: label, exact: true }));
   const form = detail.locator('.action-form');
   await field(form, '办理意见与依据').getByRole('textbox').fill(`${run}：仅虚构UI验收，无付款，释放本轮支付安排。`);
-  if (state.status === 'approved') await form.getByRole('checkbox', { name: '已核实此版本尚未付款', exact: true }).check();
+  if (state.status === 'approved') {
+    await activate(form.getByText('已核实此版本尚未付款', { exact: true }));
+    await expect(form.getByRole('checkbox', { name: '已核实此版本尚未付款', exact: true })).toBeChecked();
+  }
   await changed(page, `/api/v1/payroll/batches/${id}/${state.status === 'pending' ? 'withdraw' : 'void'}`,
-    () => form.getByRole('button', { name: label, exact: true }).click());
+    () => activate(form.getByRole('button', { name: label, exact: true })));
 }
 
 function cleanup(fixture: Fixture, own: { batchId?: string }, prefix: string) {
   // Only fixture bookkeeping is removed here. Business creation/review/approval/export never uses SQL or direct HTTP.
-  database(`
+  const result = database<{ cleaned: boolean; remainingBatches: number; remainingReservations: number; remainingSnapshots: number }>(`
     return db.$transaction(async tx=>{
       const batchId=${JSON.stringify(own.batchId ?? null)};
       if(await tx.payrollBatch.count({where:{subjectId:subject.id,month:'2026-11',...(batchId?{id:{not:batchId}}:{})}}))
@@ -278,10 +298,15 @@ function cleanup(fixture: Fixture, own: { batchId?: string }, prefix: string) {
       for(const row of snapshots)await tx.payrollEvent.deleteMany({where:{subjectId:subject.id,batchId:null,
         actorId:marker.actors.HR001,action:{in:['attendance_sync','attendance_review','attendance_seal']},metadata:{path:['snapshotId'],equals:row.id}}});
       await tx.payrollAttendanceSnapshot.deleteMany({where:{id:{in:snapshots.map(row=>row.id)}}});
-      return {cleaned:true};
+      return {cleaned:true,
+        remainingBatches:await tx.payrollBatch.count({where:{subjectId:subject.id,month:'2026-11'}}),
+        remainingReservations:await tx.payrollReservation.count({where:{subjectId:subject.id,attributionMonth:'2026-11'}}),
+        remainingSnapshots:await tx.payrollAttendanceSnapshot.count({where:{subjectId:subject.id,month:'2026-11',sourceKey:{startsWith:${JSON.stringify(prefix)}}}})};
     },{timeout:20000});
   `);
+  expect(result).toEqual({ cleaned: true, remainingBatches: 0, remainingReservations: 0, remainingSnapshots: 0 });
   expect(database<string>('return fingerprint(subject.id);'), 'Standards, rules, grants, opening balances and adjustments remain unchanged').toBe(fixture.baseline);
+  return { ...result, configurationUnchanged: true };
 }
 
 function inspectWorkbook(encrypted: Buffer, password: string) {
@@ -316,6 +341,7 @@ test('real HR attendance -> calculation -> MGR review -> VP approval and encrypt
   page.on('pageerror', error => errors.push(error.name));
   let filePassword = randomBytes(18).toString('base64url');
   const mobile = (page.viewportSize()?.width ?? 1440) <= 768;
+  if (mobile) await page.mouse.move(0, 0);
   try {
     await login(page, 'HR001', fixture);
     await payrollMenu(page, '考勤打卡', '/payroll/attendance');
@@ -328,12 +354,13 @@ test('real HR attendance -> calculation -> MGR review -> VP approval and encrypt
     expect(corrected.version).toBeGreaterThan(initial.version);
     expect(corrected.payload.issues).toEqual([]);
     await sealAttendance(page, corrected.id, true);
-    await page.getByRole('tab', { name: '封账记录', exact: true }).click();
+    await activate(page.getByRole('tab', { name: '封账记录', exact: true }));
     await noOverflow(page, info, 'attendance-sealed');
+    console.log(`[payroll-ui:${info.project.name}] attendance sealed`);
 
     let batch = await createBatch(page, own);
     const detail = page.locator('.payroll-detail');
-    const calculated = await changed<Batch>(page, `/api/v1/payroll/batches/${batch.id}/calculate`, () => detail.getByRole('button', { name: '自动核算', exact: true }).click());
+    const calculated = await changed<Batch>(page, `/api/v1/payroll/batches/${batch.id}/calculate`, () => activate(detail.getByRole('button', { name: '自动核算', exact: true })));
     expect(calculated.response.request().postDataJSON().expectedVersion).toBe(batch.version);
     batch = calculated.data;
     expect(latest(batch).gross).toMatch(/^27900(?:\.0+)?$/);
@@ -343,7 +370,8 @@ test('real HR attendance -> calculation -> MGR review -> VP approval and encrypt
     await expect(detail.locator('.summary-grid').filter({ hasText: '税前应发' })).toContainText('27900');
     await expect(detail.getByRole('button', { name: '下载加密工资表' })).toHaveCount(0);
     await noOverflow(page, info, 'hr-calculated');
-    const submitted = await changed<Batch>(page, `/api/v1/payroll/batches/${batch.id}/submit`, () => detail.getByRole('button', { name: '提交复核', exact: true }).click());
+    console.log(`[payroll-ui:${info.project.name}] payroll calculated`);
+    const submitted = await changed<Batch>(page, `/api/v1/payroll/batches/${batch.id}/submit`, () => activate(detail.getByRole('button', { name: '提交复核', exact: true })));
     expect(submitted.response.request().postDataJSON().expectedVersion).toBe(batch.version);
     batch = submitted.data;
     expect(batch.status).toBe('pending');
@@ -362,6 +390,7 @@ test('real HR attendance -> calculation -> MGR review -> VP approval and encrypt
     expect(latest(batch).approvalStep).toBe(1);
     expect(latest(batch).decisions.at(-1)?.actorId).toBe(fixture.actors.MGR001);
     await noOverflow(page, info, 'mgr-reviewed');
+    console.log(`[payroll-ui:${info.project.name}] manager reviewed`);
 
     await page.goto('/login');
     await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
@@ -372,16 +401,17 @@ test('real HR attendance -> calculation -> MGR review -> VP approval and encrypt
     expect(batch.status).toBe('approved');
     expect(latest(batch).decisions.map(decision => decision.actorId)).toEqual([fixture.actors.MGR001, fixture.actors.VP001]);
     await noOverflow(page, info, 'vp-approved');
-    await page.getByRole('dialog', { name: '工资批次', exact: true }).getByRole('button', { name: /关闭|close/i }).click();
+    console.log(`[payroll-ui:${info.project.name}] final approval passed`);
+    await activate(page.getByRole('dialog', { name: '工资批次', exact: true }).getByRole('button', { name: /关闭|close/i }));
     await openBatch(page, 'results', batch.id);
-    await detail.getByRole('button', { name: '下载加密工资表', exact: true }).click();
+    await activate(detail.getByRole('button', { name: '下载加密工资表', exact: true }));
     const exportForm = detail.locator('.action-form');
-    await exportForm.getByRole('button', { name: '下载加密工资表', exact: true }).click();
+    await activate(exportForm.getByRole('button', { name: '下载加密工资表', exact: true }));
     await expect(exportForm.getByText('请设置 4 至 64 位的独立文件密码', { exact: true })).toBeVisible();
     await field(exportForm, 'Excel 独立文件密码').locator('input[type=password]').fill(filePassword);
     const downloaded = page.waitForEvent('download');
     const exported = page.waitForResponse(response => apiPath(response) === `/api/v1/payroll/batches/${batch.id}/export`);
-    await exportForm.getByRole('button', { name: '下载加密工资表', exact: true }).click();
+    await activate(exportForm.getByRole('button', { name: '下载加密工资表', exact: true }));
     const response = await exported;
     expect(response.ok()).toBe(true);
     expect(response.request().method()).toBe('POST');
@@ -407,12 +437,19 @@ test('real HR attendance -> calculation -> MGR review -> VP approval and encrypt
     await expect(detail.getByText('已下载当前批准版本，尚未确认入薪', { exact: true })).toBeVisible();
     await expect(detail.locator('input[type=password]')).toHaveCount(0);
     await noOverflow(page, info, 'vp-final-export');
-    await info.attach('payroll-ui-run.json', { body: JSON.stringify({ run, month, subjectId: fixture.subjectId, batchId: batch.id,
-      actorIds: fixture.actors, calculationVersion: latest(batch).version, gross: latest(batch).gross, encrypted: true }), contentType: 'application/json' });
     expect(errors).toEqual([]);
+    const resultPath = info.outputPath('payroll-ui-run.json');
+    await writeFile(resultPath, JSON.stringify({ run, month, subjectId: fixture.subjectId, batchId: batch.id,
+      actorIds: fixture.actors, calculationVersion: latest(batch).version, gross: latest(batch).gross, encrypted: true, lifecyclePassed: true }, null, 2));
+    await info.attach('payroll-ui-run.json', { path: resultPath, contentType: 'application/json' });
+    console.log(`[payroll-ui:${info.project.name}] encrypted final workbook verified`);
   } finally {
     filePassword = '';
     if (own.batchId) await releaseThroughUi(page, own.batchId, fixture, run);
-    cleanup(fixture, own, prefix);
+    const cleaned = cleanup(fixture, own, prefix);
+    const cleanupPath = info.outputPath('payroll-ui-cleanup.json');
+    await writeFile(cleanupPath, JSON.stringify({ run, ...cleaned }, null, 2));
+    await info.attach('payroll-ui-cleanup.json', { path: cleanupPath, contentType: 'application/json' });
+    console.log(`[payroll-ui:${info.project.name}] owned ledger cleaned; fixture unchanged`);
   }
 });

@@ -35,11 +35,11 @@
 
 **Interfaces:** all routes `/payroll`; subjectId always a contract-subject UUID. Obligation key = subjectId + employeeId + attributionMonth + itemCode + purpose, never a mutable EmploymentRecord ID. Grants are independent of sysRole/hrCapabilities. Expected version required on writes.
 
-- [ ] Write access tests denying admin/HR without grant, cross-subject users, assessor-only, revoked access and disabled mode.
-- [ ] Add payroll-only models/migration: grants, rules/standards, versioned attendance, batches/versions/lines, reservations, settlements/openings, scoped events/exports.
-- [ ] Implement transactions and deterministic source fingerprints. Keep approved versions immutable; return/withdraw create traceable later calculations and release reservations.
-- [ ] Cover simultaneous submit/approve/settle, duplicate request, pending source change, partial payment/remainder cancellation and later delta.
-- [ ] Validate isolated migration and actual PostgreSQL constraints; no real data.
+- [x] Write access tests denying admin/HR without grant, cross-subject users, assessor-only, revoked access and disabled mode.
+- [x] Add payroll-only models/migration: grants, rules/standards, versioned attendance, batches/versions/lines, reservations, settlements/openings, scoped events/exports.
+- [x] Implement transactions and deterministic source fingerprints. Keep approved versions immutable; return/withdraw create traceable later calculations and release reservations.
+- [x] Cover real PG concurrent submissions, expected-version conflict paths, duplicate settlement requests, pending source changes, partial payment/remainder cancellation and later delta. Separate parallel approval/settlement stress tests remain outside this first preview.
+- [x] Validate isolated migration and actual PostgreSQL constraints; no real data.
 
 ### PAY-02: Attendance Input Kernel (Dalton, Isolated)
 
@@ -47,9 +47,9 @@
 
 **Interfaces:** `normalizeAttendance(PayrollAttendanceInput): PayrollAttendanceResult`; natural-month expected coverage supplied by server-authorized HRM employment/schedule, sanitized source records, issues and deterministic version. No actual provider call in this slice.
 
-- [ ] Pin real calendar validation, same-source replay, latest explicit version, missing-vs-absence, overlapping paid cover, approval-in-progress/revocation, overnight workDate and unknown units.
-- [ ] Implement using precise quantities without hidden day/hour conversion; preserve source references, not device/location/photos.
-- [ ] Integrate source matching, issue review and sealing; late arrival creates a new version and a visible diff.
+- [x] Pin real calendar validation, same-source replay, latest explicit version, missing-vs-absence, overlapping paid cover, approval-in-progress/revocation, overnight workDate and unknown units.
+- [x] Implement using precise quantities without hidden day/hour conversion; preserve source references, not device/location/photos.
+- [x] Integrate fictional scoped source input, issue review and sealing; late arrival preserves separate source versions. A dedicated business-readable old/new attendance diff remains follow-up polish.
 
 ### PAY-03: Pure Payroll Calculator (Gauss, Isolated)
 
@@ -57,9 +57,9 @@
 
 **Interfaces:** `calculatePayroll(PayrollCalculationInput): PayrollCalculationResult` with segments, absence/overtime and authorized adjustments; decimal strings in/out; ready or needs_configuration.
 
-- [ ] Failing examples:17400-200+300=17500;10/20=8700;split standards18400;included10400/additional12400;item-level half-up.
-- [ ] Implement fixed/absence/overtime/performance/adjustment item evidence and gross, missing config vs explicit zero, interval validation.
-- [ ] Integrate persisted effective standards/rules without accepting client-calculated wages as authority.
+- [x] Failing examples:17400-200+300=17500;10/20=8700;split standards18400;included10400/additional12400;item-level half-up.
+- [x] Implement fixed/absence/overtime/performance/adjustment item evidence and gross, missing config vs explicit zero, interval validation.
+- [x] Integrate persisted effective standards/rules without accepting client-calculated wages as authority.
 
 ### PAY-04: Published Individual Source (Euler, Isolated)
 
@@ -67,9 +67,9 @@
 
 **Interfaces:** `readPayrollPerformance(prisma,{employeeId,cycleId,registeredCycleIds})`; status plus immutable employee/task/cycle/grade/publication/version snapshot. No coefficient or performance write.
 
-- [ ] Test actual individual partial publication, cycle-only false positive, conflicting evidence, pending appeal, exempt/probation, unregistered cycle and grade/source-version changes.
-- [ ] Implement source adapter against existing published facts, not cycle status alone.
-- [ ] Integration uses independent effective payroll coefficient mapping and explicit period registration. Missing/multiple sources block pricing.
+- [x] Test actual individual partial publication, cycle-only false positive, conflicting evidence, pending appeal, exempt/probation, unregistered cycle and grade/source-version changes.
+- [x] Implement source adapter against existing published facts, not cycle status alone.
+- [x] Integration uses independent effective payroll coefficient mapping and explicit period registration. Missing/multiple sources block pricing.
 
 ### PAY-05: Usable UI And Final File (After API Contract)
 
@@ -77,27 +77,31 @@
 
 **Interfaces:** subject selector from independent access; attendance, standards/rules, monthly batches, approvals, results/settlement. Server state/actions authoritative; no frontend salary engine or bypass data.
 
-- [ ] Create actual compact business pages, errors near fields, visible immutable versions and actionable discrepancies.
-- [ ] Verify review/return/recompute/resubmit/approve, paused source change, test-purpose final file and reject direct unauthorized/trial/stale/void downloads.
-- [ ] Encrypt workbook with existing implementation; approved numeric values only, no formulas/unneeded personal columns. Export events do not count as payment.
+- [x] Create five actual scoped pages with immutable versions and parameter forms. Detailed source/calculation traces remain technical structured panels, explicitly recorded as pre-production UX work.
+- [x] Verify review/return/recompute/resubmit/approve, paused source change, test-purpose final file and reject direct unauthorized/trial/stale/void downloads.
+- [x] Encrypt workbook with existing implementation; approved numeric values only, no formulas/unneeded personal columns. Export events do not count as payment.
 
 ### PAY-06: Integrated Acceptance And Preview (PM)
 
 **Files:** `api/test/payroll/*`, `web/e2e/preview/payroll-lifecycle.spec.ts`, `scripts/prepare-payroll-preview.cjs`, `docs/acceptance/2026-11-22-payroll-first.md`.
 
-- [ ] Strict final API suite and targeted actual PG HTTP/transactions, unchanged performance publication/permissions compatibility.
-- [ ] Fixed5173 real backend with isolated fictional identities and external effects off; PC/mobile actual page end-to-end including return, source update, correction and cross-subject denial.
-- [ ] Inspect test Excel amounts against independently calculated expectations; real grant/filter/download checks; do not count mock-only tests as UI acceptance.
-- [ ] Publish evidence for implemented/committed/deployed/business-accepted separately. No production deployment in this task.
+- [x] Strict final API suite and targeted actual PG HTTP/transactions, unchanged performance publication/permissions compatibility.
+- [x] Fixed5173 real backend with isolated fictional identities and external effects off; PC/mobile actual page main lifecycle passed. Return, source update, correction and cross-subject denial have real HTTP/PG evidence, not a claim that every exception was repeated through mobile UI.
+- [x] Inspect test Excel amounts against independently calculated expectations; real grant/filter/download checks; do not count mock-only tests as UI acceptance.
+- [x] Publish evidence for implemented/committed/deployed/business-accepted separately. No production deployment in this task.
 
 ## Current Progress
 
 - [x] Full brief read; baseline/main/WIP/containers and current implementation checked.
 - [x] PAY-02/03/04 independent workers dispatched, each restricted to own worktree/two files and local tests.
-- [ ] PAY-01 schema/access foundation.
-- PAY-01 partial:13 payroll-only tables/migration generated offline; independent access and transaction helper tests added. Prisma validation/client generation and API build passed; no database migration executed yet.
-- [ ] PAY-05 UI/file contract.
-- [ ] PAY-06 integrated preview and evidence.
+- [x] PAY-01 schema/access foundation.
+- PAY-01 partial:14 payroll-only tables/two additive migrations applied to guarded `hrm_preview` only. Active subject grants, immutable calculation versions, review/approval/reservation/settlement implemented. Real PostgreSQL and compatibility acceptance remains pending.
+- [x] PAY-02/03/04 initial kernels and focused tests integrated; historical performance-source and live authorization corrections integrated.
+- [x] PAY-05 initial five-page UI/file contract integrated.
+- PAY-05 encrypted-file unit verification passed. Actual browser acceptance first reproduced an unsupported PostgreSQL void-lock result; helper fixed with the existing `SELECT 1 FROM pg_advisory_xact_lock` pattern. Do not count the blocked UI run as passed.
+- Independent read-only review found cross-subject employment snapshot exposure, current-vs-historical employee number mismatch, and large-value Excel precision loss. Focused failing regressions were added and corrections verified. API salary Decimals serialize as exact strings before the legacy shared response interceptor.
+- [x] PAY-06 first-slice integrated preview and evidence (not formal enablement or production acceptance).
+- Fixed preview is running from this worktree with fictional payroll fixtures, independent actors and explicit sample rules/opening confirmations. Production container inventory is unchanged. Final source rebuild, guarded real PG source checks (15 cases including safeguards), HTTP lifecycle (8 cases) and later draft-confidentiality increment (1 case), and desktop/mobile actual form workflows passed. API full226/4013 plus later batch62, Web type-check/build and focused interface tests passed; do not add overlapping test counts. Detailed boundaries and failed runs are retained in `docs/acceptance/2026-11-22-payroll-first.md`.
 
 ## Formal Enablement Dependencies
 
