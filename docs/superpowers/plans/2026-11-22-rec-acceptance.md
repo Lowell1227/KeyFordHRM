@@ -42,9 +42,9 @@
 
 **Interfaces:** `/talent-hiring?applicationId=<uuid>`; `/talents?candidateId=<uuid>&applicationId=<uuid>`; existing detail endpoints remain authorization authority.
 
-- [ ] Red tests: non-first target, missing/forbidden target, route switch with late response, manual selection, opinion-preserving conflict refresh.
-- [ ] Carry application ID; load only requested detail; never implicitly select first when explicit target unavailable. Candidate links open exact ID, never search name.
-- [ ] Green focused Node tests, later real page coverage; commit only task files.
+- [x] Red tests: non-first target, missing/forbidden target, route switch with late response, manual selection, opinion-preserving conflict refresh.
+- [x] Carry application ID; load only requested detail; never implicitly select first when explicit target unavailable. Candidate links open exact ID, never search name.
+- [x] Green focused Node tests and real page coverage; task commit `bca0e3a1`.
 
 ## Task 2: Removed Interview Participation
 
@@ -52,9 +52,9 @@
 
 **Interfaces:** Existing transactional notificationLog + auditLog; removed-participant notice without an object-access grant.
 
-- [ ] Red test proves missing notice. Cover removed/retained/added, retry, cancellation, rollback, post-removal access.
-- [ ] Difference old/new participant IDs, insert one deduplicated system notice per removed participant inside existing transaction. Preserve old/new participant audit.
-- [ ] Green relevant suites and real PG integration; commit independently.
+- [x] Red test proves missing notice. Cover removed/retained/added, retry, cancellation, rollback, post-removal access.
+- [x] Difference old/new participant IDs, insert one deduplicated system notice per removed participant inside existing transaction. Preserve old/new participant audit.
+- [x] Green relevant suites and real PG integration; task commit `43dc8c70`.
 
 ## Task 3: Read-Only Recruitment Workbench
 
@@ -62,22 +62,22 @@
 
 **Interfaces:** `GET /talent-recruitment/workbench` returns `{groups:[{key,total,items:[{id,title,subtitle,date,candidateId?,applicationId?}]}]}`. Keys: `follow_up`, `interview`, `feedback`, `hiring_review`, `onboarding`. At most 5 displayed records/group, accurate count, stable order.
 
-- [ ] Red tests for DB-current actor, narrow roles, ownership, hidden personal fields, correct date/status sources, counts, empty/error and links.
-- [ ] Read existing candidate/follow-up, interview/own-feedback, application/intake states. Follow-up is candidate-level (no application FK); owner fallback creator. Never label future/never-contacted records as overdue.
-- [ ] Use current permission predicates. Do not expose candidate/application IDs to interview-only actors. Hiring shared queue excludes self; system admin gets no implicit hiring authority.
-- [ ] Replace duplicate upcoming-interview panel with compact grouped personal recruitment list, per-object links, reload/error states. No broad list fetch or N+1 feedback calls in browser.
-- [ ] Focused API/Web tests green, then strict validation and commit.
+- [x] Red tests for DB-current actor, narrow roles, ownership, hidden personal fields, correct date/status sources, counts, empty/error and links.
+- [x] Read existing candidate/follow-up, interview/own-feedback, application/intake states. Follow-up is candidate-level (no application FK); owner fallback creator. Never label future/never-contacted records as overdue.
+- [x] Use current permission predicates. Do not expose candidate/application IDs to interview-only actors. Hiring shared queue excludes self; system admin gets no implicit hiring authority.
+- [x] Replace duplicate upcoming-interview panel with compact grouped personal recruitment list, per-object links, reload/error states. No broad list fetch or N+1 feedback calls in browser.
+- [x] Focused API/Web and strict validation; task commit `3ffce2e6`. Full 212/3649 followed by final workbench module25/build, unrelated unchanged suites reused.
 
 ## Task 4: Actual UI Closure And Review
 
 **Files:** `web/e2e/preview/rec-acceptance.spec.ts` and existing relevant preview suites as necessary; acceptance report.
 
-- [ ] Update preview API via `node scripts/preview.mjs`, preserving isolated database/files and disabled side effects.
-- [ ] Actual page lifecycle at 1440/1024/390: talent creation, follow-up, application, interview create/edit/end, feedback, independent hiring, accepted intake, archive approval, HR arrival, exact archive.
-- [ ] Negative coverage: two applications, follow-up three actions, removed participant, self approval, return/resubmit, cancellation/recovery, duplicate intake, unauthorized access, no-show not active; verify no performance auto-conversion writes.
-- [ ] Final API full tests/build + related PostgreSQL integration; Web type-check/build + direct Playwright. Run full suite once on final code, not after documentation-only edits.
-- [ ] Independent whole-diff review; resolve material findings, record residual risks and evidence separately from human acceptance.
-- [ ] Deliver exact preview, role list, short steps and implemented/committed/deployed/accepted states. No production changes.
+- [x] Update preview API via `node scripts/preview.mjs`, preserving isolated database/files and disabled side effects.
+- [x] Actual page lifecycle at 1440/1024/390 passed. Final test-only synchronization/self-approval/fixture protection strengthening passed 3/3 in one concentrated pass.
+- [x] Negative coverage: two applications, follow-up three actions, removed participant, return/resubmit, cancellation/recovery, duplicate intake, unauthorized access. Self-confirmation/current-state SQL assertions and no performance auto-conversion writes checked separately; evidence layers recorded explicitly.
+- [x] API full tests/build + related PostgreSQL integration; Web type-check/build + direct Playwright. Full API once, then only final changed workbench module; no mechanical full rerun after docs or commit.
+- [x] Independent whole-diff review; findings fixed, residual inherited mixed-assessor access risk and evidence layers documented separately from human acceptance.
+- [x] Exact preview, role list, short steps and implemented/committed/deployed/accepted states recorded in acceptance handoff. No production changes.
 
 ## Coordination / Preflight
 
@@ -98,4 +98,4 @@ Ruling: follow-up plans are candidate-level in the current schema, so workbench 
 
 ## Progress
 
-- Baseline confirmed; tasks 1-3 implementation in progress. Production untouched.
+- Tasks 1-4 technical work complete; preview updated, implementation locally committed. Production untouched; user/business acceptance and release authorization remain pending. See `docs/acceptance/2026-11-22-rec-acceptance.md`.

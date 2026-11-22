@@ -221,6 +221,52 @@ async function finishOnboarding(page: Page, info: TestInfo, candidate: Candidate
 }
 
 async function onboardFromTalent(page: Page, info: TestInfo, candidate: Candidate, doubleClick = false) {
+  // Recruitment now requires accepted hiring; prepare it through the actual pages, not an API shortcut.
+  const panel = page.locator('.talent-detail-drawer .application-panel');
+  await panel.getByRole('button', { name: '新增应聘', exact: true }).click();
+  await panel.getByLabel('岗位名称', { exact: true }).fill('虚构入职前置岗位');
+  const created = responseFor(page, 'POST', `/talent-recruitment/candidates/${candidate.id}/applications`);
+  await panel.getByRole('button', { name: '保存应聘', exact: true }).click();
+  const application = (await (await created).json()).data;
+  await panel.getByRole('button', { name: '提交录用', exact: true }).click();
+  await panel.locator('textarea').fill('虚构录用前置条件，独立人员确认');
+  await panel.getByRole('button', { name: '提交录用', exact: true }).click();
+  await expect(panel.locator('.application-panel__stage')).toHaveText('待录用确认');
+  const marker = `PLCONF_${randomUUID().slice(0, 8)}`;
+  const actor = JSON.parse(execFileSync('docker', ['exec', '-i', 'hrm-api-1', 'node'], {
+    encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 20000, input: `
+      require('./prisma/preview-guard.cjs').assertPreviewEnvironment(process.env);
+      const{PrismaClient}=require('@prisma/client'),{JwtService}=require('@nestjs/jwt');const db=new PrismaClient();
+      (async()=>{
+        if((await db.systemConfig.findUnique({where:{key:'local_preview_fixture_v1'}}))?.value?.fictional!==true)throw Error();
+        const u=await db.user.create({data:{name:'虚构${marker}',employeeNo:'${marker}',status:'active',accountType:'service',sysRole:'employee',hrCapabilities:['talent_hiring_confirm']}});
+        const token=new JwtService().sign({sub:u.id,employeeNo:u.employeeNo,name:u.name,sysRole:u.sysRole,hrCapabilities:u.hrCapabilities},{secret:process.env.JWT_SECRET,expiresIn:'10m'});
+        console.log(JSON.stringify({id:u.id,token}));
+      })().finally(()=>db.$disconnect()).catch(()=>process.exitCode=1);`,
+  })) as { id: string; token: string };
+  const context = await page.context().browser()!.newContext({ viewport: page.viewportSize()!, timezoneId: 'Asia/Shanghai' });
+  try {
+    const confirmer = await context.newPage();
+    await confirmer.goto(`${origin}/login`);
+    await confirmer.evaluate(token => { localStorage.setItem('token', token); localStorage.setItem('expiresAt', String(Date.now() + 500000)); }, actor.token);
+    await confirmer.goto(`${origin}/talent-hiring?applicationId=${application.id}`);
+    const review = confirmer.locator('.hiring-review__detail');
+    await expect(review).toContainText(candidate.name);
+    await review.getByRole('button', { name: '确认录用', exact: true }).click();
+    await review.getByRole('button', { name: '提交录用确认', exact: true }).click();
+    await expect(review).toContainText('已确认录用');
+  } finally {
+    await context.close();
+    execFileSync('docker', ['exec', '-i', 'hrm-api-1', 'node'], { stdio: ['pipe', 'pipe', 'pipe'], timeout: 20000, input: `
+      require('./prisma/preview-guard.cjs').assertPreviewEnvironment(process.env);
+      const{PrismaClient}=require('@prisma/client');const db=new PrismaClient();
+      db.user.updateMany({where:{id:'${actor.id}',employeeNo:'${marker}'},data:{archivedAt:new Date()}}).finally(()=>db.$disconnect()).catch(()=>process.exitCode=1);`,
+    });
+  }
+  await panel.getByRole('button', { name: '刷新应聘记录', exact: true }).click();
+  await panel.getByRole('button', { name: '候选人接受', exact: true }).click();
+  await panel.getByRole('button', { name: '候选人接受', exact: true }).click();
+  await expect(panel.locator('.application-panel__stage')).toHaveText('已接受录用');
   await page.locator('.talent-detail-drawer').getByRole('button', { name: '办理入职', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/entry-exit\\?talentId=${candidate.id}`));
   return finishOnboarding(page, info, candidate, doubleClick);
