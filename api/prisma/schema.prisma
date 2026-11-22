@@ -559,6 +559,7 @@ model User {
   payrollStandards PayrollStandard[]
   payrollLines PayrollLine[]
   payrollOpenings PayrollOpeningBalance[]
+  payrollAdjustments PayrollAdjustment[]
   id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   dingtalkId         String?        @unique @map("dingtalk_id") @db.VarChar(64)
   dingtalkUnionId    String?        @unique @map("dingtalk_union_id") @db.VarChar(64)
@@ -775,6 +776,7 @@ model ContractSubject {
   payrollReservations PayrollReservation[]
   payrollOpenings PayrollOpeningBalance[]
   payrollEvents PayrollEvent[]
+  payrollAdjustments PayrollAdjustment[]
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name String @unique @db.VarChar(150)
   isActive Boolean @default(true) @map("is_active")
@@ -2532,6 +2534,7 @@ model PayrollBatch {
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   subjectId String @map("subject_id") @db.Uuid
   month String @db.VarChar(7)
+  additionalMonths String[] @default([]) @map("additional_months") @db.VarChar(7)
   payMonth String @map("pay_month") @db.VarChar(7)
   purpose String @default("trial") @db.VarChar(20)
   status String @default("draft") @db.VarChar(20)
@@ -2672,4 +2675,22 @@ model PayrollEvent {
   subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
   @@index([subjectId, batchId, createdAt])
   @@map("payroll_events")
+}
+
+model PayrollAdjustment {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  domain String @db.VarChar(20)
+  month String @db.VarChar(7)
+  itemCode String @map("item_code") @db.VarChar(30)
+  amount Decimal @db.Decimal(16, 2)
+  reason String @db.VarChar(500)
+  reference String @db.VarChar(200)
+  createdById String @map("created_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  employee User @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  @@index([subjectId, employeeId, domain, month])
+  @@map("payroll_adjustments")
 }
