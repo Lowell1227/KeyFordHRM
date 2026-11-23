@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { archiveIssueSourceSystems, archiveIssueStates } from '@/employee-archives/employee-archive-issues';
+import { currentArchiveFactsSelect, loadCurrentArchiveIssues } from '@/employee-archives/employee-archive-current-issues';
 import { approvedEmploymentSourceWhere } from '@/employee-archives/employment-timeline';
 import { AccountType, ExternalIdentityProvider, SysRole, UserStatus, EmploymentType } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -140,6 +141,9 @@ export class UsersService {
     where: Prisma.UserWhereInput;
     scopeFilter: Prisma.UserWhereInput;
   }> {
+    if (dto.needsMaintenance && !(hasHrCapability(viewer, 'employee_archive_edit') || hasHrCapability(viewer, 'employee_archive_review'))) {
+      throw new ForbiddenException('无权限查看员工档案待完善事项');
+    }
     const where: Prisma.UserWhereInput = {
       deletedAt: null,
       archivedAt: dto.archived ? { not: null } : null,
@@ -202,6 +206,15 @@ export class UsersService {
     }
     if (dto.eligibleFor === 'direct_manager') {
       Object.assign(where, currentWorkerWhere, { accountType: AccountType.employee });
+    }
+    if (dto.needsMaintenance) {
+      // Evaluate the authorized result set before pagination; never filter only the visible page.
+      const candidates = await this.prisma.user.findMany({ where, select: { ...currentArchiveFactsSelect,
+        name: true, employeeNo: true, employmentType: true, position: true, positionId: true,
+        directManagerId: true, plannedRegularDate: true } });
+      const warnings = await this.getArchiveWarnings(candidates);
+      const ids = candidates.filter(u => (warnings.get(u.id)?.length ?? 0) > 0).map(u => u.id);
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), { id: { in: ids } }];
     }
     return { where, scopeFilter };
   }
@@ -462,6 +475,10 @@ export class UsersService {
         warnings.push({ field, message });
         result.set(request.userId, warnings);
       }
+    }
+    const current = await loadCurrentArchiveIssues(this.prisma, users.filter(u => u.accountType === AccountType.employee && !u.archivedAt).map(u => u.id));
+    for (const [userId, issues] of current) {
+      if (issues.length) result.set(userId, [...(result.get(userId) ?? []), ...issues.map(({ field, message }) => ({ field, message }))]);
     }
     return result;
   }

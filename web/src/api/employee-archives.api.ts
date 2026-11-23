@@ -49,6 +49,11 @@ export interface EmployeeReviewRevision {
 }
 
 export interface EmployeeArchiveIssue {
+  origin?: 'current' | 'import';
+  canExplain?: boolean;
+  contractIds?: string[];
+  exemptionVersion?: number;
+  fields?: string[];
   id: string;
   requestId: string;
   employeeId: string | null;
@@ -63,6 +68,11 @@ export interface EmployeeArchiveIssue {
   confirmBlockedReason?: string;
   fingerprint: string;
   maintenance: { employeeId?: string; requestId: string; draft: boolean };
+}
+
+export interface EmployeeArchiveIssueExemption {
+  issueId: string; fingerprint: string; version: number; message: string; field: string;
+  currentValue?: string | null; reason?: string | null; isExempt: boolean; noLongerApplies: boolean; contractIds?: string[];
 }
 
 export interface EmployeeDataReview {
@@ -383,8 +393,12 @@ export interface ArchiveBatchResult {
 }
 
 export const employeeArchivesApi = {
-  getEmployeeIssues(employeeId: string): Promise<{ items: EmployeeArchiveIssue[] }> {
-    return http.get(`/employee-archives/issues/employee/${employeeId}`, { skipErrorMessage: true }) as unknown as Promise<{ items: EmployeeArchiveIssue[] }>;
+  getEmployeeIssues(employeeId: string): Promise<{ items: EmployeeArchiveIssue[]; exemptions?: EmployeeArchiveIssueExemption[] }> {
+    return http.get(`/employee-archives/issues/employee/${employeeId}`, { skipErrorMessage: true }) as unknown as Promise<{ items: EmployeeArchiveIssue[]; exemptions?: EmployeeArchiveIssueExemption[] }>;
+  },
+
+  setIssueExemption(employeeId: string, issueId: string, body: { fingerprint: string; isExempt: boolean; expectedVersion: number; reason?: string }): Promise<{ isExempt: boolean; version: number; noLongerApplies?: boolean }> {
+    return http.patch(`/employee-archives/issues/employee/${employeeId}/${encodeURIComponent(issueId)}/exemption`, body, { skipErrorMessage: true }) as unknown as Promise<{ isExempt: boolean; version: number; noLongerApplies?: boolean }>;
   },
 
   getRequestIssues(requestId: string): Promise<{ items: EmployeeArchiveIssue[] }> {

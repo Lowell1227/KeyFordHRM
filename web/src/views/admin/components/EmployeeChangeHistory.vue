@@ -14,6 +14,7 @@ function linkedRequest(event: EmployeeArchiveEvent) {
     || request.events?.some(item => item.id === event.id));
 }
 function eventType(event: EmployeeArchiveEvent) {
+  if (event.action === 'resolve_employee_archive_current_issue') return '提醒豁免';
   return event.action === 'employee_profile_direct_update' ? '档案修改' : '归档记录';
 }
 const types = computed(() => [...new Set([...props.requests.map(applicationType), ...(props.events ?? []).filter(event => !linkedRequest(event)).map(eventType)])]);

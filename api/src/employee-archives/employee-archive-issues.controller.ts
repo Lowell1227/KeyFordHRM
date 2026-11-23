@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { Roles } from '@/common/decorators/roles.decorator';
 import type { AuthUser } from '@/common/types/auth.types';
-import { ConfirmArchiveIssueDto } from './employee-archive-issues.dto';
+import { ConfirmArchiveIssueDto, SetArchiveIssueExemptionDto } from './employee-archive-issues.dto';
 import { EmployeeArchiveIssuesService } from './employee-archive-issues.service';
 
 @Controller('employee-archives/issues')
@@ -29,5 +29,12 @@ export class EmployeeArchiveIssuesController {
   confirm(@Param('requestId', new ParseUUIDPipe()) requestId: string,
     @Param('issueId') issueId: string, @Body() body: ConfirmArchiveIssueDto, @CurrentUser() user: AuthUser) {
     return this.issues.confirmCurrent(requestId, issueId, body.fingerprint, user);
+  }
+
+  @Patch('employee/:userId/:issueId/exemption')
+  @HrCapabilities('employee_archive_edit')
+  resolve(@Param('userId', new ParseUUIDPipe()) userId: string, @Param('issueId') issueId: string,
+    @Body() body: SetArchiveIssueExemptionDto, @CurrentUser() user: AuthUser) {
+    return this.issues.setExemption(userId, issueId, body.fingerprint, body.isExempt, body.expectedVersion, body.reason, user);
   }
 }

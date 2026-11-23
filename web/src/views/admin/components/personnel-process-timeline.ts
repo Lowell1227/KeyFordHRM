@@ -34,6 +34,7 @@ export interface PersonnelProcessStep {
 }
 function eventPresentation(event: EmployeeArchiveEvent, request?: EmployeeDataReview): Pick<PersonnelProcessStep, 'title' | 'status' | 'tone' | 'stage'> {
   const action = event.action;
+  if (action === 'resolve_employee_archive_current_issue') return { title: event.newValue?.isExempt ? '豁免资料提醒' : '取消提醒豁免', status: '已记录', tone: 'neutral' };
   const onboarding = Boolean(request?.intakeType || request?.sourceType === 'manual_employee_create');
   if (/^reopen_/.test(action)) return { title: '恢复入职并重新提交', status: '已提交', tone: 'success' };
   if (action === 'revise_employee_arrival_date') return { title: '修改到岗日期并重新提交', status: '已提交', tone: 'success' };
@@ -83,7 +84,9 @@ export function personnelEventSteps(events: EmployeeArchiveEvent[], request?: Em
     return [{ key: `event-${event.id}`, eventId: event.id, eventAction: event.action, ...presentation,
       actor, time, occurredAt: event.createdAt,
       ...employeeEventDifferences(event, request),
-      note: typeof event.newValue?.reason === 'string' ? event.newValue.reason : undefined,
+      note: event.action === 'resolve_employee_archive_current_issue'
+        ? [event.newValue?.message, event.newValue?.currentValue, event.newValue?.reason].filter(value => typeof value === 'string' && value).join('；')
+        : typeof event.newValue?.reason === 'string' ? event.newValue.reason : undefined,
       details: /^approve_/.test(event.action) ? scopes.filter(scope => ['profile', 'performance'].includes(scope)).map(scope => ({
         key: scope, title: scope === 'profile' ? '基础档案' : '绩效关系', status: presentation.status, tone: presentation.tone, actor, time,
       })) : undefined,

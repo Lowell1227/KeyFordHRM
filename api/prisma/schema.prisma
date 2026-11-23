@@ -555,6 +555,8 @@ model PositionChangeRequest {
 }
 
 model User {
+  archiveIssueExemptions EmployeeArchiveIssueExemption[] @relation("ArchiveIssueEmployee")
+  updatedArchiveIssueExemptions EmployeeArchiveIssueExemption[] @relation("ArchiveIssueEditor")
   payrollNetPayments PayrollNetPayment[]
   payrollGrants PayrollGrant[]
   payrollStandards PayrollStandard[]
@@ -690,6 +692,29 @@ model User {
   @@index([accountType])
   @@index([dingtalkId])
   @@map("users")
+}
+
+model EmployeeArchiveIssueExemption {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  issueId     String   @map("issue_id") @db.VarChar(100)
+  fingerprint String   @db.VarChar(64)
+  isExempt    Boolean  @default(true) @map("is_exempt")
+  message     String   @db.VarChar(300)
+  currentValue String? @map("current_value") @db.Text
+  field       String   @db.VarChar(100)
+  reason      String?  @db.VarChar(500)
+  version     Int      @default(1)
+  updatedById String   @map("updated_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user      User @relation("ArchiveIssueEmployee", fields: [userId], references: [id], onDelete: Restrict)
+  updatedBy User @relation("ArchiveIssueEditor", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@unique([userId, issueId, fingerprint], map: "archive_issue_exemption_fact_key")
+  @@index([userId, isExempt])
+  @@map("employee_archive_issue_exemptions")
 }
 
 model EmployeeProfile {

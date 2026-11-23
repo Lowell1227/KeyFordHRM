@@ -979,7 +979,7 @@ export class EmployeeArchivesService {
     const events = await this.prisma.auditLog.findMany({
       where: { OR: [
         { entityType: 'employee_data_change_request', entityId: { in: requests.map((request) => request.id) } },
-        { entityType: 'user', entityId: userId, action: { in: ['archive_resigned_employee', 'restore_employee_archive', 'employee_profile_direct_update'] } },
+          { entityType: 'user', entityId: userId, action: { in: ['archive_resigned_employee', 'restore_employee_archive', 'employee_profile_direct_update', 'resolve_employee_archive_current_issue'] } },
       ] }, orderBy: { createdAt: 'asc' },
       select: { id: true, entityId: true, action: true, createdAt: true, user: { select: { id: true, name: true } }, oldValue: true, newValue: true },
     });

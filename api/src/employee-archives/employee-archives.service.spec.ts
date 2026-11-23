@@ -35,7 +35,7 @@ describe('EmployeeArchivesService', () => {
       auditLog: { findMany: jest.fn(async () => events) } };
     const result = await new EmployeeArchivesService(db as any).history('employee');
     expect(db.auditLog.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { OR: expect.arrayContaining([
-      { entityType: 'user', entityId: 'employee', action: { in: ['archive_resigned_employee', 'restore_employee_archive', 'employee_profile_direct_update'] } },
+      { entityType: 'user', entityId: 'employee', action: { in: ['archive_resigned_employee', 'restore_employee_archive', 'employee_profile_direct_update', 'resolve_employee_archive_current_issue'] } },
     ]) } }));
     expect(result.archiveEvents).toEqual([events[0]]);
     expect(result.changeHistory[0].events).toEqual([events[1]]);
