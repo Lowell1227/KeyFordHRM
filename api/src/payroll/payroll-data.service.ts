@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { AuthUser } from '@/common/types/auth.types';
@@ -9,6 +9,8 @@ import { assertPayrollVersion, lockPayrollSubject, payrollDate, payrollDecimal, 
 import { normalizeAttendance, PayrollAttendanceInput, PayrollAttendanceResult } from './payroll-attendance-normalizer';
 import { normalizePayrollPolicy } from './payroll-policy';
 import { normalizeDeductionSettings } from './payroll-deduction-settings';
+import { hasHrCapability } from '@/auth/hr-capabilities';
+import { PayrollPolicyWithScope, payrollScopeEmploymentDays, readFormalPayrollEmployments, readPayrollScopeEmployments, readReviewedPayrollScopePolicies } from './payroll-employment-scope';
 
 export interface PayrollAttendanceScope { employeeIds: string[]; from: string; to: string }
 export interface PayrollAttendanceSync {
@@ -60,7 +62,8 @@ export function payrollDays(month: string): string[] {
   for (let day = start.getTime(); day <= end.getTime(); day += 86400000) days.push(new Date(day).toISOString().slice(0, 10));
   return days;
 }
-export async function payrollEmployments(tx: Prisma.TransactionClient | PrismaService, subjectId: string, month: string) {
+export async function payrollEmployments(tx: Prisma.TransactionClient | PrismaService, subjectId: string, month: string, domain: PayrollDomain = 'validation') {
+  if (domain === 'formal') return readFormalPayrollEmployments(tx, subjectId, month);
   const { start, end } = payrollMonth(month);
   const relevant = await tx.employmentRecord.findMany({ where: { AND: [approvedEmploymentSourceWhere,
     { contractSubjectId: subjectId, effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] },
@@ -74,8 +77,10 @@ export async function payrollEmployments(tx: Prisma.TransactionClient | PrismaSe
       entryDate: true, leaveDate: true, employeeStatus: true, employeeNo: true,
       user: { select: { id: true, name: true, employeeNo: true } } }, orderBy: [{ userId: 'asc' }, { effectiveFrom: 'asc' }, { id: 'asc' }] });
 }
-export function isPayrollEmployment(record: { contractSubjectId: string | null; employeeStatus: string; entryDate: Date | null; leaveDate: Date | null } | null, subjectId: string, day: string) {
-  return Boolean(record && record.contractSubjectId === subjectId && ['active', 'probation', 'resigned'].includes(record.employeeStatus)
+export function isPayrollEmployment(record: { contractSubjectId: string | null; employeeStatus: string; entryDate: Date | null; leaveDate: Date | null;
+  payrollAssignment?: { subjectId: string; workDates: string[] } } | null, subjectId: string, day: string) {
+  return Boolean(record && (record.payrollAssignment ? record.payrollAssignment.subjectId === subjectId && record.payrollAssignment.workDates.includes(day)
+    : record.contractSubjectId === subjectId) && ['active', 'probation', 'resigned'].includes(record.employeeStatus)
     && (!record.entryDate || record.entryDate.getTime() <= payrollDate(day).getTime())
     && (!record.leaveDate || record.leaveDate.getTime() >= payrollDate(day).getTime()));
 }
@@ -173,10 +178,30 @@ export class PayrollDataService {
     if (!scope?.capabilities.some(value => ['attendance_edit', 'attendance_seal', 'payroll_edit', 'payroll_view', 'payroll_settle'].includes(value))) {
       await this.access.assert(this.prisma, actor, subjectId, 'payroll_view');
     }
-    await this.domain(this.prisma);
-    const records = await payrollEmployments(this.prisma, subjectId, month);
+    const domain = await this.domain(this.prisma);
+    const records = await payrollEmployments(this.prisma, subjectId, month, domain);
     return [...new Map(employmentDays(records, subjectId, month).map(({ employeeId, employment: row }) => [employeeId,
       { id: row.user.id, name: row.user.name, employeeNo: row.employeeNo ?? row.user.employeeNo }])).values()];
+  }
+  async employeeScopeCandidates(subjectId: string, month: string, actor: AuthUser) {
+    await this.access.assert(this.prisma, actor, subjectId, 'payroll_edit');
+    if (!hasHrCapability(actor, 'employee_archive_edit')) throw new ForbiddenException('配置发薪人员范围还需员工档案维护权限');
+    await this.domain(this.prisma);
+    const records = await readPayrollScopeEmployments(this.prisma, month);
+    return [...new Map(payrollScopeEmploymentDays(records, month).map(({ employeeId, employment }) => [employeeId,
+      { id: employeeId, name: employment.user.name, employeeNo: employment.employeeNo ?? employment.user.employeeNo }])).values()];
+  }
+  private async employeeForWrite(tx: Prisma.TransactionClient, subjectId: string, employeeId: string, domain: PayrollDomain) {
+    if (domain === 'formal') {
+      const { policies } = await readReviewedPayrollScopePolicies(tx, subjectId);
+      if (!policies.some(row => (row.config as unknown as PayrollPolicyWithScope).employeeScope?.employeeIds.includes(employeeId))) {
+        throw new BadRequestException('正式发薪人员范围待配置，或员工尚未纳入已审范围');
+      }
+    }
+    const employee = await tx.employmentRecord.findFirst({ where: { AND: [approvedEmploymentSourceWhere,
+      { userId: employeeId, ...(domain === 'validation' ? { contractSubjectId: subjectId } : {}) }] } });
+    if (!employee) throw new BadRequestException('员工没有已审有效任职记录');
+    return employee;
   }
   async operators(subjectId: string, actor: AuthUser) {
     await this.access.assert(this.prisma, actor, subjectId, 'payroll_edit');
@@ -200,8 +225,11 @@ export class PayrollDataService {
       if (!ids.length) return [];
       return this.prisma.assessmentCycle.findMany({ where: { id: { in: ids } }, select, orderBy: { id: 'asc' } });
     }
+    const { policies } = await readReviewedPayrollScopePolicies(this.prisma, subjectId);
+    const scopeIds = [...new Set(policies.flatMap(row => (row.config as unknown as PayrollPolicyWithScope).employeeScope?.employeeIds ?? []))];
+    if (!scopeIds.length) return [];
     const employments = await this.prisma.employmentRecord.findMany({ where: { AND: [approvedEmploymentSourceWhere,
-      { contractSubjectId: subjectId, employeeStatus: { in: ['active', 'probation', 'resigned'] } }] }, select: { userId: true } });
+      { userId: { in: scopeIds }, employeeStatus: { in: ['active', 'probation', 'resigned'] } }] }, select: { userId: true } });
     const employeeIds = [...new Set(employments.map(row => row.userId))];
     if (!employeeIds.length) return [];
     const taskScope: Prisma.AssessmentTaskWhereInput = { isExempt: false, participantDisposition: 'active', status: { not: 'exempted' } };
@@ -213,7 +241,7 @@ export class PayrollDataService {
       if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime()) || startDate.getUTCFullYear() < 2000 || endDate < startDate) continue;
       const start = startDate.toISOString().slice(0, 10), end = endDate.toISOString().slice(0, 10), month = start.slice(0, 7);
       if (month !== end.slice(0, 7)) continue;
-      if (!months.has(month)) months.set(month, employmentDays(await payrollEmployments(this.prisma, subjectId, month), subjectId, month));
+      if (!months.has(month)) months.set(month, employmentDays(await payrollEmployments(this.prisma, subjectId, month, domain), subjectId, month));
       const ids = [...new Set(months.get(month)!.filter(row => row.workDate >= start && row.workDate <= end).map(row => row.employeeId))];
       // Candidate metadata is not proof of a payable result; individual publication checks remain in salary capture.
       if (ids.length && await this.prisma.assessmentTask.count({ where: { cycleId: cycle.id, employeeId: { in: ids }, ...taskScope } })) visible.push(cycle);
@@ -227,12 +255,22 @@ export class PayrollDataService {
     return this.prisma.payrollAttendanceSnapshot.findMany({ where: { subjectId, month, domain }, orderBy: { version: 'desc' }, take: 50 });
   }
   async sync(input: PayrollAttendanceSync, actor: AuthUser) {
+    if (this.access.maintenancePurpose() !== 'validation') throw new ForbiddenException('正式考勤仅接受服务端核验的钉钉取数，不能提交客户端考勤或完整性声明');
+    return this.persistSync(input, actor);
+  }
+  async syncVerified(input: PayrollAttendanceSync, actor: AuthUser, verify: (tx: Prisma.TransactionClient) => Promise<void>) {
+    if (typeof verify !== 'function') throw new ForbiddenException('正式考勤同步缺少服务端核验');
+    return this.persistSync(input, actor, verify);
+  }
+  private async persistSync(input: PayrollAttendanceSync, actor: AuthUser, verify?: (tx: Prisma.TransactionClient) => Promise<void>) {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'attendance_edit');
       const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain);
+      if (domain === 'formal' && typeof verify !== 'function') throw new ForbiddenException('正式考勤同步缺少服务端核验');
+      if (verify) await verify(tx);
       if (!input.sourceKey?.trim() || input.sourceKey.length > 100 || input.input?.month !== input.month) throw new BadRequestException('同步来源或月份不正确');
       if (!Array.isArray(input.input?.expected) || !Array.isArray(input.input?.records) || input.input.expected.length > 10000 || input.input.records.length > 20000) throw new BadRequestException('考勤输入不完整或超过单次范围');
-      const eligible = employmentDays(await payrollEmployments(tx, input.subjectId, input.month), input.subjectId, input.month);
+      const eligible = employmentDays(await payrollEmployments(tx, input.subjectId, input.month, domain), input.subjectId, input.month);
       if (!eligible.length) throw new BadRequestException('该主体当月没有可核对的任职人员');
       const scope = attendanceScope(input, eligible), incoming = normalizeAttendance(input.input);
       const requestHash = payrollHash({ scope, complete: input.complete === true, input: incoming });
@@ -309,8 +347,7 @@ export class PayrollDataService {
       await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx);
       await lockPayrollSubject(tx, input.subjectId, domain);
       const payDate = payrollDate(input.payDate), settings = normalizeDeductionSettings(input, input.settings);
-      const employee = await tx.employmentRecord.findFirst({ where: { AND: [approvedEmploymentSourceWhere, { userId: input.employeeId, contractSubjectId: input.subjectId }] } });
-      if (!employee) throw new BadRequestException('员工不属于该用工主体');
+      await this.employeeForWrite(tx, input.subjectId, input.employeeId, domain);
       const latest = await tx.payrollDeductionProfile.findFirst({ where: { subjectId: input.subjectId, domain, employeeId: input.employeeId, payDate }, orderBy: { version: 'desc' } });
       const result = await tx.payrollDeductionProfile.create({ data: { subjectId: input.subjectId, employeeId: input.employeeId, domain, payDate,
         effectiveFrom: payDate, effectiveTo: payDate, settings: payrollJson(settings), version: (latest?.version ?? 0) + 1, createdById: actor.id } });
@@ -327,8 +364,7 @@ export class PayrollDataService {
       const from = payrollDate(input.effectiveFrom), to = input.effectiveTo ? payrollDate(input.effectiveTo) : null;
       if (to && to < from) throw new BadRequestException('生效结束日期不能早于开始日期');
       if (!input.evidence?.trim() || input.evidence.length > 500 || (input.performanceMode != null && !['none', 'included', 'additional'].includes(input.performanceMode))) throw new BadRequestException('请填写确认依据和有效工资结构');
-      const employee = await tx.employmentRecord.findFirst({ where: { AND: [approvedEmploymentSourceWhere, { userId: input.employeeId, contractSubjectId: input.subjectId }] } });
-      if (!employee) throw new BadRequestException('员工不属于该用工主体');
+      await this.employeeForWrite(tx, input.subjectId, input.employeeId, domain);
       const latest = await tx.payrollStandard.findFirst({ where: { subjectId: input.subjectId, employeeId: input.employeeId, domain }, orderBy: { version: 'desc' } });
       const result = await tx.payrollStandard.create({ data: { subjectId: input.subjectId, employeeId: input.employeeId, domain, version: (latest?.version ?? 0) + 1,
         effectiveFrom: from, effectiveTo: to, fixedMonthly: payrollDecimal(input.fixedMonthly, true), performanceBase: payrollDecimal(input.performanceBase, true), performanceMode: input.performanceMode,
@@ -344,7 +380,10 @@ export class PayrollDataService {
       if (!input.config || typeof input.config !== 'object' || Array.isArray(input.config) || JSON.stringify(input.config).length > 50000) throw new BadRequestException('规则参数不正确');
       const config = normalizePayrollPolicy(input.config);
       for (const [month, mapping] of Object.entries(config.performance)) if (mapping.sourceKind === 'manual') {
-        const eligible = new Set(employmentDays(await payrollEmployments(tx, input.subjectId, month), input.subjectId, month).map(row => row.employeeId));
+        const eligible = domain === 'formal'
+          ? new Set(payrollScopeEmploymentDays(await readPayrollScopeEmployments(tx, month, config.employeeScope?.employeeIds ?? []), month)
+            .filter(row => config.employeeScope?.employeeIds.includes(row.employeeId)).map(row => row.employeeId))
+          : new Set(employmentDays(await payrollEmployments(tx, input.subjectId, month), input.subjectId, month).map(row => row.employeeId));
         if (Object.keys(mapping.manualAmounts ?? {}).some(id => !eligible.has(id))) throw new BadRequestException('人工绩效人员不在本主体当月有效任职范围');
       }
       const latest = await tx.payrollPolicy.findFirst({ where: { subjectId: input.subjectId, domain }, orderBy: { version: 'desc' } });
@@ -425,7 +464,7 @@ export class PayrollDataService {
   async confirmOpening(input: { subjectId: string; employeeId: string; month: string; itemCode: string; amount: string; reference: string }, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'payroll_settle'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain); payrollMonth(input.month);
-      const employees = await payrollEmployments(tx, input.subjectId, input.month);
+      const employees = await payrollEmployments(tx, input.subjectId, input.month, domain);
       if (!employees.some(row => row.userId === input.employeeId) || !(PAYROLL_ITEM_CODES as readonly string[]).includes(input.itemCode)
         || !input.reference?.trim() || input.reference.length > 200) throw new BadRequestException('请核对期初人员、项目和确认依据');
       const amount = payrollDecimal(input.amount, false, true)!;
@@ -466,7 +505,7 @@ export class PayrollDataService {
   async addAdjustment(input: { subjectId: string; employeeId: string; month: string; itemCode: string; amount: string; reason: string; reference: string }, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain); payrollMonth(input.month);
-      const employees = await payrollEmployments(tx, input.subjectId, input.month);
+      const employees = await payrollEmployments(tx, input.subjectId, input.month, domain);
       if (!employees.some(row => row.userId === input.employeeId) || !(PAYROLL_ITEM_CODES as readonly string[]).includes(input.itemCode)
         || !input.reason?.trim() || input.reason.length > 500 || !input.reference?.trim() || input.reference.length > 200) throw new BadRequestException('请核对调整人员、项目、原因和依据');
       const amount = payrollDecimal(input.amount, false, true)!;

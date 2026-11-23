@@ -25,8 +25,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
     const attendanceConflicts = await payrollAttendanceConflicts(tx, subjectId, domain, month, attendance?.payload);
     if (attendanceConflicts.length) issues.push('考勤来源存在跨月归属冲突，请先核对原月、更正及已入薪差异');
     const policies = await tx.payrollPolicy.findMany({ where: { subjectId, domain, status: 'active', effectiveFrom: { lte: end } }, orderBy: { id: 'asc' } });
-    const employments = await payrollEmployments(tx, subjectId, month);
-    const employees = [...new Set(employments.filter(row => row.contractSubjectId === subjectId).map(row => row.userId))].sort();
+    const employments = await payrollEmployments(tx, subjectId, month, domain);
+    const employees = [...new Set(employments.filter(row => domain === 'formal' || row.contractSubjectId === subjectId).map(row => row.userId))].sort();
     const standards = await tx.payrollStandard.findMany({ where: { subjectId, domain, employeeId: { in: employees }, status: 'active', effectiveFrom: { lte: end } }, orderBy: { id: 'asc' } });
     const releases = await tx.payrollParameterRelease.findMany({ where: { subjectId, domain, status: 'approved', OR: [
       { rule: { is: { effectiveFrom: { lte: end } } } },
@@ -49,7 +49,7 @@ export class PayrollSourcesService implements PayrollSourceReader {
     const payload = attendance?.payload as { days?: AttendanceDay[]; issues?: unknown[]; sync?: { complete?: boolean } } | undefined;
     if (!attendance || attendance.status !== 'sealed' || !attendance.sealedHash || payload?.sync?.complete !== true
       || !Array.isArray(payload?.days) || !Array.isArray(payload?.issues) || payload.issues.length) issues.push('考勤尚未完成核对封账');
-    if (!employees.length) issues.push('当月没有已生效的本主体任职范围');
+    if (!employees.length) issues.push(domain === 'formal' ? '正式发薪人员范围待配置或当月没有已审有效任职人员' : '当月没有已生效的本主体任职范围');
     const effectivePolicyIds = new Set(payrollDays(month).flatMap(date => effectivePayrollParameters(policies, ruleLinks, payrollDate(date)).map(row => row.id)));
     const configs = policies.filter(row => effectivePolicyIds.has(row.id)).map(row => row.config as unknown as PayrollPolicyConfig);
     const paths = configs.map(config => ({ reviewers: Array.isArray(config?.reviewers) ? config.reviewers : [], approvers: Array.isArray(config?.approvers) ? config.approvers : [] }));
@@ -224,7 +224,7 @@ export class PayrollSourcesService implements PayrollSourceReader {
     if (issues.length) for (const line of lines) if (line.status === 'ready' || line.status === 'not_applicable') { line.status = 'blocked_batch'; line.amount = null; }
     const sources = payrollJson({ subjectId, month, domain, attendance, ...(attendanceConflicts.length ? { attendanceConflicts } : {}), policies, standards,
       ...(releases.length ? { parameterReleases: releases } : {}),
-      employments: employments.filter(row => row.contractSubjectId === subjectId).map(row => ({ ...row,
+      employments: employments.filter(row => domain === 'formal' || row.contractSubjectId === subjectId).map(row => ({ ...row,
         user: { id: row.user.id, name: row.user.name } })), scopeIssues: [...new Set(issues)], openings,
       settlements, adjustments, ...(manualPerformance.length ? { manualPerformance } : {}),
       performance: performanceFacts.sort((a, b) => `${a.employeeId}:${a.cycleId}`.localeCompare(`${b.employeeId}:${b.cycleId}`)) });

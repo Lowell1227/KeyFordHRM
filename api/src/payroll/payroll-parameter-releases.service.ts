@@ -10,6 +10,7 @@ import { normalizePayrollPolicy } from './payroll-policy';
 import { payrollParameterEligibleUser, payrollParameterReviewerWhere } from './payroll-parameter-access';
 import { payrollParameterDefinition, PayrollParameter, PayrollParameterKind } from './payroll-parameter-definition';
 import { normalizeDeductionSettings } from './payroll-deduction-settings';
+import { assertFormalPayrollScopeAvailable, lockFormalPayrollScope } from './payroll-employment-scope';
 
 type Kind = PayrollParameterKind;
 type Parameter = PayrollParameter;
@@ -63,6 +64,7 @@ export class PayrollParameterReleasesService {
       normalizeDeductionSettings({ subjectId: profile.subjectId, employeeId: profile.employeeId, payDate: profile.payDate.toISOString().slice(0, 10) }, profile.settings);
     } else {
       const config = normalizePayrollPolicy((row as Prisma.PayrollPolicyGetPayload<{}>).config);
+      if (row.domain === 'formal' && !config.employeeScope) throw new ConflictException('正式规则须明确实际发薪人员范围和确认依据');
       if (config.fixedSalaryBasis !== 'monthly_workdays' || config.rounding === null || !config.cutoverMonth
         || !Object.keys(config.workCalendars ?? {}).length) throw new ConflictException('请先补齐工作日日历、舍入规则和启用归属月');
       for (const mapping of Object.values(config.performance)) {
@@ -136,6 +138,7 @@ export class PayrollParameterReleasesService {
       if (header.reviewerId !== actor.id || header.submittedById === actor.id) throw new ForbiddenException('只能由该申请指定的直属主管审核，不能自审');
       if (await this.manager(tx, header.submittedById) !== actor.id) throw new ForbiddenException('直属关系已变化，请由经办撤回后重新提交');
       await this.access.assert(tx, { id: header.submittedById }, header.subjectId, 'payroll_edit');
+      if (header.domain === 'formal' && header.kind === 'rule') await lockFormalPayrollScope(tx);
       await lockPayrollSubject(tx, header.subjectId, header.domain);
       const release = (await tx.payrollParameterRelease.findUnique({ where: { id } }))!;
       assertPayrollVersion(release.attempt, input.expectedVersion);
@@ -153,6 +156,7 @@ export class PayrollParameterReleasesService {
           || (head ? payrollHash(payrollParameterDefinition(kind, head)) : null) !== release.previousHash) {
           throw new ConflictException('已有其他参数版本发布，请撤回核对后重新提交');
         }
+        if (kind === 'rule' && row.domain === 'formal') await assertFormalPayrollScopeAvailable(tx, row as Prisma.PayrollPolicyGetPayload<{}>, release.previousParameterId);
       }
       const status = input.decision === 'approve' ? 'approved' : 'returned';
       const result = await tx.payrollParameterRelease.update({ where: { id }, data: { status, decidedAt: new Date(), note: input.note.trim() }, include: display });
@@ -178,7 +182,7 @@ export class PayrollParameterReleasesService {
     });
   }
   private async header(tx: Prisma.TransactionClient, id: string) {
-    const header = await tx.payrollParameterRelease.findUnique({ where: { id }, select: { id: true, subjectId: true, domain: true, reviewerId: true, submittedById: true } });
+    const header = await tx.payrollParameterRelease.findUnique({ where: { id }, select: { id: true, subjectId: true, domain: true, kind: true, reviewerId: true, submittedById: true } });
     if (!header) throw new NotFoundException('参数审核申请不存在'); return header;
   }
   private event(tx: Prisma.TransactionClient, subjectId: string, actorId: string, action: string, metadata: object) {

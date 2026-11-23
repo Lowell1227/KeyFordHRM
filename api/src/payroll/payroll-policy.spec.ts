@@ -4,6 +4,16 @@ import { payrollCalendarDays } from './payroll-work-calendar';
 
 describe('payroll policy config', () => {
   const person = '00000000-0000-4000-8000-000000000001';
+  it('normalizes explicit payer assignments without inferring a contract subject', () => {
+    expect((normalizePayrollPolicy({ employeeScope: { employeeIds: [person], evidenceRef: '  Fictional payer approval  ' } }) as any).employeeScope)
+      .toEqual({ employeeIds: [person], evidenceRef: 'Fictional payer approval' });
+  });
+  it.each([[], [person, person], ['employee'], Array(1001).fill(person)].map(employeeIds => ({ employeeIds })))('rejects invalid formal employee scope identities: %j', ({ employeeIds }) => {
+    expect(() => normalizePayrollPolicy({ employeeScope: { employeeIds, evidenceRef: 'Fictional approval' } })).toThrow(BadRequestException);
+  });
+  it.each(['', ' ', 'x'.repeat(201)])('rejects missing or oversized payer scope evidence', evidenceRef => {
+    expect(() => normalizePayrollPolicy({ employeeScope: { employeeIds: [person], evidenceRef } })).toThrow(BadRequestException);
+  });
   it('accepts explicit reviewed manual monthly money without cycles or coefficients', () => {
     const result = normalizePayrollPolicy({ performance: { '2026-11': {
       sourceKind: 'manual', manualAmounts: { [person]: '1200.50' }, evidenceRef: 'HR confirmation',

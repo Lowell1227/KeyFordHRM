@@ -4,6 +4,9 @@ import { AuthUser } from '@/common/types/auth.types';
 import { PayrollDataService } from './payroll-data.service';
 import { normalizeAttendance, PayrollAttendanceInput } from './payroll-attendance-normalizer';
 import { assertPayrollGrant, payrollAccess } from './payroll-access';
+import { randomUUID } from 'node:crypto';
+import { payrollHash } from './payroll-transaction';
+import { payrollParameterDefinition } from './payroll-parameter-definition';
 
 const subject = 'subject', other = 'other-subject', month = '2026-11';
 const actor = { id: 'editor' } as AuthUser;
@@ -57,7 +60,7 @@ const request = (sourceKey = 'full', input = attendance(), patch: any = {}) => (
 // Prisma persistence is doubled. Normalization, employment selection, and capability decisions remain real.
 function setup() {
   const state = { employments: [employment('employee-a'), employment('employee-b')], snapshots: [] as any[], standards: [] as any[],
-    policies: [] as any[], events: [] as any[], locked: [{ id: 'locked', sources: { original: true }, status: 'approved' }],
+    policies: [] as any[], releases: [] as any[], events: [] as any[], locked: [{ id: 'locked', sources: { original: true }, status: 'approved' }],
     grants: [{ userId: actor.id, subjectId: subject, capabilities: ['attendance_edit', 'attendance_seal', 'payroll_edit'], revokedAt: null },
       { userId: finance.id, subjectId: subject, capabilities: ['payroll_settle'], revokedAt: null }] };
   const model = (name: 'snapshots' | 'standards' | 'policies') => ({
@@ -70,7 +73,7 @@ function setup() {
     update: jest.fn(async ({ where, data }) => { const row = state[name].find(row => matches(row, where)); Object.assign(row, clone(data)); return clone(row); }),
   });
   const tx = { $queryRaw: jest.fn().mockResolvedValue([]), payrollAttendanceSnapshot: model('snapshots'), payrollStandard: model('standards'), payrollPolicy: model('policies'),
-    payrollParameterRelease: { findFirst: jest.fn(async () => null) },
+    payrollParameterRelease: { findFirst: jest.fn(async () => null), findMany: jest.fn(async ({ where, select }) => state.releases.filter(row => matches(row, where)).map(row => project(row, select))) },
     systemConfig: { findUnique: jest.fn(async () => ({ value: { subjectIds: [subject], employeeIds: ['employee-a', 'employee-b'] } })) },
     employmentRecord: { findMany: jest.fn(async ({ where, select }) => state.employments.filter(row => matches(row, where)).map(row => project(row, select))) },
     payrollEvent: { create: jest.fn(async ({ data }) => { state.events.push(clone(data)); return clone(data); }) },
@@ -87,6 +90,63 @@ function setup() {
 }
 
 describe('PayrollDataService focused regressions', () => {
+  function formalSetup() {
+    const s = setup(), ids = [randomUUID(), randomUUID()];
+    s.state.employments = ids.map(id => employment(id));
+    s.access.maintenancePurpose.mockReturnValue('formal'); s.access.assertDomain.mockImplementation(async () => 'formal');
+    const policy: any = { id: 'scope', subjectId: subject, domain: 'formal', status: 'active', version: 1,
+      effectiveFrom: date('2026-11-01'), effectiveTo: null, config: { employeeScope: { employeeIds: ids, evidenceRef: 'Fictional approved assignment' } } };
+    s.state.policies.push(policy); s.state.releases.push({ subjectId: subject, domain: 'formal', kind: 'rule', status: 'approved', ruleId: policy.id,
+      previousParameterId: null, parameterVersion: 1, snapshotHash: payrollHash(payrollParameterDefinition('rule', policy)) });
+    return { ...s, ids, input: request('formal-forged-complete', attendance(ids)) };
+  }
+  it('rejects client-provided formal attendance even when complete=true and scope is valid', async () => {
+    const s = formalSetup();
+    await expect(s.service.sync(s.input, actor)).rejects.toThrow(ForbiddenException);
+    expect(s.state.snapshots).toEqual([]);
+  });
+  it('runs the verified-sync callback after grant/domain/lock but before eligible or payload reads', async () => {
+    const s = formalSetup(); s.tx.employmentRecord.findMany.mockClear();
+    const verify = jest.fn(async tx => {
+      expect(tx).toBe(s.tx); expect(s.access.assert).toHaveBeenCalled(); expect(s.access.assertDomain).toHaveBeenCalled();
+      expect(s.tx.$queryRaw).toHaveBeenCalled(); expect(s.tx.employmentRecord.findMany).not.toHaveBeenCalled();
+      throw new ConflictException('Fictional source identity changed');
+    });
+    await expect(s.service.syncVerified(s.input, actor, verify)).rejects.toThrow(ConflictException);
+    expect(verify).toHaveBeenCalledTimes(1); expect(s.state.snapshots).toEqual([]);
+  });
+  it('accepts only a real verified-sync function and persists a verified formal response atomically', async () => {
+    const s = formalSetup();
+    await expect(s.service.syncVerified(s.input, actor, undefined as any)).rejects.toThrow(ForbiddenException);
+    const verify = jest.fn(async () => undefined);
+    expect((await s.service.syncVerified(s.input, actor, verify)).domain).toBe('formal');
+    expect(verify).toHaveBeenCalledTimes(1); expect(s.state.snapshots).toHaveLength(1);
+    expect(s.state.snapshots[0].payload.sync.complete).toBe(true);
+  });
+  it('does not use contract employment as a formal payer scope when no reviewed assignment exists', async () => {
+    const s = setup(); s.access.maintenancePurpose.mockReturnValue('formal');
+    s.access.assertDomain.mockImplementation(async () => 'formal');
+    await expect(s.service.employees(subject, month, actor)).resolves.toEqual([]);
+  });
+  it('lists minimal employee-scope candidates only for subject payroll editors who can maintain HR archives', async () => {
+    const s = setup();
+    await expect(s.service.employeeScopeCandidates(subject, month, actor)).rejects.toThrow(ForbiddenException);
+    expect(s.tx.employmentRecord.findMany).not.toHaveBeenCalled();
+    const hr = { ...actor, sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] } as AuthUser;
+    await expect(s.service.employeeScopeCandidates(other, month, hr)).rejects.toThrow(ForbiddenException);
+    s.state.employments[0].contractSubjectId = other;
+    const result = await s.service.employeeScopeCandidates(subject, month, hr);
+    expect(result).toHaveLength(2); expect(result[0]).toEqual({ id: 'employee-a', name: 'employee-a', employeeNo: 'employee-a' });
+    expect(JSON.stringify(result)).not.toContain('privateWage');
+  });
+  it('uses reviewed formal assignments for employee lists even when contract subjects differ', async () => {
+    const s = formalSetup(), before = JSON.stringify(s.state.employments);
+    s.state.employments[0].contractSubjectId = other;
+    const employees = await s.service.employees(subject, month, actor);
+    expect(employees.map(row => row.id).sort()).toEqual([...s.ids].sort());
+    expect(s.state.employments[0].contractSubjectId).toBe(other);
+    expect(JSON.stringify(s.state.employments.slice(1))).toBe(JSON.stringify(JSON.parse(before).slice(1)));
+  });
   it('quarantines a cross-month source move without rewriting the sealed original month', async () => {
     const { service, state } = setup(), november = attendance();
     const overnight = { sourceId: 'cross-month-night', sourceVersion: 1, employeeId: 'employee-a',
@@ -375,11 +435,21 @@ describe('PayrollDataService performance cycle metadata scope', () => {
   }
   function candidateSetup(domain: 'formal' | 'validation' = 'formal') {
     const value = setup(), cycles: any[] = [], tasks: any[] = [];
+    const aliases = new Map<string, string>();
+    const person = (id: string) => domain === 'formal' ? (aliases.has(id) ? aliases.get(id)! : (aliases.set(id, randomUUID()), aliases.get(id)!)) : id;
+    if (domain === 'formal') {
+      const policy: any = { id: 'reviewed-scope', subjectId: subject, domain, status: 'active', version: 1,
+        effectiveFrom: date('2026-01-01'), effectiveTo: null, config: { employeeScope: {
+          employeeIds: ['employee-a', 'employee-b', 'historical', 'future', 'past', 'unapproved', 'not-arrived'].map(person), evidenceRef: 'Fictional approved payer assignment',
+        } } };
+      value.state.policies.push(policy); value.state.releases.push({ id: 'reviewed-release', subjectId: subject, domain, status: 'approved', kind: 'rule', ruleId: policy.id,
+        previousParameterId: null, parameterVersion: 1, snapshotHash: payrollHash(payrollParameterDefinition('rule', policy)) });
+    }
     const markers: Record<string, any> = {
       payroll_preview_fixture_v1: { fictional: true, subjectIds: [subject], cycleIds: ['fixture-quarterly'] },
       payroll_monthly_rules_preview_v1: { fictional: true, state: 'ready', subjectIds: [subject], cycleIds: ['fixture-monthly'] },
     };
-    const task = (cycleId: string, employeeId = 'employee-a', patch: any = {}) => tasks.push({ cycleId, employeeId,
+    const task = (cycleId: string, employeeId = 'employee-a', patch: any = {}) => tasks.push({ cycleId, employeeId: person(employeeId),
       status: 'manager_scoring', isExempt: false, participantDisposition: 'active', gradeResult: { rawGrade: 'private' }, ...patch });
     const assessmentCycle = { findMany: jest.fn(async ({ where, select }) => cycles
       .map(row => ({ ...row, tasks: tasks.filter(task => task.cycleId === row.id) }))
@@ -387,7 +457,8 @@ describe('PayrollDataService performance cycle metadata scope', () => {
     const assessmentTask = { count: jest.fn(async ({ where }) => tasks.filter(row => scopedMatches(row, where)).length),
       findUnique: jest.fn(() => { throw new Error('Cycle candidates must not read personal results'); }) };
     Object.assign(value.prisma, { assessmentCycle, assessmentTask });
-    value.tx.employmentRecord.findMany.mockImplementation(async ({ where, select }) => value.state.employments.filter(row => scopedMatches(row, where)).map(row => project(row, select)));
+    value.tx.employmentRecord.findMany.mockImplementation(async ({ where, select }) => value.state.employments.map(row => ({ ...row, userId: person(row.userId),
+      user: { ...row.user, id: person(row.userId) } })).filter(row => scopedMatches(row, where)).map(row => project(row, select)));
     (value.tx.systemConfig.findUnique as jest.Mock).mockImplementation(async ({ where }: any) => markers[where.key] ? { value: clone(markers[where.key]) } : null);
     value.access.maintenancePurpose.mockReturnValue(domain);
     value.access.assertDomain.mockImplementation(async (_tx, requested) => { if (requested !== domain) throw new ForbiddenException('Domain denied'); return domain; });

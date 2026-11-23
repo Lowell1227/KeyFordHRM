@@ -3,6 +3,7 @@ import { isUUID } from 'class-validator';
 import { PayrollPolicyConfig } from './payroll-contracts';
 import { payrollDecimal, payrollMonth } from './payroll-transaction';
 import { normalizePayrollWorkCalendar } from './payroll-work-calendar';
+import { normalizePayrollEmployeeScope, PayrollPolicyWithScope } from './payroll-employment-scope';
 
 function object(value: unknown, keys?: string[]): Record<string, unknown> {
   if (value == null) return {};
@@ -24,8 +25,9 @@ function reference(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim() || value.length > 200) throw new BadRequestException('版本与确认依据须为有效文本');
   return value.trim();
 }
-export function normalizePayrollPolicy(input: unknown): PayrollPolicyConfig {
-  const raw = object(input, ['fixedSalaryBasis', 'workCalendars', 'rounding', 'monthlyUnits', 'normalHourly', 'paidHourly', 'overtime', 'reviewers', 'approvers', 'cutoverMonth', 'performance']);
+export function normalizePayrollPolicy(input: unknown): PayrollPolicyWithScope {
+  const raw = object(input, ['employeeScope', 'fixedSalaryBasis', 'workCalendars', 'rounding', 'monthlyUnits', 'normalHourly', 'paidHourly', 'overtime', 'reviewers', 'approvers', 'cutoverMonth', 'performance']);
+  const employeeScope = raw.employeeScope === undefined ? undefined : normalizePayrollEmployeeScope(raw.employeeScope);
   if (raw.fixedSalaryBasis != null && raw.fixedSalaryBasis !== 'monthly_workdays') throw new BadRequestException('固定工资折算依据不正确');
   const calendarEntries = Object.entries(object(raw.workCalendars));
   if (calendarEntries.length > 24) throw new BadRequestException('请按有效期拆分工作日日历');
@@ -64,7 +66,7 @@ export function normalizePayrollPolicy(input: unknown): PayrollPolicyConfig {
   }
   if (Object.keys(monthlyUnits).length > 24 || Object.keys(performance).length > 24) throw new BadRequestException('请按有效期拆分规则版本');
   if (raw.cutoverMonth != null) { if (typeof raw.cutoverMonth !== 'string') throw new BadRequestException('启用切点不正确'); payrollMonth(raw.cutoverMonth); }
-  return { ...(raw.fixedSalaryBasis != null ? { fixedSalaryBasis: 'monthly_workdays' as const } : {}),
+  return { ...(employeeScope ? { employeeScope } : {}), ...(raw.fixedSalaryBasis != null ? { fixedSalaryBasis: 'monthly_workdays' as const } : {}),
     ...(calendarEntries.length ? { workCalendars } : {}), rounding: raw.rounding == null ? null : 'item_half_up', monthlyUnits,
     normalHourly: decimal(raw.normalHourly), paidHourly,
     overtime: { hourlyBase: decimal(ot.hourlyBase), weekday: decimal(ot.weekday), restday: decimal(ot.restday), holiday: decimal(ot.holiday) },

@@ -3,6 +3,10 @@ import { Prisma } from '@prisma/client';
 import { PayrollParameterReleasesService } from './payroll-parameter-releases.service';
 import { PayrollAccessService } from './payroll-access.service';
 import { payrollParameterDefinition } from './payroll-parameter-definition';
+import { payrollHash } from './payroll-transaction';
+import { payrollCalendarDays } from './payroll-work-calendar';
+import { normalizePayrollPolicy } from './payroll-policy';
+import { randomUUID } from 'node:crypto';
 
 const hr = { id: 'hr' } as any, manager = { id: 'manager' } as any;
 const date = (value: string) => new Date(`${value}T00:00:00Z`);
@@ -18,7 +22,7 @@ function fixture() {
       const row = rows.find(value => value.id === where.id);
       return !row ? null : select ? Object.fromEntries(Object.keys(select).map(key => [key, row[key]])) : { ...row };
     }),
-    findFirst: jest.fn(async () => rows.filter(row => row.status === 'active').sort((a, b) => b.version - a.version)[0] ?? null),
+    findFirst: jest.fn(async (_args: any = {}) => rows.filter(row => row.status === 'active').sort((a, b) => b.version - a.version)[0] ?? null),
     update: jest.fn(async ({ where, data }) => { const row = rows.find(value => value.id === where.id); Object.assign(row, data); return { ...row }; }),
   };
   const releases = {
@@ -43,10 +47,44 @@ function fixture() {
   const service = new PayrollParameterReleasesService(prisma, access as any);
   const submit = () => service.submit('standard', 'new', 2, hr);
   const decide = (id: string, patch: any = {}, actor: any = manager) => service.decide(id, { expectedVersion: 1, decision: 'approve', note: '', ...patch }, actor);
-  return { rows, requests, events, state, tx, model, releases, access, service, submit, decide };
+  return { rows, requests, events, state, tx, prisma, model, releases, access, service, submit, decide };
+}
+
+function formalRuleSetup() {
+  const s = fixture(), person = randomUUID(), month = '2036-11';
+  s.rows.length = 0;
+  const row: any = { id: 'formal-rule', subjectId: 'subject', domain: 'formal', version: 1, status: 'draft', createdById: 'hr',
+    effectiveFrom: date('2036-11-01'), effectiveTo: null, config: normalizePayrollPolicy({ employeeScope: { employeeIds: [person], evidenceRef: 'Fictional payer decision' },
+      fixedSalaryBasis: 'monthly_workdays', rounding: 'item_half_up', cutoverMonth: month,
+      workCalendars: { [month]: { sourceVersion: 'fictional-v1', evidenceRef: 'Fictional calendar', days: payrollCalendarDays(month).map(workDate => ({ workDate, units: '1' })) } } }) };
+  s.rows.push(row); s.access.assertDomain.mockResolvedValue('formal');
+  s.model.findFirst.mockImplementation(async ({ where }: any) => s.rows.find(row => row.status === 'active' && row.subjectId === where.subjectId && row.domain === where.domain) ?? null);
+  Object.assign(s.model, { findMany: jest.fn(async ({ where }: any) => s.rows.filter(row => row.status === 'active' && row.domain === where.domain && (!where.subjectId || row.subjectId === where.subjectId))) });
+  return { ...s, row, person, submitRule: () => s.service.submit('rule', row.id, 1, hr) };
 }
 
 describe('payroll parameters require the submitting HR direct manager', () => {
+  it('requires an explicit formal payer scope at submission rather than approving a contract-derived default', async () => {
+    const s = formalRuleSetup(); delete s.row.config.employeeScope;
+    await expect(s.submitRule()).rejects.toThrow(ConflictException); expect(s.requests).toHaveLength(0);
+  });
+  it('rejects a cross-subject employee overlap at publication under a shared lock and Serializable transaction', async () => {
+    const s = formalRuleSetup(), request = await s.submitRule();
+    const other = { ...s.row, id: 'other-rule', subjectId: 'other', status: 'active' };
+    s.rows.push(other); s.requests.push({ id: 'other-release', subjectId: 'other', domain: 'formal', kind: 'rule', status: 'approved', ruleId: other.id,
+      previousParameterId: null, parameterVersion: 1, snapshotHash: payrollHash(payrollParameterDefinition('rule', other)) });
+    s.tx.$queryRaw.mockClear();
+    await expect(s.decide(request.id)).rejects.toThrow(ConflictException);
+    expect(s.row.status).toBe('pending'); expect(s.events.some(row => row.action === 'parameter_published')).toBe(false);
+    expect(s.tx.$queryRaw.mock.calls.map(call => call[1])).toEqual(['payroll:formal:employee-scope-publication', 'payroll:formal:subject']);
+    expect((s.prisma.$transaction.mock.calls.at(-1) as any[])[1].isolationLevel).toBe('Serializable');
+  });
+  it('publishes an explicit payer scope and keeps it frozen in the manager-reviewed snapshot', async () => {
+    const s = formalRuleSetup(), request = await s.submitRule(), frozen = JSON.stringify(request.snapshot);
+    expect((await s.decide(request.id)).status).toBe('approved'); expect(s.row.status).toBe('active');
+    expect(JSON.stringify(request.snapshot)).toBe(frozen);
+    expect((request.snapshot as any).config.employeeScope.employeeIds).toEqual([s.person]);
+  });
   it('freezes a reviewed successor and leaves the original definition unchanged', async () => {
     const s = fixture(), original = payrollParameterDefinition('standard', s.rows[0]);
     const request = await s.submit();

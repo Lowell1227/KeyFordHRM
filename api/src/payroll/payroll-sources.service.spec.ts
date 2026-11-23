@@ -1,9 +1,11 @@
 import { Prisma } from '@prisma/client';
 import { PayrollSourcesService } from './payroll-sources.service';
 import { payrollDays } from './payroll-data.service';
+import { payrollHash } from './payroll-transaction';
+import { payrollParameterDefinition } from './payroll-parameter-definition';
 
 describe('payroll source capture', () => {
-  const month = '2026-11', subjectId = 'subject', employeeId = 'employee';
+  const month = '2026-11', subjectId = 'subject', employeeId = '00000000-0000-4000-8000-000000000001';
   function fixture() {
     const days = payrollDays(month).map((workDate, index) => ({ employeeId, workDate, units: index < 20 ? '1' : '0', required: index < 20, issues: [], records: index === 0 ? [
       { type: 'unpaid_leave', state: 'effective', hours: '2', effectiveHours: '2', resolution: 'usable', unit: 'hour' },
@@ -23,7 +25,7 @@ describe('payroll source capture', () => {
         user: { id: employeeId, name: '虚构核算人员', employeeNo: 'PAY_FIXTURE' } }],
       openings: ['fixed', 'absence', 'overtime', 'performance', 'adjustment'].map(itemCode => ({ id: `opening-${itemCode}`, employeeId, itemCode, amount: new Prisma.Decimal(0), confirmedAt: new Date('2026-01-01'), confirmedById: 'finance', reference: 'Fictional opening verification' })),
       settlements: [] as any[], adjustments: [] as any[],
-      otherAttendance: [] as any[],
+      otherAttendance: [] as any[], releases: [] as any[],
     };
     const tx = {
       payrollAttendanceSnapshot: { findFirst: jest.fn(async () => data.attendance), findMany: jest.fn(async () => data.otherAttendance) },
@@ -33,7 +35,7 @@ describe('payroll source capture', () => {
       payrollOpeningBalance: { findMany: jest.fn(async () => data.openings) },
       payrollSettlement: { findMany: jest.fn(async () => data.settlements) },
       payrollAdjustment: { findMany: jest.fn(async () => data.adjustments) },
-      payrollParameterRelease: { findMany: jest.fn(async () => []) },
+      payrollParameterRelease: { findMany: jest.fn(async () => data.releases) },
     };
     return { data, tx, capture: (domain: 'validation' | 'formal' = 'validation') => new PayrollSourcesService().capture(tx as any, subjectId, month, domain) };
   }
@@ -51,8 +53,44 @@ describe('payroll source capture', () => {
     value.data.policies[0].config.performance = { [month]: { sourceKind: 'manual', manualAmounts: { [employeeId]: '1234.56' }, evidenceRef: 'Fictional HR confirmation', cycleIds: [], coefficients: {} } } as any;
     return value;
   }
+  function formalFixture<T extends ReturnType<typeof fixture>>(value: T): T {
+    const policy = value.data.policies[0];
+    Object.assign(policy, { subjectId, domain: 'formal', status: 'active', version: 1 });
+    Object.assign(policy.config, { employeeScope: { employeeIds: [employeeId], evidenceRef: 'Fictional actual payer assignment' } });
+    value.data.releases.push({ id: 'rule-release', ruleId: policy.id, standardId: null, previousParameterId: null, parameterVersion: 1,
+      snapshotHash: payrollHash(payrollParameterDefinition('rule', policy as any)) });
+    return value;
+  }
+  it('selects a reviewed actual payer scope across contract subjects without changing employment history', async () => {
+    const value = formalFixture(workdayFixture()); value.data.employments[0].contractSubjectId = 'different-contract';
+    const before = JSON.stringify(value.data.employments), result = await value.capture('formal');
+    expect(result.issues).toEqual([]); expect(result.gross).toBe('17500.00');
+    expect((result.sources as any).employments[0]).toMatchObject({ contractSubjectId: 'different-contract', payrollAssignment: { subjectId } });
+    expect(JSON.stringify(value.data.employments)).toBe(before);
+  });
+  it('leaves formal payroll unconfigured without a reviewed payer scope, despite existing contracts', async () => {
+    const value = workdayFixture(), result = await value.capture('formal');
+    expect(result.gross).toBeNull(); expect(result.issues.join()).toContain('正式发薪人员范围待配置');
+    expect(result.lines).toEqual([]);
+  });
+  it('freezes scope in the source hash and invalidates an in-review source after a reviewed assignment changes', async () => {
+    const value = formalFixture(workdayFixture()), before = await value.capture('formal'), frozen = JSON.stringify(before.sources);
+    (value.data.policies[0].config as any).employeeScope.employeeIds = ['00000000-0000-4000-8000-000000000002'];
+    value.data.releases[0].snapshotHash = payrollHash(payrollParameterDefinition('rule', value.data.policies[0] as any));
+    const after = await value.capture('formal');
+    expect(after.sourceHash).not.toBe(before.sourceHash); expect(after.gross).toBeNull(); expect(JSON.stringify(before.sources)).toBe(frozen);
+  });
+  it('intersects payer effective dates with HRM employment dates without prorating manual performance', async () => {
+    const value = formalFixture(manualFixture()); value.data.policies[0].effectiveFrom = new Date('2026-11-11');
+    value.data.releases[0].snapshotHash = payrollHash(payrollParameterDefinition('rule', value.data.policies[0] as any));
+    const result = await value.capture('formal');
+    expect(result.issues).toEqual([]);
+    expect(result.lines.find(row => row.itemCode === 'fixed')?.amount).toBe('8700.00');
+    expect(result.lines.find(row => row.itemCode === 'performance')?.amount).toBe('1234.56');
+  });
   it.each(['validation', 'formal'] as const)('manual wages are counted once, without reading performance in %s', async domain => {
-    const { capture, tx } = manualFixture();
+    const value = manualFixture(); if (domain === 'formal') formalFixture(value);
+    const { capture, tx } = value;
     const task = jest.fn(() => { throw new Error('Manual wages must not read performance'); });
     Object.assign(tx, { assessmentTask: { findUnique: task } });
     const result = await capture(domain);
@@ -129,7 +167,7 @@ describe('payroll source capture', () => {
   });
   it('keeps old validation examples compatible but blocks formal calculation without the confirmed basis', async () => {
     expect((await fixture().capture()).gross).not.toBeNull();
-    const result = await fixture().capture('formal');
+    const result = await formalFixture(fixture()).capture('formal');
     expect(result.gross).toBeNull(); expect(result.issues.join()).toContain('固定工资');
   });
   it('a calendar source revision invalidates the source fingerprint even if the amounts stay the same', async () => {
