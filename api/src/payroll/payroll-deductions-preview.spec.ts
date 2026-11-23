@@ -12,6 +12,8 @@ import { PayrollController } from './payroll.controller';
 import { PayrollParameterReleasesService } from './payroll-parameter-releases.service';
 import { PAYROLL_ITEM_CODES, PayrollCapture } from './payroll-contracts';
 import { payrollHash } from './payroll-transaction';
+import { readPayrollPerformance } from './payroll-performance-source';
+import { payrollParameterDefinition } from './payroll-parameter-definition';
 
 jest.mock('../../prisma/preview-guard.cjs', () => ({ assertPreviewEnvironment: jest.fn() }));
 const environmentGuard = require('../../prisma/preview-guard.cjs').assertPreviewEnvironment as jest.Mock;
@@ -34,7 +36,8 @@ function setup() {
     entitlement: new Prisma.Decimal(itemCode === 'fixed' ? index === 0 ? '12000' : '7000' : '0'),
     paidBefore: new Prisma.Decimal(itemCode === 'fixed' ? '2000' : '0'),
     amount: new Prisma.Decimal(itemCode === 'fixed' ? index === 0 ? '10000' : '5000' : '0'),
-    status: 'ready', evidence: { applicability: 'applicable' }, settlements: [], reservation: null,
+    status: itemCode === 'performance' ? 'not_applicable' : 'ready', evidence: { applicability: itemCode === 'performance' ? 'not_applicable' : 'applicable',
+      ...(itemCode === 'performance' ? { calculated: null, adjustment: '0.00', adjustmentIds: [] } : {}) }, settlements: [], reservation: null,
   })));
   const frozen = { months: [{ month: '2035-11', sources: { subjectId: 'subject-a', month: '2035-11', domain: 'validation',
     employments: employees.map(row => ({ userId: row.id, contractSubjectId: 'subject-a' })), attendance: { payload: {
@@ -96,6 +99,27 @@ describe('PayrollBatchesService deductions preview boundary', () => {
   let s: ReturnType<typeof setup>;
   beforeEach(() => { environmentGuard.mockReset(); s = setup(); });
   afterEach(() => s.noWrites());
+  it('blocks approved deduction previews when the frozen unpaid performance result changes', async () => {
+    s.batch.status = s.version.status = 'approved'; s.version.approvedAt = new Date();
+    const task: any = { id: 'task', employeeId: 'employee-a', cycleId: 'cycle', status: 'published', isExempt: false, participantDisposition: 'active',
+      publishedAt: new Date('2035-11-30'), cycle: { type: 'monthly', startDate: new Date('2035-11-01'), endDate: new Date('2035-11-30') },
+      gradeResult: { id: 'grade', calibratedGrade: 'A', rawGrade: 'B', isPublished: true, publishedAt: new Date('2035-11-30'), hrCalibratedAt: null, approvedAt: null }, appeals: [] };
+    s.tx.assessmentTask = { findUnique: jest.fn(async () => task) };
+    s.tx.payrollSettlement.findMany = jest.fn(async () => []); s.tx.payrollEvent.findMany = jest.fn(async () => []);
+    const result = await readPayrollPerformance(s.tx, { employeeId: 'employee-a', cycleId: 'cycle', registeredCycleIds: ['cycle'], requiredMonth: '2035-11' });
+    s.version.sources.months[0].sources.performance = [{ employeeId: 'employee-a', cycleId: 'cycle', result }];
+    const line = s.version.lines.find(row => row.employeeId === 'employee-a' && row.itemCode === 'performance');
+    line.status = 'ready'; Object.assign(line.evidence, { applicability: 'applicable', calculated: { code: 'performance', amount: '0.00' } });
+    const policy: any = { id: 'policy', subjectId: 'subject-a', domain: 'validation', status: 'active', version: 1, effectiveFrom: new Date('2035-11-01'), effectiveTo: null,
+      config: { fixedSalaryBasis: 'monthly_workdays', performance: { '2035-11': { sourceKind: 'fictional', cycleIds: ['cycle'], coefficients: { A: '1' }, coefficientVersion: 'v1', evidenceRef: 'fictional' } } } };
+    const release = { ruleId: policy.id, previousParameterId: null, parameterVersion: 1, snapshotHash: payrollHash(payrollParameterDefinition('rule', policy)) };
+    Object.assign(s.version.sources.months[0].sources, { policies: JSON.parse(JSON.stringify([policy])), parameterReleases: [release] });
+    s.version.sources.months[0].sources.attendance.payload.days[0].workDate = '2035-11-10';
+    s.tx.payrollPolicy.findMany = jest.fn(async () => [policy]); s.tx.payrollParameterRelease = { findMany: jest.fn(async () => [release]) };
+    task.gradeResult.isPublished = false;
+    await expect(s.preview()).rejects.toThrow(ConflictException);
+    expect(s.sources.capture).not.toHaveBeenCalled();
+  });
 
   it('saved mode leaves every missing employee pending instead of substituting the demonstration settings', async () => {
     s.tx.payrollDeductionProfile = {findFirst: jest.fn(async () => null)};

@@ -187,13 +187,38 @@ export class PayrollDataService {
   async performanceCycles(subjectId: string, actor: AuthUser) {
     await this.access.assert(this.prisma, actor, subjectId, 'payroll_edit');
     const domain = await this.domain(this.prisma);
-    if (domain !== 'validation') return [];
     const fixture = await this.prisma.systemConfig.findUnique({ where: { key: 'payroll_preview_fixture_v1' } });
     const monthly = await this.prisma.systemConfig.findUnique({ where: { key: 'payroll_monthly_rules_preview_v1' } });
-    const base = fixture?.value as { cycleIds?: string[] } | null;
-    const extra = monthly?.value as { fictional?: boolean; cycleIds?: string[] } | null;
-    const ids = [...new Set([...(base?.cycleIds ?? []), ...(extra?.fictional === true ? extra.cycleIds ?? [] : [])])];
-    return this.prisma.assessmentCycle.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, type: true, startDate: true, endDate: true }, orderBy: { id: 'asc' } });
+    const markers = [fixture?.value, monthly?.value] as Array<{ fictional?: boolean; state?: string; subjectIds?: unknown; cycleIds?: unknown } | null | undefined>;
+    const idsOf = (marker: typeof markers[number]): string[] => Array.isArray(marker?.cycleIds)
+      ? marker.cycleIds.filter((id): id is string => typeof id === 'string' && !!id.trim()) : [];
+    const select = { id: true, name: true, type: true, startDate: true, endDate: true } as const;
+    if (domain === 'validation') {
+      const ids = [...new Set(markers.flatMap((marker, index) => marker?.fictional === true
+        && Array.isArray(marker.subjectIds) && marker.subjectIds.includes(subjectId)
+        && (index === 0 || marker.state === 'ready') ? idsOf(marker) : []))];
+      if (!ids.length) return [];
+      return this.prisma.assessmentCycle.findMany({ where: { id: { in: ids } }, select, orderBy: { id: 'asc' } });
+    }
+    const employments = await this.prisma.employmentRecord.findMany({ where: { AND: [approvedEmploymentSourceWhere,
+      { contractSubjectId: subjectId, employeeStatus: { in: ['active', 'probation', 'resigned'] } }] }, select: { userId: true } });
+    const employeeIds = [...new Set(employments.map(row => row.userId))];
+    if (!employeeIds.length) return [];
+    const taskScope: Prisma.AssessmentTaskWhereInput = { isExempt: false, participantDisposition: 'active', status: { not: 'exempted' } };
+    const cycles = await this.prisma.assessmentCycle.findMany({ where: { type: 'monthly', id: { notIn: markers.flatMap(idsOf) },
+      tasks: { some: { ...taskScope, employeeId: { in: employeeIds } } } }, select, orderBy: { id: 'asc' } });
+    const months = new Map<string, ReturnType<typeof employmentDays>>(), visible: typeof cycles = [];
+    for (const cycle of cycles) {
+      const { startDate, endDate } = cycle;
+      if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime()) || startDate.getUTCFullYear() < 2000 || endDate < startDate) continue;
+      const start = startDate.toISOString().slice(0, 10), end = endDate.toISOString().slice(0, 10), month = start.slice(0, 7);
+      if (month !== end.slice(0, 7)) continue;
+      if (!months.has(month)) months.set(month, employmentDays(await payrollEmployments(this.prisma, subjectId, month), subjectId, month));
+      const ids = [...new Set(months.get(month)!.filter(row => row.workDate >= start && row.workDate <= end).map(row => row.employeeId))];
+      // Candidate metadata is not proof of a payable result; individual publication checks remain in salary capture.
+      if (ids.length && await this.prisma.assessmentTask.count({ where: { cycleId: cycle.id, employeeId: { in: ids }, ...taskScope } })) visible.push(cycle);
+    }
+    return visible;
   }
   async attendance(subjectId: string, month: string, actor: AuthUser) {
     const scopes = await this.access.getAccess(actor), scope = scopes.subjects.find(row => row.id === subjectId);
@@ -317,8 +342,13 @@ export class PayrollDataService {
       const from = payrollDate(input.effectiveFrom), to = input.effectiveTo ? payrollDate(input.effectiveTo) : null;
       if (to && to < from) throw new BadRequestException('生效结束日期不能早于开始日期');
       if (!input.config || typeof input.config !== 'object' || Array.isArray(input.config) || JSON.stringify(input.config).length > 50000) throw new BadRequestException('规则参数不正确');
+      const config = normalizePayrollPolicy(input.config);
+      for (const [month, mapping] of Object.entries(config.performance)) if (mapping.sourceKind === 'manual') {
+        const eligible = new Set(employmentDays(await payrollEmployments(tx, input.subjectId, month), input.subjectId, month).map(row => row.employeeId));
+        if (Object.keys(mapping.manualAmounts ?? {}).some(id => !eligible.has(id))) throw new BadRequestException('人工绩效人员不在本主体当月有效任职范围');
+      }
       const latest = await tx.payrollPolicy.findFirst({ where: { subjectId: input.subjectId, domain }, orderBy: { version: 'desc' } });
-      const result = await tx.payrollPolicy.create({ data: { subjectId: input.subjectId, domain, version: (latest?.version ?? 0) + 1, effectiveFrom: from, effectiveTo: to, config: payrollJson(normalizePayrollPolicy(input.config)), createdById: actor.id } });
+      const result = await tx.payrollPolicy.create({ data: { subjectId: input.subjectId, domain, version: (latest?.version ?? 0) + 1, effectiveFrom: from, effectiveTo: to, config: payrollJson(config), createdById: actor.id } });
       await this.event(tx, input.subjectId, actor.id, 'rule_draft', { ruleId: result.id }); return result;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }

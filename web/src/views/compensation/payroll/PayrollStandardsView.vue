@@ -10,6 +10,8 @@ import { payrollApi, payrollError } from '@/api/payroll.api';
 import type { PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollPerformanceMapping } from '@/types/payroll.types';
 import PayrollScope from './PayrollScope.vue';
 import PayrollWorkCalendarEditor from './PayrollWorkCalendarEditor.vue';
+import PayrollManualPerformanceEditor from './PayrollManualPerformanceEditor.vue';
+import { newPerformanceMapping, manualPerformanceErrors, performanceMappingsPayload } from './payroll-manual-performance-form';
 import { usePayrollScope } from './usePayrollScope';
 import { isDecimal } from './payroll-state';
 
@@ -27,6 +29,7 @@ const rule = ref<PayrollRuleInput>(emptyRule());
 const history = ref<PayrollStandard | PayrollRule>();
 const rows = computed<Array<PayrollStandard | PayrollRule>>(() => tab.value === 'standards' ? standards.value : rules.value);
 const mappings = ref<Array<PayrollPerformanceMapping & { month: string }>>([]);
+const manualPeople = reactive<Record<string, { employees: PayrollEmployee[]; loading: boolean; error: string }>>({});
 let baseline = '', sequence = 0;
 const reviewerOptions = computed(() => operators.value.filter(person => person.capabilities.includes('payroll_review')));
 const approverOptions = computed(() => operators.value.filter(person => person.capabilities.includes('payroll_approve')));
@@ -77,9 +80,39 @@ function edit(type: 'standard' | 'rule', row?: unknown) {
   rule.value.config.monthlyUnits ??= {};
   rule.value.config.workCalendars ??= {};
   mappings.value = Object.entries(rule.value.config.performance).map(([key, value]) => ({ ...clone(value), month: key }));
+  Object.keys(manualPeople).forEach(key => delete manualPeople[key]);
   baseline = serialized(); open.value = true;
 }
-function addMapping() { mappings.value.push({ month: '', cycleIds: [], coefficients: {}, sourceKind: null }); }
+function addMapping() { mappings.value.push(newPerformanceMapping(mappings.value.some(mapping => mapping.month === month.value) ? '' : month.value)); }
+function peopleKey(attributionMonth: string) { return `${subjectId.value}:${attributionMonth}`; }
+async function loadManualPeople(attributionMonth: string, retry = false) {
+  if (!subjectId.value || !/^\d{4}-(0[1-9]|1[0-2])$/.test(attributionMonth)) return;
+  const key = peopleKey(attributionMonth);
+  if (!retry && manualPeople[key]) return;
+  const state = reactive({ employees: [] as PayrollEmployee[], loading: true, error: '' });
+  manualPeople[key] = state;
+  try { state.employees = await payrollApi.employees(subjectId.value, attributionMonth); }
+  catch (cause) { state.error = await payrollError(cause); }
+  finally { state.loading = false; }
+}
+watch(() => [subjectId.value, ...mappings.value.filter(mapping => mapping.sourceKind === 'manual').map(mapping => mapping.month)], () => {
+  for (const mapping of mappings.value) if (mapping.sourceKind === 'manual') void loadManualPeople(mapping.month);
+});
+function mappingErrors(index: number) {
+  const prefix = `performance.${index}.`;
+  return Object.fromEntries(Object.entries(fields).filter(([key]) => key.startsWith(prefix)).map(([key, value]) => [key.slice(prefix.length), value]));
+}
+function clearMappingErrors(index: number) {
+  Object.keys(fields).filter(key => key.startsWith(`performance.${index}.`)).forEach(key => delete fields[key]);
+}
+function updateMapping(index: number, value: PayrollPerformanceMapping) {
+  mappings.value[index] = { ...value, month: mappings.value[index]!.month };
+  clearMappingErrors(index);
+}
+function removeMapping(index: number) {
+  mappings.value.splice(index, 1);
+  Object.keys(fields).filter(key => key.startsWith('performance.')).forEach(key => delete fields[key]);
+}
 async function save() {
   Object.keys(fields).forEach(key => delete fields[key]); formError.value = '';
   const value = kind.value === 'standard' ? standard.value : rule.value;
@@ -104,14 +137,22 @@ async function save() {
     const values = [config.normalHourly, ...Object.values(config.paidHourly), ...Object.values(config.overtime), ...Object.values(config.monthlyUnits)];
     if (values.some(value => value && !isDecimal(value))) formError.value = '计价参数应为非负十进制数，未确认项请留空';
     const seen = new Set<string>();
-    for (const mapping of mappings.value) {
-      if (!mapping.month || seen.has(mapping.month)) { formError.value = '绩效归属月不能为空或重复'; break; }
+    for (const [index, mapping] of mappings.value.entries()) {
+      const prefix = `performance.${index}.`;
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mapping.month) || seen.has(mapping.month)) fields[`${prefix}month`] = '请选择不重复的绩效归属月';
       seen.add(mapping.month);
-      if (Object.values(mapping.coefficients).some(value => value && !isDecimal(value))) formError.value = '绩效系数应为非负十进制数';
+      if (mapping.sourceKind === 'manual') {
+        const people = manualPeople[peopleKey(mapping.month)];
+        if (!people || people.loading || people.error) fields[`${prefix}people`] = '请先完成本月人员核对，读取失败时可重新读取';
+        for (const [key, message] of Object.entries(manualPerformanceErrors(mapping, people?.employees.map(person => person.id) ?? []))) fields[`${prefix}${key}`] = message;
+        continue;
+      }
+      if (Object.values(mapping.coefficients).some(value => value && !isDecimal(value))) fields[`${prefix}coefficients`] = '绩效系数应为非负十进制数';
       if (config.fixedSalaryBasis === 'monthly_workdays') {
-        if (!mapping.coefficientVersion?.trim() || !mapping.evidenceRef?.trim()) fields.performance = '请填写统一系数表版本和确认依据';
+        if (!mapping.coefficientVersion?.trim()) fields[`${prefix}coefficientVersion`] = '请填写统一系数表版本';
+        if (!mapping.evidenceRef?.trim()) fields[`${prefix}evidenceRef`] = '请填写系数确认依据';
         if (mapping.cycleIds.length !== 1 || !cycles.value.some(cycle => cycle.id === mapping.cycleIds[0] && cycle.type === 'monthly'
-          && cycle.startDate?.slice(0, 7) === mapping.month && cycle.endDate?.slice(0, 7) === mapping.month)) fields.performance = '请选择该归属月唯一的月度考核周期';
+          && cycle.startDate?.slice(0, 7) === mapping.month && cycle.endDate?.slice(0, 7) === mapping.month)) fields[`${prefix}cycleIds`] = '请选择该归属月唯一的月度考核周期';
       }
     }
   }
@@ -130,7 +171,7 @@ async function save() {
       }
       config.paidHourly = Object.fromEntries(Object.entries(config.paidHourly).filter(([, value]) => value !== ''));
       for (const key of ['hourlyBase', 'weekday', 'restday', 'holiday'] as const) config.overtime[key] ||= null;
-      config.performance = Object.fromEntries(mappings.value.map(({ month: key, ...mapping }) => [key, { ...mapping, coefficients: Object.fromEntries(Object.entries(mapping.coefficients).filter(([, value]) => value !== '')) }]));
+      config.performance = performanceMappingsPayload(mappings.value);
       await payrollApi.createRule({ subjectId: subjectId.value, effectiveFrom: r.effectiveFrom, effectiveTo: r.effectiveTo || undefined, config });
     }
     open.value = false; await load();
@@ -188,8 +229,8 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
           </div>
           <template v-if="kind === 'standard'">
             <el-form-item label="员工" :error="fields.employeeId"><el-select v-model="standard.employeeId" filterable><el-option v-for="person in employees" :key="person.id" :value="person.id" :label="`${person.name} ${person.employeeNo}`" /></el-select></el-form-item>
-            <div class="form-grid"><el-form-item label="固定月标准" :error="fields.fixedMonthly"><el-input v-model="standard.fixedMonthly" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="个人绩效基数" :error="fields.performanceBase"><el-input v-model="standard.performanceBase" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
-            <el-form-item label="绩效工资结构"><el-select v-model="standard.performanceMode" clearable><el-option label="含薪" value="included" /><el-option label="另计" value="additional" /><el-option label="不适用" value="none" /></el-select></el-form-item>
+            <div class="form-grid"><el-form-item label="固定月标准" :error="fields.fixedMonthly"><el-input v-model="standard.fixedMonthly" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="个人绩效基数（自动关联时使用）" :error="fields.performanceBase"><el-input v-model="standard.performanceBase" inputmode="decimal" placeholder="人工填写绩效金额时可留空" /></el-form-item></div>
+            <el-form-item label="绩效工资结构"><el-select v-model="standard.performanceMode" clearable><el-option v-if="standard.performanceMode === 'included'" label="含薪（历史配置）" value="included" /><el-option label="另计" value="additional" /><el-option label="不适用" value="none" /></el-select></el-form-item>
             <el-form-item label="确认依据" :error="fields.evidence"><el-input v-model="standard.evidence" type="textarea" :rows="3" maxlength="500" /></el-form-item>
           </template>
           <template v-else>
@@ -202,10 +243,17 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
             <h3>复核与审批</h3><div class="form-grid"><el-form-item label="复核人（按选择顺序）"><el-select v-model="rule.config.reviewers" multiple filterable><el-option v-for="person in reviewerOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item><el-form-item label="审批人（按选择顺序）"><el-select v-model="rule.config.approvers" multiple filterable><el-option v-for="person in approverOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item></div>
             <h3>个人绩效归属</h3>
             <section v-for="(mapping, index) in mappings" :key="index" class="mapping-row">
-              <div class="form-grid"><el-form-item label="归属月"><el-date-picker v-model="mapping.month" type="month" value-format="YYYY-MM" /></el-form-item><el-form-item label="来源类型"><el-select v-model="mapping.sourceKind" clearable><el-option label="正式公示结果" value="official" /><el-option label="虚构验收来源" value="fictional" /></el-select></el-form-item></div>
-              <el-form-item label="绩效周期" :error="fields.performance"><el-select v-model="mapping.cycleIds" multiple filterable><el-option v-for="cycle in cycles" :key="cycle.id" :value="cycle.id" :label="cycle.name" :disabled="rule.config.fixedSalaryBasis === 'monthly_workdays' && (cycle.type !== 'monthly' || cycle.startDate?.slice(0, 7) !== mapping.month || cycle.endDate?.slice(0, 7) !== mapping.month)" /></el-select></el-form-item>
-              <div class="form-grid"><el-form-item label="统一系数表版本" :error="fields.performance"><el-input v-model="mapping.coefficientVersion" maxlength="200" /></el-form-item><el-form-item label="系数确认依据"><el-input v-model="mapping.evidenceRef" maxlength="200" /></el-form-item></div>
-              <div class="coefficient-grid"><el-form-item v-for="grade in (['A','B','C','D'] as const)" :key="grade" :label="`${grade} 等系数`"><el-input v-model="mapping.coefficients[grade]" inputmode="decimal" placeholder="未确认" /></el-form-item><el-tooltip content="删除归属月"><el-button :icon="Delete" aria-label="删除归属月" @click="mappings.splice(index, 1)" /></el-tooltip></div>
+              <div class="form-grid"><el-form-item label="归属月" :error="fields[`performance.${index}.month`]"><el-date-picker v-model="mapping.month" type="month" value-format="YYYY-MM" @update:model-value="clearMappingErrors(index)" /></el-form-item><el-form-item label="来源类型"><el-select v-model="mapping.sourceKind" clearable @update:model-value="clearMappingErrors(index)"><el-option label="HR填写金额" value="manual" /><el-option label="正式公示结果" value="official" /><el-option label="虚构验收来源" value="fictional" /></el-select></el-form-item></div>
+              <PayrollManualPerformanceEditor v-if="mapping.sourceKind === 'manual'" :model-value="mapping" :month="mapping.month"
+                :employees="manualPeople[peopleKey(mapping.month)]?.employees ?? []" :loading="manualPeople[peopleKey(mapping.month)]?.loading"
+                :load-error="manualPeople[peopleKey(mapping.month)]?.error" :errors="mappingErrors(index)"
+                @retry="loadManualPeople(mapping.month, true)" @update:model-value="updateMapping(index, $event)" />
+              <template v-else>
+                <el-form-item label="绩效周期" :error="fields[`performance.${index}.cycleIds`]"><el-select v-model="mapping.cycleIds" multiple filterable><el-option v-for="cycle in cycles" :key="cycle.id" :value="cycle.id" :label="cycle.name" :disabled="rule.config.fixedSalaryBasis === 'monthly_workdays' && (cycle.type !== 'monthly' || cycle.startDate?.slice(0, 7) !== mapping.month || cycle.endDate?.slice(0, 7) !== mapping.month)" /></el-select></el-form-item>
+                <div class="form-grid"><el-form-item label="统一系数表版本" :error="fields[`performance.${index}.coefficientVersion`]"><el-input v-model="mapping.coefficientVersion" maxlength="200" /></el-form-item><el-form-item label="系数确认依据" :error="fields[`performance.${index}.evidenceRef`]"><el-input v-model="mapping.evidenceRef" maxlength="200" /></el-form-item></div>
+                <div class="coefficient-grid"><el-form-item v-for="grade in (['A','B','C','D'] as const)" :key="grade" :label="`${grade} 等系数`" :error="fields[`performance.${index}.coefficients`]"><el-input v-model="mapping.coefficients[grade]" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
+              </template>
+              <div class="mapping-actions"><el-tooltip content="删除归属月"><el-button :icon="Delete" aria-label="删除归属月" @click="removeMapping(index)" /></el-tooltip></div>
             </section>
             <el-button :icon="Plus" @click="addMapping">添加绩效归属月</el-button>
           </template>
@@ -219,7 +267,8 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
 </template>
 <style scoped>
 .form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 16px; }
-.coefficient-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)) 32px; gap: 12px; align-items: center; }
+.coefficient-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; align-items: center; }
+.mapping-actions { display: flex; justify-content: flex-end; margin-bottom: 14px; }
 .form-grid :deep(.el-date-editor), .form-grid :deep(.el-select) { width: 100%; }
 h3 { font-size: 15px; margin: 22px 0 14px; }
 .mapping-row { border-top: 1px solid var(--el-border-color-lighter); padding-top: 14px; }

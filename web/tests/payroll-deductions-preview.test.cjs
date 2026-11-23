@@ -6,14 +6,15 @@ const path = require('node:path');
 const os = require('node:os');
 const Module = require('node:module');
 const ts = require('typescript');
+const { parse } = require('@vue/compiler-sfc');
 const { chromium } = require('playwright');
 const { expect } = require('@playwright/test');
 const web = path.resolve(__dirname, '..');
 let server, browser, origin;
 
 function batch(more = {}) {
-  return { id: 'batch', subjectId: 'subject', month: '2035-11', payMonth: '2035-12', purpose: 'validation', version: 7, status: 'calculated', versions: [{
-    id: 'calculation', version: 2, status: 'calculated', sourceHash: 'fictional-source', sources: {}, issues: [], approvalPath: ['actor'], approvalStep: 0, reviewerCount: 1, gross: '18000.00', decisions: [], exports: [],
+  return { id: 'batch', subjectId: 'subject', month: '2035-11', payMonth: '2035-12', purpose: 'validation', version: 7, status: 'calculated', events: [], versions: [{
+    id: 'calculation', version: 2, status: 'calculated', submittedById: 'fictional-hr', sourceHash: 'fictional-source', sources: {}, issues: [], approvalPath: ['actor'], approvalStep: 0, reviewerCount: 1, gross: '18000.00', payDate: null, netSnapshot: null, netPayments: [], decisions: [], exports: [],
     lines: [{ id: 'line', employeeId: 'person', itemCode: 'fixed', attributionMonth: '2035-11', status: 'ready', amount: '10000.00', entitlement: '10000.00', paidBefore: '0.00', evidence: {} }],
   }], ...more };
 }
@@ -77,6 +78,48 @@ async function calculate(region) {
   await region.getByRole('button', { name: '试算', exact: true }).click();
 }
 
+function assertServerMoneyBoundary(file, source) {
+  assert.equal(/parseFloat|toFixed\s*\(|localStorage|sessionStorage/.test(source), false, `${file}: client money conversion or browser persistence is forbidden`);
+  const descriptor = file.endsWith('.vue') ? parse(source).descriptor : undefined;
+  const script = descriptor ? [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join('\n') : source;
+  const ast = ts.createSourceFile(file, script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  function visit(node) {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const mathRound = (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Math' && callee.name.text === 'round')
+        || (ts.isElementAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Math' && ts.isStringLiteral(callee.argumentExpression) && callee.argumentExpression.text === 'round');
+      if (mathRound) {
+        const input = node.arguments[0];
+        const conversion = input && ts.isBinaryExpression(input) ? input.left : undefined;
+        const units = conversion && ts.isCallExpression(conversion) ? conversion.arguments[0] : undefined;
+        // Only the existing calendar-day unit sum may round; currency paths get no exemption.
+        assert.ok(['PayrollWorkCalendarEditor.vue', 'PayrollStandardsView.vue', 'PayrollParameterReviewsView.vue'].includes(file)
+          && node.arguments.length === 1 && ts.isBinaryExpression(input) && input.operatorToken.kind === ts.SyntaxKind.AsteriskToken
+          && ts.isNumericLiteral(input.right) && input.right.text === '10000'
+          && ts.isCallExpression(conversion) && ts.isIdentifier(conversion.expression) && conversion.expression.text === 'Number' && conversion.arguments.length === 1
+          && ts.isPropertyAccessExpression(units) && ts.isIdentifier(units.expression) && units.expression.text === 'day' && units.name.text === 'units',
+        `${file}: rounding is permitted only for calendar day.units`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+}
+
+test('client money guard permits calendar-unit sums only, rejects monetary rounding, conversion and browser persistence', () => {
+  const source = script => `<script setup lang="ts">${script}</script>`;
+  assertServerMoneyBoundary('PayrollWorkCalendarEditor.vue', source('Math.round(Number(day.units) * 10000)'));
+  for (const [file, script] of [
+    ['PayrollDeductionsPreview.vue', 'Math.round(Number(day.units) * 10000)'],
+    ['PayrollStandardsView.vue', 'Math.round(Number(day.amount) * 10000)'],
+    ['PayrollWorkCalendarEditor.vue', 'Math["round"](Number(row.net) * 100)'],
+    ['PayrollDeductionsPreview.vue', 'parseFloat(row.net)'],
+    ['PayrollDeductionsPreview.vue', 'Number(row.net).toFixed(2)'],
+    ['PayrollDeductionsPreview.vue', 'localStorage.setItem("net", row.net)'],
+    ['PayrollDeductionsPreview.vue', 'sessionStorage.setItem("net", row.net)'],
+  ]) assert.throws(() => assertServerMoneyBoundary(file, source(script)), assert.AssertionError, script);
+});
+
 test('deductions API carries only the optimistic token, explicit date and mode', async () => {
   const filename = path.join(web, 'src/api/payroll.api.ts'), calls = [], m = new Module(filename, module);
   m.require = id => id === './http' ? { default: { post: (...args) => { calls.push(args); return Promise.resolve({}); } } } : require(id);
@@ -87,9 +130,11 @@ test('deductions API carries only the optimistic token, explicit date and mode',
 });
 
 test('manual preview validates empty/invalid/out-of-month dates and never calculates money locally', async t => {
-  const { page, region, calls, errors } = await pageFor(t);
+  // Intentionally independent server totals catch any attempt to sum rows or recompute net in the browser.
+  const savedTotals = { gross: '18000.00', socialInsurance: '111.11', housingFund: '222.22', incomeTax: '333.33', net: '7777.77' };
+  const { page, region, calls, errors } = await pageFor(t, { preview: body => body.mode === 'saved' ? { data: { totals: savedTotals } } : undefined });
   await expect(region).toBeVisible();
-  await expect(region.getByText('虚构试算 · 未纳入审批', { exact: true })).toBeVisible();
+  await expect(region.getByText('虚构试算 · 实发未审批', { exact: true })).toBeVisible();
   const date = region.getByLabel('试算发薪日', { exact: true });
   await expect(date).toHaveValue('');
   assert.equal(attempts(calls).length, 0);
@@ -100,10 +145,21 @@ test('manual preview validates empty/invalid/out-of-month dates and never calcul
   assert.equal(attempts(calls).length, 0);
   await calculate(region);
   await expect(region.getByTestId('payroll-deductions-preview-totals')).toContainText('15480.00');
+  for (const [key, value] of Object.entries({ gross: '18000.00', socialInsurance: '1440.00', housingFund: '900.00', incomeTax: '180.00', net: '15480.00' })) {
+    await expect(region.getByTestId(`payroll-deductions-preview-total-${key}`)).toHaveText(value);
+  }
   assert.deepEqual(attempts(calls)[0].body, { expectedVersion: 7, payDate: '2035-12-15', mode: 'complete' });
+  await region.getByText('已审核资料', { exact: true }).click();
+  await expect(region.getByTestId('payroll-deductions-preview-totals')).toHaveCount(0);
+  await calculate(region);
+  for (const [key, value] of Object.entries(savedTotals)) await expect(region.getByTestId(`payroll-deductions-preview-total-${key}`)).toHaveText(value);
+  assert.deepEqual(attempts(calls).map(call => call.body), [
+    { expectedVersion: 7, payDate: '2035-12-15', mode: 'complete' },
+    { expectedVersion: 7, payDate: '2035-12-15', mode: 'saved' },
+  ]);
   assert.deepEqual(errors, []);
-  const sources = fs.readdirSync(path.join(web, 'src/views/compensation/payroll')).map(file => fs.readFileSync(path.join(web, 'src/views/compensation/payroll', file), 'utf8')).join('\n');
-  assert.doesNotMatch(sources, /parseFloat|toFixed\(|Math\.round|localStorage|sessionStorage/);
+  const directory = path.join(web, 'src/views/compensation/payroll');
+  for (const file of fs.readdirSync(directory)) assertServerMoneyBoundary(file, fs.readFileSync(path.join(directory, file), 'utf8'));
 });
 
 test('only an editable current nonformal calculated/pending/approved batch shows preview', async t => {

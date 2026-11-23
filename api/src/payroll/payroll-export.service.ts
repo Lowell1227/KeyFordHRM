@@ -10,6 +10,7 @@ import { PAYROLL_ITEM_CODES } from './payroll-contracts';
 import { assertPayrollFrozenAttendance } from './payroll-data.service';
 import { createHash } from 'node:crypto';
 import { assertPayrollNetFresh, assertPayrollNetLines, PayrollNetSnapshot } from './payroll-net';
+import { assertPayrollApprovedPerformance } from './payroll-approved-performance';
 
 const Decimal = Prisma.Decimal.clone({ precision: 40 });
 const NET_AMOUNTS = ['gross', 'socialInsurance', 'housingFund', 'incomeTax', 'net'] as const;
@@ -123,6 +124,7 @@ export class PayrollExportService {
       await assertPayrollNetFresh(tx, batch, net, domain, version.id);
     }
     await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+    await assertPayrollApprovedPerformance(tx, batch, version, domain);
     const subject = await tx.contractSubject.findUniqueOrThrow({ where: { id: batch.subjectId }, select: { name: true } });
     return { batch, version, subject, net };
   }

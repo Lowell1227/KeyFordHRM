@@ -42,11 +42,23 @@ export function normalizePayrollPolicy(input: unknown): PayrollPolicyConfig {
   const ot = object(raw.overtime, ['hourlyBase', 'weekday', 'restday', 'holiday']);
   const performance: PayrollPolicyConfig['performance'] = {};
   for (const [month, value] of Object.entries(object(raw.performance))) {
-    payrollMonth(month); const source = object(value, ['cycleIds', 'sourceKind', 'coefficients', 'coefficientVersion', 'evidenceRef']);
-    if (source.sourceKind != null && !['official', 'fictional'].includes(source.sourceKind as string)) throw new BadRequestException('绩效来源登记类型不正确');
+    payrollMonth(month); const source = object(value, ['cycleIds', 'sourceKind', 'coefficients', 'coefficientVersion', 'evidenceRef', 'manualAmounts']);
+    if (source.sourceKind != null && !['official', 'fictional', 'manual'].includes(source.sourceKind as string)) throw new BadRequestException('绩效来源登记类型不正确');
     const coefficients: PayrollPolicyConfig['performance'][string]['coefficients'] = {}, mapping = object(source.coefficients, ['A', 'B', 'C', 'D']);
     for (const grade of ['A', 'B', 'C', 'D'] as const) if (mapping[grade] != null) coefficients[grade] = decimal(mapping[grade])!;
-    performance[month] = { cycleIds: identities(source.cycleIds), sourceKind: (source.sourceKind ?? null) as 'official' | 'fictional' | null, coefficients,
+    const cycleIds = identities(source.cycleIds);
+    const manualAmounts: Record<string, string> = {};
+    if (source.sourceKind === 'manual') {
+      if (cycleIds.length || Object.keys(coefficients).length || source.coefficientVersion) throw new BadRequestException('人工绩效金额不能混用考核周期或系数');
+      const entries = Object.entries(object(source.manualAmounts));
+      if (entries.length > 1000) throw new BadRequestException('单月人工绩效人数超出范围');
+      for (const [employeeId, value] of entries) {
+        if (!isUUID(employeeId) || typeof value !== 'string' || !/^\d{1,12}(\.\d{1,2})?$/.test(value)) throw new BadRequestException('人工绩效须选择员工并填写非负金额，最多两位小数');
+        manualAmounts[employeeId] = payrollDecimal(value)!.toFixed(2);
+      }
+    } else if (source.manualAmounts != null) throw new BadRequestException('自动绩效来源不能包含人工金额');
+    performance[month] = { cycleIds, sourceKind: (source.sourceKind ?? null) as PayrollPolicyConfig['performance'][string]['sourceKind'], coefficients,
+      ...(source.sourceKind === 'manual' ? { manualAmounts } : {}),
       ...(source.coefficientVersion != null ? { coefficientVersion: reference(source.coefficientVersion) } : {}),
       ...(source.evidenceRef != null ? { evidenceRef: reference(source.evidenceRef) } : {}) };
   }

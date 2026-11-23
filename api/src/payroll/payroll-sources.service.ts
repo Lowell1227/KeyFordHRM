@@ -44,6 +44,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
       include: { line: { select: { employeeId: true, itemCode: true } } }, orderBy: { id: 'asc' } });
     const adjustments = await tx.payrollAdjustment.findMany({ where: { subjectId, domain, month, employeeId: { in: employees } }, orderBy: { id: 'asc' } });
     const performanceFacts: Array<{ employeeId: string; cycleId: string; result: PayrollPerformanceSource }> = [];
+    const manualPerformance: Array<{ employeeId: string; month: string; workDates: string[];
+      entries: Array<{ policyId: string; amount: string; evidenceRef: string }> }> = [];
     const payload = attendance?.payload as { days?: AttendanceDay[]; issues?: unknown[]; sync?: { complete?: boolean } } | undefined;
     if (!attendance || attendance.status !== 'sealed' || !attendance.sealedHash || payload?.sync?.complete !== true
       || !Array.isArray(payload?.days) || !Array.isArray(payload?.issues) || payload.issues.length) issues.push('考勤尚未完成核对封账');
@@ -64,6 +66,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
       const days = Array.isArray(payload?.days) ? payload.days.filter(row => row.employeeId === employeeId) : [];
       const denominators = new Set<string>();
       const calendarVersions = new Set<string>(), bases = new Set<string>(), coefficientTables = new Set<string>();
+      const modes = new Set<string>(), manualEntries = new Map<string, { policyId: string; amount: string; evidenceRef: string }>();
+      const manualDates: string[] = [];
       let employedDates = 0;
       for (const date of payrollDays(month)) {
         const selection = selectEmploymentAt(history, payrollDate(date));
@@ -108,7 +112,17 @@ export class PayrollSourcesService implements PayrollSourceReader {
         }
         denominators.add(new D(denominator).toString());
         let coefficient: string | null = null;
-        if (standard.performanceMode !== 'none') {
+        const manual = config.performance?.[month]?.sourceKind === 'manual';
+        modes.add(standard.performanceMode === 'none' ? 'none' : manual ? 'manual' : 'automatic');
+        if (manual && standard.performanceMode !== 'none') {
+          const mapping = config.performance[month], amount = mapping.manualAmounts?.[employeeId];
+          manualDates.push(date);
+          if (standard.performanceMode !== 'additional') personal.push('人工绩效须在固定月薪之外另计');
+          if (typeof amount !== 'string' || !/^\d{1,12}(\.\d{1,2})?$/.test(amount) || !mapping.evidenceRef?.trim()) personal.push('人工绩效工资金额或确认依据待补充');
+          else manualEntries.set(policy.id, { policyId: policy.id, amount: new D(amount).toFixed(2), evidenceRef: mapping.evidenceRef.trim() });
+        } else if (manual && config.performance[month].manualAmounts?.[employeeId] !== undefined) {
+          personal.push('该员工绩效结构为不适用，请核对人工金额与工资标准');
+        } else if (standard.performanceMode !== 'none') {
           const mapping = config.performance?.[month];
           if (strict) {
             if (!mapping?.coefficientVersion?.trim() || !mapping.evidenceRef?.trim()) personal.push('统一绩效系数表版本与确认依据待配置');
@@ -143,7 +157,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
         }
         if (!['included', 'additional', 'none'].includes(standard.performanceMode ?? '')) personal.push('工资结构待配置');
         segments.push({ from: date, to: date, units, monthUnits: denominator, fixedMonthly: standard.fixedMonthly?.toString() ?? null,
-          performanceBase: standard.performanceBase?.toString() ?? null, performanceMode: standard.performanceMode as PayrollSegment['performanceMode'], coefficient });
+          performanceBase: manual ? null : standard.performanceBase?.toString() ?? null,
+          performanceMode: manual ? 'none' : standard.performanceMode as PayrollSegment['performanceMode'], coefficient });
         for (const record of day.records ?? []) {
           if (record.state !== 'effective' || record.resolution !== 'usable') continue;
           const hours = quantity(record.effectiveHours);
@@ -164,6 +179,11 @@ export class PayrollSourcesService implements PayrollSourceReader {
       }
       if (calendarVersions.size > 1 || bases.size > 1) personal.push('当月固定工资折算依据或工作日日历存在冲突');
       if (coefficientTables.size > 1) personal.push('当月统一绩效系数表版本存在冲突');
+      if (performanceFacts.filter(row => row.employeeId === employeeId).length > 1) personal.push('同一归属月存在多个考核来源，请登记唯一的个人月度结果');
+      if (modes.has('manual') && modes.size > 1) personal.push('同一归属月不能混用人工绩效与自动绩效或不适用结构');
+      const entries = [...manualEntries.values()].sort((a, b) => a.policyId.localeCompare(b.policyId));
+      if (new Set(entries.map(entry => JSON.stringify([entry.amount, entry.evidenceRef]))).size > 1) personal.push('当月人工绩效金额或确认依据存在冲突');
+      if (modes.has('manual')) manualPerformance.push({ employeeId, month, workDates: manualDates, entries });
       if (bases.has('monthly_workdays') && segments.some(segment => segment.performanceMode !== 'none')
         && (employedDates !== payrollDays(month).length || new Set(segments.map(segment =>
           JSON.stringify([segment.performanceMode, segment.performanceBase]))).size > 1)) {
@@ -176,12 +196,13 @@ export class PayrollSourcesService implements PayrollSourceReader {
       if (calculated.status !== 'ready') personal.push('分段计算依据不完整或存在冲突');
       for (const code of PAYROLL_ITEM_CODES) {
         const item = calculated.items.find(row => row.code === code);
+        const manualAmount = code === 'performance' && modes.has('manual') ? entries[0]?.amount : undefined;
         const notApplicable = calculated.status === 'ready' && !item && (
-          (code === 'performance' && segments.every(segment => segment.performanceMode === 'none'))
+          (code === 'performance' && !modes.has('manual') && segments.every(segment => segment.performanceMode === 'none'))
           || (code === 'absence' && !absences.length) || (code === 'overtime' && !overtime.length) || code === 'adjustment');
         const authorized = adjustments.filter(row => row.employeeId === employeeId && row.itemCode === code);
         const adjustment = authorized.reduce((sum, row) => sum.plus(row.amount), new D(0));
-        let entitlement = item || notApplicable ? new D(item?.amount ?? '0').plus(adjustment).toDecimalPlaces(2, D.ROUND_HALF_UP) : null;
+        let entitlement = manualAmount !== undefined || item || notApplicable ? new D(manualAmount ?? item?.amount ?? '0').plus(adjustment).toDecimalPlaces(2, D.ROUND_HALF_UP) : null;
         if (entitlement && entitlement.abs().gt('99999999999999.99')) { entitlement = null; personal.push('金额超出核算范围'); }
         const opening = openings.find(row => row.employeeId === employeeId && row.itemCode === code);
         const confirmed = Boolean(opening?.confirmedAt && opening.confirmedById && opening.reference?.trim() && opening.amount !== null);
@@ -194,6 +215,7 @@ export class PayrollSourcesService implements PayrollSourceReader {
           entitlement: entitlement?.toFixed(2) ?? null, paidBefore: paid?.toFixed(2) ?? null,
           amount: complete ? entitlement!.minus(paid!).toFixed(2) : null,
           evidence: payrollJson({ employeeName: history[0]?.user.name, employeeNo: employmentNumbers.size === 1 ? [...employmentNumbers][0] : null, calculated: item ?? null,
+            ...(manualAmount !== undefined ? { manualPerformance: { amount: manualAmount, evidenceRef: entries[0].evidenceRef, policyIds: entries.map(entry => entry.policyId) } } : {}),
             applicability: notApplicable ? 'not_applicable' : 'applicable', adjustment: adjustment.toFixed(2), adjustmentIds: authorized.map(row => row.id), openingBalanceId: opening?.id ?? null,
             settlementIds: settlements.filter(row => row.line.employeeId === employeeId && row.line.itemCode === code).map(row => row.id) }) });
       }
@@ -204,7 +226,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
       ...(releases.length ? { parameterReleases: releases } : {}),
       employments: employments.filter(row => row.contractSubjectId === subjectId).map(row => ({ ...row,
         user: { id: row.user.id, name: row.user.name } })), scopeIssues: [...new Set(issues)], openings,
-      settlements, adjustments, performance: performanceFacts.sort((a, b) => `${a.employeeId}:${a.cycleId}`.localeCompare(`${b.employeeId}:${b.cycleId}`)) });
+      settlements, adjustments, ...(manualPerformance.length ? { manualPerformance } : {}),
+      performance: performanceFacts.sort((a, b) => `${a.employeeId}:${a.cycleId}`.localeCompare(`${b.employeeId}:${b.cycleId}`)) });
     return { sourceHash: payrollHash(sources), sources, issues: [...new Set(issues)], lines, approvalPath,
       reviewerCount: first?.reviewers.length ?? 0, gross: issues.length ? null : lines.reduce((sum, row) => sum.plus(row.amount ?? '0'), new D(0)).toFixed(2) };
   }

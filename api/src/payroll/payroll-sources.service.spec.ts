@@ -14,7 +14,7 @@ describe('payroll source capture', () => {
       reviewers: ['reviewer'], approvers: ['approver'], performance: {} };
     const data = {
       attendance: { id: 'attendance', month, status: 'sealed', sealedHash: 'sealed', payload: { days, issues: [], sync: { complete: true } } },
-      policies: [{ id: 'policy', config, effectiveFrom: new Date('2026-01-01'), effectiveTo: null }],
+      policies: [{ id: 'policy', config, effectiveFrom: new Date('2026-01-01'), effectiveTo: null as Date | null }],
       standards: [{ id: 'standard', employeeId, effectiveFrom: new Date('2026-01-01'), effectiveTo: null,
         fixedMonthly: new Prisma.Decimal('17400'), performanceBase: null, performanceMode: 'none' }],
       employments: [{ id: 'employment', userId: employeeId, contractSubjectId: subjectId,
@@ -45,6 +45,67 @@ describe('payroll source capture', () => {
     } } });
     return value;
   }
+  function manualFixture() {
+    const value = workdayFixture();
+    Object.assign(value.data.standards[0], { performanceMode: 'additional', performanceBase: null });
+    value.data.policies[0].config.performance = { [month]: { sourceKind: 'manual', manualAmounts: { [employeeId]: '1234.56' }, evidenceRef: 'Fictional HR confirmation', cycleIds: [], coefficients: {} } } as any;
+    return value;
+  }
+  it.each(['validation', 'formal'] as const)('manual wages are counted once, without reading performance in %s', async domain => {
+    const { capture, tx } = manualFixture();
+    const task = jest.fn(() => { throw new Error('Manual wages must not read performance'); });
+    Object.assign(tx, { assessmentTask: { findUnique: task } });
+    const result = await capture(domain);
+    expect(result.issues).toEqual([]);
+    expect(result.lines.find(row => row.itemCode === 'performance')?.amount).toBe('1234.56');
+    expect(result.gross).toBe('18734.56');
+    expect((result.sources as any).manualPerformance[0]).toMatchObject({ employeeId, month, entries: [{ policyId: 'policy', amount: '1234.56', evidenceRef: 'Fictional HR confirmation' }] });
+    expect(task).not.toHaveBeenCalled();
+  });
+  it('does not prorate manually confirmed performance for a mid-month hire', async () => {
+    const { data, capture } = manualFixture();
+    data.employments[0].effectiveFrom = new Date('2026-11-11');
+    data.attendance.payload.days = data.attendance.payload.days.slice(10);
+    const result = await capture();
+    expect(result.issues).toEqual([]);
+    expect(result.lines.find(row => row.itemCode === 'fixed')?.amount).toBe('8700.00');
+    expect(result.lines.find(row => row.itemCode === 'performance')?.amount).toBe('1234.56');
+  });
+  it('manual zero is explicit; missing amount or basis blocks, without fallback to old base', async () => {
+    const { data, capture } = manualFixture();
+    const mapping = data.policies[0].config.performance[month] as any;
+    mapping.manualAmounts[employeeId] = '0.00';
+    expect((await capture()).lines.find(row => row.itemCode === 'performance')?.amount).toBe('0.00');
+    delete mapping.manualAmounts[employeeId];
+    expect((await capture()).gross).toBeNull();
+    mapping.manualAmounts[employeeId] = '1234.56'; mapping.evidenceRef = '';
+    expect((await capture()).gross).toBeNull();
+  });
+  it('manual input changes affect fingerprints and do not mutate previous snapshots', async () => {
+    const { data, capture } = manualFixture(); const before = await capture();
+    const frozen = JSON.stringify(before.sources);
+    (data.policies[0].config.performance[month] as any).manualAmounts[employeeId] = '1300';
+    const after = await capture();
+    expect(after.sourceHash).not.toBe(before.sourceHash);
+    expect(after.lines.find(row => row.itemCode === 'performance')?.amount).toBe('1300.00');
+    expect(JSON.stringify(before.sources)).toBe(frozen);
+  });
+  it('a prior actual manual payment is deducted once rather than added again in a correction', async () => {
+    const { data, capture } = manualFixture();
+    data.settlements.push({ id: 'prior-manual-payment', amount: new Prisma.Decimal('1000'), line: { employeeId, itemCode: 'performance' } });
+    const result = await capture();
+    expect(result.lines.find(row => row.itemCode === 'performance')).toMatchObject({ entitlement: '1234.56', paidBefore: '1000.00', amount: '234.56' });
+  });
+  it('conflicting manual rules within the same month block instead of adding or prorating the values', async () => {
+    const { data, capture } = manualFixture();
+    data.policies[0].effectiveTo = new Date('2026-11-15');
+    const config = JSON.parse(JSON.stringify(data.policies[0].config));
+    config.performance[month].manualAmounts[employeeId] = '2000.00';
+    data.policies.push({ ...data.policies[0], id: 'second', effectiveFrom: new Date('2026-11-16'), effectiveTo: null, config });
+    const result = await capture();
+    expect(result.gross).toBeNull(); expect(result.issues.join()).toContain('人工绩效金额');
+    expect(result.lines.every(row => row.amount === null)).toBe(true);
+  });
   it('uses full-month workdays for a mid-month hire, with absence deducted only once', async () => {
     const { data, capture } = workdayFixture(); data.employments[0].effectiveFrom = new Date('2026-11-11');
     data.attendance.payload.days = data.attendance.payload.days.slice(10);
@@ -92,6 +153,22 @@ describe('payroll source capture', () => {
     expect(full.lines.find(row => row.itemCode === 'performance')?.amount).toBe('2400.00');
     (data.policies[0].config.performance[month] as any).coefficientVersion = '';
     expect((await capture()).issues.join()).toContain('系数表');
+  });
+  it('rejects multiple automatic cycles across effective rule segments within one wage month', async () => {
+    const { data, capture, tx } = workdayFixture();
+    Object.assign(data.standards[0], { performanceMode: 'additional', performanceBase: new Prisma.Decimal('2000') });
+    data.policies[0].config.performance = { [month]: { cycleIds: ['monthly-a'], sourceKind: 'fictional', coefficients: { A: '1.2' }, coefficientVersion: 'v1', evidenceRef: 'Fictional approval' } } as any;
+    data.policies[0].effectiveTo = new Date('2026-11-15');
+    const config = JSON.parse(JSON.stringify(data.policies[0].config)); config.performance[month].cycleIds = ['monthly-b'];
+    data.policies.push({ ...data.policies[0], id: 'second-auto', effectiveFrom: new Date('2026-11-16'), effectiveTo: null, config });
+    Object.assign(tx, { assessmentTask: { findUnique: jest.fn(async ({ where }) => ({
+      id: where.cycleId_employeeId.cycleId, employeeId, cycleId: where.cycleId_employeeId.cycleId,
+      status: 'published', participantDisposition: 'active', isExempt: false, publishedAt: new Date('2026-11-20'),
+      cycle: { type: 'monthly', startDate: new Date('2026-11-01'), endDate: new Date('2026-11-30') },
+      gradeResult: { id: 'grade', calibratedGrade: 'A', rawGrade: 'A', isPublished: true, publishedAt: new Date('2026-11-20') }, appeals: [],
+    })) } });
+    const result = await capture();
+    expect(result.gross).toBeNull(); expect(result.issues.join()).toContain('多个考核来源');
   });
   it('uses the sealed source and exact money, preserving each obligation', async () => {
     const { capture } = fixture(), result = await capture();

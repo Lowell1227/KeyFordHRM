@@ -212,7 +212,7 @@ async function run() {
     <template v-if="batch && readable">
       <dl class="summary-grid"><div><dt>用工主体</dt><dd>{{ access?.subjects.find(subject => subject.id === batch?.subjectId)?.name || batch.subjectId }}</dd></div><div><dt>工资归属月</dt><dd>{{ batch.month }}</dd></div><div><dt>发放月</dt><dd>{{ batch.payMonth }}</dd></div><div><dt>用途</dt><dd>{{ purposeLabels[batch.purpose] }}</dd></div><div><dt>状态</dt><dd>{{ batchStatus(batch) }}</dd></div><div><dt>税前应发</dt><dd>{{ version?.gross ?? '待核算' }}</dd></div><div v-if="batch.status === 'pending'"><dt>当前办理人</dt><dd>{{ currentActor ? operatorName(currentActor) : '待分配' }}</dd></div></dl>
       <el-alert v-if="needsUpdate(batch)" :title="batch.status === 'approved'
-        ? version?.netSnapshot ? '核算来源已变化或存在归属冲突，下载和新增实发与扣缴确认已暂停。请核对来源及实际已发已扣差异，原批准记录保留。' : '考勤来源存在跨月归属冲突，下载和新增入薪已暂停。请核对原月及已入薪差异，原批准记录保留。'
+        ? version?.netSnapshot ? '核算来源已变化或存在归属冲突，下载和新增实发与扣缴确认已暂停。请核对来源及实际已发已扣差异，原批准记录保留。' : '核算来源已变化或存在归属冲突，下载和新增入薪已暂停。请核对原月及已入薪差异，原批准记录保留。'
         : '来源已更新，当前审批暂停。经办撤回或当前办理人退回后，重新核算并提交新版。'" type="warning" :closable="false" />
       <el-alert v-if="!isCurrent" title="历史版本，只读" type="info" :closable="false" />
       <ul v-if="version?.issues.length" class="issue-list"><li v-for="(issue, index) in version.issues" :key="index">{{ issue }}</li></ul>

@@ -10,6 +10,7 @@ import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
 import { payrollHash } from './payroll-transaction';
 import { payrollParameterDefinition } from './payroll-parameter-definition';
 import { PayrollAccessService } from './payroll-access.service';
+import { readPayrollPerformance } from './payroll-performance-source';
 
 describe('locked payroll export', () => {
   function fixture() {
@@ -19,9 +20,12 @@ describe('locked payroll export', () => {
       approvalStep: 2, approvalPath: ['reviewer', 'approver'], reviewerCount: 1,
       decisions: [{ step: 0, actorId: 'reviewer', action: 'approve' }, { step: 1, actorId: 'approver', action: 'approve' }],
       lines: ['fixed', 'absence', 'overtime', 'performance', 'adjustment'].map((itemCode, index) => ({ id: itemCode, employeeId: 'employee', attributionMonth: '2026-11', itemCode,
-        amount: new Prisma.Decimal(['17400', '-200', '300', '0', '0'][index]), status: 'ready', evidence: { employeeName: '虚构核算甲', employeeNo: 'PAY_TEST' } })) };
+        amount: new Prisma.Decimal(['17400', '-200', '300', '0', '0'][index]), status: itemCode === 'performance' ? 'not_applicable' : 'ready',
+        evidence: { employeeName: '虚构核算甲', employeeNo: 'PAY_TEST', ...(itemCode === 'performance' ? {
+          applicability: 'not_applicable', calculated: null, adjustment: '0.00', adjustmentIds: [],
+        } : {}) } })) };
     const tx = { payrollBatch: { findUnique: jest.fn(async () => batch) }, payrollVersion: { findFirst: jest.fn(async () => version) },
-      payrollEvent: { create: jest.fn(async () => ({})), findFirst: jest.fn(async () => null) },
+      payrollEvent: { create: jest.fn(async () => ({})), findFirst: jest.fn(async () => null), findMany: jest.fn(async () => []) },
       payrollExportRecord: { create: jest.fn(async () => ({})) }, contractSubject: { findUniqueOrThrow: jest.fn(async () => ({ name: '虚构薪酬主体' })) },
       $queryRaw: jest.fn(async () => []), payrollSettlement: { create: jest.fn() } };
     const prisma = { $transaction: async (work: (tx: any) => any) => work(tx) };
@@ -85,6 +89,46 @@ describe('locked payroll export', () => {
     }
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(data as any); return workbook;
   }
+  it.each([false, true])('blocks approved unpaid automatic performance changes before returning an export, late=%s', async late => {
+    const setup = await unpaidNetFixture();
+    const task: any = { id: 'fictional-task', employeeId: 'employee', cycleId: 'monthly-cycle', status: 'published', isExempt: false, participantDisposition: 'active',
+      publishedAt: new Date('2026-11-30'), cycle: { type: 'monthly', startDate: new Date('2026-11-01'), endDate: new Date('2026-11-30') },
+      gradeResult: { id: 'grade', calibratedGrade: 'A', rawGrade: 'B', isPublished: true, publishedAt: new Date('2026-11-30'), hrCalibratedAt: null, approvedAt: null }, appeals: [] };
+    Object.assign(setup.tx, { assessmentTask: { findUnique: jest.fn(async () => task) } });
+    const result = await readPayrollPerformance(setup.tx as any, { employeeId: 'employee', cycleId: task.cycleId, registeredCycleIds: [task.cycleId], requiredMonth: '2026-11' });
+    setup.version.lines[3].status = 'ready'; Object.assign(setup.version.lines[3].evidence, { applicability: 'applicable', calculated: { code: 'performance', amount: '0.00' } });
+    const policy: any = { id: 'policy', subjectId: 'subject', domain: 'validation', status: 'active', version: 1, effectiveFrom: new Date('2026-11-01'), effectiveTo: null,
+      config: { fixedSalaryBasis: 'monthly_workdays', performance: { '2026-11': { sourceKind: 'fictional', cycleIds: [task.cycleId], coefficients: { A: '1' }, coefficientVersion: 'v1', evidenceRef: 'fictional' } } } };
+    const release = { ruleId: policy.id, previousParameterId: null, parameterVersion: 1, snapshotHash: payrollHash(payrollParameterDefinition('rule', policy)) };
+    Object.assign(setup.tx, { payrollPolicy: { findMany: jest.fn(async () => [policy]) }, payrollParameterRelease: { findMany: jest.fn(async () => [release]) } });
+    (setup.version as any).sources = JSON.parse(JSON.stringify({ months: [{ month: '2026-11', sources: { performance: [{ employeeId: 'employee', cycleId: task.cycleId, result }],
+      policies: [policy], parameterReleases: [release], attendance: { payload: { days: [{ employeeId: 'employee', workDate: '2026-11-10' }] } } } }] }));
+    let encrypted: Buffer | undefined;
+    if (late) setup.crypto.encryptWorkbook.mockImplementation(async buffer => { encrypted = Buffer.from(buffer); task.gradeResult.isPublished = false; return encrypted; });
+    else task.gradeResult.isPublished = false;
+    await expect(setup.service.download('batch', { expectedVersion: 4, filePassword: 'fictional-password' }, actor)).rejects.toThrow(ConflictException);
+    expect(setup.crypto.encryptWorkbook).toHaveBeenCalledTimes(late ? 1 : 0); expect(setup.tx.payrollExportRecord.create).not.toHaveBeenCalled();
+    if (late) expect(encrypted!.every(byte => byte === 0)).toBe(true);
+  });
+  it.each([false, true])('blocks approved unpaid manual performance changes before returning an export, late=%s', async late => {
+    const setup = await unpaidNetFixture(); setup.version.lines[0].amount = new Prisma.Decimal('16900'); setup.version.lines[3].amount = new Prisma.Decimal('500');
+    setup.version.lines[3].status = 'ready'; Object.assign(setup.version.lines[3].evidence, { applicability: 'applicable', manualPerformance: { amount: '500.00' } });
+    const policy: any = { id: 'policy', subjectId: 'subject', domain: 'validation', version: 1, status: 'active', effectiveFrom: new Date('2026-11-01'), effectiveTo: null,
+      config: { performance: { '2026-11': { sourceKind: 'manual', manualAmounts: { employee: '500.00' }, evidenceRef: 'fictional-approved-input', cycleIds: [], coefficients: {} } } } };
+    const release = { ruleId: policy.id, previousParameterId: null, parameterVersion: 1, snapshotHash: payrollHash(payrollParameterDefinition('rule', policy)) };
+    const assessmentTask = { findUnique: jest.fn(async () => { throw new Error('Manual performance must not read HRM results'); }) };
+    Object.assign(setup.tx, { assessmentTask, payrollPolicy: { findMany: jest.fn(async () => [policy]) }, payrollParameterRelease: { findMany: jest.fn(async () => [release]) } });
+    (setup.version as any).sources = { months: [{ month: '2026-11', sources: { manualPerformance: [{ employeeId: 'employee', month: '2026-11',
+      workDates: ['2026-11-10', '2026-11-20'], entries: [{ policyId: policy.id, amount: '500.00', evidenceRef: 'fictional-approved-input' }] }] } }] };
+    const change = () => { policy.config.performance['2026-11'].manualAmounts.employee = '600.00'; release.snapshotHash = payrollHash(payrollParameterDefinition('rule', policy)); };
+    let encrypted: Buffer | undefined;
+    if (late) setup.crypto.encryptWorkbook.mockImplementation(async buffer => { encrypted = Buffer.from(buffer); change(); return encrypted; });
+    else change();
+    await expect(setup.service.download('batch', { expectedVersion: 4, filePassword: 'fictional-password' }, actor)).rejects.toThrow(ConflictException);
+    expect(assessmentTask.findUnique).not.toHaveBeenCalled(); expect(setup.tx.payrollExportRecord.create).not.toHaveBeenCalled();
+    expect(setup.crypto.encryptWorkbook).toHaveBeenCalledTimes(late ? 1 : 0);
+    if (late) expect(encrypted!.every(byte => byte === 0)).toBe(true);
+  });
   it('exports one net row per employee, all attribution months, exact totals and minimal approval evidence', async () => {
     const setup = netFixture();
     setup.version.lines.push(...setup.version.lines.map(line => ({ ...line, id: `${line.id}-prior`, attributionMonth: '2026-10',
@@ -223,7 +267,7 @@ describe('locked payroll export', () => {
   it.each([false, true])('keeps employee-level net/gross allocation consistent even when global totals match, swap=%s', async swap => {
     const setup = netFixture(), snapshot = setup.version.netSnapshot;
     setup.version.lines.push(...setup.version.lines.map(line => ({ ...line, id: `${line.id}-second`, employeeId: 'second',
-      evidence: { employeeName: '虚构核算乙', employeeNo: 'PAY_SECOND' }, amount: new Prisma.Decimal(line.itemCode === 'fixed' ? '10000' : '0') })));
+      evidence: { ...line.evidence, employeeName: '虚构核算乙', employeeNo: 'PAY_SECOND' }, amount: new Prisma.Decimal(line.itemCode === 'fixed' ? '10000' : '0') })));
     setup.version.gross = new Prisma.Decimal('27500');
     snapshot.rows.push({ ...structuredClone(snapshot.rows[0]), employeeId: 'second', employeeName: '虚构核算乙', employeeNo: 'PAY_SECOND', result: {
       ...snapshot.rows[0].result, gross: '10000.00', socialInsurance: '500.00', housingFund: '250.00', incomeTax: '100.00', net: '9150.00',

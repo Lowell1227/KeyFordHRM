@@ -59,6 +59,10 @@ async function decide(action: 'approve' | 'return' | 'withdraw') {
   finally { busy.value = false; }
 }
 const workdays = (days: Array<{ units: string }>) => days.reduce((total, day) => total + Math.round(Number(day.units) * 10000), 0) / 10000;
+function manualEmployeeLabel(id: string) {
+  const person = selected.value?.manualEmployees?.find(employee => employee.id === id);
+  return person ? `${person.name}${person.employeeNo ? ` · ${person.employeeNo}` : ''}` : `记录不可用（${id.slice(-8)}）`;
+}
 const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value)) : '';
 </script>
 <template>
@@ -92,7 +96,7 @@ const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN',
           <h3>{{ title(selected) }}</h3>
           <dl class="parameter-grid"><div><dt>状态</dt><dd>{{ labels[selected.status] }}</dd></div><div><dt>生效日期</dt><dd>{{ selected.snapshot.effectiveFrom }}</dd></div><div><dt>结束日期</dt><dd>{{ selected.snapshot.effectiveTo ?? '长期' }}</dd></div><div><dt>替代版本</dt><dd>{{ selected.previousParameterId ? '替代前一已发布版本' : '首次发布' }}</dd></div></dl>
           <dl v-if="selected.kind === 'standard'" class="parameter-grid">
-            <div><dt>固定月薪</dt><dd>{{ selected.snapshot.fixedMonthly ?? '待配置' }}</dd></div><div><dt>个人绩效基数</dt><dd>{{ selected.snapshot.performanceBase ?? '不适用' }}</dd></div>
+            <div><dt>固定月薪</dt><dd>{{ selected.snapshot.fixedMonthly ?? '待配置' }}</dd></div><div><dt>个人绩效基数</dt><dd>{{ selected.snapshot.performanceBase ?? '未配置（人工金额不使用）' }}</dd></div>
             <div><dt>绩效结构</dt><dd>{{ selected.snapshot.performanceMode === 'additional' ? '固定月薪之外另计' : '不适用' }}</dd></div><div><dt>确认依据</dt><dd>{{ selected.snapshot.evidence }}</dd></div>
           </dl>
           <template v-if="selected.snapshot.config">
@@ -101,8 +105,17 @@ const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN',
               <p>应出勤：{{ calendar.days.filter(day => Number(day.units) > 0).map(day => `${day.workDate.slice(-2)}日${day.units !== '1' ? `(${day.units})` : ''}`).join('、') }}</p>
             </section>
             <section v-for="(mapping, key) in selected.snapshot.config.performance" :key="key" class="parameter-section">
-              <h4>{{ key }} 绩效系数</h4><p>{{ mapping.coefficientVersion }} · {{ mapping.evidenceRef }}</p>
-              <dl class="parameter-grid"><div v-for="(value, grade) in mapping.coefficients" :key="grade"><dt>{{ grade }}等</dt><dd>{{ value }}</dd></div></dl>
+              <template v-if="mapping.sourceKind === 'manual'">
+                <h4>{{ key }} 绩效工资</h4><p>确认依据：{{ mapping.evidenceRef }}</p>
+                <dl class="manual-amounts" data-testid="payroll-manual-review">
+                  <div v-for="(amount, employeeId) in mapping.manualAmounts" :key="employeeId"><dt>{{ manualEmployeeLabel(employeeId) }}</dt><dd>{{ amount }} 元</dd></div>
+                </dl>
+                <p v-if="!Object.keys(mapping.manualAmounts ?? {}).length">金额待确认</p>
+              </template>
+              <template v-else>
+                <h4>{{ key }} 绩效系数</h4><p>{{ mapping.coefficientVersion }} · {{ mapping.evidenceRef }}</p>
+                <dl class="parameter-grid"><div v-for="(value, grade) in mapping.coefficients" :key="grade"><dt>{{ grade }}等</dt><dd>{{ value }}</dd></div></dl>
+              </template>
             </section>
             <el-collapse><el-collapse-item title="完整参数" name="parameters"><pre>{{ JSON.stringify(selected.snapshot.config, null, 2) }}</pre></el-collapse-item></el-collapse>
           </template>
@@ -132,6 +145,10 @@ h4 { font-size: 15px; margin: 18px 0 10px; }
 .parameter-grid dd { margin: 5px 0 0; overflow-wrap: anywhere; font-size: 14px; }
 .parameter-section { border-top: 1px solid var(--el-border-color-lighter); padding-bottom: 12px; }
 .parameter-section p, .el-timeline p { font-size: 14px; overflow-wrap: anywhere; line-height: 1.7; }
+.manual-amounts { margin: 0 0 14px; font-size: 14px; }
+.manual-amounts > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+.manual-amounts dt { overflow-wrap: anywhere; }
+.manual-amounts dd { margin: 0; font-variant-numeric: tabular-nums; }
 .action-panel { border-top: 1px solid var(--el-border-color-lighter); padding-top: 16px; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @media(max-width:480px) { .parameter-grid { gap: 14px 12px; } }

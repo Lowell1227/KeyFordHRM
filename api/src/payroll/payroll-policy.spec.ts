@@ -3,6 +3,26 @@ import { normalizePayrollPolicy } from './payroll-policy';
 import { payrollCalendarDays } from './payroll-work-calendar';
 
 describe('payroll policy config', () => {
+  const person = '00000000-0000-4000-8000-000000000001';
+  it('accepts explicit reviewed manual monthly money without cycles or coefficients', () => {
+    const result = normalizePayrollPolicy({ performance: { '2026-11': {
+      sourceKind: 'manual', manualAmounts: { [person]: '1200.50' }, evidenceRef: 'HR confirmation',
+    } } });
+    expect(result.performance['2026-11']).toMatchObject({ sourceKind: 'manual', manualAmounts: { [person]: '1200.50' }, cycleIds: [], coefficients: {} });
+    const zero = normalizePayrollPolicy({ performance: { '2026-11': { sourceKind: 'manual', manualAmounts: { [person]: '0' } } } });
+    expect((zero.performance['2026-11'] as any).manualAmounts[person]).toBe('0.00');
+  });
+  it.each(['', '-1', '1.001', 'Infinity', '1000000000000'])('rejects invalid manual monthly money %s', amount => {
+    expect(() => normalizePayrollPolicy({ performance: { '2026-11': { sourceKind: 'manual', manualAmounts: { [person]: amount } } } })).toThrow(BadRequestException);
+  });
+  it('rejects foreign-shaped identities and mixed manual/automatic inputs', () => {
+    for (const mapping of [
+      { sourceKind: 'manual', manualAmounts: { arbitrary: '12' } },
+      { sourceKind: 'manual', cycleIds: [person], manualAmounts: { [person]: '12' } },
+      { sourceKind: 'manual', coefficients: { A: '1' }, manualAmounts: { [person]: '12' } },
+      { sourceKind: 'official', manualAmounts: { [person]: '12' } },
+    ]) expect(() => normalizePayrollPolicy({ performance: { '2026-11': mapping } })).toThrow(BadRequestException);
+  });
   it('keeps unconfirmed fields blank rather than inventing official values', () => {
     const config = normalizePayrollPolicy({});
     expect(config.rounding).toBeNull(); expect(config.normalHourly).toBeNull(); expect(config.monthlyUnits).toEqual({});

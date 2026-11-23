@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { PayrollAccessService } from './payroll-access.service';
-import { PayrollDomain } from './payroll-contracts';
+import { PayrollDomain, PayrollPolicyConfig } from './payroll-contracts';
 import { assertPayrollVersion, lockPayrollSubject, payrollHash } from './payroll-transaction';
 import { payrollJson } from './payroll-data.service';
 import { normalizePayrollPolicy } from './payroll-policy';
@@ -57,8 +57,7 @@ export class PayrollParameterReleasesService {
   private validate(kind: Kind, row: Parameter) {
     if (kind === 'standard') {
       const value = row as Prisma.PayrollStandardGetPayload<{}>;
-      if (value.fixedMonthly === null || !['additional', 'none'].includes(value.performanceMode ?? '') || !value.evidence.trim()
-        || value.performanceMode === 'additional' && value.performanceBase === null) throw new ConflictException('请先补齐固定月薪、另计或不适用结构、个人绩效基数及确认依据');
+      if (value.fixedMonthly === null || !['additional', 'none'].includes(value.performanceMode ?? '') || !value.evidence.trim()) throw new ConflictException('请先补齐固定月薪、另计或不适用结构及确认依据');
     } else if (kind === 'deduction') {
       const profile = row as Prisma.PayrollDeductionProfileGetPayload<{}>;
       normalizeDeductionSettings({ subjectId: profile.subjectId, employeeId: profile.employeeId, payDate: profile.payDate.toISOString().slice(0, 10) }, profile.settings);
@@ -66,10 +65,14 @@ export class PayrollParameterReleasesService {
       const config = normalizePayrollPolicy((row as Prisma.PayrollPolicyGetPayload<{}>).config);
       if (config.fixedSalaryBasis !== 'monthly_workdays' || config.rounding === null || !config.cutoverMonth
         || !Object.keys(config.workCalendars ?? {}).length) throw new ConflictException('请先补齐工作日日历、舍入规则和启用归属月');
-      for (const mapping of Object.values(config.performance)) if (mapping.cycleIds.length !== 1
-        || mapping.sourceKind !== (row.domain === 'validation' ? 'fictional' : 'official')
-        || !mapping.coefficientVersion || !mapping.evidenceRef || !Object.keys(mapping.coefficients).length) {
-        throw new ConflictException('绩效来源及统一系数表版本、系数和确认依据未完整');
+      for (const mapping of Object.values(config.performance)) {
+        if (mapping.sourceKind === 'manual') {
+          if (!mapping.evidenceRef || !Object.keys(mapping.manualAmounts ?? {}).length) throw new ConflictException('请补齐人工绩效工资金额和确认依据');
+        } else if (mapping.cycleIds.length !== 1
+          || mapping.sourceKind !== (row.domain === 'validation' ? 'fictional' : 'official')
+          || !mapping.coefficientVersion || !mapping.evidenceRef || !Object.keys(mapping.coefficients).length) {
+          throw new ConflictException('绩效来源及统一系数表版本、系数和确认依据未完整');
+        }
       }
     }
   }
@@ -113,7 +116,16 @@ export class PayrollParameterReleasesService {
       const where = { subjectId, domain, ...(editor ? {} : payrollParameterReviewerWhere(actor.id, subjectId)) };
       const pending = await tx.payrollParameterRelease.findMany({ where: { ...where, status: 'pending' }, include: display, orderBy: { submittedAt: 'desc' } });
       const recent = await tx.payrollParameterRelease.findMany({ where: { ...where, status: { not: 'pending' } }, include: display, orderBy: { submittedAt: 'desc' }, take: 100 });
-      return [...pending, ...recent];
+      const rows = [...pending, ...recent];
+      const manualIds = (row: typeof rows[number]) => row.kind === 'rule' ? Object.values(
+        (row.snapshot as unknown as { config?: PayrollPolicyConfig })?.config?.performance ?? {},
+      ).flatMap(mapping => mapping.sourceKind === 'manual' ? Object.keys(mapping.manualAmounts ?? {}) : []) : [];
+      const ids = [...new Set(rows.flatMap(manualIds))].sort();
+      const employees = ids.length ? await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, employeeNo: true } }) : [];
+      return rows.map(row => {
+        const visible = new Set(manualIds(row));
+        return visible.size ? { ...row, manualEmployees: employees.filter(person => visible.has(person.id)) } : row;
+      });
     });
   }
   async decide(id: string, input: { expectedVersion: number; decision: 'approve' | 'return'; note: string }, actor: AuthUser) {

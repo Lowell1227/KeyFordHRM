@@ -14,7 +14,8 @@ async function prepare(scope, inspectOnly) {
     check(response.ok, `fixture_http_${response.status}`); const json = await response.json(); check(json.code === 0, 'fixture_response'); return json.data;
   }
   try {
-    check(['desktop', 'mobile', 'tablet', 'api', 'demo', 'net-desktop', 'net-mobile', 'net-api', 'net-demo', 'net-recovery', 'net-desktop-final', 'net-mobile-final'].includes(scope), 'fixture_scope');
+    check(['desktop', 'mobile', 'tablet', 'api', 'demo', 'net-desktop', 'net-mobile', 'net-api', 'net-demo', 'net-recovery', 'net-desktop-final', 'net-mobile-final',
+      'net-manual-desktop', 'net-manual-mobile', 'net-manual-api', 'net-manual-demo'].includes(scope), 'fixture_scope');
     const [identity] = await db.$queryRawUnsafe('SELECT current_database() AS db,current_user AS role');
     check(identity.db === 'hrm_preview' && identity.role === 'hrm_preview' && process.env.PAYROLL_ENABLED === 'true'
       && process.env.PAYROLL_FORMAL_ENABLED !== 'true', 'fixture_database');
@@ -47,12 +48,14 @@ async function prepare(scope, inspectOnly) {
       const release = await http('HR001', 'POST', `/payroll/parameters/${kind}/${row.id}/submit`, { expectedVersion: row.version });
       await http('MGR001', 'POST', `/payroll/parameter-releases/${release.id}/decide`, { expectedVersion: release.attempt, decision: 'approve', note: '虚构初版参数确认' });
     }
-    const standard = await http('HR001', 'POST', '/payroll/standards', { subjectId, employeeId, effectiveFrom: `${month}-01`, fixedMonthly: '10000', performanceBase: '0', performanceMode: 'none', evidence: '虚构已审批工资标准来源' });
+    const manual = scope.startsWith('net-manual-');
+    const standard = await http('HR001', 'POST', '/payroll/standards', { subjectId, employeeId, effectiveFrom: `${month}-01`, fixedMonthly: '10000', performanceBase: manual ? null : '0', performanceMode: manual ? 'additional' : 'none', evidence: '虚构已审批工资标准来源' });
     await publish('standard', standard);
     const days = Array.from({ length: 31 }, (_, i) => ({ workDate: `${month}-${String(i + 1).padStart(2, '0')}`, units: i < 20 ? '1' : '0' }));
     const rule = await http('HR001', 'POST', '/payroll/rules', { subjectId, effectiveFrom: `${month}-01`, config: {
       fixedSalaryBasis: 'monthly_workdays', workCalendars: { [month]: { sourceVersion: 'fictional-v1', evidenceRef: '虚构日历，非真实排班', days } },
-      rounding: 'item_half_up', cutoverMonth: month, reviewers: [actors.MGR001], approvers: [actors.VP001], performance: {} } });
+      rounding: 'item_half_up', cutoverMonth: month, reviewers: [actors.MGR001], approvers: [actors.VP001],
+      performance: manual ? { [month]: { sourceKind: 'manual', manualAmounts: { [employeeId]: '0.00' }, evidenceRef: '虚构HR明确确认本样例初始人工绩效为零', cycleIds: [], coefficients: {} } } : {} } });
     await publish('rule', rule);
     for (const itemCode of ['fixed', 'absence', 'overtime', 'performance', 'adjustment']) await http('VP001', 'POST', '/payroll/opening-balances', { subjectId, employeeId, month, itemCode, amount: '0', reference: '虚构确认零期初' });
     const attendance = await http('HR001', 'POST', '/payroll/attendance/sync', { subjectId, month, sourceKey: `parameter:${runId}`, complete: true,

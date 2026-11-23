@@ -34,7 +34,7 @@ async function prepare(m,inspectOnly){
   }finally{await db.$disconnect();}
 }
 if(require.main===module){try{
-  const scope=process.argv[2]??'net-demo';if(!['net-demo','net-desktop','net-mobile','net-api','net-recovery','net-desktop-final','net-mobile-final'].includes(scope))throw new Error('scope_guard');
+  const scope=process.argv[2]??'net-demo';if(!['net-demo','net-desktop','net-mobile','net-api','net-recovery','net-desktop-final','net-mobile-final','net-manual-desktop','net-manual-mobile','net-manual-api','net-manual-demo'].includes(scope))throw new Error('scope_guard');
   const inspectOnly=process.argv.includes('--inspect');const manifest=JSON.parse(execFileSync(process.execPath,['scripts/prepare-payroll-parameter-preview.cjs',scope,...(inspectOnly?['--inspect']:[])],{encoding:'utf8',timeout:180000}));
   const r=spawnSync('docker',['exec','-i','-w','/app','hrm-api-1','node'],{encoding:'utf8',timeout:180000,input:`(${prepare.toString()})(${JSON.stringify(manifest)},${inspectOnly}).then(r=>console.log(JSON.stringify(r))).catch(e=>{console.error(e.message);process.exitCode=1;});`});
   if(r.status!==0)throw new Error(r.stderr.trim()||'net_fixture_refused');process.stdout.write(r.stdout);

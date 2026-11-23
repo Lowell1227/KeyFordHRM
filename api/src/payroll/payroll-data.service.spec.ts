@@ -352,3 +352,140 @@ describe('PayrollDataService focused regressions', () => {
     expect(state.standards[0].status).toBe('active');
   });
 });
+
+describe('PayrollDataService performance cycle metadata scope', () => {
+  function scopedMatches(row: any, where: any = {}): boolean {
+    return Object.entries(where).every(([key, value]: [string, any]) => {
+      if (key === 'AND') return value.every((part: any) => scopedMatches(row, part));
+      if (key === 'OR') return value.some((part: any) => scopedMatches(row, part));
+      const actual = row?.[key];
+      if (!value || typeof value !== 'object' || value instanceof Date) return actual instanceof Date ? +actual === +value : actual === value;
+      if ('some' in value) return Array.isArray(actual) && actual.some(item => scopedMatches(item, value.some));
+      if ('in' in value) return value.in.includes(actual);
+      if ('notIn' in value) return !value.notIn.includes(actual);
+      if ('not' in value) return actual !== value.not;
+      if ('lte' in value) return actual != null && actual <= value.lte;
+      if ('gte' in value) return actual != null && actual >= value.gte;
+      return actual != null && scopedMatches(actual, value);
+    });
+  }
+  function cycle(id: string, patch: any = {}) {
+    return { id, name: id, type: 'monthly', startDate: date('2026-11-01'), endDate: date('2026-11-30'),
+      status: 'self_eval', scoringFrequency: 'monthly', publishVisibleFields: { total_score: true }, privateSalary: 'never expose', ...patch };
+  }
+  function candidateSetup(domain: 'formal' | 'validation' = 'formal') {
+    const value = setup(), cycles: any[] = [], tasks: any[] = [];
+    const markers: Record<string, any> = {
+      payroll_preview_fixture_v1: { fictional: true, subjectIds: [subject], cycleIds: ['fixture-quarterly'] },
+      payroll_monthly_rules_preview_v1: { fictional: true, state: 'ready', subjectIds: [subject], cycleIds: ['fixture-monthly'] },
+    };
+    const task = (cycleId: string, employeeId = 'employee-a', patch: any = {}) => tasks.push({ cycleId, employeeId,
+      status: 'manager_scoring', isExempt: false, participantDisposition: 'active', gradeResult: { rawGrade: 'private' }, ...patch });
+    const assessmentCycle = { findMany: jest.fn(async ({ where, select }) => cycles
+      .map(row => ({ ...row, tasks: tasks.filter(task => task.cycleId === row.id) }))
+      .filter(row => scopedMatches(row, where)).sort((a, b) => a.id.localeCompare(b.id)).map(row => project(row, select))) };
+    const assessmentTask = { count: jest.fn(async ({ where }) => tasks.filter(row => scopedMatches(row, where)).length),
+      findUnique: jest.fn(() => { throw new Error('Cycle candidates must not read personal results'); }) };
+    Object.assign(value.prisma, { assessmentCycle, assessmentTask });
+    value.tx.employmentRecord.findMany.mockImplementation(async ({ where, select }) => value.state.employments.filter(row => scopedMatches(row, where)).map(row => project(row, select)));
+    (value.tx.systemConfig.findUnique as jest.Mock).mockImplementation(async ({ where }: any) => markers[where.key] ? { value: clone(markers[where.key]) } : null);
+    value.access.maintenancePurpose.mockReturnValue(domain);
+    value.access.assertDomain.mockImplementation(async (_tx, requested) => { if (requested !== domain) throw new ForbiddenException('Domain denied'); return domain; });
+    return { ...value, cycles, tasks, markers, task, assessmentCycle, assessmentTask };
+  }
+  const metadata = (row: ReturnType<typeof cycle>) => ({ id: row.id, name: row.name, type: row.type, startDate: row.startDate, endDate: row.endDate });
+
+  it('lists only monthly metadata with actual participants employed in the authorized subject during the cycle', async () => {
+    const value = candidateSetup(), own = cycle('own-monthly'), mixed = cycle('mixed-monthly');
+    value.state.employments.push(employment('foreign', { contractSubjectId: other }));
+    value.cycles.push(own, mixed, cycle('foreign-only'), cycle('quarterly-monthly-scores', { type: 'quarterly' }), cycle('unstarted-no-tasks'),
+      cycle('cross-month', { endDate: date('2026-12-01') }), cycle('short-month', { endDate: date('2026-11-10') }));
+    value.task(own.id); value.task(mixed.id); value.task(mixed.id, 'foreign'); value.task('foreign-only', 'foreign');
+    value.task('quarterly-monthly-scores'); value.task('cross-month'); value.task('short-month');
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([metadata(mixed), metadata(own)]);
+    expect(value.assessmentTask.findUnique).not.toHaveBeenCalled();
+    expect(value.assessmentCycle.findMany.mock.calls[0][0].select).toEqual({ id: true, name: true, type: true, startDate: true, endDate: true });
+  });
+
+  it('allows historical resigned staff but not future hires, past-only employment or unapproved/overridden employment', async () => {
+    const value = candidateSetup(); value.state.employments.length = 0;
+    value.state.employments.push(
+      employment('historical', { effectiveFrom: date('2026-11-01'), entryDate: date('2026-11-01'), effectiveTo: date('2026-11-30'), leaveDate: date('2026-11-30'), employeeStatus: 'resigned' }),
+      employment('future', { entryDate: date('2026-12-01') }),
+      employment('past', { effectiveFrom: date('2026-10-01'), effectiveTo: date('2026-10-31'), entryDate: date('2026-10-01'), leaveDate: date('2026-10-31') }),
+      employment('unapproved', { sourceRequestId: 'pending', sourceRequest: { profileReviewStatus: 'pending', onboardingStatus: 'effective', requiresArrivalConfirmation: false } }),
+      employment('not-arrived', { sourceRequestId: 'arrival', sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: 'waiting', requiresArrivalConfirmation: true, arrivalConfirmedAt: null } }),
+      employment('transferred', { effectiveFrom: date('2026-10-01'), effectiveTo: date('2026-10-31'), entryDate: date('2026-10-01') }),
+      employment('transferred', { id: 'new-subject', contractSubjectId: other, effectiveFrom: date('2026-11-01'), entryDate: date('2026-10-01') }),
+    );
+    for (const employee of ['historical', 'future', 'past', 'unapproved', 'not-arrived', 'transferred']) { value.cycles.push(cycle(employee)); value.task(employee, employee); }
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([metadata(cycle('historical'))]);
+  });
+
+  it.each([{ isExempt: true }, { participantDisposition: 'cycle_exempt' }, { participantDisposition: 'top_leader_exempt' }, { status: 'exempted' }])('does not offer a cycle whose only subject task is exempt: %j', patch => {
+    const value = candidateSetup(); value.cycles.push(cycle('exempt')); value.task('exempt', 'employee-a', patch);
+    return expect(value.service.performanceCycles(subject, actor)).resolves.toEqual([]);
+  });
+
+  it('keeps registered fictional cycles out of formal results even when their participants belong to this subject', async () => {
+    const value = candidateSetup();
+    value.cycles.push(cycle('fixture-monthly'), cycle('fixture-quarterly', { type: 'quarterly' }), cycle('official'));
+    for (const row of value.cycles) value.task(row.id);
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([metadata(cycle('official'))]);
+    value.markers.payroll_monthly_rules_preview_v1.subjectIds = [other]; value.markers.payroll_preview_fixture_v1.fictional = false;
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([metadata(cycle('official'))]);
+  });
+
+  it('does not query global cycles when the subject has no approved employment scope', async () => {
+    const value = candidateSetup(); value.state.employments.length = 0;
+    value.cycles.push(cycle('foreign')); value.task('foreign', 'foreign');
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([]);
+    expect(value.assessmentCycle.findMany).not.toHaveBeenCalled();
+    expect(value.assessmentTask.count).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on conflicting subject employment instead of selecting a cycle from an ambiguous assignment', async () => {
+    const value = candidateSetup(); value.cycles.push(cycle('ambiguous')); value.task('ambiguous');
+    value.state.employments.push(employment('employee-a', { id: 'overlapping-other-subject', contractSubjectId: other }));
+    await expect(value.service.performanceCycles(subject, actor)).rejects.toBeInstanceOf(ConflictException);
+    expect(value.assessmentTask.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('keeps validation restricted to subject-owned, ready fictional fixture allowlists without discovering real cycles', async () => {
+    const value = candidateSetup('validation');
+    const base = cycle('fixture-quarterly', { type: 'quarterly' }), monthly = cycle('fixture-monthly');
+    value.cycles.push(base, monthly, cycle('unregistered-real-monthly'));
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([metadata(monthly), metadata(base)]);
+    value.markers.payroll_monthly_rules_preview_v1.subjectIds = [other];
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([metadata(base)]);
+    value.markers.payroll_preview_fixture_v1.fictional = false;
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([]);
+    expect(value.tx.employmentRecord.findMany).not.toHaveBeenCalled();
+    expect(value.assessmentTask.count).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { fictional: false, state: 'ready', subjectIds: [subject], cycleIds: ['fixture-monthly'] },
+    { fictional: true, state: 'preparing', subjectIds: [subject], cycleIds: ['fixture-monthly'] },
+    { fictional: true, state: 'ready', subjectIds: [other], cycleIds: ['fixture-monthly'] },
+    { fictional: true, state: 'ready', subjectIds: [subject], cycleIds: 'fixture-monthly' },
+  ])('does not broaden a malformed or ineligible validation allowlist: %j', async marker => {
+    const value = candidateSetup('validation'); delete value.markers.payroll_preview_fixture_v1;
+    value.markers.payroll_monthly_rules_preview_v1 = marker; value.cycles.push(cycle('fixture-monthly'), cycle('real'));
+    expect(await value.service.performanceCycles(subject, actor)).toEqual([]);
+  });
+
+  it('checks subject edit permission and domain gates before any cycle or employment reads', async () => {
+    const value = candidateSetup();
+    await expect(value.service.performanceCycles(subject, outsider)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(value.service.performanceCycles(subject, finance)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(value.service.performanceCycles(other, actor)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(value.access.assertDomain).not.toHaveBeenCalled();
+    value.access.assertDomain.mockRejectedValueOnce(new ForbiddenException('Formal gate closed'));
+    await expect(value.service.performanceCycles(subject, actor)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(value.assessmentCycle.findMany).not.toHaveBeenCalled();
+    expect(value.assessmentTask.count).not.toHaveBeenCalled();
+    expect(value.tx.employmentRecord.findMany).not.toHaveBeenCalled();
+    expect(value.tx.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+});

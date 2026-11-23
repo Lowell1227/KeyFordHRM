@@ -16,7 +16,8 @@ export interface PayrollPolicyConfig {
   reviewers: string[];
   approvers: string[];
   cutoverMonth: string | null;
-  performance: Record<string, { cycleIds: string[]; sourceKind?: 'official' | 'fictional' | null;
+  performance: Record<string, { cycleIds: string[]; sourceKind?: 'official' | 'fictional' | 'manual' | null;
+    manualAmounts?: Record<string, string>;
     coefficientVersion?: string | null; evidenceRef?: string | null;
     coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>> }>;
 }

@@ -12,6 +12,7 @@ import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
 import { readReviewedDeductions } from './payroll-reviewed-deductions';
 import { assertPayrollNetFresh, assertPayrollNetLines, assertPayrollNetShape, capturePayrollNet, netSnapshotHash } from './payroll-net';
 import { randomUUID } from 'node:crypto';
+import { assertPayrollApprovedPerformance } from './payroll-approved-performance';
 
 const versionInclude = {
   lines: { include: { settlements: true, reservation: true } },
@@ -189,7 +190,10 @@ export class PayrollBatchesService {
       if (groups.size !== expectedGroups.size || [...expectedGroups].some(group => !groups.has(group)) ||
         [...groups.values()].some(items => items.size !== PAYROLL_ITEM_CODES.length) ||
         !gross.eq(this.money(version.gross!.toString(), 18))) throw new ConflictException('完整五项工资明细与核算合计不一致');
-      if (batch.status === 'approved') await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+      if (batch.status === 'approved') {
+        await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+        await assertPayrollApprovedPerformance(tx, batch, version, domain);
+      }
       else await this.assertFresh(tx, batch, version, domain);
       const rows: Array<PayrollDeductionsResult & { employeeId: string; employeeName: string }> = [];
       for (const [index, [employeeId, amount]] of [...grossByEmployee.entries()].sort(([a], [b]) => a.localeCompare(b)).entries()) {
@@ -369,6 +373,7 @@ export class PayrollBatchesService {
       }
       await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
       assertPayrollVersion(batch.version, input.expectedVersion);
+      await assertPayrollApprovedPerformance(tx, batch, version, domain);
       const line = this.payableLine(version, input.lineId);
       const paid = line.settlements.reduce((total, payment) => total.plus(payment.amount), new Decimal(0));
       const remainder = new Decimal(line.amount!).minus(paid);
@@ -413,6 +418,7 @@ export class PayrollBatchesService {
       }
       assertPayrollVersion(batch.version, input.expectedVersion);
       await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+      await assertPayrollApprovedPerformance(tx, batch, version, domain);
       await assertPayrollNetFresh(tx, batch, snapshot, domain, version.id);
       const reservationKey = { subjectId: batch.subjectId, employeeId: input.employeeId, domain, taxYear: Number(input.payDate.slice(0, 4)) };
       const reservation = await tx.payrollNetReservation.findUnique({ where: { subjectId_employeeId_domain_taxYear: reservationKey } });
@@ -565,6 +571,7 @@ export class PayrollBatchesService {
     try {
       if (version.status === 'approved') {
         await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+        await assertPayrollApprovedPerformance(tx, batch, version, domain);
         if (version.netSnapshot) await assertPayrollNetFresh(tx, batch, version.netSnapshot, domain, version.id);
       }
       else await this.assertFresh(tx, batch, version, domain);

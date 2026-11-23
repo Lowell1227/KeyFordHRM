@@ -13,8 +13,11 @@ const { routes } = load('routes.ts');
 const { canAccessRoute, buildNavigation } = load('navigation.ts');
 const actor = (capabilities = [], sysRole = 'employee', enabled = true) => ({ sysRole, canViewAll: true, payrollAccess: { enabled, subjects: [{ id: 'a', name: '虚构主体', capabilities }] } });
 const payroll = () => routes.filter(r => r.path.startsWith('/payroll/'));
-test('five independent payroll entries exist, with both guard metadata fields', () => {
-  assert.equal(payroll().length, 5);
+test('all seven payroll entries exist, with both guard metadata fields', () => {
+  assert.deepEqual(payroll().map(route => route.path), [
+    '/payroll/attendance', '/payroll/standards', '/payroll/deductions', '/payroll/parameter-reviews',
+    '/payroll/batches', '/payroll/approvals', '/payroll/results',
+  ]);
   for (const r of payroll()) { assert.equal(r.meta.payrollOnly, true); assert.ok(r.meta.payrollCapabilities.length); }
 });
 test('admin and HR have no implicit salary access; disabled and empty scopes fail closed', () => {

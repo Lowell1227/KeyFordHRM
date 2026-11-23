@@ -8,6 +8,10 @@ import { PayrollCapture } from './payroll-contracts';
 import { PayrollBatchesService } from './payroll-batches.service';
 import { PayrollController } from './payroll.controller';
 import { PayrollExceptionFilter } from './payroll-exception.filter';
+import { readPayrollPerformance } from './payroll-performance-source';
+import * as netHelpers from './payroll-net';
+import { payrollHash } from './payroll-transaction';
+import { payrollParameterDefinition } from './payroll-parameter-definition';
 
 const subject = randomUUID(), otherSubject = randomUUID(), employee = randomUUID();
 const editor = { id: randomUUID() }, reviewer = { id: randomUUID() }, approver = { id: randomUUID() };
@@ -32,7 +36,7 @@ function selectFields(value: any, select: any): any {
 function database() {
   const state = { batches: [] as any[], versions: [] as any[], lines: [] as any[], decisions: [] as any[],
     reservations: [] as any[], settlements: [] as any[], openings: [] as any[], events: [] as any[], exports: [] as any[],
-    grants: [
+    netPayments: [] as any[], grants: [
       { userId: editor.id, subjectId: subject, capabilities: ['payroll_edit'], revokedAt: null },
       { userId: reviewer.id, subjectId: subject, capabilities: ['payroll_review'], revokedAt: null },
       { userId: approver.id, subjectId: subject, capabilities: ['payroll_approve'], revokedAt: null },
@@ -41,7 +45,7 @@ function database() {
   const version = (v: any) => ({ ...v, lines: state.lines.filter(l => l.versionId === v.id).map(l => ({ ...l,
     settlements: state.settlements.filter(s => s.lineId === l.id), reservation: state.reservations.find(r => r.lineId === l.id) ?? null })),
     decisions: state.decisions.filter(d => d.versionId === v.id).sort((a, b) => a.step - b.step),
-    exports: state.exports.filter(e => e.versionId === v.id) });
+    exports: state.exports.filter(e => e.versionId === v.id), netPayments: state.netPayments.filter(p => p.versionId === v.id) });
   const batch = (b: any, args: any = {}) => {
     if (!b) return null;
     const versions = args.include?.versions ?? args.select?.versions;
@@ -151,6 +155,52 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
   async function approved() { const b = await submitted();
     await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: 'Fictional review' }, reviewer);
     await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: 'Fictional approval' }, approver); return b; }
+  async function approvedPerformance() {
+    const task: any = { id: 'fictional-task', employeeId: employee, cycleId: 'monthly-cycle', status: 'published',
+      isExempt: false, participantDisposition: 'active', publishedAt: new Date('2026-11-30'),
+      cycle: { type: 'monthly', startDate: new Date('2026-11-01'), endDate: new Date('2026-11-30') },
+      gradeResult: { id: 'grade', calibratedGrade: 'A', rawGrade: 'B', isPublished: true, publishedAt: new Date('2026-11-30'), hrCalibratedAt: null, approvedAt: null }, appeals: [] };
+    db.tx.assessmentTask = { findUnique: jest.fn(async () => task) };
+    const result = await readPayrollPerformance(db.tx, { employeeId: employee, cycleId: task.cycleId, registeredCycleIds: [task.cycleId], requiredMonth: '2026-11' });
+    const policy: any = { id: 'policy', subjectId: subject, domain: 'validation', status: 'active', version: 1,
+      effectiveFrom: new Date('2026-11-01'), effectiveTo: null, config: { fixedSalaryBasis: 'monthly_workdays', performance: {
+        '2026-11': { sourceKind: 'fictional', cycleIds: [task.cycleId], coefficients: { A: '1', B: '0.8' }, coefficientVersion: 'v1', evidenceRef: 'fictional-approved' },
+      } } };
+    const release = { ruleId: policy.id, previousParameterId: null, parameterVersion: 1, snapshotHash: payrollHash(payrollParameterDefinition('rule', policy)) };
+    db.tx.payrollPolicy = { findMany: jest.fn(async () => [policy]) }; db.tx.payrollParameterRelease = { findMany: jest.fn(async () => [release]) };
+    capture.sources = JSON.parse(JSON.stringify({ performance: [{ employeeId: employee, cycleId: task.cycleId, result }], policies: [policy], parameterReleases: [release],
+      attendance: { payload: { days: [{ employeeId: employee, workDate: '2026-11-10' }] } } }));
+    capture.lines = ['fixed', 'absence', 'overtime', 'performance', 'adjustment'].map(itemCode => ({ ...capture.lines[0], itemCode: itemCode as any,
+      amount: itemCode === 'fixed' ? '200.00' : '0.00', entitlement: itemCode === 'fixed' ? '200.00' : '0.00' }));
+    for (const line of capture.lines) confirmOpening(employee, '2026-11', line.itemCode);
+    const batch = await approved();
+    db.tx.payrollNetPayment = { findMany: jest.fn(async () => []), findUnique: jest.fn(async () => null), create: jest.fn(async () => ({})) };
+    return { batch, task };
+  }
+  it('marks an approved unpaid version stale when automatic performance publication changes without recapturing gross', async () => {
+    const { batch, task } = await approvedPerformance(); sources.capture.mockClear(); task.gradeResult.isPublished = false;
+    expect((await service.detail(batch.id, editor)).versions[0].needsUpdate).toBe(true);
+    expect(sources.capture).not.toHaveBeenCalled(); expect(db.state.settlements).toHaveLength(0);
+  });
+  it('blocks legacy gross settlement after approved unpaid automatic performance changes', async () => {
+    const { batch, task } = await approvedPerformance(); sources.capture.mockClear(); task.gradeResult.isPublished = false;
+    await expect(service.settle(batch.id, payment(batch, '200.00'), finance)).rejects.toThrow(ConflictException);
+    expect(db.state.settlements).toHaveLength(0); expect(sources.capture).not.toHaveBeenCalled();
+  });
+  it('blocks net payment after approved automatic performance changes before any funds facts are written', async () => {
+    const { batch, task } = await approvedPerformance(), version = db.state.versions[0];
+    const body = { schema: 1, subjectId: subject, domain: 'validation', payDate: '2026-12-10', rows: [{ employeeId: employee, employeeName: '虚构员工', employeeNo: 'PAY_TEST',
+      result: { status: 'ready', issues: [], gross: '200.00', socialInsurance: '0.00', housingFund: '0.00', incomeTax: '0.00', net: '200.00', evidence: { parameter: {} } }, ledger: {} }],
+      totals: { gross: '200.00', socialInsurance: '0.00', housingFund: '0.00', incomeTax: '0.00', net: '200.00' } };
+    version.netSnapshot = { ...body, sourceHash: netHelpers.netSnapshotHash(body) }; version.payDate = new Date(body.payDate);
+    db.tx.payrollNetReservation = { findUnique: jest.fn(async () => ({ versionId: version.id })), deleteMany: jest.fn(async () => ({})) };
+    const fresh = jest.spyOn(netHelpers, 'assertPayrollNetFresh').mockResolvedValue(undefined);
+    try {
+      sources.capture.mockClear(); task.gradeResult.calibratedGrade = 'C';
+      await expect(service.netPayment(batch.id, { expectedVersion: batch.version, employeeId: employee, requestId: randomUUID(), reference: 'FICTIONAL', payDate: body.payDate }, finance)).rejects.toThrow(ConflictException);
+      expect(db.tx.payrollNetPayment.create).not.toHaveBeenCalled(); expect(db.state.settlements).toHaveLength(0); expect(sources.capture).not.toHaveBeenCalled();
+    } finally { fresh.mockRestore(); }
+  });
   const payment = (b: any, amount = '150.00', requestId = randomUUID()) => ({ expectedVersion: b.version,
     lineId: db.state.lines.find(l => l.versionId === db.state.versions.filter(v => v.batchId === b.id).at(-1)!.id)!.id,
     amount, reference: 'FICTIONAL-RECEIPT-1', requestId });

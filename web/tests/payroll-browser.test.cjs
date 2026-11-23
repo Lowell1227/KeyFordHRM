@@ -16,11 +16,11 @@ after(async () => { await browser?.close(); await server?.close(); });
 const caps = ['attendance_edit','attendance_seal','payroll_view','payroll_edit','payroll_review','payroll_approve','payroll_export','payroll_settle'];
 const people = [{ id: 'person', name: '虚构员工甲（长文本验收）', employeeNo: 'FICTIONAL-01' }];
 function batch(status = 'calculated', purpose = 'validation', more = {}) {
-  return { id: 'batch', subjectId: 'subject', month: '2026-11', payMonth: '2026-12', purpose, version: 1, status, versions: [{ id: 'version', version: 1, status, approvalPath: ['actor'], approvalStep: 0, reviewerCount: 1, gross: '0.00', sourceHash: 'fictional-source', sources: {}, issues: [], decisions: [], exports: [], lines: [
+  return { id: 'batch', subjectId: 'subject', month: '2026-11', payMonth: '2026-12', purpose, version: 1, status, events: [], versions: [{ id: 'version', version: 1, status, submittedById: 'fictional-hr', approvalPath: ['actor'], approvalStep: status === 'approved' ? 1 : 0, reviewerCount: 1, gross: '0.00', payDate: null, netSnapshot: null, netPayments: [], sourceHash: 'fictional-source', sources: {}, issues: [], decisions: [], exports: [], lines: [
     { id: 'line', employeeId: 'person', attributionMonth: '2026-11', itemCode: 'fixed', status: 'ready', entitlement: '0.00', paidBefore: '0', amount: '0.00', evidence: { explanation: '虚构计算依据' } },
     { id: 'na', employeeId: 'person', attributionMonth: '2026-11', itemCode: 'overtime', status: 'not_applicable', entitlement: '0.00', paidBefore: '0', amount: '0.00', evidence: { applicability: 'not_applicable' } },
     { id: 'missing', employeeId: 'person', attributionMonth: '2026-11', itemCode: 'performance', status: 'needs_configuration', entitlement: null, paidBefore: null, amount: null, evidence: {} },
-  ] }], ...more };
+  ].map(line => ({ ...line, reservation: null, settlements: [] })) }], ...more };
 }
 async function pageFor(t, options = {}) {
   const context = await browser.newContext({ viewport: options.viewport ?? { width: 1440, height: 900 } });
@@ -41,7 +41,7 @@ async function pageFor(t, options = {}) {
     if (p === '/payroll/operators') data = [{ id: 'actor', name: '虚构复核人', capabilities: caps }];
     if (p === '/payroll/batches') data = [options.batch ?? batch()];
     if (p === '/payroll/batches/batch') data = options.batch ?? batch();
-    if (p === '/payroll/performance-cycles') data = [{ id: 'cycle', name: '虚构验收周期' }];
+    if (p === '/payroll/performance-cycles') data = [{ id: 'cycle', name: '虚构验收周期', type: 'monthly', startDate: '2026-11-01', endDate: '2026-11-30' }];
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ code: 0, data }) });
   });
   return { page, calls, errors };
@@ -50,7 +50,9 @@ const expect = require('@playwright/test').expect;
 test('actual pages: attendance-only never requests wages; 1440/1024/390 layouts do not overflow', async t => {
   for (const viewport of [{ width:1440,height:900 }, { width:1024,height:768 }, { width:390,height:844 }]) {
     const { page, calls, errors } = await pageFor(t, { viewport, capabilities: ['attendance_edit'] });
+    const accessReady = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/payroll/access');
     await page.goto(`${origin}payroll/attendance?month=2026-11`);
+    expect((await accessReady).status()).toBe(200);
     await expect(page.getByRole('button', { name: '接收考勤', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '接收考勤', exact: true }).click();
     await expect(page.getByRole('button', { name: '载入虚构考勤', exact: true })).toBeVisible();
@@ -63,8 +65,17 @@ test('actual pages: attendance-only never requests wages; 1440/1024/390 layouts 
 });
 test('actual action failure retains form and expected version, settlement retry reuses original request', async t => {
   let first = true;
-  const { page, calls } = await pageFor(t, { batch: batch('approved'), handle: async ({ path: p }) => {
-    if (p.endsWith('/settlements')) { if (first) { first = false; return { status: 503, body: JSON.stringify({ message: '虚构网络中断，请核对后重试' }) }; } return { data: batch('approved') }; }
+  const approved = batch('approved');
+  approved.versions[0].lines = [{ ...approved.versions[0].lines[0], reservation: {
+    subjectId: 'subject', employeeId: 'person', domain: 'validation', attributionMonth: '2026-11', itemCode: 'fixed', lineId: 'line', createdAt: '2026-12-10T00:00:00Z',
+  } }];
+  const { page, calls } = await pageFor(t, { batch: approved, handle: async ({ path: p, body }) => {
+    if (p.endsWith('/settlements')) {
+      if (first) { first = false; return { status: 503, body: JSON.stringify({ message: '虚构网络中断，请核对后重试' }) }; }
+      return { data: { ...approved, version: 2, versions: [{ ...approved.versions[0], lines: [{ ...approved.versions[0].lines[0], reservation: null,
+        settlements: [{ id: 'settlement', lineId: body.lineId, requestId: body.requestId, amount: body.amount, reference: body.reference, confirmedById: 'actor', createdAt: '2026-12-10T00:00:00Z' }],
+      }] }] } };
+    }
   } });
   await page.goto(`${origin}payroll/results/batch?month=2026-11`);
   await page.getByRole('button', { name: '确认入薪', exact: true }).click();
@@ -77,7 +88,10 @@ test('actual action failure retains form and expected version, settlement retry 
   await page.getByRole('button', { name: '重试同一入薪请求' }).click();
   await expect(page.getByText('确认入薪已完成')).toBeVisible();
   const attempts = calls.filter(call => call.path.endsWith('/settlements'));
-  assert.equal(attempts.length, 2); assert.deepEqual(attempts[0].body, attempts[1].body); assert.equal(attempts[0].body.expectedVersion, 1);
+  assert.equal(attempts.length, 2); assert.deepEqual(attempts[0].body, attempts[1].body);
+  assert.deepEqual(attempts[0].body, { expectedVersion: 1, lineId: 'line', amount: '0.00', reference: 'fictional-payment', requestId: attempts[0].body.requestId });
+  assert.match(attempts[0].body.requestId, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i);
+  assert.ok(!calls.some(call => call.path.endsWith('/net-payment')));
 });
 test('trial export absent; stale source blocks approval but permits assigned return', async t => {
   const trial = await pageFor(t, { batch: batch('approved', 'trial') });
@@ -86,20 +100,47 @@ test('trial export absent; stale source blocks approval but permits assigned ret
   await expect(trial.page.getByRole('button', { name: '下载加密工资表' })).toHaveCount(0);
   const stale = await pageFor(t, { batch: batch('pending', 'validation', { needsUpdate: true }) });
   await stale.page.goto(`${origin}payroll/approvals/batch?month=2026-11`);
-  await expect(stale.page.getByText('来源已更新', { exact: false })).toBeVisible();
+  await expect(stale.page.getByText('来源已更新，当前审批暂停。经办撤回或当前办理人退回后，重新核算并提交新版。', { exact: true })).toBeVisible();
   await expect(stale.page.getByRole('button', { name: '通过当前环节' })).toHaveCount(0);
   await expect(stale.page.getByRole('button', { name: '退回经办' })).toBeVisible();
 });
-test('formal parameters blank, actual employee/operator/cycle selectors, copy keeps JSON evidence', async t => {
-  const { page, calls } = await pageFor(t);
+test('monthly workday parameters start unconfirmed and copying a rule preserves approved automatic sources and evidence', async t => {
+  const rule = { id: 'rule', subjectId: 'subject', version: 3, status: 'active', effectiveFrom: '2026-11-01', effectiveTo: null, config: {
+    fixedSalaryBasis: 'monthly_workdays', workCalendars: { '2026-11': { sourceVersion: 'fictional-calendar-v1', evidenceRef: '虚构日历批准依据',
+      days: Array.from({ length: 30 }, (_, index) => ({ workDate: `2026-11-${String(index + 1).padStart(2, '0')}`, units: index < 20 ? '1' : '0' })),
+    } }, monthlyUnits: { '2026-11': '20' }, rounding: 'item_half_up', normalHourly: null, paidHourly: {},
+    overtime: { hourlyBase: null, weekday: null, restday: null, holiday: null }, reviewers: ['actor'], approvers: ['actor'], cutoverMonth: '2026-11',
+    performance: { '2026-11': { sourceKind: 'official', cycleIds: ['cycle'], coefficients: { A: '1.2' }, coefficientVersion: 'fictional-table-v1', evidenceRef: '虚构系数表批准依据' } },
+  } };
+  const { page, calls } = await pageFor(t, { handle: ({ path: p }) => p === '/payroll/rules' ? { data: [rule] } : undefined });
   await page.goto(`${origin}payroll/standards?month=2026-11`);
   await page.getByRole('tab', { name: '工资规则' }).click();
   await page.getByRole('button', { name: '新增规则', exact: true }).click();
-  const drawer = page.locator('.business-detail-drawer');
-  const units = drawer.locator('.el-form-item').filter({ has: page.getByText('2026-11 计薪单位', { exact: true }) }).getByRole('textbox');
-  await expect(units).toHaveValue('');
+  const drawer = page.getByRole('dialog', { name: '工资规则草稿', exact: true });
+  const calendar = drawer.getByTestId('payroll-work-calendar');
+  await expect(drawer.getByLabel('2026-11 计薪单位', { exact: true })).toHaveCount(0);
+  await expect(calendar.getByLabel('日历版本', { exact: true })).toHaveValue('');
+  await expect(calendar.getByLabel('日历确认依据', { exact: true })).toHaveValue('');
+  await expect(calendar.getByRole('checkbox')).toHaveCount(30);
+  await expect(calendar.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  await expect(drawer.getByLabel('正常计薪小时单价', { exact: true })).toHaveValue('');
+  await expect(drawer.getByRole('combobox', { name: '舍入规则', exact: true })).toHaveValue('');
+  await expect(drawer.getByRole('combobox', { name: '正式启用归属月切点', exact: true })).toHaveValue('');
   await drawer.getByRole('button', { name: '保存草稿' }).click(); await expect(drawer.getByText('请选择生效日期')).toBeVisible();
+  await expect(calendar.getByText('请填写日历版本、确认依据并选择应出勤日期', { exact: true })).toBeVisible();
+  assert.ok(!calls.some(call => call.method === 'POST'));
   assert.ok(calls.some(call => call.path.endsWith('/operators'))); assert.ok(calls.some(call => call.path.endsWith('/performance-cycles')));
+  assert.ok(calls.some(call => call.path.endsWith('/employees')));
+  await drawer.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '复制草稿', exact: true }).first().click();
+  await expect(calendar.getByLabel('日历版本', { exact: true })).toHaveValue('fictional-calendar-v1');
+  await expect(calendar.getByLabel('日历确认依据', { exact: true })).toHaveValue('虚构日历批准依据');
+  await expect(calendar.getByRole('checkbox', { checked: true })).toHaveCount(20);
+  await expect(drawer.getByLabel('统一系数表版本', { exact: true })).toHaveValue('fictional-table-v1');
+  await expect(drawer.getByLabel('系数确认依据', { exact: true })).toHaveValue('虚构系数表批准依据');
+  await expect(drawer.getByLabel('A 等系数', { exact: true })).toHaveValue('1.2');
+  await expect(drawer.locator('.el-form-item').filter({ has: page.getByText('绩效周期', { exact: true }) })).toContainText('虚构验收周期');
+  await expect(drawer.getByTestId('payroll-manual-performance')).toHaveCount(0);
 });
 test('actual results distinguish not applicable, ready zero and missing; screenshots at desktop/mobile', async t => {
   for (const viewport of [{ width:1440,height:900 }, { width:1024,height:768 }, { width:390,height:844 }]) {
@@ -172,7 +213,7 @@ test('submit conflict offers the protected original batch without resubmitting o
 test('an approved cross-month hold explains the financial pause without requesting an impossible withdrawal', async t => {
   const { page } = await pageFor(t, { batch: batch('approved', 'validation', { needsUpdate: true }) });
   await page.goto(`${origin}payroll/results/batch?month=2026-11`);
-  await expect(page.getByText('考勤来源存在跨月归属冲突，下载和新增入薪已暂停。请核对原月及已入薪差异，原批准记录保留。', { exact: true })).toBeVisible();
+  await expect(page.getByText('核算来源已变化或存在归属冲突，下载和新增入薪已暂停。请核对原月及已入薪差异，原批准记录保留。', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '下载加密工资表', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '确认入薪', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '撤回重算', exact: true })).toHaveCount(0);

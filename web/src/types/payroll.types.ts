@@ -10,7 +10,7 @@ export interface PayrollAttendance { id: string; month: string; version: number;
 export interface PayrollSourceInput { sourceKey: string; input: Record<string, unknown>; complete?: boolean; scope?: { employeeIds: string[]; from: string; to: string } }
 export interface PayrollStandardInput { subjectId: string; employeeId: string; effectiveFrom: string; effectiveTo?: string; fixedMonthly: string | null; performanceBase: string | null; performanceMode: 'included' | 'additional' | 'none' | null; evidence: string }
 export interface PayrollStandard extends PayrollStandardInput { id: string; version: number; status: string }
-export interface PayrollPerformanceMapping { cycleIds: string[]; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>>; sourceKind?: 'official' | 'fictional' | null; coefficientVersion?: string | null; evidenceRef?: string | null }
+export interface PayrollPerformanceMapping { cycleIds: string[]; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>>; sourceKind?: 'manual' | 'official' | 'fictional' | null; manualAmounts?: Record<string, string>; coefficientVersion?: string | null; evidenceRef?: string | null }
 export interface PayrollWorkCalendar { sourceVersion: string; evidenceRef: string; days: Array<{ workDate: string; units: string }> }
 export interface PayrollRuleConfig {
   fixedSalaryBasis?: 'monthly_workdays' | null;
@@ -50,6 +50,7 @@ export interface PayrollParameterRelease {
   submittedBy: { id: string; name: string }; reviewer: { id: string; name: string };
   standard?: { employee: { name: string; employeeNo: string | null } } | null;
   deduction?: { employee: { name: string; employeeNo: string | null } } | null;
+  manualEmployees?: Array<{ id: string; name: string; employeeNo: string | null }>;
   snapshot: { effectiveFrom: string; effectiveTo: string | null; fixedMonthly?: string | null; performanceBase?: string | null;
     performanceMode?: string | null; evidence?: string; config?: PayrollRuleConfig; payDate?: string; settings?: PayrollDeductionSettings };
   submittedAt: string; decidedAt: string | null; note: string;
