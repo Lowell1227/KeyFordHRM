@@ -23,6 +23,7 @@ export function completeNetVersion(batch: PayrollBatch): boolean {
       && ['gross', 'socialInsurance', 'housingFund', 'incomeTax', 'net'].every(key => row.result[key as keyof typeof row.result] != null)));
 }
 export function payrollDownloadName(batch: PayrollBatch): string {
+  if (batch.purpose === 'reconciliation') throw new Error('真实资料对账不能下载最终工资表');
   return `${batch.purpose === 'formal' ? '' : '测试环境-'}${currentVersion(batch)?.netSnapshot ? '实发工资' : '税前工资'}-${batch.month}-V${currentVersion(batch)?.version}.xlsx`;
 }
 export function cancelledNetEmployeeIds(batch: PayrollBatch, version: PayrollVersion | undefined = currentVersion(batch)): string[] {
@@ -39,6 +40,7 @@ export function cancelledNetEmployeeIds(batch: PayrollBatch, version: PayrollVer
 }
 export type BatchAction = 'calculate' | 'submit' | 'approve' | 'return' | 'withdraw' | 'export' | 'settle' | 'net-payment' | 'cancel-net-remainder' | 'cancel-remainder' | 'void' | 'correct';
 export function batchActions(batch: PayrollBatch, capabilities: string[], actorId: string): BatchAction[] {
+  if (batch.purpose === 'reconciliation') return capabilities.includes('payroll_edit') && ['draft', 'calculated'].includes(batch.status) ? ['calculate'] : [];
   const actions: BatchAction[] = [];
   const can = (cap: string) => capabilities.includes(cap);
   const version = currentVersion(batch);
@@ -81,10 +83,12 @@ export function batchActions(batch: PayrollBatch, capabilities: string[], actorI
 }
 export const statusLabels: Record<PayrollStatus, string> = { draft: '草稿', calculated: '待提交复核', blocked: '待核对 / 待配置', pending: '复核 / 审批中', approved: '已批准', returned: '已退回', withdrawn: '已撤回', voided: '已作废', closed: '已结清' };
 export function batchStatus(batch: PayrollBatch): string {
+  if (batch.purpose === 'reconciliation') return batch.status === 'draft' ? '对账草稿'
+    : batch.status === 'calculated' ? currentVersion(batch)?.issues.length ? '对账待核对' : '对账已计算' : '对账只读';
   const version = currentVersion(batch);
   return batch.status === 'pending' && version ? version.approvalStep < version.reviewerCount ? '待复核' : '待审批' : statusLabels[batch.status];
 }
-export const purposeLabels = { trial: '试算', validation: '测试环境', formal: '正式' };
+export const purposeLabels = { trial: '试算', validation: '测试环境', formal: '正式', reconciliation: '真实资料对账' };
 export const itemLabels: Record<string, string> = { fixed: '固定工资', absence: '假勤差额', overtime: '加班工资', performance: '个人绩效', adjustment: '授权调整' };
 export function isDecimal(value: string, signed = false) { return (signed ? /^-?\d+(\.\d+)?$/ : /^\d+(\.\d+)?$/).test(value); }
 export const attendanceIssueLabels: Record<string, string> = {

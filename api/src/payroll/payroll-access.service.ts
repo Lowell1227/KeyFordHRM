@@ -41,7 +41,7 @@ export class PayrollAccessService {
   }
   async assertDomain(tx: Prisma.TransactionClient | PrismaService, purpose: PayrollPurpose): Promise<PayrollDomain> {
     if (!this.enabled()) throw new ForbiddenException('薪酬功能尚未启用');
-    if (purpose === 'formal') {
+    if (purpose === 'formal' || purpose === 'reconciliation') {
       if (this.config.get<string>('PAYROLL_FORMAL_ENABLED') !== 'true' || this.config.get<string>('HRM_PREVIEW') === 'true') {
         throw new ForbiddenException('正式薪酬尚未开放，需先确认正式规则与授权');
       }

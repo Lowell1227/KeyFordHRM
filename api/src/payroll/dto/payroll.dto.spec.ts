@@ -8,6 +8,13 @@ import * as payrollDto from './payroll.dto';
 describe('payroll HTTP validation', () => {
   const subjectId = '00000000-0000-4000-8000-000000000001';
   const batchQuery = Reflect.getMetadata('design:paramtypes', PayrollController.prototype, 'list')[0];
+  it('accepts a separate real reconciliation purpose, never an override on a formal batch', async () => {
+    const input = { subjectId, month: '2026-10', payMonth: '2026-11', purpose: 'reconciliation' };
+    const options = { whitelist: true, forbidNonWhitelisted: true };
+    expect(await validate(plainToInstance(payrollDto.PayrollCreateDto, input), options)).toEqual([]);
+    expect((await validate(plainToInstance(payrollDto.PayrollCreateDto, { ...input, purpose: 'formal', trial: true }), options)).length).toBeGreaterThan(0);
+    expect((await validate(plainToInstance(payrollDto.PayrollCreateDto, { ...input, purpose: 'formal', domain: 'validation' }), options)).length).toBeGreaterThan(0);
+  });
   it.each([{}, { month: '2026-11' }])('accepts the compatible batch-list query %j', async query => {
     expect(await validate(plainToInstance(batchQuery, { subjectId, ...query }) as object,
       { whitelist: true, forbidNonWhitelisted: true })).toEqual([]);

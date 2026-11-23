@@ -34,6 +34,11 @@ describe('locked payroll export', () => {
     return { batch, version, tx, access, crypto, service: new PayrollExportService(prisma as any, access as any, crypto as any) };
   }
   const actor = { id: 'exporter', sysRole: 'employee' } as any;
+  it('rejects a real reconciliation final Excel even with a forged approved version and export permission', async () => {
+    const s = fixture(); s.batch.purpose = 'reconciliation';
+    await expect(s.service.download('batch', { expectedVersion: 4, filePassword: 'fictional-only' }, actor)).rejects.toThrow(ForbiddenException);
+    expect(s.crypto.encryptWorkbook).not.toHaveBeenCalled(); expect(s.tx.payrollExportRecord.create).not.toHaveBeenCalled();
+  });
   function sealNet(snapshot: any) {
     const { sourceHash, ...body } = snapshot;
     snapshot.sourceHash = netSnapshotHash(body);

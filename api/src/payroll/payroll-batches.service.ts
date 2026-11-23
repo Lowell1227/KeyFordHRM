@@ -52,7 +52,7 @@ export class PayrollBatchesService {
       if (month !== undefined) payrollMonth(month);
       const where = { subjectId, ...(month !== undefined ? { month } : {}) };
       const candidates = await tx.payrollBatch.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: batchScopeSelect });
-      const allowed = candidates.filter(batch => scope.full || batch.versions[0] &&
+      const allowed = candidates.filter(batch => scope.full || batch.purpose !== 'reconciliation' && batch.versions[0] &&
         (this.assigned(batch.versions[0], actor, scope) || scope.final && this.isEffective(batch, batch.versions[0])));
       if (!allowed.length) return [];
       const domains = new Map<string, PayrollDomain>();
@@ -75,6 +75,7 @@ export class PayrollBatchesService {
       const header = await this.lookup(tx, id);
       const scope = await this.readScope(tx, header.subjectId, actor);
       const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
+      if (header.purpose === 'reconciliation' && !scope.full) throw new ForbiddenException('真实资料对账仅限本主体工资查看或经办人员');
       const metadata = await this.scopeBatch(tx, id, scope.full || scope.review || scope.approve ? 50 : 1);
       const latest = metadata.versions[0], assigned = !!latest && this.assigned(latest, actor, scope);
       if (!scope.full && !assigned && !(scope.final && latest && this.isEffective(metadata, latest))) throw new ForbiddenException('无权查看该工资版本');
@@ -101,9 +102,10 @@ export class PayrollBatchesService {
         throw new BadRequestException('补差归属月最多十一项，且不能重复或包含主归属月');
       }
       months.forEach(payrollMonth);
+      if (input.purpose === 'reconciliation' && input.correctionOfId) throw new BadRequestException('真实资料对账不能发起正式更正或补差，请在本批次重新计算');
       if (input.correctionOfId) {
         const original = await tx.payrollBatch.findUnique({ where: { id: input.correctionOfId } });
-        if (!original || original.subjectId !== input.subjectId || original.month !== input.month ||
+        if (!original || original.purpose === 'reconciliation' || original.subjectId !== input.subjectId || original.month !== input.month ||
           (original.purpose === 'formal' ? 'formal' : 'validation') !== domain || !['approved', 'voided'].includes(original.status)) {
           throw new BadRequestException('更正原批次必须属于同一主体、归属月和核算环境，且已有批准记录');
         }
@@ -118,6 +120,7 @@ export class PayrollBatchesService {
   async calculate(id: string, input: ExpectedVersion & { payDate?: string }, actor: PayrollActor) {
     return this.write(id, actor, 'payroll_edit', async (tx, batch, domain) => {
       assertPayrollVersion(batch.version, input.expectedVersion);
+      if (batch.purpose === 'reconciliation' && !['draft', 'calculated'].includes(batch.status)) throw new ConflictException('真实资料对账仅允许草稿或已计算版本重新计算');
       if (!['draft', 'calculated', 'returned', 'withdrawn', 'voided'].includes(batch.status)) throw new ConflictException('请先撤回或作废当前版本后重算');
       if (batch.purpose === 'formal' && !input.payDate) throw new ConflictException('正式工资必须核算扣缴及实发，请明确发薪日');
       const captured = await this.captureForBatch(tx, batch, domain);
@@ -256,6 +259,7 @@ export class PayrollBatchesService {
 
   async submit(id: string, input: ExpectedVersion, actor: PayrollActor) {
     return this.write(id, actor, 'payroll_edit', async (tx, batch, domain) => {
+      if (batch.purpose === 'reconciliation') throw new ConflictException('真实资料对账不能提交复核审批');
       assertPayrollVersion(batch.version, input.expectedVersion);
       const version = this.latest(batch);
       if (batch.purpose === 'trial') throw new ConflictException('试算批次不能提交正式审批或最终导出');
@@ -299,6 +303,7 @@ export class PayrollBatchesService {
         throw new ForbiddenException('没有该主体的工资复核或审批权限');
       }
       const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
+      if (header.purpose === 'reconciliation') throw new ConflictException('真实资料对账不能办理复核审批');
       await lockPayrollSubject(tx, header.subjectId, domain);
       const metadata = await this.scopeBatch(tx, id), step = metadata.versions[0];
       if (!step) throw new ConflictException('请先完成工资核算');
@@ -332,6 +337,7 @@ export class PayrollBatchesService {
 
   async withdraw(id: string, input: ExpectedVersion & { note: string }, actor: PayrollActor) {
     return this.write(id, actor, 'payroll_edit', async (tx, batch) => {
+      if (batch.purpose === 'reconciliation') throw new ConflictException('真实资料对账没有待撤回的正式审批或支付安排');
       assertPayrollVersion(batch.version, input.expectedVersion);
       const version = this.latest(batch), note = this.text(input.note, 500);
       if (batch.status !== 'pending' || version.status !== 'pending') throw new ConflictException('仅审批中的版本可以撤回');
@@ -480,6 +486,9 @@ export class PayrollBatchesService {
     return this.transaction(async tx => {
       const header = await this.lookup(tx, id);
       await this.access.assert(tx, actor, header.subjectId, capability);
+      if (header.purpose === 'reconciliation' && (capability !== 'payroll_edit' || previewGuard)) {
+        throw new ConflictException('真实资料对账仅允许计算，不能使用虚构试算、结算或变更支付安排');
+      }
       if (previewGuard && header.purpose === 'formal') throw new ForbiddenException('扣缴试算仅限虚构预览，不接受正式批次');
       const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
       await lockPayrollSubject(tx, header.subjectId, domain);
@@ -533,7 +542,7 @@ export class PayrollBatchesService {
   }
 
   private isEffective(batch: Pick<PayrollBatch, 'purpose' | 'status'>, version: VersionScope): boolean {
-    return batch.purpose !== 'trial' && batch.status === 'approved' && version.status === 'approved' && !!version.approvedAt && !version.voidedAt &&
+    return ['validation', 'formal'].includes(batch.purpose) && batch.status === 'approved' && version.status === 'approved' && !!version.approvedAt && !version.voidedAt &&
       version.approvalStep === version.approvalPath.length && version.reviewerCount >= 1 && version.reviewerCount < version.approvalPath.length &&
       version.decisions.length === version.approvalPath.length && version.decisions.every((decision, step) =>
         decision.step === step && decision.action === 'approve' && decision.actorId === version.approvalPath[step]);
@@ -590,6 +599,12 @@ export class PayrollBatchesService {
       try { capture = await this.sources.capture(tx, batch.subjectId, month, domain); }
       catch { throw new ConflictException('工资来源暂不可用，请核对后重新取数；未按零金额处理'); }
       this.validateCapture(capture, month);
+      if (batch.purpose === 'reconciliation') {
+        const source = capture.sources as { subjectId?: string; month?: string; domain?: string } | null;
+        if (domain !== 'formal' || source?.domain !== 'formal' || source.subjectId !== batch.subjectId || source.month !== month) {
+          throw new ConflictException('真实资料对账须读取本主体对应归属月的正式域来源');
+        }
+      }
       const first = captures[0]?.capture;
       if (first && (first.reviewerCount !== capture.reviewerCount || JSON.stringify(first.approvalPath) !== JSON.stringify(capture.approvalPath))) {
         throw new ConflictException('各归属月复核审批路径不一致，请分批核算');

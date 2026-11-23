@@ -27,6 +27,20 @@ describe('live payroll access', () => {
     const { service, prisma } = fixture({ PAYROLL_ENABLED: 'true', HRM_PREVIEW: 'true', PAYROLL_FORMAL_ENABLED: 'true' });
     await expect(service.assertDomain(prisma, 'formal')).rejects.toThrow(ForbiddenException);
   });
+  it('reads authorized real reconciliation from the formal domain without touching preview fixtures', async () => {
+    const { service, prisma } = fixture({ PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'true', HRM_PREVIEW: 'false' });
+    prisma.systemConfig = { findUnique: jest.fn(() => { throw new Error('Preview fixture must not be read'); }) };
+    await expect(service.assertDomain(prisma, 'reconciliation' as any)).resolves.toBe('formal');
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+  it.each([
+    { PAYROLL_ENABLED: 'false', PAYROLL_FORMAL_ENABLED: 'true', HRM_PREVIEW: 'false' },
+    { PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'false', HRM_PREVIEW: 'false' },
+    { PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'true', HRM_PREVIEW: 'true' },
+  ])('keeps real reconciliation closed under %j', async flags => {
+    const { service, prisma } = fixture(flags);
+    await expect(service.assertDomain(prisma, 'reconciliation' as any)).rejects.toThrow(ForbiddenException);
+  });
   it('chooses the maintenance domain from server configuration, never a client selector', () => {
     expect(fixture().service.maintenancePurpose()).toBe('validation');
     expect(fixture({ PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'true' }).service.maintenancePurpose()).toBe('formal');

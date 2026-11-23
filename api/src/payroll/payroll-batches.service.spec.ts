@@ -12,6 +12,7 @@ import { readPayrollPerformance } from './payroll-performance-source';
 import * as netHelpers from './payroll-net';
 import { payrollHash } from './payroll-transaction';
 import { payrollParameterDefinition } from './payroll-parameter-definition';
+import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
 
 const subject = randomUUID(), otherSubject = randomUUID(), employee = randomUUID();
 const editor = { id: randomUUID() }, reviewer = { id: randomUUID() }, approver = { id: randomUUID() };
@@ -210,6 +211,131 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     new PayrollExceptionFilter().catch(error, { switchToHttp: () => ({ getResponse: () => res }) } as any);
     return { status: status!, body };
   }
+
+  describe('real reconciliation is calculation-only', () => {
+    const input = () => ({ ...createInput(), purpose: 'reconciliation' as any });
+    beforeEach(() => {
+      access = new PayrollAccessService(db.prisma, { get: (key: string) =>
+        ['PAYROLL_ENABLED', 'PAYROLL_FORMAL_ENABLED'].includes(key) ? 'true' : 'false' } as ConfigService);
+      service = new PayrollBatchesService(db.prisma, access, sources);
+      capture.sources = { subjectId: subject, month: '2026-11', domain: 'formal' };
+      db.tx.payrollNetReservation = { createMany: jest.fn(), deleteMany: jest.fn(), findUnique: jest.fn() };
+      db.tx.payrollNetPayment = { create: jest.fn(), findMany: jest.fn(async () => []) };
+    });
+    it('creates and repeatedly calculates real sources without a preview marker or formal reservations', async () => {
+      const batch = await service.create(input(), editor);
+      await service.calculate(batch.id, { expectedVersion: 0 }, editor);
+      const original = clone(db.state.versions[0]);
+      await service.calculate(batch.id, { expectedVersion: 1 }, editor);
+      expect(db.state.versions.map(v => v.version)).toEqual([1, 2]);
+      expect(db.state.versions[0]).toEqual(original);
+      expect(sources.capture).toHaveBeenCalledWith(db.tx, subject, '2026-11', 'formal');
+      expect((await service.list(subject, editor))[0].purpose).toBe('reconciliation');
+      expect((await service.detail(batch.id, editor)).versions).toHaveLength(2);
+      expect(db.state.reservations).toEqual([]); expect(db.state.settlements).toEqual([]);
+      expect(db.tx.payrollNetReservation.createMany).not.toHaveBeenCalled();
+      expect(db.tx.payrollNetReservation.deleteMany).not.toHaveBeenCalled();
+      expect(db.tx.payrollNetPayment.create).not.toHaveBeenCalled();
+    });
+    it('does not grant real reconciliation to HR/admin titles, cross-subject or assessor-only actors', async () => {
+      for (const actor of [outsider, { ...editor, isAssessorOnly: true }]) await expect(service.create(input(), actor)).rejects.toThrow(ForbiddenException);
+      await expect(service.create({ ...input(), subjectId: otherSubject }, editor)).rejects.toThrow(ForbiddenException);
+      const b = await service.create(input(), editor);
+      await expect(service.detail(b.id, outsider)).rejects.toThrow(ForbiddenException);
+      expect(db.state.batches).toHaveLength(1);
+    });
+    it('uses reviewed formal net inputs without writing tax facts or allocations across repeated calculations', async () => {
+      const payDate = '2026-12-10';
+      const { gross, payDate: date, subjectId, employeeId, ...settings } = fictionalDeductionsInput({
+        subjectId: subject, employeeId: employee, month: '2026-11', payDate, gross: '1000.00' });
+      const { subjectId: s, employeeId: e, year, ...opening } = settings.tax.opening;
+      const profile: any = { id: randomUUID(), subjectId, employeeId, domain: 'formal', version: 1, status: 'active',
+        payDate: new Date(date), effectiveFrom: new Date(date), effectiveTo: new Date(date), settings: {
+          ...settings, tax: { ...settings.tax, opening }, ledger: { startDate: '2026-01-01',
+            priorInPayMonth: Object.fromEntries(Object.keys(settings.tax.current).map(key => [key, '0'])), priorSocialInsurance: '0', priorHousingFund: '0' },
+        } };
+      profile.releases = [{ id: randomUUID(), parameterVersion: 1, submittedById: editor.id, reviewerId: reviewer.id,
+        snapshotHash: payrollHash(payrollParameterDefinition('deduction', profile)) }];
+      db.tx.payrollDeductionProfile = { findFirst: jest.fn(async () => profile) };
+      capture.gross = capture.lines[0].amount = capture.lines[0].entitlement = '1000.00';
+      const b = await service.create(input(), editor);
+      await service.calculate(b.id, { expectedVersion: 0, payDate }, editor);
+      await service.calculate(b.id, { expectedVersion: 1, payDate }, editor);
+      expect(db.state.versions[0].netSnapshot).toEqual(db.state.versions[1].netSnapshot);
+      expect(db.state.versions[0].netSnapshot.domain).toBe('formal');
+      expect(db.state.versions[0].netSnapshot.totals).toEqual({ gross: '1000.00', socialInsurance: '100.00', housingFund: '100.00', incomeTax: '80.00', net: '720.00' });
+      expect(db.tx.payrollDeductionProfile.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ domain: 'formal', subjectId: subject }) }));
+      expect(db.tx.payrollNetPayment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ domain: 'formal', subjectId: subject }) }));
+      expect(db.tx.payrollNetPayment.create).not.toHaveBeenCalled(); expect(db.state.settlements).toEqual([]);
+      expect(db.tx.payrollNetReservation.createMany).not.toHaveBeenCalled(); expect(db.state.reservations).toEqual([]);
+    });
+    it('parallel independent reconciliations leave existing formal payments and occupied amounts untouched', async () => {
+      const existing = { subjectId: subject, employeeId: employee, domain: 'formal', attributionMonth: '2026-11', itemCode: 'fixed', lineId: randomUUID() };
+      db.state.reservations.push(existing); db.state.netPayments.push({ id: randomUUID(), subjectId: otherSubject, amount: '500.00' });
+      const before = clone({ allocations: db.state.reservations, paid: db.state.netPayments });
+      const first = await service.create(input(), editor), second = await service.create(input(), editor);
+      await Promise.all([first, second].map(b => service.calculate(b.id, { expectedVersion: 0 }, editor)));
+      expect(db.state.versions).toHaveLength(2); expect(new Set(db.state.versions.map(v => v.batchId)).size).toBe(2);
+      expect({ allocations: db.state.reservations, paid: db.state.netPayments }).toEqual(before);
+      expect(db.tx.payrollReservation.createMany).not.toHaveBeenCalled(); expect(db.tx.payrollReservation.deleteMany).not.toHaveBeenCalled();
+    });
+    it('requires formal net calculation for formal purpose even if an operator intended reconciliation', async () => {
+      const b = await service.create({ ...input(), purpose: 'formal' }, editor);
+      await expect(service.calculate(b.id, { expectedVersion: 0 }, editor)).rejects.toThrow('正式工资必须核算扣缴及实发');
+      expect(db.state.versions).toEqual([]);
+    });
+    it('preserves pending configuration and source failures without fabricating zero or reserving funds', async () => {
+      const b = await service.create(input(), editor);
+      capture.issues = ['Fictional unconfirmed source']; capture.gross = null;
+      capture.lines[0].status = 'needs_configuration'; capture.lines[0].amount = null;
+      await service.calculate(b.id, { expectedVersion: 0 }, editor);
+      const result = await service.detail(b.id, editor);
+      expect(result.versions[0].gross).toBeNull(); expect(result.versions[0].issues).toContain('Fictional unconfirmed source');
+      sources.capture.mockRejectedValueOnce(new Error('offline'));
+      await expect(service.calculate(b.id, { expectedVersion: 1 }, editor)).rejects.toThrow(ConflictException);
+      expect(db.state.versions).toHaveLength(1); expect(db.state.reservations).toEqual([]);
+    });
+    it('rejects a validation-domain source returned for a real reconciliation', async () => {
+      const b = await service.create(input(), editor); (capture.sources as any).domain = 'validation';
+      await expect(service.calculate(b.id, { expectedVersion: 0 }, editor)).rejects.toThrow(ConflictException);
+      expect(db.state.versions).toEqual([]);
+    });
+    it('does not convert real reconciliation into a correction of an approved formal batch', async () => {
+      const original = await db.tx.payrollBatch.create({ data: { ...createInput(), purpose: 'formal', status: 'approved' } });
+      await expect(service.create({ ...input(), correctionOfId: original.id }, editor)).rejects.toThrow(BadRequestException);
+      expect(db.state.batches).toHaveLength(1);
+    });
+    it('rejects stale concurrent recalculation tokens without creating duplicate versions or reservations', async () => {
+      const b = await service.create(input(), editor);
+      await service.calculate(b.id, { expectedVersion: 0 }, editor);
+      await expect(service.calculate(b.id, { expectedVersion: 0 }, editor)).rejects.toThrow(ConflictException);
+      expect(db.state.versions).toHaveLength(1); expect(db.state.reservations).toEqual([]);
+    });
+    it.each(['submit', 'withdraw', 'decide', 'settle', 'netPayment', 'cancelRemainder', 'cancelNetRemainder', 'voidApproved', 'deductionsPreview'])('rejects the %s backdoor even for an apparently approved/assigned reconciliation', async action => {
+      const b = await service.create(input(), editor); await service.calculate(b.id, { expectedVersion: 0 }, editor);
+      const batch = db.state.batches[0], version = db.state.versions[0];
+      batch.status = version.status = ['decide', 'withdraw'].includes(action) ? 'pending' : action === 'submit' ? 'calculated' : 'approved';
+      version.submittedById = editor.id; version.approvedAt = new Date();
+      version.approvalStep = action === 'decide' ? 0 : 2;
+      if (version.approvalStep === 2) for (const [step, actorId] of [reviewer.id, approver.id].entries()) db.state.decisions.push({ versionId: version.id, step, actorId, action: 'approve' });
+      const body = { expectedVersion: batch.version, decision: 'approve', note: 'Fictional', confirmedUnpaid: true,
+        lineId: db.state.lines[0].id, employeeId: employee, requestId: randomUUID(), amount: '10.00', reference: 'Fictional', payDate: '2026-12-10', mode: 'complete' };
+      const actor = action === 'decide' ? reviewer : ['submit', 'withdraw', 'deductionsPreview'].includes(action) ? editor : finance;
+      const before = clone(db.state);
+      await expect((service as any)[action](b.id, body, actor)).rejects.toThrow(/对账|试算/);
+      expect(db.state).toEqual(before); expect(db.tx.payrollNetPayment.create).not.toHaveBeenCalled();
+    });
+    it('never exposes reconciliation to assigned approvers or final-only readers through forged state', async () => {
+      const b = await service.create(input(), editor); await service.calculate(b.id, { expectedVersion: 0 }, editor);
+      const batch = db.state.batches[0], v = db.state.versions[0]; batch.status = v.status = 'approved';
+      v.submittedById = editor.id; v.approvedAt = new Date(); v.approvalStep = 2;
+      for (const [step, actorId] of [reviewer.id, approver.id].entries()) db.state.decisions.push({ versionId: v.id, step, actorId, action: 'approve' });
+      for (const actor of [reviewer, approver, finance]) {
+        expect(await service.list(subject, actor)).toEqual([]);
+        await expect(service.detail(b.id, actor)).rejects.toThrow(ForbiddenException);
+      }
+    });
+  });
 
   it('denies HR/admin, cross-subject, assessor-only, disabled and domain bypasses without writing', async () => {
     for (const actor of [outsider, { ...editor, isAssessorOnly: true }]) await expect(service.create(createInput(), actor)).rejects.toBeInstanceOf(ForbiddenException);

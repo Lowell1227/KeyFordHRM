@@ -93,7 +93,7 @@ export class PayrollExportService {
     const header = await tx.payrollBatch.findUnique({ where: { id }, select: { id: true, subjectId: true, purpose: true } });
     if (!header) throw new NotFoundException('工资批次不存在');
     await this.access.assert(tx, actor, header.subjectId, 'payroll_export');
-    if (header.purpose !== 'validation' && header.purpose !== 'formal') throw new ForbiddenException('试算不能下载最终工资表');
+    if (header.purpose !== 'validation' && header.purpose !== 'formal') throw new ForbiddenException('试算或真实资料对账不能下载最终工资表');
     const domain = header.purpose;
     await this.access.assertDomain(tx, domain); await lockPayrollSubject(tx, header.subjectId, domain);
     const batch = await tx.payrollBatch.findUnique({ where: { id } });

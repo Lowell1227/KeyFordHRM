@@ -28,6 +28,7 @@ let sequence = 0, openedFromList = false;
 const detailOpen = computed(() => !!route.params.id);
 const listPath = computed(() => `/payroll/${props.mode}`);
 const rows = computed(() => batches.value.filter(row => (!month.value || row.month === month.value) && (!status.value || row.status === status.value)
+  && (props.mode === 'batches' || row.purpose !== 'reconciliation')
   && (props.mode !== 'approvals' || ['pending', 'returned'].includes(row.status))
   && (props.mode !== 'results' || ['approved', 'closed', 'voided'].includes(row.status))));
 async function load() {
@@ -51,7 +52,7 @@ watch([subjectId, month], () => { void load(); });
 watch(() => props.mode, () => { status.value = ''; void refresh(); });
 onMounted(refresh);
 function create(correction?: PayrollBatch) {
-  if (!subjectId.value) return;
+  if (!subjectId.value || correction?.purpose === 'reconciliation') return;
   form.value = { subjectId: correction?.subjectId ?? subjectId.value, month: correction?.month ?? month.value, payMonth: '', purpose: correction?.purpose ?? (previewMode ? 'trial' : 'formal'), ...(correction ? { correctionOfId: correction.id } : {}) };
   additionalMonths.value = [...(correction?.additionalMonths ?? [])];
   formError.value = ''; Object.keys(fields).forEach(key => delete fields[key]); open.value = true;
@@ -113,7 +114,7 @@ async function closeCreate(value: boolean) {
         <el-form label-position="top">
           <el-form-item label="工资归属月" :error="fields.month"><el-date-picker v-model="form.month" type="month" value-format="YYYY-MM" :disabled="!!form.correctionOfId || busy" /></el-form-item>
           <el-form-item label="发放月" :error="fields.payMonth"><el-date-picker v-model="form.payMonth" type="month" value-format="YYYY-MM" :disabled="busy" /></el-form-item>
-          <el-form-item label="用途"><el-select v-model="form.purpose" :disabled="busy || !!form.correctionOfId"><template v-if="previewMode"><el-option label="试算" value="trial" /><el-option label="测试环境验收" value="validation" /></template><el-option v-else label="正式" value="formal" /></el-select></el-form-item>
+          <el-form-item label="用途"><el-select v-model="form.purpose" :disabled="busy || !!form.correctionOfId"><template v-if="previewMode"><el-option label="试算" value="trial" /><el-option label="测试环境验收" value="validation" /></template><template v-else><el-option label="真实资料对账" value="reconciliation" /><el-option label="正式" value="formal" /></template></el-select></el-form-item>
           <el-form-item label="其他归属月" :error="fields.additionalMonths"><div class="additional-months"><div v-for="(_, index) in additionalMonths" :key="index" class="month-row"><el-date-picker v-model="additionalMonths[index]" type="month" value-format="YYYY-MM" :disabled="busy" /><el-button :icon="Delete" aria-label="删除其他归属月" :disabled="busy" @click="additionalMonths.splice(index, 1)" /></div><el-button :icon="Plus" :disabled="additionalMonths.length >= 11 || busy" @click="additionalMonths.push('')">添加归属月</el-button></div></el-form-item>
           <el-alert v-if="formError" :title="formError" type="error" :closable="false" />
         </el-form>

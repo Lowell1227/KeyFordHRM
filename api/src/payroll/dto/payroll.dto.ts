@@ -35,7 +35,7 @@ export class PayrollDecisionDto extends PayrollVersionDto {
 export class PayrollVoidDto extends PayrollNoteDto { @BooleanQuery() @IsBoolean() confirmedUnpaid!: boolean; }
 export class PayrollCreateDto extends PayrollMonthDto {
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/) payMonth!: string;
-  @IsIn(['trial', 'validation', 'formal']) purpose!: 'trial' | 'validation' | 'formal';
+  @IsIn(['trial', 'validation', 'formal', 'reconciliation']) purpose!: 'trial' | 'validation' | 'formal' | 'reconciliation';
   @IsOptional() @IsUUID() correctionOfId?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(11) @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { each: true }) additionalMonths?: string[];
 }

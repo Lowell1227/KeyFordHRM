@@ -55,7 +55,7 @@ export interface PayrollParameterRelease {
     performanceMode?: string | null; evidence?: string; config?: PayrollRuleConfig; payDate?: string; settings?: PayrollDeductionSettings };
   submittedAt: string; decidedAt: string | null; note: string;
 }
-export type PayrollPurpose = 'trial' | 'validation' | 'formal';
+export type PayrollPurpose = 'trial' | 'validation' | 'formal' | 'reconciliation';
 export type PayrollStatus = 'draft' | 'calculated' | 'blocked' | 'pending' | 'approved' | 'returned' | 'withdrawn' | 'voided' | 'closed';
 export type PayrollItemCode = 'fixed' | 'absence' | 'overtime' | 'performance' | 'adjustment';
 export interface PayrollLine { id: string; employeeId: string; attributionMonth: string; itemCode: string; status: string; entitlement: string | null; paidBefore: string | null; amount: string | null; evidence: unknown; reservation?: object | null; settlements?: Array<{ id: string; amount: string; reference: string; createdAt?: string }> }

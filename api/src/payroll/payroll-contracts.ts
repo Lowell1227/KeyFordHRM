@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { PayrollWorkCalendar } from './payroll-work-calendar';
 
 export type PayrollDomain = 'validation' | 'formal';
-export type PayrollPurpose = 'trial' | PayrollDomain;
+export type PayrollPurpose = 'trial' | 'reconciliation' | PayrollDomain;
 export const PAYROLL_ITEM_CODES = ['fixed', 'absence', 'overtime', 'performance', 'adjustment'] as const;
 export type PayrollItemCode = typeof PAYROLL_ITEM_CODES[number];
 export interface PayrollPolicyConfig {
