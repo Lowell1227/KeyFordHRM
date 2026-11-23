@@ -33,8 +33,14 @@ test('download errors decode locally and salary UI has no client money engine or
   const { payrollError } = load();
   assert.equal(await payrollError({ response: { data: new Blob([JSON.stringify({ message: 'version changed' })]) } }), 'version changed');
   const dir = path.resolve(__dirname, '../src/views/compensation/payroll');
-  const source = fs.readdirSync(dir).map(name => fs.readFileSync(path.join(dir, name), 'utf8')).join('\n');
+  const calendarFiles = new Set(['PayrollParameterReviewsView.vue', 'PayrollStandardsView.vue', 'PayrollWorkCalendarEditor.vue']);
+  const source = fs.readdirSync(dir).map(name => {
+    const text = fs.readFileSync(path.join(dir, name), 'utf8');
+    // Calendar unit summaries are quantities, not a browser-side wage calculation engine.
+    return calendarFiles.has(name) ? text.replace(/Math\.round\(Number\(day\.units\) \* 10000\)/g, 'CALENDAR_UNIT_SUMMARY') : text;
+  }).join('\n');
   assert.doesNotMatch(source, /parseFloat|toFixed\(|Math\.round|eval\(|localStorage|sessionStorage/);
+  assert.throws(() => assert.doesNotMatch('Math.round(Number(wage.amount) * 10000)', /Math\.round/));
 });
 
 test('batch queries send the selected month and conflict links accept only a structured server UUID', async () => {

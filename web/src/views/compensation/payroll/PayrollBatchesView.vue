@@ -14,13 +14,14 @@ import { usePayrollScope } from './usePayrollScope';
 import { currentVersion, purposeLabels, statusLabels, batchStatus, needsUpdate } from './payroll-state';
 
 const props = defineProps<{ mode: 'batches' | 'approvals' | 'results' }>();
+const previewMode = import.meta.env.VITE_PREVIEW_MODE === 'true';
 const route = useRoute(), router = useRouter();
 const required: Record<typeof props.mode, PayrollCapability[]> = { batches: ['payroll_edit', 'payroll_view'], approvals: ['payroll_review', 'payroll_approve'], results: ['payroll_view', 'payroll_export', 'payroll_settle'] };
 const { access, subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(computed(() => required[props.mode]));
 const batches = ref<PayrollBatch[]>([]), employees = ref<PayrollEmployee[]>([]);
 const open = ref(false), busy = ref(false), detailBusy = ref(false), formError = ref('');
 const fields = reactive<Record<string, string>>({});
-const form = ref<PayrollBatchInput>({ subjectId: '', month: '', payMonth: '', purpose: 'trial' });
+const form = ref<PayrollBatchInput>({ subjectId: '', month: '', payMonth: '', purpose: previewMode ? 'trial' : 'formal' });
 const additionalMonths = ref<string[]>([]);
 const status = ref('');
 let sequence = 0, openedFromList = false;
@@ -51,7 +52,7 @@ watch(() => props.mode, () => { status.value = ''; void refresh(); });
 onMounted(refresh);
 function create(correction?: PayrollBatch) {
   if (!subjectId.value) return;
-  form.value = { subjectId: correction?.subjectId ?? subjectId.value, month: correction?.month ?? month.value, payMonth: '', purpose: correction?.purpose ?? 'trial', ...(correction ? { correctionOfId: correction.id } : {}) };
+  form.value = { subjectId: correction?.subjectId ?? subjectId.value, month: correction?.month ?? month.value, payMonth: '', purpose: correction?.purpose ?? (previewMode ? 'trial' : 'formal'), ...(correction ? { correctionOfId: correction.id } : {}) };
   additionalMonths.value = [...(correction?.additionalMonths ?? [])];
   formError.value = ''; Object.keys(fields).forEach(key => delete fields[key]); open.value = true;
 }
@@ -112,7 +113,7 @@ async function closeCreate(value: boolean) {
         <el-form label-position="top">
           <el-form-item label="工资归属月" :error="fields.month"><el-date-picker v-model="form.month" type="month" value-format="YYYY-MM" :disabled="!!form.correctionOfId || busy" /></el-form-item>
           <el-form-item label="发放月" :error="fields.payMonth"><el-date-picker v-model="form.payMonth" type="month" value-format="YYYY-MM" :disabled="busy" /></el-form-item>
-          <el-form-item label="用途"><el-select v-model="form.purpose" :disabled="busy || !!form.correctionOfId"><el-option label="试算" value="trial" /><el-option label="测试环境验收" value="validation" /><el-option label="正式（待业务启用）" value="formal" disabled /></el-select></el-form-item>
+          <el-form-item label="用途"><el-select v-model="form.purpose" :disabled="busy || !!form.correctionOfId"><template v-if="previewMode"><el-option label="试算" value="trial" /><el-option label="测试环境验收" value="validation" /></template><el-option v-else label="正式" value="formal" /></el-select></el-form-item>
           <el-form-item label="其他归属月" :error="fields.additionalMonths"><div class="additional-months"><div v-for="(_, index) in additionalMonths" :key="index" class="month-row"><el-date-picker v-model="additionalMonths[index]" type="month" value-format="YYYY-MM" :disabled="busy" /><el-button :icon="Delete" aria-label="删除其他归属月" :disabled="busy" @click="additionalMonths.splice(index, 1)" /></div><el-button :icon="Plus" :disabled="additionalMonths.length >= 11 || busy" @click="additionalMonths.push('')">添加归属月</el-button></div></el-form-item>
           <el-alert v-if="formError" :title="formError" type="error" :closable="false" />
         </el-form>

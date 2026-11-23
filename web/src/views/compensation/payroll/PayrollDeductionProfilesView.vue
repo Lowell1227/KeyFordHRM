@@ -43,7 +43,7 @@ async function mayClose() {
 async function close(value:boolean){if(!value&&await mayClose())open.value=false;}
 onBeforeRouteLeave(mayClose);
 async function save() {
-  fields.value=deductionFormErrors(form.value.settings);formError.value='';
+  fields.value=deductionFormErrors(form.value.settings,form.value.payDate);formError.value='';
   if(!form.value.employeeId)fields.value.employeeId='请选择员工';
   const date=new Date(`${form.value.payDate}T00:00:00Z`);
   if(!/^\d{4}-\d{2}-\d{2}$/.test(form.value.payDate)||!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==form.value.payDate)fields.value.payDate='请填写有效的发薪日';

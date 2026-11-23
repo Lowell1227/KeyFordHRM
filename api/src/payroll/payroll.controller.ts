@@ -10,7 +10,7 @@ import { PayrollExceptionFilter } from './payroll-exception.filter';
 import { PayrollResponseInterceptor } from './payroll-response.interceptor';
 import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSyncDto, PayrollBatchQueryDto, PayrollCreateDto, PayrollDecisionDto, PayrollExportDto,
   PayrollDeductionProfileDto, PayrollDeductionsPreviewDto, PayrollFixtureDto, PayrollMonthDto, PayrollNoteDto, PayrollOpeningDto, PayrollRemainderDto, PayrollRuleDto,
-  PayrollSettlementDto, PayrollStandardDto, PayrollSubjectDto, PayrollVersionDto, PayrollVoidDto } from './dto/payroll.dto';
+  PayrollSettlementDto, PayrollStandardDto, PayrollSubjectDto, PayrollVersionDto, PayrollVoidDto, PayrollCalculateDto, PayrollNetPaymentDto, PayrollNetRemainderDto } from './dto/payroll.dto';
 
 @Controller('payroll')
 @UseFilters(PayrollExceptionFilter)
@@ -74,8 +74,17 @@ export class PayrollController {
   @Post('batches') async create(@Body() input: PayrollCreateDto, @CurrentUser() actor: AuthUser) {
     const result = await this.batches.create(input, actor); return this.batches.detail(result.id, actor);
   }
-  @Post('batches/:id/calculate') async calculate(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollVersionDto, @CurrentUser() actor: AuthUser) {
-    await this.batches.calculate(id, input, actor); return this.batches.detail(id, actor);
+  @Post('batches/:id/calculate') async calculate(@Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ expectedType: PayrollCalculateDto, whitelist: true, forbidNonWhitelisted: true, transform: true })) input: unknown, @CurrentUser() actor: AuthUser) {
+    await this.batches.calculate(id, input as PayrollCalculateDto, actor); return this.batches.detail(id, actor);
+  }
+  @Post('batches/:id/net-payment') async netPayment(@Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ expectedType: PayrollNetPaymentDto, whitelist: true, forbidNonWhitelisted: true, transform: true })) input: unknown, @CurrentUser() actor: AuthUser) {
+    await this.batches.netPayment(id, input as PayrollNetPaymentDto, actor); return this.batches.detail(id, actor);
+  }
+  @Post('batches/:id/cancel-net-remainder') async cancelNetRemainder(@Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ expectedType: PayrollNetRemainderDto, whitelist: true, forbidNonWhitelisted: true, transform: true })) input: unknown, @CurrentUser() actor: AuthUser) {
+    await this.batches.cancelNetRemainder(id, input as PayrollNetRemainderDto, actor); return this.batches.detail(id, actor);
   }
   @Post('batches/:id/deductions-preview') @Header('Cache-Control', 'no-store, private')
   deductionsPreview(@Param('id', new ParseUUIDPipe()) id: string,

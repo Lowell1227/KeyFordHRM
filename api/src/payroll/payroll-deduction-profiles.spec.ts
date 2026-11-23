@@ -13,7 +13,7 @@ function setup() {
     payrollDeductionProfile: { findFirst: jest.fn(async () => rows.at(-1) ?? null), findMany: jest.fn(async () => rows),
       create: jest.fn(async ({ data }) => { const row = { id: `profile-${rows.length}`, status: 'draft', ...data }; rows.push(row); return row; }) },
     payrollEvent: { create: jest.fn() } };
-  const access = { assert: jest.fn(async (_tx, user) => { if (user.id !== actor.id) throw new ForbiddenException(); }), assertDomain: jest.fn(async () => 'validation') };
+  const access = { maintenancePurpose: () => 'validation', assert: jest.fn(async (_tx, user) => { if (user.id !== actor.id) throw new ForbiddenException(); }), assertDomain: jest.fn(async () => 'validation') };
   const service = new PayrollDataService({ ...tx, $transaction: async work => work(tx) } as any, access as any);
   return { service, tx, rows, input, actor };
 }

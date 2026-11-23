@@ -555,6 +555,7 @@ model PositionChangeRequest {
 }
 
 model User {
+  payrollNetPayments PayrollNetPayment[]
   payrollGrants PayrollGrant[]
   payrollStandards PayrollStandard[]
   payrollLines PayrollLine[]
@@ -771,6 +772,7 @@ model PersonnelReferenceData {
 }
 
 model ContractSubject {
+  payrollNetPayments PayrollNetPayment[]
   payrollGrants PayrollGrant[]
   payrollPolicies PayrollPolicy[]
   payrollStandards PayrollStandard[]
@@ -2624,6 +2626,8 @@ model PayrollVersion {
   reviewerCount Int @map("reviewer_count")
   approvalStep Int @default(0) @map("approval_step")
   gross Decimal? @db.Decimal(18, 2)
+  payDate DateTime? @map("pay_date") @db.Date
+  netSnapshot Json? @map("net_snapshot") @db.JsonB
   calculatedById String @map("calculated_by_id") @db.Uuid
   submittedById String? @map("submitted_by_id") @db.Uuid
   submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
@@ -2634,6 +2638,8 @@ model PayrollVersion {
   lines PayrollLine[]
   decisions PayrollDecision[]
   exports PayrollExportRecord[]
+  netPayments PayrollNetPayment[]
+  netReservations PayrollNetReservation[]
   @@unique([batchId, version])
   @@map("payroll_versions")
 }
@@ -2696,6 +2702,44 @@ model PayrollSettlement {
   line PayrollLine @relation(fields: [lineId], references: [id], onDelete: Restrict)
   @@index([lineId])
   @@map("payroll_settlements")
+}
+
+model PayrollNetPayment {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionId String @map("version_id") @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  domain String @db.VarChar(20)
+  payDate DateTime @map("pay_date") @db.Date
+  gross Decimal @db.Decimal(18, 2)
+  socialInsurance Decimal @map("social_insurance") @db.Decimal(18, 2)
+  housingFund Decimal @map("housing_fund") @db.Decimal(18, 2)
+  incomeTax Decimal @map("income_tax") @db.Decimal(18, 2)
+  net Decimal @db.Decimal(18, 2)
+  snapshot Json @db.JsonB
+  requestId String @unique @map("request_id") @db.Uuid
+  requestHash String @map("request_hash") @db.VarChar(64)
+  reference String @db.VarChar(200)
+  confirmedById String @map("confirmed_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  version PayrollVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  employee User @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  @@unique([versionId, employeeId])
+  @@index([subjectId, employeeId, domain, payDate])
+  @@map("payroll_net_payments")
+}
+
+model PayrollNetReservation {
+  subjectId String @map("subject_id") @db.Uuid
+  employeeId String @map("employee_id") @db.Uuid
+  domain String @db.VarChar(20)
+  taxYear Int @map("tax_year")
+  versionId String @map("version_id") @db.Uuid
+  version PayrollVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  @@id([subjectId, employeeId, domain, taxYear])
+  @@index([versionId])
+  @@map("payroll_net_reservations")
 }
 
 model PayrollOpeningBalance {

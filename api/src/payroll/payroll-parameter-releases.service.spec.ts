@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PayrollParameterReleasesService } from './payroll-parameter-releases.service';
+import { PayrollAccessService } from './payroll-access.service';
 import { payrollParameterDefinition } from './payroll-parameter-definition';
 
 const hr = { id: 'hr' } as any, manager = { id: 'manager' } as any;
@@ -36,7 +37,7 @@ function fixture() {
       : ['manager', 'new-manager'].includes(where.id) && state.eligible ? { id: where.id } : null) },
     payrollEvent: { create: jest.fn(async ({ data }) => { events.push(data); return data; }) } };
   const prisma: any = { ...tx, $transaction: jest.fn(async work => work(tx)) };
-  const access = { assertDomain: jest.fn(async () => 'validation'), assert: jest.fn(async (_tx, actor, subject, capability) => {
+  const access = { maintenancePurpose: jest.fn(() => 'validation'), assertDomain: jest.fn(async (_tx: any, _purpose: string) => 'validation'), assert: jest.fn(async (_tx, actor, subject, capability) => {
     if (!state.editorEnabled || actor.id !== 'hr' || subject !== 'subject' || capability !== 'payroll_edit') throw new ForbiddenException();
   }) };
   const service = new PayrollParameterReleasesService(prisma, access as any);
@@ -112,5 +113,20 @@ describe('payroll parameters require the submitting HR direct manager', () => {
     expect(result.filter(row => row.status === 'pending')).toHaveLength(150);
     expect(s.releases.findMany.mock.calls).toContainEqual([expect.objectContaining({ where: expect.objectContaining({ status: 'pending' }) })]);
     expect(s.releases.findMany.mock.calls.find(([input]) => input.where.status === 'pending')?.[0].take).toBeUndefined();
+  });
+  it('uses the server-selected formal domain for both reviewer qualification and list queries', async () => {
+    const s = fixture(); await s.submit();
+    s.access.maintenancePurpose.mockReturnValue('formal'); s.access.assertDomain.mockResolvedValue('formal');
+    await s.service.list('subject', manager);
+    expect(s.access.assertDomain.mock.calls.at(-1)?.[1]).toBe('formal');
+    expect(s.releases.findFirst.mock.calls.at(-1)?.[0].where.domain).toBe('formal');
+    expect(s.releases.findMany.mock.calls.every(([input]) => input.where.domain === 'formal')).toBe(true);
+  });
+  it('does not expose assigned review snapshots when only the formal switch is on', async () => {
+    const s = fixture(); await s.submit(); s.releases.findMany.mockClear();
+    const access = new PayrollAccessService(s.tx, { get: (key: string) => key === 'PAYROLL_FORMAL_ENABLED' ? 'true' : 'false' } as any);
+    const service = new PayrollParameterReleasesService({ $transaction: work => work(s.tx) } as any, access);
+    await expect(service.list('subject', manager)).rejects.toThrow(ForbiddenException);
+    expect(s.releases.findMany).not.toHaveBeenCalled();
   });
 });

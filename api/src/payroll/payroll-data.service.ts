@@ -167,7 +167,7 @@ function mergedAttendance(input: PayrollAttendanceSync, scope: PayrollAttendance
 @Injectable()
 export class PayrollDataService {
   constructor(private readonly prisma: PrismaService, private readonly access: PayrollAccessService) {}
-  private async domain(tx: Prisma.TransactionClient | PrismaService) { return this.access.assertDomain(tx, 'validation'); }
+  private async domain(tx: Prisma.TransactionClient | PrismaService) { return this.access.assertDomain(tx, this.access.maintenancePurpose()); }
   async employees(subjectId: string, month: string, actor: AuthUser) {
     const scopes = await this.access.getAccess(actor), scope = scopes.subjects.find(row => row.id === subjectId);
     if (!scope?.capabilities.some(value => ['attendance_edit', 'attendance_seal', 'payroll_edit', 'payroll_view', 'payroll_settle'].includes(value))) {
@@ -409,7 +409,7 @@ export class PayrollDataService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
   async fixtureResponse(subjectId: string, month: string, corrected: boolean, actor: AuthUser) {
-    await this.access.assert(this.prisma, actor, subjectId, 'attendance_edit'); await this.domain(this.prisma);
+    await this.access.assert(this.prisma, actor, subjectId, 'attendance_edit'); await this.access.assertDomain(this.prisma, 'validation');
     const marker = await this.prisma.systemConfig.findUnique({ where: { key: 'payroll_preview_fixture_v1' } });
     const fixture = marker?.value as { subjectIds?: string[]; employeeIds?: string[] } | null;
     if (!fixture?.subjectIds?.includes(subjectId) || !fixture.employeeIds?.length) throw new BadRequestException('尚未准备该主体的虚构考勤');

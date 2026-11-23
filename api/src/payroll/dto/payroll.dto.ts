@@ -10,6 +10,19 @@ export class PayrollBatchQueryDto extends PayrollSubjectDto {
 export class PayrollMonthDto extends PayrollSubjectDto { @Matches(/^\d{4}-(0[1-9]|1[0-2])$/) month!: string; }
 export class PayrollFixtureDto extends PayrollMonthDto { @IsOptional() @BooleanQuery() @IsBoolean() corrected = false; }
 export class PayrollVersionDto { @IsInt() @Min(0) expectedVersion!: number; }
+export class PayrollCalculateDto extends PayrollVersionDto {
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) payDate?: string;
+}
+export class PayrollNetPaymentDto extends PayrollVersionDto {
+  @IsUUID() employeeId!: string;
+  @IsUUID() requestId!: string;
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) payDate!: string;
+  @IsString() @Length(1, 200) reference!: string;
+}
+export class PayrollNetRemainderDto extends PayrollVersionDto {
+  @IsUUID() employeeId!: string;
+  @IsString() @Length(1, 200) reference!: string;
+}
 export class PayrollDeductionsPreviewDto extends PayrollVersionDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) payDate!: string;
   @IsIn(['complete', 'missing', 'saved']) mode!: 'complete' | 'missing' | 'saved';

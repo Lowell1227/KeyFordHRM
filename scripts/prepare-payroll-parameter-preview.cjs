@@ -14,7 +14,7 @@ async function prepare(scope, inspectOnly) {
     check(response.ok, `fixture_http_${response.status}`); const json = await response.json(); check(json.code === 0, 'fixture_response'); return json.data;
   }
   try {
-    check(['desktop', 'mobile', 'tablet', 'api', 'demo'].includes(scope), 'fixture_scope');
+    check(['desktop', 'mobile', 'tablet', 'api', 'demo', 'net-desktop', 'net-mobile', 'net-api', 'net-demo', 'net-recovery', 'net-desktop-final', 'net-mobile-final'].includes(scope), 'fixture_scope');
     const [identity] = await db.$queryRawUnsafe('SELECT current_database() AS db,current_user AS role');
     check(identity.db === 'hrm_preview' && identity.role === 'hrm_preview' && process.env.PAYROLL_ENABLED === 'true'
       && process.env.PAYROLL_FORMAL_ENABLED !== 'true', 'fixture_database');

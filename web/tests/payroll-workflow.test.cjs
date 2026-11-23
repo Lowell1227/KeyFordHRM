@@ -77,3 +77,98 @@ test('a held partially paid version permits stopping the remaining arrangement b
   assert.ok(!batchActions({ ...batch, purpose: 'trial' }, ['payroll_settle'], 'finance').includes('cancel-remainder'));
   assert.ok(!batchActions({ ...batch, versions: [{ ...version, lines: [{ ...version.lines[0], reservation: null }] }] }, ['payroll_settle'], 'finance').includes('cancel-remainder'));
 });
+
+function netBatch() {
+  const result = {status:'ready',issues:[],gross:'100.00',socialInsurance:'8.00',housingFund:'5.00',incomeTax:'1.00',net:'86.00',evidence:{}};
+  return {id:'batch',month:'2035-11',status:'approved',purpose:'formal',payMonth:'2035-12',version:5,versions:[{
+    id:'v1',version:1,status:'approved',payDate:'2035-12-10',gross:'100.00',issues:[],approvalPath:['reviewer','approver'],reviewerCount:1,approvalStep:2,
+    lines:[{employeeId:'e',status:'ready',amount:'100.00',reservation:{id:'r'}}],netPayments:[],
+    netSnapshot:{schema:1,payDate:'2035-12-10',sourceHash:'hash',rows:[{employeeId:'e',employeeName:'Fictional',employeeNo:'F001',result}],totals:result},
+  }]};
+}
+
+test('net versions use whole-row payments only after all approvals and remain read-only when held or paid', () => {
+  const {batchActions} = load(), batch = netBatch(), caps = ['payroll_settle','payroll_export'];
+  assert.ok(batchActions(batch,caps,'finance').includes('net-payment'));
+  assert.ok(!batchActions(batch,caps,'finance').includes('settle'));
+  assert.ok(!batchActions(batch,caps,'finance').includes('cancel-remainder'));
+  for (const changed of [{needsUpdate:true},{status:'pending'},{purpose:'trial'},{status:'closed'}]) {
+    assert.ok(!batchActions({...batch,...changed},caps,'finance').includes('net-payment'));
+  }
+  assert.ok(!batchActions(batch,['payroll_view'],'reader').includes('net-payment'));
+  batch.versions[0].approvalStep=1;
+  assert.ok(!batchActions(batch,caps,'finance').includes('net-payment'));
+  assert.ok(!batchActions(batch,caps,'finance').includes('export'));
+  batch.versions[0].approvalStep=2;
+  batch.versions[0].netPayments=[{employeeId:'e',id:'payment'}];
+  assert.ok(!batchActions(batch,caps,'finance').includes('net-payment'));
+  assert.ok(!batchActions(batch,caps,'finance').includes('void'));
+});
+
+test('formal gross-only or incomplete net versions never submit; legacy test gross batches still do', () => {
+  const {batchActions} = load(), batch=netBatch(); batch.status='calculated'; batch.versions[0].status='calculated';
+  assert.ok(batchActions(batch,['payroll_edit'],'editor').includes('submit'));
+  batch.versions[0].netSnapshot=null;
+  assert.ok(!batchActions(batch,['payroll_edit'],'editor').includes('submit'));
+  assert.ok(batchActions({...batch,purpose:'validation'},['payroll_edit'],'editor').includes('submit'));
+  batch.versions[0].netSnapshot=netBatch().versions[0].netSnapshot;
+  batch.versions[0].netSnapshot.totals=null;
+  assert.ok(!batchActions(batch,['payroll_edit'],'editor').includes('submit'));
+});
+
+test('pay dates are explicit calendar dates in pay month, and net export names distinguish tests', () => {
+  const {payrollPayDateError,payrollDownloadName}=load();
+  assert.match(payrollPayDateError('','2035-12'),/发薪日/);
+  for(const date of ['2035-12-32','2035-02-29','2035-12-10T00:00:00Z']) assert.ok(payrollPayDateError(date,'2035-12'));
+  assert.match(payrollPayDateError('2035-11-30','2035-12'),/2035-12/);
+  assert.equal(payrollPayDateError('2036-02-29','2036-02'),'');
+  assert.equal(payrollDownloadName(netBatch()),'实发工资-2035-11-V1.xlsx');
+  assert.match(payrollDownloadName({...netBatch(),month:'2035-11',purpose:'validation'}),/^测试环境-实发工资-2035-11-V1/);
+});
+
+test('serialized server dates retain net actions, but mismatched snapshot dates fail closed',()=>{
+  const {batchActions}=load(),batch=netBatch();
+  batch.versions[0].payDate='2035-12-10T00:00:00.000Z';
+  assert.ok(batchActions(batch,['payroll_settle'],'finance').includes('net-payment'));
+  batch.versions[0].payDate='2035-12-11T00:00:00.000Z';
+  assert.ok(!batchActions(batch,['payroll_settle','payroll_export'],'finance').includes('net-payment'));
+  assert.ok(!batchActions(batch,['payroll_settle','payroll_export'],'finance').includes('export'));
+});
+
+test('held partially paid net versions can cancel only unpaid uncancelled people, never export the old whole file',()=>{
+  const {batchActions,cancelledNetEmployeeIds}=load(), batch=netBatch(), version=batch.versions[0];
+  version.netSnapshot.rows.push({...version.netSnapshot.rows[0],employeeId:'paid'}, {...version.netSnapshot.rows[0],employeeId:'next'});
+  version.netPayments=[{id:'p',employeeId:'paid'}];
+  batch.needsUpdate=true;
+  let actions=batchActions(batch,['payroll_settle','payroll_export'],'finance');
+  assert.ok(actions.includes('cancel-net-remainder'));assert.ok(!actions.includes('net-payment'));assert.ok(!actions.includes('export'));
+  assert.ok(!actions.includes('void'));assert.ok(!actions.includes('settle'));assert.ok(!actions.includes('cancel-remainder'));
+  batch.events=[{action:'remainder_cancelled',version:1,metadata:{employeeId:'e',versionId:'v1',sourceHash:'hash',reference:'fictional'}}];
+  assert.deepEqual(cancelledNetEmployeeIds(batch,version),['e']);
+  batch.needsUpdate=false;
+  actions=batchActions(batch,['payroll_settle','payroll_export'],'finance');
+  assert.ok(actions.includes('net-payment'));assert.ok(actions.includes('cancel-net-remainder'));assert.ok(!actions.includes('export'));
+  batch.events.push({action:'remainder_cancelled',version:1,metadata:{employeeId:'next',versionId:'v1'}});
+  actions=batchActions(batch,['payroll_settle','payroll_export'],'finance');
+  assert.ok(!actions.includes('net-payment'));assert.ok(!actions.includes('cancel-net-remainder'));
+});
+
+test('net cancellation event identities bind both selected calculation number and version id, never another version',()=>{
+  const {cancelledNetEmployeeIds,batchActions}=load(),batch=netBatch(),version=batch.versions[0];
+  batch.events=[
+    {action:'net_paid',version:1,metadata:{employeeId:'e',versionId:'v1'}},
+    {action:'remainder_cancelled',version:2,metadata:{employeeId:'e',versionId:'v1'}},
+    {action:'remainder_cancelled',version:1,metadata:{employeeId:'e',versionId:'other'}},
+    {action:'remainder_cancelled',version:1,metadata:{employeeId:'unknown',versionId:'v1'}},
+    {action:'remainder_cancelled',version:1,metadata:{lineId:'old-gross-line'}},
+  ];
+  assert.deepEqual(cancelledNetEmployeeIds(batch,version),[]);
+  batch.events.push({action:'remainder_cancelled',version:1,metadata:{employeeId:'e',versionId:'v1'}});
+  batch.events.push(batch.events.at(-1));
+  assert.deepEqual(cancelledNetEmployeeIds(batch,version),['e']);
+  assert.deepEqual(cancelledNetEmployeeIds(batch,{...version,id:'old',version:0}),[]);
+  for(const more of [{status:'pending'},{purpose:'trial'},{status:'closed'}]) {
+    assert.ok(!batchActions({...netBatch(),...more},['payroll_settle'],'finance').includes('cancel-net-remainder'));
+  }
+  assert.ok(!batchActions(netBatch(),['payroll_view'],'reader').includes('cancel-net-remainder'));
+});

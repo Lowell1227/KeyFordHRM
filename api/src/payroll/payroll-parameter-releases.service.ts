@@ -104,13 +104,13 @@ export class PayrollParameterReleasesService {
   }
   async list(subjectId: string, actor: AuthUser) {
     return this.transaction(async tx => {
-      await this.access.assertDomain(tx, 'validation');
+      const domain = await this.access.assertDomain(tx, this.access.maintenancePurpose());
       let editor = false;
       try { await this.access.assert(tx, actor, subjectId, 'payroll_edit'); editor = true; }
       catch (error) { if (!(error instanceof ForbiddenException)) throw error; }
-      if (!editor && !await tx.payrollParameterRelease.findFirst({ where: { subjectId, domain: 'validation',
+      if (!editor && !await tx.payrollParameterRelease.findFirst({ where: { subjectId, domain,
         ...payrollParameterReviewerWhere(actor.id, subjectId) }, select: { id: true } })) throw new ForbiddenException('没有该主体分配给你的参数审核记录');
-      const where = { subjectId, domain: 'validation', ...(editor ? {} : payrollParameterReviewerWhere(actor.id, subjectId)) };
+      const where = { subjectId, domain, ...(editor ? {} : payrollParameterReviewerWhere(actor.id, subjectId)) };
       const pending = await tx.payrollParameterRelease.findMany({ where: { ...where, status: 'pending' }, include: display, orderBy: { submittedAt: 'desc' } });
       const recent = await tx.payrollParameterRelease.findMany({ where: { ...where, status: { not: 'pending' } }, include: display, orderBy: { submittedAt: 'desc' }, take: 100 });
       return [...pending, ...recent];

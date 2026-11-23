@@ -27,8 +27,15 @@ export interface PayrollRuleInput { subjectId: string; effectiveFrom: string; ef
 export interface PayrollRule extends PayrollRuleInput { id: string; version: number; status: string }
 export interface PayrollContributionSettings { status: string; ruleVersion: string; evidenceRef: string; contributionDate: string; effectiveFrom: string; effectiveTo: string | null; items: Array<{code: string; base: string; rate: string}> }
 export type PayrollTaxAmount = 'exemptIncome' | 'standardDeduction' | 'specialDeduction' | 'additionalDeduction' | 'otherDeduction' | 'taxRelief';
+export interface PayrollDeductionLedgerSettings {
+  startDate: string;
+  priorInPayMonth: Record<PayrollTaxAmount, string>;
+  priorSocialInsurance: string;
+  priorHousingFund: string;
+}
 export interface PayrollDeductionSettings {
   rounding: string; socialInsurance: PayrollContributionSettings; housingFund: PayrollContributionSettings;
+  ledger?: PayrollDeductionLedgerSettings;
   tax: { method: string; ruleVersion: string; evidenceRef: string; effectiveFrom: string; effectiveTo: string | null;
     brackets: Array<{upTo: string | null; rate: string; quickDeduction: string}>;
     opening: Record<PayrollTaxAmount | 'income' | 'taxPaid', string> & {confirmed: boolean; sourceVersion: string; evidenceRef: string};
@@ -51,12 +58,28 @@ export type PayrollPurpose = 'trial' | 'validation' | 'formal';
 export type PayrollStatus = 'draft' | 'calculated' | 'blocked' | 'pending' | 'approved' | 'returned' | 'withdrawn' | 'voided' | 'closed';
 export type PayrollItemCode = 'fixed' | 'absence' | 'overtime' | 'performance' | 'adjustment';
 export interface PayrollLine { id: string; employeeId: string; attributionMonth: string; itemCode: string; status: string; entitlement: string | null; paidBefore: string | null; amount: string | null; evidence: unknown; reservation?: object | null; settlements?: Array<{ id: string; amount: string; reference: string; createdAt?: string }> }
-export interface PayrollVersion { id: string; version: number; status: PayrollStatus; needsUpdate?: boolean; submittedById?: string | null; sourceHash: string; sources: unknown; issues: string[]; approvalPath: string[]; reviewerCount: number; approvalStep: number; gross: string | null; lines: PayrollLine[]; decisions: unknown[]; exports: unknown[] }
+export interface PayrollVersion { id: string; version: number; status: PayrollStatus; needsUpdate?: boolean; submittedById?: string | null; sourceHash: string; sources: unknown; issues: string[]; approvalPath: string[]; reviewerCount: number; approvalStep: number; gross: string | null; lines: PayrollLine[]; decisions: unknown[]; exports: unknown[]; payDate: string | null; netSnapshot: PayrollNetSnapshot | null; netPayments: PayrollNetPayment[] }
 export interface PayrollBatch { id: string; subjectId: string; month: string; payMonth: string; purpose: PayrollPurpose; status: PayrollStatus; version: number; needsUpdate?: boolean; versions: PayrollVersion[]; events?: unknown[]; correctionOfId?: string | null; additionalMonths?: string[] }
 export interface PayrollBatchInput { subjectId: string; month: string; payMonth: string; purpose: PayrollPurpose; correctionOfId?: string; additionalMonths?: string[] }
 export type PayrollDeductionsPreviewMode = 'complete' | 'missing' | 'saved';
 export interface PayrollDeductionsPreviewInput { expectedVersion: number; payDate: string; mode: PayrollDeductionsPreviewMode }
 export interface PayrollDeductionsAmounts { gross: string; socialInsurance: string; housingFund: string; incomeTax: string; net: string }
+export interface PayrollDeductionsResult {
+  status: 'ready' | 'needs_configuration' | 'needs_review'; issues: string[];
+  gross: string | null; socialInsurance: string | null; housingFund: string | null; incomeTax: string | null; net: string | null;
+  evidence: {sourceHash: string | null; input: unknown; [key: string]: unknown};
+}
+export interface PayrollNetRow {
+  employeeId: string; employeeName: string; employeeNo: string | null; result: PayrollDeductionsResult;
+  ledger?: {openingDate: string; openingHash: string; factIds: string[]; taxDeductions: Record<PayrollTaxAmount, string>;
+    socialMonth: string; housingMonth: string; sourceHash: string};
+}
+export interface PayrollNetSnapshot {
+  schema: 1; payDate: string; sourceHash: string; rows: PayrollNetRow[]; totals: PayrollDeductionsAmounts | null;
+}
+export interface PayrollNetPayment { id: string; employeeId: string; payDate: string; reference: string; createdAt: string }
+export interface PayrollNetPaymentInput { expectedVersion: number; employeeId: string; requestId: string; reference: string; payDate: string }
+export interface PayrollCancelNetRemainderInput { expectedVersion: number; employeeId: string; reference: string }
 export interface PayrollDeductionsPreviewRow {
   employeeId: string; employeeName: string; status: 'ready' | 'needs_configuration' | 'needs_review'; issues: string[];
   gross: string | null; socialInsurance: string | null; housingFund: string | null; incomeTax: string | null; net: string | null;

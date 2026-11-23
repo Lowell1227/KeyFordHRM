@@ -10,10 +10,13 @@ import { PayrollDeductionsPreviewDto } from './dto/payroll.dto';
 import { calculatePayrollDeductions, PayrollTaxDeductions, PayrollDeductionsResult } from './payroll-deductions-calculator';
 import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
 import { readReviewedDeductions } from './payroll-reviewed-deductions';
+import { assertPayrollNetFresh, assertPayrollNetLines, assertPayrollNetShape, capturePayrollNet, netSnapshotHash } from './payroll-net';
+import { randomUUID } from 'node:crypto';
 
 const versionInclude = {
   lines: { include: { settlements: true, reservation: true } },
   decisions: { orderBy: { step: 'asc' as const } }, exports: true,
+  netPayments: { select: { id: true, employeeId: true, payDate: true, reference: true, createdAt: true } },
 } satisfies Prisma.PayrollVersionInclude;
 const versionScopeSelect = {
   id: true, version: true, status: true, approvalPath: true, reviewerCount: true, approvalStep: true,
@@ -111,14 +114,18 @@ export class PayrollBatchesService {
     });
   }
 
-  async calculate(id: string, input: ExpectedVersion, actor: PayrollActor) {
+  async calculate(id: string, input: ExpectedVersion & { payDate?: string }, actor: PayrollActor) {
     return this.write(id, actor, 'payroll_edit', async (tx, batch, domain) => {
       assertPayrollVersion(batch.version, input.expectedVersion);
       if (!['draft', 'calculated', 'returned', 'withdrawn', 'voided'].includes(batch.status)) throw new ConflictException('请先撤回或作废当前版本后重算');
+      if (batch.purpose === 'formal' && !input.payDate) throw new ConflictException('正式工资必须核算扣缴及实发，请明确发薪日');
       const captured = await this.captureForBatch(tx, batch, domain);
+      const net = input.payDate ? await capturePayrollNet(tx, batch, domain, input.payDate, captured.lines) : undefined;
+      const issues = [...captured.issues, ...(net?.rows.flatMap(row => row.result.issues.map(issue => `${row.employeeName}：${issue}`)) ?? [])];
       const version = await tx.payrollVersion.create({ data: {
         batchId: id, version: (batch.versions[0]?.version ?? 0) + 1, sourceHash: captured.sourceHash,
-        sources: captured.sources, issues: captured.issues, approvalPath: captured.approvalPath, reviewerCount: captured.reviewerCount,
+        sources: captured.sources, issues, approvalPath: captured.approvalPath, reviewerCount: captured.reviewerCount,
+        ...(net ? { payDate: payrollDate(net.payDate), netSnapshot: JSON.parse(JSON.stringify(net)) } : {}),
         gross: captured.gross === null ? null : this.money(captured.gross, 18), calculatedById: actor.id,
         lines: { create: captured.lines.map(line => ({ employeeId: line.employeeId, attributionMonth: line.attributionMonth,
           itemCode: line.itemCode, status: line.status, evidence: line.evidence,
@@ -140,6 +147,7 @@ export class PayrollBatchesService {
         throw new ConflictException('仅当前已核算、审批中或已批准的完整版本可以进行虚构扣缴试算');
       }
       this.assertReady(version);
+      if (batch.purpose === 'formal' && !version.netSnapshot) throw new ConflictException('正式工资必须包含完整扣缴与实发快照');
       const groups = new Map<string, Set<string>>(), grossByEmployee = new Map<string, Prisma.Decimal>();
       const keys = new Set<string>(), months = [batch.month, ...batch.additionalMonths];
       const frozen = version.sources as { months?: Array<{ month: string; sources?: {
@@ -252,6 +260,11 @@ export class PayrollBatchesService {
       await this.assertPath(tx, batch, version, actor.id);
       await this.assertFresh(tx, batch, version, domain);
       await this.assertPaidBefore(tx, batch, version, domain);
+      if (version.netSnapshot) {
+        const net = version.netSnapshot; assertPayrollNetShape(net);
+        await tx.payrollNetReservation.createMany({ data: net.rows.map(row => ({ subjectId: batch.subjectId, domain,
+          employeeId: row.employeeId, taxYear: Number(net.payDate.slice(0, 4)), versionId: version.id })) });
+      }
       const claimLines = version.lines.filter(line => line.status === 'ready');
       if (claimLines.length) {
         const conflicts = await tx.payrollReservation.findMany({ where: { subjectId: batch.subjectId, domain,
@@ -295,6 +308,7 @@ export class PayrollBatchesService {
       if (!['approve', 'return'].includes(input.decision)) throw new BadRequestException('审批动作不正确');
       const note = this.text(input.note, 500, input.decision === 'return');
       if (input.decision === 'approve') {
+        if (batch.purpose === 'formal' && !version.netSnapshot) throw new ConflictException('正式工资必须包含扣缴与实发快照');
         this.assertReady(version);
         await this.assertPath(tx, batch, version, version.submittedById!);
         await this.assertFresh(tx, batch, version, domain);
@@ -304,7 +318,7 @@ export class PayrollBatchesService {
       const status = input.decision === 'return' ? 'returned' : nextStep === version.approvalPath.length ? 'approved' : 'pending';
       await tx.payrollVersion.update({ where: { id: version.id }, data: { status,
         ...(input.decision === 'approve' ? { approvalStep: nextStep } : {}), ...(status === 'approved' ? { approvedAt: new Date() } : {}) } });
-      if (status === 'returned') await this.release(tx, version.lines);
+      if (status === 'returned') { await this.release(tx, version.lines); if (version.netSnapshot) await tx.payrollNetReservation.deleteMany({ where: { versionId: version.id } }); }
       if (status === 'approved') await this.release(tx, version.lines.filter(line => line.amount?.isZero()));
       await this.event(tx, batch, actor, input.decision === 'return' ? 'returned' : status === 'approved' ? 'approved' : 'reviewed',
         { step: version.approvalStep, note }, version.version);
@@ -319,6 +333,7 @@ export class PayrollBatchesService {
       if (batch.status !== 'pending' || version.status !== 'pending') throw new ConflictException('仅审批中的版本可以撤回');
       await tx.payrollVersion.update({ where: { id: version.id }, data: { status: 'withdrawn' } });
       await this.release(tx, version.lines);
+      if (version.netSnapshot) await tx.payrollNetReservation.deleteMany({ where: { versionId: version.id } });
       await this.event(tx, batch, actor, 'withdrawn', { note }, version.version);
       return this.advance(tx, batch, 'withdrawn');
     });
@@ -328,10 +343,11 @@ export class PayrollBatchesService {
     return this.write(id, actor, 'payroll_settle', async (tx, batch) => {
       assertPayrollVersion(batch.version, input.expectedVersion);
       const version = this.effective(batch), note = this.text(input.note, 200);
-      if (version.lines.some(line => line.settlements.length > 0)) throw new ConflictException('已有确认入薪，不能作废；请办理差额');
+      if (version.netPayments?.length || version.lines.some(line => line.settlements.length > 0)) throw new ConflictException('已有确认入薪或扣缴，不能作废；请办理差额');
       if (version.exports.length > 0 && input.confirmedUnpaid !== true) throw new ConflictException('已导出版本须先核对财务未付款，并明确确认未付款凭证');
       await tx.payrollVersion.update({ where: { id: version.id }, data: { status: 'voided', voidedAt: new Date() } });
       await this.release(tx, version.lines);
+      if (version.netSnapshot) await tx.payrollNetReservation.deleteMany({ where: { versionId: version.id } });
       await this.event(tx, batch, actor, 'voided', { reference: note, confirmedUnpaid: input.confirmedUnpaid === true }, version.version);
       return this.advance(tx, batch, 'voided');
     });
@@ -340,6 +356,7 @@ export class PayrollBatchesService {
   async settle(id: string, input: ExpectedVersion & { lineId: string; amount: string; reference: string; requestId: string }, actor: PayrollActor) {
     return this.write(id, actor, 'payroll_settle', async (tx, batch, domain) => {
       const version = this.effective(batch);
+      if (version.netSnapshot) throw new ConflictException('实发版本请按人员确认实发与扣缴，不能仅确认税前工资行');
       const reference = this.text(input.reference, 200), amount = this.money(input.amount);
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestId)) throw new BadRequestException('入薪请求标识不正确');
       const requestHash = payrollHash({ batchId: id, versionId: version.id, lineId: input.lineId, amount: amount.toFixed(2), reference, actorId: actor.id });
@@ -368,9 +385,72 @@ export class PayrollBatchesService {
     return this.write(id, actor, 'payroll_settle', async (tx, batch) => {
       assertPayrollVersion(batch.version, input.expectedVersion);
       const version = this.effective(batch), line = this.payableLine(version, input.lineId);
+      if (version.netSnapshot) throw new ConflictException('实发版本不能单独取消税前行；未付款请作废版本并重新核算');
       const reference = this.text(input.reference, 200);
       await this.release(tx, [line]);
       await this.event(tx, batch, actor, 'remainder_cancelled', { lineId: line.id, reference }, version.version);
+      return this.advance(tx, batch, 'approved');
+    });
+  }
+
+  async netPayment(id: string, input: ExpectedVersion & { employeeId: string; requestId: string; reference: string; payDate: string }, actor: PayrollActor) {
+    return this.write(id, actor, 'payroll_settle', async (tx, batch, domain) => {
+      const version = this.effective(batch), snapshot = version.netSnapshot;
+      assertPayrollNetLines(snapshot, version.lines, version.gross);
+      assertPayrollNetShape(snapshot);
+      const reference = this.text(input.reference, 200);
+      payrollDate(input.payDate);
+      if (input.payDate !== snapshot.payDate || version.payDate?.toISOString().slice(0, 10) !== input.payDate) throw new ConflictException('实际发薪日与批准日期不一致；未付款请作废重算');
+      if (domain === 'formal' && input.payDate > new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())) throw new ConflictException('尚未到实际发薪日，不能预先记为已付已扣');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestId)) throw new BadRequestException('实发请求标识不正确');
+      const row = snapshot.rows.find(item => item.employeeId === input.employeeId);
+      if (!row) throw new BadRequestException('人员不属于当前批准实发版本');
+      const requestHash = netSnapshotHash({ batchId: id, versionId: version.id, row, payDate: input.payDate, reference, actorId: actor.id });
+      const existing = await tx.payrollNetPayment.findUnique({ where: { requestId: input.requestId } });
+      if (existing) {
+        if (existing.requestHash !== requestHash || existing.confirmedById !== actor.id) throw new ConflictException('该请求已用于其他实发内容或操作人');
+        const { versions: _versions, ...record } = batch; return record;
+      }
+      assertPayrollVersion(batch.version, input.expectedVersion);
+      await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+      await assertPayrollNetFresh(tx, batch, snapshot, domain, version.id);
+      const reservationKey = { subjectId: batch.subjectId, employeeId: input.employeeId, domain, taxYear: Number(input.payDate.slice(0, 4)) };
+      const reservation = await tx.payrollNetReservation.findUnique({ where: { subjectId_employeeId_domain_taxYear: reservationKey } });
+      if (reservation?.versionId !== version.id) throw new ConflictException('该人员没有当前有效的实发安排或已确认实发');
+      const lines = version.lines.filter(line => line.employeeId === input.employeeId);
+      if (lines.some(line => line.settlements.length > 0 || !line.amount!.isZero() && !line.reservation)) throw new ConflictException('税前行已有结算或安排不完整，不能重复确认');
+      await this.assertPaidBefore(tx, batch, { ...version, lines }, domain);
+      await tx.payrollNetPayment.create({ data: { versionId: version.id, subjectId: batch.subjectId, employeeId: row.employeeId, domain,
+        payDate: payrollDate(input.payDate), gross: row.result.gross!, socialInsurance: row.result.socialInsurance!, housingFund: row.result.housingFund!,
+        incomeTax: row.result.incomeTax!, net: row.result.net!, snapshot: JSON.parse(JSON.stringify(row)),
+        requestId: input.requestId, requestHash, reference, confirmedById: actor.id } });
+      for (const line of lines.filter(line => !line.amount!.isZero())) await tx.payrollSettlement.create({ data: { lineId: line.id,
+        requestId: randomUUID(), requestHash, amount: line.amount!, reference, confirmedById: actor.id } });
+      await this.release(tx, lines);
+      await tx.payrollNetReservation.deleteMany({ where: { ...reservationKey, versionId: version.id } });
+      await this.event(tx, batch, actor, 'net_paid', { employeeId: row.employeeId, requestId: input.requestId, reference,
+        payDate: input.payDate, sourceHash: snapshot.sourceHash }, version.version);
+      return this.advance(tx, batch, 'approved');
+    }, Prisma.TransactionIsolationLevel.ReadCommitted);
+  }
+
+  async cancelNetRemainder(id: string, input: ExpectedVersion & { employeeId: string; reference: string }, actor: PayrollActor) {
+    return this.write(id, actor, 'payroll_settle', async (tx, batch, domain) => {
+      assertPayrollVersion(batch.version, input.expectedVersion);
+      const version = this.effective(batch), snapshot = version.netSnapshot;
+      assertPayrollNetShape(snapshot);
+      const reference = this.text(input.reference, 200);
+      if (!snapshot.rows.some(row => row.employeeId === input.employeeId)) throw new BadRequestException('人员不属于当前批准版本');
+      if (version.netPayments.some(payment => payment.employeeId === input.employeeId)) throw new ConflictException('已有实发与扣缴事实，不能撤销；请办理更正');
+      const lines = version.lines.filter(line => line.employeeId === input.employeeId);
+      if (lines.some(line => line.settlements.length)) throw new ConflictException('已有工资结算事实，不能撤销');
+      const key = { subjectId: batch.subjectId, employeeId: input.employeeId, domain, taxYear: Number(snapshot.payDate.slice(0, 4)) };
+      const reservation = await tx.payrollNetReservation.findUnique({ where: { subjectId_employeeId_domain_taxYear: key } });
+      if (reservation?.versionId !== version.id) throw new ConflictException('该人员没有待撤销的未付安排');
+      await this.release(tx, lines);
+      await tx.payrollNetReservation.deleteMany({ where: { ...key, versionId: version.id } });
+      await this.event(tx, batch, actor, 'remainder_cancelled', { employeeId: input.employeeId, versionId: version.id,
+        sourceHash: snapshot.sourceHash, reference }, version.version);
       return this.advance(tx, batch, 'approved');
     });
   }
@@ -483,7 +563,10 @@ export class PayrollBatchesService {
   private async withFreshness(tx: Prisma.TransactionClient, batch: PayrollBatch, version: Version, domain: PayrollDomain): Promise<VisibleVersion> {
     if (version.status !== 'pending' && version.status !== 'approved') return version;
     try {
-      if (version.status === 'approved') await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+      if (version.status === 'approved') {
+        await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
+        if (version.netSnapshot) await assertPayrollNetFresh(tx, batch, version.netSnapshot, domain, version.id);
+      }
       else await this.assertFresh(tx, batch, version, domain);
       return { ...version, needsUpdate: false };
     } catch (error) {
@@ -552,6 +635,11 @@ export class PayrollBatchesService {
   }
 
   private assertReady(version: Version) {
+    if (version.netSnapshot) {
+      assertPayrollNetShape(version.netSnapshot);
+      assertPayrollNetLines(version.netSnapshot, version.lines, version.gross);
+      if (version.payDate?.toISOString().slice(0, 10) !== version.netSnapshot.payDate) throw new ConflictException('批准发薪日与实发快照不一致');
+    }
     if (!Array.isArray(version.issues) || version.issues.length > 0 || !version.lines.length || version.gross === null ||
       version.lines.some(line => line.status !== 'ready' && !this.notApplicable(line) || line.entitlement === null || line.paidBefore === null || line.amount === null)) {
       throw new ConflictException('工资来源或规则尚待核对，不能以部分成功提交或审批');
@@ -580,6 +668,7 @@ export class PayrollBatchesService {
       current.reviewerCount !== version.reviewerCount || JSON.stringify(current.approvalPath) !== JSON.stringify(version.approvalPath)) {
       throw new ConflictException('工资来源已更新或待核，暂停审批；请退回或撤回后重算并重新提交');
     }
+    if (version.netSnapshot) await assertPayrollNetFresh(tx, batch, version.netSnapshot, domain, version.id);
   }
 
   private async assertPaidBefore(tx: Prisma.TransactionClient, batch: PayrollBatch, version: Version, domain: PayrollDomain) {

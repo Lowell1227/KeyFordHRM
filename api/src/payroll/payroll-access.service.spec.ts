@@ -27,9 +27,18 @@ describe('live payroll access', () => {
     const { service, prisma } = fixture({ PAYROLL_ENABLED: 'true', HRM_PREVIEW: 'true', PAYROLL_FORMAL_ENABLED: 'true' });
     await expect(service.assertDomain(prisma, 'formal')).rejects.toThrow(ForbiddenException);
   });
+  it('chooses the maintenance domain from server configuration, never a client selector', () => {
+    expect(fixture().service.maintenancePurpose()).toBe('validation');
+    expect(fixture({ PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'true' }).service.maintenancePurpose()).toBe('formal');
+    expect(fixture({}).service.maintenancePurpose()).toBe('formal');
+  });
   it('the global switch alone cannot enable formal payroll', async () => {
     const { service, prisma } = fixture({ PAYROLL_ENABLED: 'true' });
     expect(service.enabled()).toBe(false);
+    await expect(service.assertDomain(prisma, 'formal')).rejects.toThrow(ForbiddenException);
+  });
+  it('the formal flag cannot bypass the disabled global switch for domain-only checks', async () => {
+    const { service, prisma } = fixture({ PAYROLL_ENABLED: 'false', PAYROLL_FORMAL_ENABLED: 'true', HRM_PREVIEW: 'false' });
     await expect(service.assertDomain(prisma, 'formal')).rejects.toThrow(ForbiddenException);
   });
   it('checks revoked grants again rather than trusting the menu or JWT', async () => {

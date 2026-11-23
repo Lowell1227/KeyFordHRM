@@ -1,17 +1,20 @@
-import type { PayrollDeductionSettings, PayrollTaxAmount } from '@/types/payroll.types';
+import type { PayrollDeductionLedgerSettings, PayrollDeductionSettings, PayrollTaxAmount } from '@/types/payroll.types';
 
 export const taxAmountFields: Array<{key: PayrollTaxAmount; label: string}> = [
   {key: 'exemptIncome', label: '免税收入'}, {key: 'standardDeduction', label: '减除费用'},
   {key: 'specialDeduction', label: '专项扣除'}, {key: 'additionalDeduction', label: '专项附加扣除'},
   {key: 'otherDeduction', label: '其他依法扣除'}, {key: 'taxRelief', label: '减免税额'},
 ];
-export function emptyDeductionSettings(): PayrollDeductionSettings {
-  const amounts = () => Object.fromEntries(taxAmountFields.map(field => [field.key, ''])) as Record<PayrollTaxAmount, string>;
-  const contribution = () => ({status: '', ruleVersion: '', evidenceRef: '', contributionDate: '', effectiveFrom: '', effectiveTo: null, items: []});
-  return {rounding: '', socialInsurance: contribution(), housingFund: contribution(), tax: {method: '', ruleVersion: '', evidenceRef: '', effectiveFrom: '', effectiveTo: null,
-    brackets: [], opening: {...amounts(), income: '', taxPaid: '', confirmed: false, sourceVersion: '', evidenceRef: ''}, current: amounts()}};
+const emptyAmounts = () => Object.fromEntries(taxAmountFields.map(field => [field.key, ''])) as Record<PayrollTaxAmount, string>;
+export function emptyDeductionLedger(): PayrollDeductionLedgerSettings {
+  return {startDate: '', priorInPayMonth: emptyAmounts(), priorSocialInsurance: '', priorHousingFund: ''};
 }
-export function deductionFormErrors(settings: PayrollDeductionSettings): Record<string, string> {
+export function emptyDeductionSettings(): PayrollDeductionSettings {
+  const contribution = () => ({status: '', ruleVersion: '', evidenceRef: '', contributionDate: '', effectiveFrom: '', effectiveTo: null, items: []});
+  return {rounding: '', ledger: emptyDeductionLedger(), socialInsurance: contribution(), housingFund: contribution(), tax: {method: '', ruleVersion: '', evidenceRef: '', effectiveFrom: '', effectiveTo: null,
+    brackets: [], opening: {...emptyAmounts(), income: '', taxPaid: '', confirmed: false, sourceVersion: '', evidenceRef: ''}, current: emptyAmounts()}};
+}
+export function deductionFormErrors(settings: PayrollDeductionSettings, payDate?: string): Record<string, string> {
   const errors: Record<string, string> = {};
   const needed = (path: string, value: unknown) => { if (typeof value !== 'string' || !value.trim()) errors[path] = '请填写此项；无金额也须明确填写0'; };
   const money = (path: string, value: string | null) => { needed(path, value); if (value && !/^\d{1,12}(\.\d{1,4})?$/.test(value)) errors[path] = '请填写非负十进制金额，最多4位小数'; };
@@ -29,5 +32,20 @@ export function deductionFormErrors(settings: PayrollDeductionSettings): Record<
   for (const field of [...taxAmountFields.map(row => row.key), 'income', 'taxPaid'] as const) money(`tax.opening.${field}`, settings.tax.opening[field]);
   for (const {key} of taxAmountFields) money(`tax.current.${key}`, settings.tax.current[key]);
   if (!settings.tax.opening.confirmed) errors['tax.opening.confirmed'] = '请先核对累计期初及其依据';
+  if (settings.ledger) {
+    const ledger = settings.ledger, date = new Date(`${ledger.startDate}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ledger.startDate) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== ledger.startDate) errors['ledger.startDate'] = '请填写有效的台账基准日';
+    else if (payDate && (ledger.startDate.slice(0, 4) !== payDate.slice(0, 4) || ledger.startDate > payDate)) errors['ledger.startDate'] = '基准日须在发薪年度内且不晚于发薪日';
+    for (const {key} of taxAmountFields) {
+      const path = `ledger.priorInPayMonth.${key}`, value = ledger.priorInPayMonth[key];
+      money(path, value);
+      if (payDate && ledger.startDate.slice(0, 7) !== payDate.slice(0, 7) && value && !/^0+(\.0+)?$/.test(value)) errors[path] = '非基准月的月内既有金额须明确填写0';
+    }
+    for (const [key, contribution] of [['priorSocialInsurance', 'socialInsurance'], ['priorHousingFund', 'housingFund']] as const) {
+      money(`ledger.${key}`, ledger[key]);
+      const month = settings[contribution].contributionDate.slice(0, 7);
+      if (month && month > ledger.startDate.slice(0, 7) && ledger[key] && !/^0+(\.0+)?$/.test(ledger[key])) errors[`ledger.${key}`] = '晚于基准月的缴费月，接管前外部已扣金额须明确填写0';
+    }
+  }
   return errors;
 }

@@ -80,6 +80,7 @@ function setup() {
     try { return await callback(tx); } catch (error) { Object.assign(state, before); throw error; } }) };
   const access = { getAccess: jest.fn(async user => payrollAccess(user, state.grants, true)),
     assert: jest.fn(async (_tx, user, subjectId, capability) => assertPayrollGrant(user, state.grants, subjectId, capability, true)),
+    maintenancePurpose: jest.fn(() => 'validation'),
     assertDomain: jest.fn(async (_tx, domain) => { if (domain !== 'validation') throw new ForbiddenException('Domain denied'); return 'validation'; }) };
   const service = new PayrollDataService(prisma as any, access as any);
   return { state, tx, prisma, access, service };

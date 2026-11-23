@@ -14,6 +14,7 @@ export class PayrollAccessService {
     return this.config.get<string>('PAYROLL_ENABLED') === 'true'
       && (this.config.get<string>('HRM_PREVIEW') === 'true' || this.config.get<string>('PAYROLL_FORMAL_ENABLED') === 'true');
   }
+  maintenancePurpose(): PayrollPurpose { return this.config.get<string>('HRM_PREVIEW') === 'true' ? 'validation' : 'formal'; }
   async getAccess(actor: PayrollActor) {
     if (!this.enabled() || actor.isAssessorOnly) return payrollAccess(actor, [], false);
     const grants = await this.prisma.payrollGrant.findMany({ where: { userId: actor.id, revokedAt: null,
@@ -39,6 +40,7 @@ export class PayrollAccessService {
     assertPayrollGrant(actor, grants, subjectId, capability, true);
   }
   async assertDomain(tx: Prisma.TransactionClient | PrismaService, purpose: PayrollPurpose): Promise<PayrollDomain> {
+    if (!this.enabled()) throw new ForbiddenException('薪酬功能尚未启用');
     if (purpose === 'formal') {
       if (this.config.get<string>('PAYROLL_FORMAL_ENABLED') !== 'true' || this.config.get<string>('HRM_PREVIEW') === 'true') {
         throw new ForbiddenException('正式薪酬尚未开放，需先确认正式规则与授权');

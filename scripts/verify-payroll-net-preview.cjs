@@ -1,0 +1,82 @@
+'use strict';
+const {spawnSync}=require('node:child_process');
+async function verify(){
+  require('./prisma/preview-guard.cjs').assertPreviewEnvironment(process.env);
+  const {PrismaClient}=require('@prisma/client'),assert=require('node:assert/strict'),{randomUUID,randomBytes}=require('node:crypto');
+  const db=new PrismaClient({log:[],errorFormat:'minimal'}),tokens={},passed=[];let stage='guard';
+  async function http(actor,method,path,body,status=method==='GET'?200:201){const r=await fetch('http://127.0.0.1:3000/api/v1'+path,{method,signal:AbortSignal.timeout(30000),headers:{'content-type':'application/json',...(tokens[actor]?{authorization:'Bearer '+tokens[actor]}:{})},...(body?{body:JSON.stringify(body)}:{})});if(r.status!==status)throw new Error(`status_${r.status}_expected_${status}_${path.split('/').at(-1)}`);return(await r.json()).data;}
+  try{
+    const [identity]=await db.$queryRawUnsafe('SELECT current_database() AS db,current_user AS role');assert.equal(identity.db,'hrm_preview');assert.equal(identity.role,'hrm_preview');assert.notEqual(process.env.PAYROLL_FORMAL_ENABLED,'true');
+    const m=(await db.systemConfig.findUnique({where:{key:'payroll_net_preview_net-api_v1'}}))?.value;assert.equal(m?.fictional,true);assert.equal(m.state,'ready');
+    for(const actor of['HR001','MGR001','VP001','ADMIN','EMP001'])tokens[actor]=(await http('','POST','/auth/test-login',{employeeNo:actor},200)).token;
+    let b=await http('HR001','GET',`/payroll/batches/${m.batchId}`);assert.equal(b.status,'draft');
+    const counts=async()=>({paid:await db.payrollNetPayment.count({where:{subjectId:m.subjectId}}),gross:await db.payrollSettlement.count({where:{line:{version:{batch:{subjectId:m.subjectId}}}}})});
+    stage='scope';
+    for(const actor of['ADMIN','EMP001'])await http(actor,'GET',`/payroll/batches/${b.id}`,null,403);
+    await http('HR001','POST','/payroll/batches',{subjectId:m.subjectId,month:m.month,payMonth:m.payMonth,purpose:'formal'},403);
+    await http('HR001','POST',`/payroll/batches/${b.id}/calculate`,{expectedVersion:b.version,payDate:m.payDate,gross:'1'},400);
+    await http('HR001','POST',`/payroll/batches/${b.id}/calculate`,{expectedVersion:b.version,payDate:'2037-02-31'},400);
+    b=await http('HR001','POST',`/payroll/batches/${b.id}/calculate`,{expectedVersion:b.version,payDate:m.payDate});
+    assert.equal(b.versions[0].netSnapshot.totals.net,'8820.00');assert.deepEqual(await counts(),{paid:0,gross:0});passed.push('real_scoped_calculation_immutable_net_not_actual_payment');
+    stage='return';
+    b=await http('HR001','POST',`/payroll/batches/${b.id}/submit`,{expectedVersion:b.version});
+    await http('HR001','POST',`/payroll/batches/${b.id}/decide`,{expectedVersion:b.version,decision:'approve',note:''},403);
+    await http('VP001','POST',`/payroll/batches/${b.id}/decide`,{expectedVersion:b.version,decision:'approve',note:''},403);
+    b=await http('MGR001','POST',`/payroll/batches/${b.id}/decide`,{expectedVersion:b.version,decision:'return',note:'虚构退回核对'});
+    assert.equal(await db.payrollNetReservation.count({where:{subjectId:m.subjectId}}),0);
+    b=await http('HR001','POST',`/payroll/batches/${b.id}/calculate`,{expectedVersion:b.version,payDate:m.payDate});
+    b=await http('HR001','POST',`/payroll/batches/${b.id}/submit`,{expectedVersion:b.version});
+    stage='source_change';
+    const profile=await db.payrollDeductionProfile.findUnique({where:{id:m.profileId}}),updated=structuredClone(profile.settings);updated.tax.evidenceRef='虚构复核后的新版依据';
+    const revision=await http('HR001','POST','/payroll/deduction-profiles',{subjectId:m.subjectId,employeeId:m.employeeId,payDate:m.payDate,settings:updated});
+    const release=await http('HR001','POST',`/payroll/parameters/deduction/${revision.id}/submit`,{expectedVersion:revision.version});
+    await http('MGR001','POST',`/payroll/parameter-releases/${release.id}/decide`,{expectedVersion:release.attempt,decision:'approve',note:'虚构来源修订'});
+    await http('MGR001','POST',`/payroll/batches/${b.id}/decide`,{expectedVersion:b.version,decision:'approve',note:''},409);
+    assert.equal((await http('HR001','GET',`/payroll/batches/${b.id}`)).versions[0].needsUpdate,true);
+    b=await http('MGR001','POST',`/payroll/batches/${b.id}/decide`,{expectedVersion:b.version,decision:'return',note:'来源变化后重算'});
+    b=await http('HR001','POST',`/payroll/batches/${b.id}/calculate`,{expectedVersion:b.version,payDate:m.payDate});
+    b=await http('HR001','POST',`/payroll/batches/${b.id}/submit`,{expectedVersion:b.version});
+    const contender=await http('HR001','POST','/payroll/batches',{subjectId:m.subjectId,month:m.month,payMonth:m.payMonth,purpose:'validation'});
+    let duplicate=await http('HR001','POST',`/payroll/batches/${contender.id}/calculate`,{expectedVersion:contender.version,payDate:m.payDate});
+    await http('HR001','POST',`/payroll/batches/${duplicate.id}/submit`,{expectedVersion:duplicate.version},409);
+    b=await http('MGR001','POST',`/payroll/batches/${b.id}/decide`,{expectedVersion:b.version,decision:'approve',note:'虚构独立复核'});
+    b=await http('VP001','POST',`/payroll/batches/${b.id}/decide`,{expectedVersion:b.version,decision:'approve',note:'虚构独立审批'});
+    assert.deepEqual(await counts(),{paid:0,gross:0});passed.push('return_resubmit_source_change_self_review_wrong_step_and_cross_batch_claims');
+    stage='export';
+    const password=randomBytes(16).toString('hex');
+    async function excel(batch){const r=await fetch(`http://127.0.0.1:3000/api/v1/payroll/batches/${batch.id}/export`,{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+tokens.VP001},body:JSON.stringify({expectedVersion:batch.version,filePassword:password})});assert.equal(r.status,201);const encrypted=Buffer.from(await r.arrayBuffer());assert.equal(encrypted.subarray(0,8).toString('hex'),'d0cf11e0a1b11ae1');const plain=await require('officecrypto-tool').decrypt(encrypted,{password});const workbook=new(require('exceljs').Workbook)();await workbook.xlsx.load(plain);const sheet=workbook.getWorksheet('工资实发');assert.equal(sheet.getCell('A1').value,'测试环境');assert.ok(workbook.getWorksheet('工资明细'));assert.ok(workbook.getWorksheet('审批依据'));return['F3','G3','H3','I3','J3'].map(cell=>sheet.getCell(cell).value);}
+    assert.deepEqual(await excel(b),[10000,100,100,980,8820]);assert.deepEqual(await counts(),{paid:0,gross:0});
+    stage='payment';
+    const original=JSON.stringify(await db.payrollVersion.findUnique({where:{id:b.versions[0].id}}));
+    const request={expectedVersion:b.version,employeeId:m.employeeId,payDate:m.payDate,reference:'虚构实际发放与扣缴凭证',requestId:randomUUID()};
+    await http('HR001','POST',`/payroll/batches/${b.id}/net-payment`,request,403);
+    await http('VP001','POST',`/payroll/batches/${b.id}/net-payment`,{...request,payDate:'2037-02-11'},409);
+    await http('VP001','POST',`/payroll/batches/${b.id}/settlements`,{expectedVersion:b.version,lineId:b.versions[0].lines[0].id,amount:'1',reference:'test',requestId:randomUUID()},409);
+    const paid=await Promise.all([http('VP001','POST',`/payroll/batches/${b.id}/net-payment`,request),http('VP001','POST',`/payroll/batches/${b.id}/net-payment`,request)]);
+    b=paid[0];assert.deepEqual(await counts(),{paid:1,gross:1});
+    await http('VP001','POST',`/payroll/batches/${b.id}/net-payment`,{...request,requestId:randomUUID(),expectedVersion:b.version},409);
+    assert.equal(JSON.stringify(await db.payrollVersion.findUnique({where:{id:b.versions[0].id}})),original);
+    assert.deepEqual(await excel(b),[10000,100,100,980,8820]);
+    passed.push('encrypted_final_excel_no_payment_side_effect_explicit_atomic_payment_and_concurrent_replay');
+    stage='correction';
+    await http('HR001','POST','/payroll/adjustments',{subjectId:m.subjectId,employeeId:m.employeeId,month:m.month,itemCode:'adjustment',amount:'500',reference:'虚构补差依据',reason:'虚构晚到更正，不改原批准版本'});
+    let correction=await http('HR001','POST','/payroll/batches',{subjectId:m.subjectId,month:m.month,payMonth:m.payMonth,purpose:'validation',correctionOfId:b.id});
+    correction=await http('HR001','POST',`/payroll/batches/${correction.id}/calculate`,{expectedVersion:correction.version,payDate:m.payDate});
+    assert.deepEqual(correction.versions[0].netSnapshot.totals,{gross:'500.00',socialInsurance:'0.00',housingFund:'0.00',incomeTax:'50.00',net:'450.00'});
+    assert.equal(correction.versions[0].netSnapshot.rows[0].ledger.factIds.length,1);
+    const approve=async value=>{value=await http('HR001','POST',`/payroll/batches/${value.id}/submit`,{expectedVersion:value.version});value=await http('MGR001','POST',`/payroll/batches/${value.id}/decide`,{expectedVersion:value.version,decision:'approve',note:''});return http('VP001','POST',`/payroll/batches/${value.id}/decide`,{expectedVersion:value.version,decision:'approve',note:''});};
+    correction=await approve(correction);assert.deepEqual(await excel(correction),[500,0,0,50,450]);
+    await http('VP001','POST',`/payroll/batches/${correction.id}/net-payment`,{expectedVersion:correction.version,employeeId:m.employeeId,payDate:m.payDate,reference:'虚构补差实发凭证',requestId:randomUUID()});
+    assert.deepEqual(await counts(),{paid:2,gross:2});
+    assert.equal(JSON.stringify(await db.payrollVersion.findUnique({where:{id:b.versions[0].id}})),original);
+    passed.push('late_correction_preserves_original_and_same_month_deductions_not_repeated');
+    stage='trial';
+    let trial=await http('HR001','POST','/payroll/batches',{subjectId:m.subjectId,month:m.month,payMonth:m.payMonth,purpose:'trial'});
+    trial=await http('HR001','POST',`/payroll/batches/${trial.id}/calculate`,{expectedVersion:trial.version,payDate:m.payDate});
+    await http('HR001','POST',`/payroll/batches/${trial.id}/submit`,{expectedVersion:trial.version},409);
+    await http('VP001','POST',`/payroll/batches/${trial.id}/export`,{expectedVersion:trial.version,filePassword:password},403);
+    passed.push('trial_and_formal_domains_not_opened');
+    return{fictional:true,count:passed.length,passed,productionTouched:false};
+  }catch(e){throw new Error(`net_${stage}_failed:${e.message}`);}finally{await db.$disconnect();}
+}
+if(require.main===module){const r=spawnSync('docker',['exec','-i','-w','/app','hrm-api-1','node'],{encoding:'utf8',timeout:180000,input:`(${verify.toString()})().then(r=>console.log(JSON.stringify(r))).catch(e=>{console.error(e.message);process.exitCode=1;});`});if(r.status!==0){process.stderr.write(r.stderr||'net_verification_refused');process.exitCode=1;}else process.stdout.write(r.stdout);}

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { Plus, Delete } from '@element-plus/icons-vue';
 import type { PayrollDeductionSettings } from '@/types/payroll.types';
-import { taxAmountFields } from './payroll-deduction-form';
+import { emptyDeductionLedger, taxAmountFields } from './payroll-deduction-form';
 const model = defineModel<PayrollDeductionSettings>({required: true});
 withDefaults(defineProps<{disabled?: boolean; errors?: Record<string,string>}>(), {errors: () => ({})});
 const contributions = [{key:'socialInsurance',label:'个人社保'},{key:'housingFund',label:'个人公积金'}] as const;
 </script>
 <template>
   <el-form label-position="top" :disabled="disabled" class="deduction-settings">
+    <el-form-item label="实发累计台账"><el-checkbox :model-value="!!model.ledger" @update:model-value="model.ledger = $event ? emptyDeductionLedger() : undefined">接入实发累计台账</el-checkbox></el-form-item>
     <el-form-item label="扣缴舍入" :error="errors.rounding"><el-select v-model="model.rounding"><el-option label="分项四舍五入到分" value="component_half_up" /></el-select></el-form-item>
     <section v-for="section in contributions" :key="section.key">
       <h3>{{ section.label }}</h3>
@@ -42,19 +43,29 @@ const contributions = [{key:'socialInsurance',label:'个人社保'},{key:'housin
         <el-button v-if="!disabled" :icon="Delete" circle aria-label="删除分档" title="删除分档" @click="model.tax.brackets.splice(index,1)"/>
       </div>
     </section>
-    <section><h3>发薪年度累计期初</h3><div class="fields-grid">
+    <section><h3>{{ model.ledger ? '基准日前累计' : '发薪年度累计期初' }}</h3><div class="fields-grid">
       <el-form-item label="累计来源版本" :error="errors['tax.opening.sourceVersion']"><el-input v-model="model.tax.opening.sourceVersion" maxlength="200"/></el-form-item>
       <el-form-item label="累计期初依据" :error="errors['tax.opening.evidenceRef']"><el-input v-model="model.tax.opening.evidenceRef" maxlength="200"/></el-form-item>
       <el-form-item label="累计收入" :error="errors['tax.opening.income']"><el-input v-model="model.tax.opening.income" inputmode="decimal"/></el-form-item>
       <el-form-item label="累计已扣个税" :error="errors['tax.opening.taxPaid']"><el-input v-model="model.tax.opening.taxPaid" inputmode="decimal"/></el-form-item>
       <el-form-item v-for="field in taxAmountFields" :key="field.key" :label="`累计${field.label}`" :error="errors[`tax.opening.${field.key}`]"><el-input v-model="model.tax.opening[field.key]" inputmode="decimal"/></el-form-item>
     </div><el-form-item :error="errors['tax.opening.confirmed']"><el-checkbox v-model="model.tax.opening.confirmed">已核对累计期初及其依据</el-checkbox></el-form-item></section>
-    <section><h3>本次扣除事实</h3><div class="fields-grid"><el-form-item v-for="field in taxAmountFields" :key="field.key" :label="`本次${field.label}`" :error="errors[`tax.current.${field.key}`]"><el-input v-model="model.tax.current[field.key]" inputmode="decimal"/></el-form-item></div></section>
+    <section v-if="model.ledger"><h3>台账基准</h3>
+      <p class="ledger-note">基准日前累计为发薪年度历史事实；个税月内既有金额仅基准月可非零，本月累计扣除额度不重复累加。外部已扣仅填该缴费月的系统外已扣金额，勿重复填入 HRM 实发台账；晚于基准月的缴费月须填0。</p>
+      <div class="fields-grid">
+        <el-form-item label="台账基准日" :error="errors['ledger.startDate']"><el-input v-model="model.ledger.startDate" placeholder="YYYY-MM-DD"/></el-form-item>
+        <el-form-item label="接管前外部已扣个人社保" :error="errors['ledger.priorSocialInsurance']"><el-input v-model="model.ledger.priorSocialInsurance" inputmode="decimal"/></el-form-item>
+        <el-form-item label="接管前外部已扣个人公积金" :error="errors['ledger.priorHousingFund']"><el-input v-model="model.ledger.priorHousingFund" inputmode="decimal"/></el-form-item>
+        <el-form-item v-for="field in taxAmountFields" :key="field.key" :label="`基准月既有${field.label}`" :error="errors[`ledger.priorInPayMonth.${field.key}`]"><el-input v-model="model.ledger.priorInPayMonth[field.key]" inputmode="decimal"/></el-form-item>
+      </div>
+    </section>
+    <section><h3>{{ model.ledger ? '本月累计扣除额度' : '本次扣除事实' }}</h3><div class="fields-grid"><el-form-item v-for="field in taxAmountFields" :key="field.key" :label="`${model.ledger ? '本月累计' : '本次'}${field.label}`" :error="errors[`tax.current.${field.key}`]"><el-input v-model="model.tax.current[field.key]" inputmode="decimal"/></el-form-item></div></section>
   </el-form>
 </template>
 <style scoped>
 section { border-top: 1px solid var(--el-border-color-lighter); margin-top: 16px; padding-top: 8px; }
 h3 {font-size:16px;margin:10px 0 16px;}
+.ledger-note {font-size:13px;color:var(--el-text-color-secondary);line-height:1.6;overflow-wrap:anywhere;}
 .fields-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px;}
 .item-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) 32px;align-items:start;gap:10px;}
 .item-grid > .el-button {margin-top:30px;}
