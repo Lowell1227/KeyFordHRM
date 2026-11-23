@@ -38,6 +38,7 @@ async function serve() {
   const commands = createInterface({ input: process.stdin });
   const iterator = commands[Symbol.asyncIterator]();
   const initial = JSON.parse((await iterator.next()).value);
+  const setupOnly = initial.setupOnly === true;
   const sourceHashes = initial.sourceHashes;
   for (const [file, expected] of Object.entries(sourceHashes)) assert.equal(hash(fs.readFileSync(file)), expected, `Source/dependency drift: ${file}`);
   for (const name of ['@nestjs/testing', '@nestjs/config', '@nestjs/jwt', '@prisma/client', 'bcrypt', 'typescript', 'ts-node']) {
@@ -80,17 +81,39 @@ async function serve() {
   const values = { PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'true', HRM_PREVIEW: 'false', ENABLE_TEST_QUICK_LOGIN: 'false', JWT_EXPIRES_IN: '1h' };
   const config = new ConfigService({ ...values, [VALIDATED_ENV_PROPNAME]: { ...values } });
   const db = new PrismaService({ log: [], errorFormat: 'minimal' });
+  let gatewayCalls = 0;
+  const setupControllers = [], setupProviders = [];
+  if (setupOnly) {
+    const SyncController = load('payroll/payroll-attendance-sync.controller', 'PayrollAttendanceSyncController');
+    const SyncService = load('payroll/payroll-attendance-sync.service', 'PayrollAttendanceSyncService');
+    const Gateway = load('dingtalk/dingtalk-attendance.service', 'DingtalkAttendanceService');
+    const syncValues = { ...values, DINGTALK_ATTENDANCE_SYNC_ENABLED: 'true' };
+    const syncConfig = new ConfigService({ ...syncValues, [VALIDATED_ENV_PROPNAME]: syncValues });
+    const gateway = new Proxy(new Gateway(Object.freeze({}), config), { get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      return typeof value === 'function' && key !== 'constructor' ? () => { gatewayCalls++; throw new Error('External gateway is prohibited in setup UI acceptance'); } : value;
+    } });
+    setupControllers.push(SyncController);
+    setupProviders.push({ provide: SyncService, useFactory: (client, access, data) => new SyncService(client, access, data, gateway, Object.freeze({}), syncConfig),
+      inject: [PrismaService, PayrollAccessService, PayrollDataService] });
+  }
   const module = await Test.createTestingModule({
-    controllers: [AuthController, PayrollController, PayrollReadinessController],
+    controllers: [AuthController, PayrollController, PayrollReadinessController, ...setupControllers],
     providers: [{ provide: PrismaService, useValue: db }, { provide: ConfigService, useValue: config },
       { provide: JwtService, useValue: new JwtService({ secret: randomBytes(32).toString('hex'), signOptions: { expiresIn: '1h' } }) },
       { provide: DingtalkService, useValue: Object.freeze({}) },
       AuthService, BusinessCapabilitiesService, EmployeeEffectiveDateService, PayrollAccessService, PayrollDataService, PayrollGrantsService,
       PayrollParameterReleasesService, PayrollBatchesService, PayrollReadinessService, PayrollExportService, RosterSensitiveExportService,
-      { provide: 'PAYROLL_SOURCE_READER', useClass: PayrollSourcesService }, { provide: APP_GUARD, useClass: JwtAuthGuard }],
+      { provide: 'PAYROLL_SOURCE_READER', useClass: PayrollSourcesService }, { provide: APP_GUARD, useClass: JwtAuthGuard }, ...setupProviders],
   }).compile();
   const app = module.createNestApplication({ logger: false });
   app.setGlobalPrefix('api/v1');
+  if (setupOnly) app.use((request, response, next) => {
+    if (!['GET', 'HEAD'].includes(request.method) && request.path !== '/api/v1/auth/login') {
+      response.status(403).json({ code: 4030, message: 'Setup UI acceptance prohibits business writes' }); return;
+    }
+    next();
+  });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true, transformOptions: { enableImplicitConversion: true } }));
   app.useGlobalInterceptors(new ResponseInterceptor()); app.useGlobalFilters(new HttpExceptionFilter());
   await app.init();
@@ -98,7 +121,26 @@ async function serve() {
   assert.deepEqual(identity, { db: 'hrm_preview', role: 'hrm_preview' });
   const marker = await db.systemConfig.findUniqueOrThrow({ where: { key: 'local_preview_fixture_v1' } });
   assert.equal(marker.value.fictional, true);
-  assert.equal((await db.systemConfig.findUniqueOrThrow({ where: { key: 'payroll_preview_fixture_v1' } })).value.fictional, true);
+  const originalDemo = await db.systemConfig.findUniqueOrThrow({ where: { key: 'payroll_preview_fixture_v1' } });
+  assert.equal(originalDemo.value.fictional, true);
+  const demoSubjectIds = originalDemo.value.subjectIds;
+  assert.ok(Array.isArray(demoSubjectIds) && demoSubjectIds.length);
+  const demoUserIds = Array.from(new Set([...(originalDemo.value.employeeIds ?? []), ...Object.values(originalDemo.value.actors ?? {})]));
+  async function demoDigest() {
+    return db.$transaction(async tx => {
+      const records = { marker: await tx.systemConfig.findUnique({ where: { key: originalDemo.key } }),
+        users: await tx.user.findMany({ where: { id: { in: demoUserIds } }, orderBy: { id: 'asc' } }),
+        employments: await tx.employmentRecord.findMany({ where: { userId: { in: demoUserIds } }, orderBy: { id: 'asc' } }),
+        subjects: await tx.contractSubject.findMany({ where: { id: { in: demoSubjectIds } }, orderBy: { id: 'asc' } }) };
+      for (const model of ['payrollGrant', 'payrollPolicy', 'payrollStandard', 'payrollDeductionProfile', 'payrollParameterRelease', 'payrollAttendanceSnapshot',
+        'payrollAttendanceSyncJob', 'payrollOpeningBalance', 'payrollAdjustment', 'payrollBatch', 'payrollEvent', 'payrollNetPayment', 'payrollNetReservation']) {
+        records[model] = await tx[model].findMany({ where: { subjectId: { in: demoSubjectIds } },
+          orderBy: model === 'payrollNetReservation' ? [{ subjectId: 'asc' }, { employeeId: 'asc' }, { domain: 'asc' }, { taxYear: 'asc' }] : { id: 'asc' } });
+      }
+      return hash(json(records));
+    }, { isolationLevel: 'RepeatableRead', timeout: 60000 });
+  }
+  const demoBaseline = await demoDigest();
   const checks = await db.$queryRawUnsafe("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid = 'payroll_batches'::regclass AND contype = 'c'");
   assert.ok(checks.some(row => row.definition.includes('reconciliation')));
   const environment = hash(process.env);
@@ -111,6 +153,47 @@ async function serve() {
   const services = { access: module.get(PayrollAccessService), grants: module.get(PayrollGrantsService), data: module.get(PayrollDataService),
     releases: module.get(PayrollParameterReleasesService), batches: module.get(PayrollBatchesService) };
   const fixtures = [];
+  async function emptySetupState(subjectId) {
+    const state = {};
+    for (const [label, model] of Object.entries({ rules: 'payrollPolicy', standards: 'payrollStandard', deductions: 'payrollDeductionProfile',
+      parameterReleases: 'payrollParameterRelease', attendance: 'payrollAttendanceSnapshot', syncJobs: 'payrollAttendanceSyncJob', batches: 'payrollBatch',
+      openings: 'payrollOpeningBalance', adjustments: 'payrollAdjustment', payments: 'payrollNetPayment', reservations: 'payrollNetReservation' })) {
+      state[label] = await db[model].count({ where: { subjectId } });
+    }
+    return state;
+  }
+  async function createSetupFixture() {
+    guard();
+    const runId = randomUUID(), prefix = `PRUI_${runId.slice(0, 8)}`, subjectId = randomUUID(), departmentId = randomUUID();
+    const users = Object.fromEntries(['admin', 'hr', 'manager', 'reviewer', 'approver', 'employee', 'conflict'].map(role => [role, randomUUID()]));
+    const fixture = { runId, prefix, subjectId, departmentId, users, key: `payroll_readiness_ui_run:${runId}`,
+      employmentIds: [randomUUID(), randomUUID(), randomUUID()], month: '2026-10', setupOnly: true };
+    fixtures.push(fixture);
+    const password = randomBytes(24).toString('base64url'), passwordHash = await require('bcrypt').hash(password, 4);
+    const actor = role => ({ id: users[role], sysRole: role === 'admin' ? 'system_admin' : role === 'hr' ? 'hr' : 'employee', deptId: departmentId, isAssessorOnly: false });
+    await db.$transaction(async tx => {
+      await tx.systemConfig.create({ data: { key: fixture.key, value: { fictional: true, manifest: fixture } } });
+      await tx.contractSubject.create({ data: { id: subjectId, name: `${prefix}_subject_fictional` } });
+      await tx.department.create({ data: { id: departmentId, name: `${prefix}_department_fictional` } });
+      for (const [role, id] of Object.entries(users)) await tx.user.create({ data: { id, name: `${prefix}_${role}_fictional`, employeeNo: `${prefix}_${role}`,
+        deptId: departmentId, status: 'active', accountType: ['employee', 'conflict'].includes(role) ? 'employee' : 'service', sysRole: actor(role).sysRole,
+        hrCapabilities: role === 'hr' ? ['employee_archive_edit'] : [], passwordHash, mustChangePassword: false } });
+      await tx.user.update({ where: { id: users.hr }, data: { directManagerId: users.manager } });
+      for (const [index, id] of fixture.employmentIds.entries()) {
+        const role = index === 0 ? 'employee' : 'conflict';
+        await tx.employmentRecord.create({ data: { id, userId: users[role], employeeNo: `${prefix}_${role}`, deptId: departmentId, contractSubjectId: subjectId,
+          effectiveFrom: new Date(index === 2 ? '2026-10-16' : '2026-10-01'), effectiveTo: new Date('2026-10-31'), entryDate: new Date('2026-10-01'), employeeStatus: 'active',
+          changeType: 'initial', sourceType: 'payroll_readiness_ui_fictional', sourceRequestId: null, createdById: users.hr } });
+      }
+    });
+    for (const [role, capabilities] of [['hr', ['attendance_edit', 'attendance_seal', 'payroll_edit', 'payroll_export', 'payroll_settle']],
+      ['reviewer', ['payroll_review']], ['approver', ['payroll_approve']]]) {
+      await services.grants.save({ subjectId, userId: users[role], capabilities, expectedUpdatedAt: null, reason: `${prefix}:fictional-setup` }, actor('admin'));
+    }
+    assert.ok(Object.values(await emptySetupState(subjectId)).every(count => count === 0));
+    return { subjectId, prefix, month: fixture.month, employeeId: users.employee, employeeName: `${prefix}_employee_fictional`, conflictId: users.conflict,
+      conflictName: `${prefix}_conflict_fictional`, credentials: Object.fromEntries(['hr', 'reviewer', 'approver'].map(role => [role, { employeeNo: `${prefix}_${role}`, password }])) };
+  }
   async function createFixture() {
     guard();
     const runId = randomUUID(), prefix = `PRUI_${runId.slice(0, 8)}`, subjectId = randomUUID(), departmentId = randomUUID();
@@ -201,13 +284,15 @@ async function serve() {
       await tx.payrollDecision.deleteMany({ where: versionScope }); await tx.payrollExportRecord.deleteMany({ where: versionScope });
       await tx.payrollLine.deleteMany({ where: versionScope }); await tx.payrollVersion.deleteMany({ where: { batch: subjectScope } });
       for (const model of ['payrollBatch', 'payrollEvent', 'payrollParameterRelease', 'payrollAdjustment', 'payrollOpeningBalance', 'payrollStandard', 'payrollDeductionProfile', 'payrollPolicy', 'payrollAttendanceSnapshot', 'payrollGrant']) await tx[model].deleteMany({ where: subjectScope });
-      await tx.employmentRecord.deleteMany({ where: { id: fixture.employmentId, userId: fixture.users.employee } });
+      await tx.employmentRecord.deleteMany({ where: { id: { in: fixture.employmentIds ?? [fixture.employmentId] }, userId: { in: ids } } });
       await tx.user.updateMany({ where: { id: { in: ids } }, data: { directManagerId: null } });
       await tx.user.deleteMany({ where: { id: { in: ids }, employeeNo: { startsWith: fixture.prefix } } });
       await tx.department.delete({ where: { id: fixture.departmentId } }); await tx.contractSubject.delete({ where: { id: fixture.subjectId } });
       assert.equal(await tx.user.count({ where: { id: { in: ids } } }), 0);
       assert.equal(await tx.payrollBatch.count({ where: subjectScope }), 0);
     }, { timeout: 60000 });
+    assert.equal(await demoDigest(), demoBaseline, 'Original payroll demo changed');
+    assert.equal(gatewayCalls, 0);
     fixtures.length = 0;
   }
   try {
@@ -216,8 +301,11 @@ async function serve() {
       const command = JSON.parse(raw);
       try {
         if (command.op !== 'stop') guard();
-        const data = command.op === 'create' ? await createFixture() : command.op === 'inspect' ? await inspect(command.subjectId)
-          : command.op === 'stop' ? (await cleanup(), { cleaned: true, environmentUnchanged: hash(process.env) === environment }) : assert.fail('Unsupported control command');
+        const data = command.op === 'create' ? await (setupOnly ? createSetupFixture() : createFixture())
+          : command.op === 'inspect' && setupOnly ? (assert.ok(fixtures.some(fixture => fixture.subjectId === command.subjectId)),
+            { emptyState: await emptySetupState(command.subjectId), gatewayCalls, environmentUnchanged: hash(process.env) === environment })
+          : command.op === 'inspect' ? await inspect(command.subjectId)
+          : command.op === 'stop' ? (await cleanup(), { cleaned: true, demoUnchanged: true, gatewayCalls, environmentUnchanged: hash(process.env) === environment }) : assert.fail('Unsupported control command');
         line({ id: command.id, data }); if (command.op === 'stop') break;
       } catch (error) { line({ id: command.id, error: `${error.name}:${error.message}` }); }
     }
@@ -228,7 +316,9 @@ async function run() {
   const apiRoot = path.join(root, 'api'), webRoot = path.join(root, 'web');
   const inspect = JSON.parse(spawnSync('docker', ['inspect', container], { encoding: 'utf8' }).stdout)[0];
   const mount = inspect.Mounts.find(row => row.Destination === '/app');
-  assert.equal(path.normalize(mount.Source).toLowerCase(), path.normalize(apiRoot).toLowerCase());
+  const normalizeMount = value => value.replaceAll('\\', '/').toLowerCase();
+  const dockerDesktopMount = `/run/desktop/mnt/host/${apiRoot[0]}${apiRoot.slice(2)}`;
+  assert.ok([apiRoot, dockerDesktopMount].map(normalizeMount).includes(normalizeMount(mount.Source)), 'Verification mount must be this exact checkout');
   assert.ok(!Object.values(inspect.NetworkSettings.Ports ?? {}).some(value => value?.length), 'Verification container must remain unpublished');
   const sourceHashes = Object.fromEntries([...files(path.join(apiRoot, 'src')).filter(file => file.endsWith('.ts')), path.join(apiRoot, 'package.json'), path.join(apiRoot, 'package-lock.json'), path.join(apiRoot, 'prisma/schema.prisma'), path.join(apiRoot, script)].map(file => [path.relative(apiRoot, file).replaceAll('\\', '/'), hash(fs.readFileSync(file))]));
   const webSources = Object.fromEntries(files(path.join(webRoot, 'src')).filter(file => /\.(ts|vue|css)$/.test(file)).map(file => [file, hash(fs.readFileSync(file))]));
@@ -251,7 +341,8 @@ async function run() {
     pending.set(id, { resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } });
     processApi.stdin.write(JSON.stringify({ id, op, ...extra }) + '\n');
   });
-  processApi.stdin.write(JSON.stringify({ sourceHashes }) + '\n');
+  const setupOnly = process.argv.includes('--setup-only');
+  processApi.stdin.write(JSON.stringify({ sourceHashes, setupOnly }) + '\n');
   let proxy, vite, test, cleanupEvidence;
   try {
     const ready = await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(new Error('Isolated API startup timeout')), 90000).unref())]);
@@ -309,9 +400,10 @@ async function run() {
           await page.goto('http://127.0.0.1:5175/login');
           await page.waitForLoadState('networkidle');
           try {
-            await page.evaluate(async () => {
-              for (const source of ['/src/views/auth/LoginView.vue', '/src/views/compensation/payroll/PayrollBatchesView.vue']) await import(source);
-            });
+            await page.evaluate(async setup => {
+              for (const source of ['/src/views/auth/LoginView.vue', '/src/views/compensation/payroll/PayrollBatchesView.vue',
+                ...(setup ? ['/src/views/compensation/payroll/PayrollAttendanceView.vue', '/src/views/compensation/payroll/PayrollStandardsView.vue'] : [])]) await import(source);
+            }, setupOnly);
             await page.waitForLoadState('networkidle');
             assert.equal(await page.evaluate(() => !!localStorage.getItem('token')), false);
             settled = true;
@@ -328,8 +420,10 @@ async function run() {
     const playwright = path.join(webRoot, 'node_modules/@playwright/test/cli.js');
     const args = [playwright, 'test', '--config', 'playwright.readiness-ui.config.ts'];
     if (process.argv.includes('--desktop-only')) args.push('--project=desktop');
+    if (process.argv.includes('--mobile-only')) args.push('--project=mobile');
+    if (process.argv.includes('--candidates-only')) args.push('--grep', 'candidate dates isolate conflicts');
     test = spawn(process.execPath, args, { cwd: webRoot,
-      env: { ...process.env, HRM_READINESS_UI_RUN: controlToken, HRM_READINESS_UI_COLD: process.argv.includes('--cold') ? '1' : '0' }, stdio: 'inherit' });
+      env: { ...process.env, HRM_READINESS_UI_RUN: controlToken, HRM_READINESS_UI_COLD: process.argv.includes('--cold') ? '1' : '0', HRM_PAYROLL_SETUP_UI: setupOnly ? '1' : '0' }, stdio: 'inherit' });
     const code = await new Promise(resolve => test.once('exit', resolve));
     for (const [file, expected] of Object.entries(webSources)) assert.equal(hash(fs.readFileSync(file)), expected, `Frontend source drift: ${path.relative(webRoot, file)}`);
     process.exitCode = code || 0;
