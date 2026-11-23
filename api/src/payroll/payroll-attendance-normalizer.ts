@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 
 export type PayrollAttendanceType =
   | 'normal'
+  | 'late'
+  | 'early'
   | 'paid_leave'
   | 'unpaid_leave'
   | 'sick_leave'
@@ -25,7 +27,7 @@ export interface PayrollAttendanceRecord {
   startsAt: string;
   endsAt: string;
   type: PayrollAttendanceType;
-  state: 'effective' | 'pending' | 'revoked';
+  state: 'effective' | 'pending' | 'revoked' | 'superseded' | 'cancelled';
   hours: string;
   unit: 'hour' | 'day' | 'unknown';
   overtimeKind?: PayrollOvertimeKind;
@@ -113,6 +115,8 @@ type LocatedRecord = {
 
 const types: PayrollAttendanceType[] = [
   'normal',
+  'late',
+  'early',
   'paid_leave',
   'unpaid_leave',
   'sick_leave',
@@ -206,7 +210,9 @@ function sanitize(source: PayrollAttendanceRecord): Candidate {
     problems.push('HOURS_EXCEED_INTERVAL');
   }
   if (!types.includes(source.type)) problems.push('INVALID_RECORD_TYPE');
-  if (!['effective', 'pending', 'revoked'].includes(source.state)) problems.push('INVALID_RECORD_STATE');
+  if (!['effective', 'pending', 'revoked', 'superseded', 'cancelled'].includes(source.state)
+    || source.state === 'superseded' && source.type !== 'normal'
+    || source.state === 'cancelled' && ![...replacements, 'overtime'].includes(source.type)) problems.push('INVALID_RECORD_STATE');
   if (source.type === 'overtime' && hours !== null && new Prisma.Decimal(hours).gt(0) && !overtimeKind) {
     problems.push('OVERTIME_KIND_REQUIRED');
   }
@@ -469,8 +475,9 @@ export function normalizeAttendance(input: PayrollAttendanceInput): PayrollAtten
   const normalizedDays = [...days.values()]
     .sort((a, b) => compare(identity(a.employeeId, a.workDate), identity(b.employeeId, b.workDate)))
     .map(({ expected, codes, ...day }) => {
-      if (expected && day.required && !day.records.length) codes.add('MISSING_RECORD');
-      if (expected && day.required && day.records.length && day.records.every((record) => record.type === 'overtime')) {
+      const coverage = day.records.filter(record => record.state !== 'superseded' && record.state !== 'cancelled');
+      if (expected && day.required && !coverage.length) codes.add('MISSING_RECORD');
+      if (expected && day.required && coverage.length && coverage.every((record) => record.type === 'overtime')) {
         codes.add('MISSING_REGULAR_COVERAGE');
       }
       return {

@@ -255,7 +255,7 @@ describe("DingtalkAttendanceService read-only official contracts", () => {
     ["COMPLETED", "agree", "NONE", "approved"],
     ["RUNNING", "agree", "NONE", "pending"],
     ["COMPLETED", "refuse", "NONE", "pending"],
-    ["TERMINATED", "agree", "NONE", "revoked"],
+    ["TERMINATED", "agree", "NONE", "cancelled"],
     ["COMPLETED", "agree", "REVOKE", "pending"],
     ["COMPLETED", "agree", "MODIFY", "pending"],
   ])(
@@ -279,6 +279,37 @@ describe("DingtalkAttendanceService read-only official contracts", () => {
       ).toBe("fictional-process");
     },
   );
+  it("proves a terminal cancellation without making an otherwise complete normal day pending", async () => {
+    detail.result.approve_list = [approval()];
+    workflow.result.status = "TERMINATED";
+    const result = await service.readRange(
+      query({ workflowInstanceRead: true }),
+    );
+    expect(result.complete).toBe(true);
+    expect(result.pending).toEqual([]);
+    expect(result.days[0].approvals[0]).toMatchObject({
+      state: "cancelled",
+      terminalProof: {
+        status: "TERMINATED",
+        fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    });
+    const converted = convertDingtalkAttendance(result, {
+      expected: [
+        { employeeId, workDate: "2026-11-02", required: true, units: "1" },
+      ],
+      observationVersion: 1,
+      previous: [],
+      approvalMappings: { "3:leave:annual": { type: "paid_leave" } },
+    });
+    expect(converted.complete).toBe(true);
+    expect(
+      converted.input.records.some((row) => row.state === "cancelled"),
+    ).toBe(true);
+    expect(
+      JSON.stringify(converted.sourceState.map((row) => row.proof)),
+    ).not.toMatch(/fictional-staff|fictional-process|PRIVATE/);
+  });
   it("keeps workflow permission failure pending without leaking upstream messages", async () => {
     detail.result.approve_list = [approval()];
     transport.mockImplementationOnce(

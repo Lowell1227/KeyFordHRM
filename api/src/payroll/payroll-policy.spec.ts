@@ -8,6 +8,9 @@ describe('payroll policy config', () => {
       attendanceMappings: { '1:年假:年假': { type: 'paid_leave' }, '3:加班:工作日': { type: 'overtime', overtimeKind: 'weekday' } },
     });
     expect(normalizePayrollPolicy({})).not.toHaveProperty('attendanceMappings');
+    const key = `3:leave:${'a'.repeat(81)}`;
+    expect(normalizePayrollPolicy({ attendanceMappings: { [key]: { type: 'paid_leave' } } }).attendanceMappings).toHaveProperty(key);
+    expect(() => normalizePayrollPolicy({ attendanceMappings: { [`3:leave:${'a'.repeat(201)}`]: { type: 'paid_leave' } } })).toThrow(BadRequestException);
   });
   it.each([
     { invalid: { type: 'paid_leave' } }, { '1:病假:病假': { type: 'normal' } },
@@ -50,6 +53,11 @@ describe('payroll policy config', () => {
     const config = normalizePayrollPolicy({});
     expect(config.rounding).toBeNull(); expect(config.normalHourly).toBeNull(); expect(config.monthlyUnits).toEqual({});
     expect(config.reviewers).toEqual([]); expect(config.approvers).toEqual([]); expect(config.cutoverMonth).toBeNull();
+  });
+  it('versions explicit lateness and early-leave hourly treatment without a default rate', () => {
+    expect(normalizePayrollPolicy({ paidHourly: { late: '0', early: '25' } }).paidHourly).toEqual({ late: '0', early: '25' });
+    expect(normalizePayrollPolicy({}).paidHourly).not.toHaveProperty('late');
+    expect(() => normalizePayrollPolicy({ paidHourly: { late: '-1' } })).toThrow(BadRequestException);
   });
   it('rejects unknown/free-form fields and nondecimal defaults', () => {
     for (const config of [{ formula: 'eval(value)' }, { normalHourly: 100 }, { monthlyUnits: { '2026-13': '20' } },

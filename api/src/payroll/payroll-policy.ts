@@ -33,7 +33,7 @@ export function normalizePayrollPolicy(input: unknown): PayrollPolicyWithScope {
   if (attendanceEntries.length > 100) throw new BadRequestException('假勤类别映射最多100项');
   for (const [key, value] of attendanceEntries) {
     const mapping = object(value, ['type', 'overtimeKind']);
-    if (!/^\d{1,3}:[^:\r\n]{1,80}:[^:\r\n]{0,80}$/.test(key) || key !== key.trim()
+    if (key.length > 200 || !/^\d{1,3}:[^:\r\n]{1,190}:[^:\r\n]{0,190}$/.test(key) || key !== key.trim()
       || !['paid_leave', 'unpaid_leave', 'sick_leave', 'business_trip', 'outing', 'makeup', 'overtime'].includes(mapping.type as string)
       || (mapping.type === 'overtime' ? !['weekday', 'restday', 'holiday'].includes(mapping.overtimeKind as string) : mapping.overtimeKind !== undefined)) {
       throw new BadRequestException('请明确钉钉假勤原类型及计薪类型，加班还需指定日类型');
@@ -51,9 +51,9 @@ export function normalizePayrollPolicy(input: unknown): PayrollPolicyWithScope {
     payrollMonth(month); const units = payrollDecimal(value)!;
     if (!units.gt(0)) throw new BadRequestException('当月计薪单位须大于零'); monthlyUnits[month] = units.toString();
   }
-  const paid = object(raw.paidHourly, ['unpaid_leave', 'sick_leave', 'absence']);
+  const paid = object(raw.paidHourly, ['unpaid_leave', 'sick_leave', 'absence', 'late', 'early']);
   const paidHourly: PayrollPolicyConfig['paidHourly'] = {};
-  for (const key of ['unpaid_leave', 'sick_leave', 'absence'] as const) if (paid[key] != null) paidHourly[key] = decimal(paid[key])!;
+  for (const key of ['unpaid_leave', 'sick_leave', 'absence', 'late', 'early'] as const) if (paid[key] != null) paidHourly[key] = decimal(paid[key])!;
   const ot = object(raw.overtime, ['hourlyBase', 'weekday', 'restday', 'holiday']);
   const performance: PayrollPolicyConfig['performance'] = {};
   for (const [month, value] of Object.entries(object(raw.performance))) {

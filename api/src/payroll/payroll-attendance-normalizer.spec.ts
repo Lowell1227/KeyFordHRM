@@ -31,6 +31,26 @@ const input = (
 const codes = (value: PayrollAttendanceInput) => normalizeAttendance(value).issues.map((issue) => issue.code);
 
 describe('normalizeAttendance', () => {
+  it.each(['late', 'early'])('normalizes %s as a regular fact without deciding its pay rate', type => {
+    const result = normalizeAttendance(input([record({ type: type as any })]));
+    expect(result.issues).toEqual([]);
+    expect(result.days[0].records[0]).toMatchObject({ type, kind: 'regular', resolution: 'usable', effectiveHours: '8' });
+  });
+  it.each(['superseded', 'cancelled'])('retains %s tombstones without using them as attendance coverage', state => {
+    const type = state === 'superseded' ? 'normal' : 'paid_leave';
+    const tombstone = record({ type, state: state as any, sourceVersion: 2 });
+    const alone = normalizeAttendance(input([tombstone]));
+    expect(alone.days[0].records[0]).toMatchObject({ state, resolution: 'inactive', effectiveHours: null });
+    expect(alone.issues.map(row => row.code)).toEqual(['MISSING_RECORD']);
+    const result = normalizeAttendance(input([record({ type, sourceVersion: 1 }), tombstone, record({ sourceId: 'replacement' })]));
+    expect(result.issues).toEqual([]);
+    expect(result.days[0].records.filter(row => row.resolution === 'usable')).toHaveLength(1);
+    expect(normalizeAttendance(input([record({ state: 'revoked' })])).issues.map(row => row.code)).toEqual(['REVOKED_RECORD']);
+  });
+  it('does not accept superseded on external leave sources or cancelled on normal sources', () => {
+    expect(codes(input([record({ type: 'paid_leave', state: 'superseded' as any })]))).toContain('INVALID_RECORD_STATE');
+    expect(codes(input([record({ type: 'normal', state: 'cancelled' as any })]))).toContain('INVALID_RECORD_STATE');
+  });
   it('retains every expected HRM day, distinguishing missing facts from days not requiring attendance', () => {
     const result = normalizeAttendance(
       input([], {

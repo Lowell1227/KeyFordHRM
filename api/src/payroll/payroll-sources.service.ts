@@ -163,7 +163,7 @@ export class PayrollSourcesService implements PayrollSourceReader {
           if (record.state !== 'effective' || record.resolution !== 'usable') continue;
           const hours = quantity(record.effectiveHours);
           if (record.unit !== 'hour' || hours === null) { personal.push('原始时长单位或数量待核对'); continue; }
-          if (['unpaid_leave', 'sick_leave', 'absence'].includes(record.type)) {
+          if (['unpaid_leave', 'sick_leave', 'absence', 'late', 'early'].includes(record.type)) {
             const paidHourly = quantity(config.paidHourly?.[record.type as keyof PayrollPolicyConfig['paidHourly']]), normalHourly = quantity(config.normalHourly);
             if (paidHourly === null || normalHourly === null) personal.push('假勤待遇或正常计薪单位价待配置');
             else absences.push({ hours, normalHourly, paidHourly });

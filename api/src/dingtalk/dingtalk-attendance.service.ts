@@ -64,7 +64,8 @@ export interface DingtalkAttendanceApproval {
   endsAt: string | null;
   duration: string | null;
   unit: string | null;
-  state: "approved" | "pending" | "revoked";
+  state: "approved" | "pending" | "revoked" | "cancelled";
+  terminalProof?: { status: "TERMINATED"; fingerprint: string };
 }
 export interface DingtalkAttendanceDay {
   employeeId: string;
@@ -336,7 +337,7 @@ export class DingtalkAttendanceService {
         (instance.processInstanceId && instance.processInstanceId !== id)
       )
         failure("APPROVAL_PERSON_MISMATCH");
-      if (instance.status === "TERMINATED") return "revoked";
+      if (instance.status === "TERMINATED") return "cancelled";
       if (instance.status !== "COMPLETED" || instance.result !== "agree")
         failure("APPROVAL_TERMINAL_STATE_UNPROVEN");
       const main = text(instance.mainProcessInstanceId);
@@ -512,12 +513,6 @@ export class DingtalkAttendanceService {
             } catch (error) {
               note(error, "workflow", day);
             }
-            if (state === "revoked")
-              note(
-                new ReadFailure({ code: "APPROVAL_REVOKED" }),
-                "workflow",
-                day,
-              );
             day.approvals.push({
               processInstanceId,
               businessType: Number.isInteger(row.biz_type)
@@ -534,6 +529,19 @@ export class DingtalkAttendanceService {
                   : null,
               unit: text(row.duration_unit),
               state,
+              ...(state === "cancelled"
+                ? {
+                    terminalProof: {
+                      status: "TERMINATED" as const,
+                      fingerprint: digest([
+                        "workflow-terminal-v1",
+                        processInstanceId,
+                        binding.dingtalkUserId,
+                        "TERMINATED",
+                      ]),
+                    },
+                  }
+                : {}),
             });
           }
           for (const punch of day.punches.filter((row) => row.approvalLinked)) {

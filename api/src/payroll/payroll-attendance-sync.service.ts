@@ -47,6 +47,7 @@ const messages: Record<string, string> = {
   PRIOR_SNAPSHOT_CHANGED: '当前考勤快照已被其他操作更新，请重新同步，未覆盖已有记录',
   SOURCE_VERSION_NOT_NEWER: '已有更新的考勤来源版本，请重试建立新任务，未覆盖更新记录',
   SOURCE_STATE_CHANGED: '考勤来源索引已变化，请重新同步，未覆盖更新记录',
+  SOURCE_STATE_INVALID: '已存考勤来源结构或核验证据异常，请核对后重试，未覆盖已有记录',
   UPSTREAM_SCOPE_MISMATCH: '钉钉返回范围与本次任务不一致，已暂停同步，未覆盖已有记录',
   APPROVAL_TYPE_UNMAPPED: '有假勤类别未配置计薪映射，请补充规则并审核后重试',
   UPSTREAM_REJECTED: '钉钉拒绝取数，请核对应用权限及IP白名单后重试',
@@ -60,7 +61,7 @@ const messages: Record<string, string> = {
 function issue(code: string, mappingKey?: unknown): AttendanceSyncIssue {
   const safeCode = /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'SYNC_FAILED';
   return { code: safeCode, message: messages[safeCode] ?? '钉钉考勤仍有待核项目，请核对来源及规则后重试',
-    ...(typeof mappingKey === 'string' && /^\d{1,3}:[^:\r\n]{1,80}:[^:\r\n]{0,80}$/.test(mappingKey) ? { mappingKey } : {}) };
+    ...(typeof mappingKey === 'string' && mappingKey.length <= 200 && /^\d{1,3}:[^:\r\n]{1,190}:[^:\r\n]{0,190}$/.test(mappingKey) ? { mappingKey } : {}) };
 }
 class Blocked extends Error {
   constructor(readonly code: string) { super(code); }
@@ -236,7 +237,8 @@ export class PayrollAttendanceSyncService {
           source.sourceVersion === prior.sourceVersion && source.fingerprint !== prior.fingerprint)) throw new Blocked('SOURCE_VERSION_NOT_NEWER');
         const key = { subjectId: current.subjectId, month: current.month, domain: 'formal', sourceId: source.sourceId };
         const data = { employeeId: source.record.employeeId, workDate: payrollDate(source.record.workDate),
-          sourceVersion: source.sourceVersion, fingerprint: source.fingerprint, record: json(source.record) };
+          sourceVersion: source.sourceVersion, fingerprint: source.fingerprint,
+          record: json({ schema: 1, record: source.record, proof: source.proof ?? null }) };
         await tx.payrollAttendanceSyncSource.upsert({ where: { subjectId_month_domain_sourceId: key }, create: { ...key, ...data }, update: data });
       }
       const cursor = converted.complete ? current.cursor + claim.cells.length : current.cursor;
@@ -334,8 +336,31 @@ export class PayrollAttendanceSyncService {
   private sources(tx: Reader, job: PayrollAttendanceSyncJob, cells: Cell[]): Promise<PayrollDingtalkAttendanceSourceState[]> {
     return tx.payrollAttendanceSyncSource.findMany({ where: { subjectId: job.subjectId, month: job.month, domain: 'formal',
       employeeId: { in: [...new Set(cells.map(row => row.employeeId))] }, workDate: { gte: payrollDate(cells[0].workDate), lte: payrollDate(cells[cells.length - 1].workDate) } },
-      orderBy: { sourceId: 'asc' } }).then(rows => rows.map(row => ({ sourceId: row.sourceId, sourceVersion: row.sourceVersion,
-        fingerprint: row.fingerprint, record: row.record as unknown as PayrollDingtalkAttendanceSourceState['record'] })));
+      orderBy: { sourceId: 'asc' } }).then(rows => rows.map(row => {
+        const object = (value: unknown): Record<string, unknown> | null => value && typeof value === 'object' && !Array.isArray(value)
+          ? value as Record<string, unknown> : null;
+        const stored = object(row.record);
+        if (!stored) throw new Blocked('SOURCE_STATE_INVALID');
+        const envelope = ['schema', 'record', 'proof'].some(key => Object.prototype.hasOwnProperty.call(stored, key));
+        let record = stored, proof: PayrollDingtalkAttendanceSourceState['proof'];
+        if (envelope) {
+          if (stored.schema !== 1 || !object(stored.record) || Object.keys(stored).some(key => !['schema', 'record', 'proof'].includes(key))) throw new Blocked('SOURCE_STATE_INVALID');
+          record = object(stored.record)!;
+          if (stored.proof != null) {
+            const value = object(stored.proof);
+            if (!value || Object.keys(value).some(key => !['kind', 'identityHash', 'evidenceHash', 'terminalHash', 'previousFingerprint'].includes(key))
+              || !['derived-normal', 'approval', 'punch', 'superseded-normal'].includes(value.kind as string)
+              || !['identityHash', 'evidenceHash'].every(key => typeof value[key] === 'string' && /^[a-f0-9]{64}$/.test(value[key] as string))
+              || ['terminalHash', 'previousFingerprint'].some(key => value[key] !== undefined && (typeof value[key] !== 'string' || !/^[a-f0-9]{64}$/.test(value[key] as string)))) throw new Blocked('SOURCE_STATE_INVALID');
+            proof = value as unknown as PayrollDingtalkAttendanceSourceState['proof'];
+          }
+        }
+        // Legacy raw records carry no proof; never infer adapter provenance from their type.
+        if (record.sourceId !== row.sourceId || record.sourceVersion !== row.sourceVersion || record.employeeId !== row.employeeId
+          || record.workDate !== row.workDate.toISOString().slice(0, 10)) throw new Blocked('SOURCE_STATE_INVALID');
+        return { sourceId: row.sourceId, sourceVersion: row.sourceVersion, fingerprint: row.fingerprint,
+          record: record as unknown as PayrollDingtalkAttendanceSourceState['record'], ...(proof ? { proof } : {}) };
+      }));
   }
   private async fail(claim: Claim, error: unknown) {
     await this.prisma.payrollAttendanceSyncJob.updateMany({ where: { id: claim.job.id, status: 'processing', leaseToken: claim.token,

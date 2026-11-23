@@ -14,11 +14,20 @@ import {
   PayrollOvertimeKind,
 } from "./payroll-attendance-normalizer";
 
+export interface PayrollDingtalkAttendanceSourceProof {
+  kind: "derived-normal" | "approval" | "punch" | "superseded-normal";
+  identityHash: string;
+  evidenceHash: string;
+  terminalHash?: string;
+  previousFingerprint?: string;
+}
 export interface PayrollDingtalkAttendanceSourceState {
   sourceId: string;
   sourceVersion: number;
   fingerprint: string;
   record: PayrollAttendanceRecord;
+  /** Persist alongside record; hashes only, never external identity or raw workflow payloads. */
+  proof?: PayrollDingtalkAttendanceSourceProof;
 }
 export interface PayrollDingtalkAttendanceOptions {
   expected: PayrollAttendanceInput["expected"];
@@ -28,10 +37,14 @@ export interface PayrollDingtalkAttendanceOptions {
   approvalMappings: Record<
     string,
     {
-      type: Exclude<
-        PayrollAttendanceType,
-        "normal" | "absence" | "missing_punch" | "not_required"
-      >;
+      type:
+        | "paid_leave"
+        | "unpaid_leave"
+        | "sick_leave"
+        | "business_trip"
+        | "outing"
+        | "makeup"
+        | "overtime";
       overtimeKind?: PayrollOvertimeKind;
     }
   >;
@@ -68,6 +81,8 @@ export const PAYROLL_DINGTALK_ATTENDANCE_PENDING_LABELS: Readonly<
   APPROVAL_TERMINAL_STATE_UNPROVEN:
     "\u5ba1\u6279\u7ec8\u5ba1\u7ed3\u679c\u672a\u83b7\u8bc1\u5b9e",
   APPROVAL_TYPE_UNMAPPED: "\u5047\u52e4\u7c7b\u578b\u5c1a\u672a\u6838\u5b9a",
+  APPROVAL_MAPPING_KEY_UNSUPPORTED:
+    "\u5047\u52e4\u7c7b\u522b\u952e\u8d85\u51fa\u957f\u5ea6\u6216\u5b89\u5168\u683c\u5f0f\uff0c\u8bf7\u6838\u5bf9\u6765\u6e90",
   CALENDAR_OR_RESTS_UNPROVEN:
     "\u65e5\u5386\u6216\u4f11\u606f\u65f6\u6bb5\u5f85\u6838",
   DAILY_PLANS_INVALID: "\u5f53\u65e5\u5e94\u6253\u5361\u4fe1\u606f\u5f02\u5e38",
@@ -174,6 +189,10 @@ export function payrollDingtalkAttendancePendingLabel(code: string): string {
 }
 
 const D = Prisma.Decimal.clone({ precision: 40 });
+const Hour = Prisma.Decimal.clone({
+  precision: 40,
+  rounding: Prisma.Decimal.ROUND_DOWN,
+});
 type Interval = { startsAt: string; endsAt: string };
 function safeMappingKey(
   approval: DingtalkAttendanceApproval,
@@ -185,6 +204,7 @@ function safeMappingKey(
     categories.some(
       (value) =>
         typeof value !== "string" ||
+        value.length > 190 ||
         value !== value.trim() ||
         !/^[\p{L}\p{M}\p{N} _./()\uFF08\uFF09-]*$/u.test(value) ||
         /\d{6,}/.test(value) ||
@@ -239,6 +259,17 @@ function subtract(intervals: Interval[], cuts: Interval[]): Interval[] {
     intervals,
   );
 }
+function intersect(intervals: Interval[], window: Interval): Interval[] {
+  return intervals.flatMap((row) => {
+    const startsAt =
+      millis(row.startsAt) > millis(window.startsAt)
+        ? row.startsAt
+        : window.startsAt;
+    const endsAt =
+      millis(row.endsAt) < millis(window.endsAt) ? row.endsAt : window.endsAt;
+    return millis(startsAt) < millis(endsAt) ? [{ startsAt, endsAt }] : [];
+  });
+}
 
 /** Callers must persist sourceState and allocate observationVersion transactionally before enabling real synchronization. */
 export function convertDingtalkAttendance(
@@ -253,6 +284,10 @@ export function convertDingtalkAttendance(
     };
   const state = new Map<string, PayrollDingtalkAttendanceSourceState>(),
     observed = new Set<string>();
+  const provenDays = new Map<
+    string,
+    { working: Interval[]; evidenceHash: string }
+  >();
   const note = (
     code: string,
     day?: Pick<DingtalkAttendanceDay, "employeeId" | "workDate">,
@@ -304,6 +339,16 @@ export function convertDingtalkAttendance(
       !Number.isSafeInteger(previous.sourceVersion) ||
       previous.sourceVersion < 1 ||
       !/^[a-f0-9]{64}$/.test(previous.fingerprint) ||
+      (previous.proof &&
+        (!["derived-normal", "approval", "punch", "superseded-normal"].includes(
+          previous.proof.kind,
+        ) ||
+          !/^[a-f0-9]{64}$/.test(previous.proof.identityHash) ||
+          !/^[a-f0-9]{64}$/.test(previous.proof.evidenceHash) ||
+          (previous.proof.terminalHash !== undefined &&
+            !/^[a-f0-9]{64}$/.test(previous.proof.terminalHash)) ||
+          (previous.proof.previousFingerprint !== undefined &&
+            !/^[a-f0-9]{64}$/.test(previous.proof.previousFingerprint)))) ||
       state.has(previous.sourceId)
     ) {
       note("PREVIOUS_SOURCE_STATE_INVALID");
@@ -362,8 +407,12 @@ export function convertDingtalkAttendance(
       (sum, row) => sum.plus(millis(row.endsAt) - millis(row.startsAt)),
       new D(0),
     );
-    const value = duration.div(3600000);
-    if (!value.times(3600000).eq(duration)) {
+    // Keep exact intervals; a repeating hour fraction must not exceed its source duration.
+    const value = new Hour(duration.toString()).div(3600000);
+    if (
+      !value.isFinite() ||
+      duration.minus(value.times(3600000)).abs().gt("1e-30")
+    ) {
       note("HOUR_PRECISION_UNPROVEN", day);
       return null;
     }
@@ -378,6 +427,7 @@ export function convertDingtalkAttendance(
     quantity: string,
     evidence: unknown,
     overtimeKind?: PayrollOvertimeKind,
+    proof?: PayrollDingtalkAttendanceSourceProof,
   ) {
     const sourceId = `dt:${hash([read.organizationKey, day.employeeId, day.workDate, identity])}`;
     const record: PayrollAttendanceRecord = {
@@ -393,8 +443,17 @@ export function convertDingtalkAttendance(
       unit: "hour",
       ...(overtimeKind ? { overtimeKind } : {}),
     };
+    save(sourceId, record, evidence, proof);
+  }
+  function save(
+    sourceId: string,
+    record: PayrollAttendanceRecord,
+    evidence: unknown,
+    proof?: PayrollDingtalkAttendanceSourceProof,
+  ) {
+    const day = record;
     const { sourceVersion: _version, ...body } = record,
-      fingerprint = hash({ body, evidence }),
+      fingerprint = hash({ body, evidence, ...(proof ? { proof } : {}) }),
       previous = state.get(sourceId);
     if (observed.has(sourceId)) {
       note("SOURCE_IDENTITY_DUPLICATE", day);
@@ -417,6 +476,7 @@ export function convertDingtalkAttendance(
       sourceVersion: record.sourceVersion,
       fingerprint,
       record,
+      ...(proof ? { proof } : {}),
     });
     input.records.push(record);
   }
@@ -526,6 +586,47 @@ export function convertDingtalkAttendance(
     const working = subtract(shifts, rests),
       leave: Interval[] = [];
     for (const approval of day.approvals) {
+      const approvalIdentity = hash(["approval", approval.processInstanceId]);
+      const cancelled = approval.state === "cancelled";
+      if (
+        cancelled &&
+        (approval.terminalProof?.status !== "TERMINATED" ||
+          !/^[a-f0-9]{64}$/.test(approval.terminalProof.fingerprint))
+      ) {
+        note("APPROVAL_TERMINAL_STATE_UNPROVEN", day);
+        continue;
+      }
+      const approvalProof: PayrollDingtalkAttendanceSourceProof = {
+        kind: "approval",
+        identityHash: approvalIdentity,
+        evidenceHash: hash(cancelled ? approval.terminalProof : approval),
+        ...(cancelled
+          ? { terminalHash: approval.terminalProof!.fingerprint }
+          : {}),
+      };
+      if (cancelled) {
+        const previous = [...state.values()].filter(
+          (row) =>
+            row.record.employeeId === day.employeeId &&
+            row.record.workDate === day.workDate &&
+            row.proof?.kind === "approval" &&
+            row.proof.identityHash === approvalIdentity,
+        );
+        if (previous.length) {
+          for (const prior of previous)
+            save(
+              prior.sourceId,
+              {
+                ...prior.record,
+                state: "cancelled",
+                sourceVersion: options.observationVersion,
+              },
+              approval.terminalProof,
+              approvalProof,
+            );
+          continue;
+        }
+      }
       const mappingKey = safeMappingKey(approval);
       const mapping = mappingKey
         ? options.approvalMappings[mappingKey]
@@ -542,10 +643,11 @@ export function convertDingtalkAttendance(
           "overtime",
         ].includes(mapping.type)
       ) {
+        if (!mappingKey) note("APPROVAL_MAPPING_KEY_UNSUPPORTED", day);
         note("APPROVAL_TYPE_UNMAPPED", day, mappingKey);
         continue;
       }
-      if (approval.state !== "approved")
+      if (approval.state !== "approved" && !cancelled)
         note(
           approval.state === "revoked"
             ? "APPROVAL_REVOKED"
@@ -606,8 +708,9 @@ export function convertDingtalkAttendance(
           mapping.type,
           approval.state === "approved" ? "effective" : approval.state,
           part,
-          approval,
+          cancelled ? approval.terminalProof : approval,
           mapping.overtimeKind,
+          approvalProof,
         );
       }
       if (approval.state === "approved" && mapping.type !== "overtime")
@@ -629,19 +732,81 @@ export function convertDingtalkAttendance(
         off.length !== 1 ||
         on[0].checkType !== "OnDuty" ||
         off[0].checkType !== "OffDuty" ||
+        !["Normal", "Late"].includes(on[0].result) ||
+        !["Normal", "Early"].includes(off[0].result) ||
         [on[0], off[0]].some(
           (punch) =>
-            punch.result !== "Normal" ||
             punch.location !== "Normal" ||
-            !punch.checkedAt,
+            !punch.checkedAt ||
+            !/(?:Z|[+-]\d{2}:\d{2})$/.test(punch.checkedAt) ||
+            !Number.isFinite(millis(punch.checkedAt)),
         ) ||
+        millis(on[0].checkedAt!) > millis(off[0].checkedAt!) ||
+        (on[0].result === "Late" &&
+          !(
+            millis(shift.startsAt) < millis(on[0].checkedAt!) &&
+            millis(on[0].checkedAt!) < millis(shift.endsAt)
+          )) ||
+        (off[0].result === "Early" &&
+          !(
+            millis(shift.startsAt) < millis(off[0].checkedAt!) &&
+            millis(off[0].checkedAt!) < millis(shift.endsAt)
+          )) ||
         millis(on[0].plannedAt) !== millis(shift.startsAt) ||
         millis(off[0].plannedAt) !== millis(shift.endsAt)
       ) {
         note("NORMAL_COVERAGE_UNPROVEN", day);
         continue;
       }
-      for (const [index, interval] of regular.entries()) {
+      const shortfalls: Array<
+        Interval & { type: "late" | "early"; punch: (typeof on)[number] }
+      > = [];
+      if (on[0].result === "Late")
+        shortfalls.push(
+          ...intersect(regular, {
+            startsAt: shift.startsAt,
+            endsAt: on[0].checkedAt!,
+          }).map((part) => ({ ...part, type: "late" as const, punch: on[0] })),
+        );
+      if (off[0].result === "Early")
+        shortfalls.push(
+          ...intersect(regular, {
+            startsAt: off[0].checkedAt!,
+            endsAt: shift.endsAt,
+          }).map((part) => ({
+            ...part,
+            type: "early" as const,
+            punch: off[0],
+          })),
+        );
+      for (const type of ["late", "early"] as const) {
+        for (const [index, part] of shortfalls
+          .filter((row) => row.type === type)
+          .entries()) {
+          const quantity = hours([part], day);
+          if (quantity === null) continue;
+          add(
+            day,
+            [type, shift.on, shift.off, index],
+            part,
+            type,
+            "effective",
+            quantity,
+            part.punch,
+            undefined,
+            {
+              kind: "punch",
+              identityHash: hash([
+                part.punch.id,
+                part.punch.planId,
+                part.punch.checkType,
+              ]),
+              evidenceHash: hash(part.punch),
+            },
+          );
+        }
+      }
+      for (const [index, interval] of subtract(regular, shortfalls).entries()) {
         const quantity = hours([interval], day);
         if (quantity === null) continue;
         add(
@@ -652,16 +817,92 @@ export function convertDingtalkAttendance(
           "effective",
           quantity,
           { on: on[0], off: off[0], rests, leave },
+          undefined,
+          {
+            kind: "derived-normal",
+            identityHash: hash(["normal", shift.on, shift.off, index]),
+            evidenceHash: hash({ on: on[0], off: off[0], rests, leave }),
+          },
         );
       }
+    }
+    const current = input.records.filter(
+      (row) =>
+        row.employeeId === day.employeeId && row.workDate === day.workDate,
+    );
+    if (
+      read.complete &&
+      day.complete &&
+      !pending.some(
+        (issue) =>
+          !issue.workDate ||
+          (issue.employeeId === day.employeeId &&
+            issue.workDate === day.workDate),
+      ) &&
+      !normalizeAttendance(input).issues.some(
+        (issue) =>
+          issue.employeeId === day.employeeId &&
+          issue.workDate === day.workDate,
+      ) &&
+      !subtract(
+        working,
+        current
+          .filter((row) => row.state === "effective" && row.type !== "overtime")
+          .map((row) => ({ startsAt: row.startsAt, endsAt: row.endsAt })),
+      ).length
+    ) {
+      provenDays.set(key, {
+        working,
+        evidenceHash: hash({ schedule: day.schedule, rests, current }),
+      });
     }
   }
   for (const row of input.expected)
     if (!seenDays.has(`${row.employeeId}:${row.workDate}`))
       note("DAY_COVERAGE_MISSING", row);
-  // A disappearing approval is not proof of withdrawal; retain the old observation until explicitly reconciled.
-  for (const previous of state.values())
-    if (inScope(previous.record) && !observed.has(previous.sourceId))
-      note("SOURCE_DISAPPEARED_UNPROVEN", previous.record);
+  // Only our own derived normal segments can be retired by proven replacement coverage.
+  for (const previous of [...state.values()]) {
+    if (!inScope(previous.record) || observed.has(previous.sourceId)) continue;
+    const proof = previous.proof;
+    if (
+      (previous.record.state === "superseded" &&
+        previous.record.type === "normal" &&
+        proof?.kind === "superseded-normal") ||
+      (previous.record.state === "cancelled" &&
+        proof?.kind === "approval" &&
+        proof.terminalHash)
+    ) {
+      observed.add(previous.sourceId);
+      input.records.push(structuredClone(previous.record));
+      continue;
+    }
+    const coverage = provenDays.get(
+      `${previous.record.employeeId}:${previous.record.workDate}`,
+    );
+    if (
+      previous.record.type === "normal" &&
+      previous.record.state === "effective" &&
+      proof?.kind === "derived-normal" &&
+      coverage &&
+      validInterval(previous.record) &&
+      !subtract([previous.record], coverage.working).length
+    ) {
+      save(
+        previous.sourceId,
+        {
+          ...previous.record,
+          sourceVersion: options.observationVersion,
+          state: "superseded",
+        },
+        coverage.evidenceHash,
+        {
+          kind: "superseded-normal",
+          identityHash: proof.identityHash,
+          evidenceHash: coverage.evidenceHash,
+          previousFingerprint: previous.fingerprint,
+        },
+      );
+    } else note("SOURCE_DISAPPEARED_UNPROVEN", previous.record);
+  }
   return finish();
 }

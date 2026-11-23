@@ -7,6 +7,7 @@ import { PayrollDataService } from './payroll-data.service';
 import { payrollHash } from './payroll-transaction';
 import { payrollParameterDefinition } from './payroll-parameter-definition';
 import { payrollCalendarDays } from './payroll-work-calendar';
+import { convertDingtalkAttendance, PayrollDingtalkAttendanceSourceState } from './payroll-dingtalk-attendance';
 
 const subjectId = '20000000-0000-4000-8000-000000000001', employeeId = '20000000-0000-4000-8000-000000000002';
 const operatorId = '20000000-0000-4000-8000-000000000003', otherSubject = '20000000-0000-4000-8000-000000000004';
@@ -123,9 +124,103 @@ async function dispatchOneChunk(f: ReturnType<typeof fixture>) {
   try { await f.service.dispatch(); } finally { clock.mockRestore(); }
 }
 
+function approvalFixture() {
+  const f = fixture(), original = f.gateway.readRange.getMockImplementation()!;
+  let mode: 'normal' | 'approved' | 'cancelled' = 'normal';
+  f.state.policies[0].config.attendanceMappings = { '3:leave:annual': { type: 'paid_leave' } }; f.refreshRule();
+  f.gateway.readRange.mockImplementation(async query => {
+    const read = await original(query), day = read.days.find(row => row.workDate === '2035-11-01');
+    if (day && mode !== 'normal') (day as any).approvals = [{ processInstanceId: 'fictional-process', businessType: 3,
+      tagName: 'leave', subType: 'annual', startsAt: '2035-11-01T09:00:00+08:00', endsAt: '2035-11-01T17:00:00+08:00',
+      duration: '7', unit: 'hour', state: mode, ...(mode === 'cancelled' ? { terminalProof: { status: 'TERMINATED', fingerprint: 'a'.repeat(64) } } : {}) }];
+    return read;
+  });
+  const readSources = (worker = f.worker()): Promise<PayrollDingtalkAttendanceSourceState[]> => (worker as any).sources(f.prisma,
+    { subjectId, month }, [{ employeeId, workDate: '2035-11-01' }]);
+  const run = async (next: typeof mode) => {
+    mode = next; const worker = f.worker(), job = await f.start(worker); await worker.dispatch();
+    return (await worker.list(subjectId, month, actor)).find(row => row.id === job.id)!;
+  };
+  return { ...f, readSources, run, original };
+}
+
 describe('formal attendance durable jobs (fictional persistence and gateway only)', () => {
   beforeAll(() => jest.spyOn(global, 'fetch').mockRejectedValue(new Error('Live requests forbidden in this suite')));
   afterAll(() => jest.restoreAllMocks());
+  it('persists a schema-1 record/proof envelope and reloads the complete proof through a restarted sources reader', async () => {
+    const f = approvalFixture(); expect((await f.run('normal')).status).toBe('completed');
+    const expected = f.state.snapshots[0].payload.dingtalk.sourceState.filter((row: any) => row.record.workDate === '2035-11-01');
+    for (const row of f.state.sources) {
+      expect(row.record).toMatchObject({ schema: 1, record: { sourceId: row.sourceId }, proof: { kind: 'derived-normal' } });
+      row.record = JSON.parse(JSON.stringify(row.record));
+    }
+    expect(await f.readSources(f.worker())).toEqual(expected);
+    expect(JSON.stringify(expected.map((row: any) => row.proof))).not.toMatch(/private-|fictional-secret-token|fictional-process/);
+  });
+  it('restarts normal to full leave to terminal cancellation with stable versions and inactive tombstones', async () => {
+    const f = approvalFixture(); expect((await f.run('normal')).status).toBe('completed');
+    const initial = await f.readSources();
+    expect((await f.run('approved')).status).toBe('completed');
+    const leave = await f.readSources();
+    for (const prior of initial) expect(leave.find(row => row.sourceId === prior.sourceId)).toMatchObject({
+      sourceVersion: 2, record: { state: 'superseded' }, proof: { kind: 'superseded-normal', previousFingerprint: prior.fingerprint },
+    });
+    expect((await f.run('approved')).status).toBe('completed'); expect(await f.readSources()).toEqual(leave);
+    expect((await f.run('cancelled')).status).toBe('completed');
+    const cancelled = await f.readSources();
+    expect(cancelled.filter(row => row.record.state === 'cancelled')).toHaveLength(2);
+    for (const source of cancelled.filter(row => row.record.state === 'cancelled')) expect(source).toMatchObject({
+      sourceVersion: 4, proof: { kind: 'approval', terminalHash: 'a'.repeat(64) },
+    });
+    const day = f.state.snapshots.at(-1).payload.days.find((row: any) => row.workDate === '2035-11-01');
+    expect(day.issues).toEqual([]);
+    expect(day.records.filter((row: any) => row.state === 'cancelled').every((row: any) => row.resolution === 'inactive')).toBe(true);
+    expect(day.records.filter((row: any) => row.type === 'normal' && row.resolution === 'usable').reduce((sum: number, row: any) => sum + Number(row.effectiveHours), 0)).toBe(7);
+    expect((await f.run('cancelled')).status).toBe('completed'); expect(await f.readSources()).toEqual(cancelled);
+  });
+  it('keeps a genuinely disappeared external source blocked after source proof is reloaded', async () => {
+    const f = approvalFixture(); expect((await f.run('approved')).status).toBe('completed');
+    const before = await f.readSources();
+    const result = await f.run('normal');
+    expect(result.status).toBe('blocked'); expect(result.issues).toContainEqual(expect.objectContaining({ code: 'SOURCE_DISAPPEARED_UNPROVEN' }));
+    const retained = await f.readSources();
+    for (const source of before) expect(retained.find(row => row.sourceId === source.sourceId)).toEqual(source);
+  });
+  it('reads old raw records without inventing proof and keeps replacement pending through the real converter', async () => {
+    const f = approvalFixture(); await f.run('normal');
+    for (const row of f.state.sources) row.record = row.record.record ?? row.record;
+    const previous = await f.readSources(f.worker());
+    expect(previous).toHaveLength(2); expect(previous.every(row => row.proof === undefined)).toBe(true);
+    const read = await f.original({ month, from: '2035-11-01', to: '2035-11-01', bindings: [{ employeeId }] });
+    (read.days[0] as any).approvals = [{ processInstanceId: 'fictional-process', businessType: 3, tagName: 'leave', subType: 'annual',
+      startsAt: '2035-11-01T09:00:00+08:00', endsAt: '2035-11-01T17:00:00+08:00', duration: '7', unit: 'hour', state: 'approved' }];
+    const result = convertDingtalkAttendance(read, { expected: [{ employeeId, workDate: '2035-11-01', required: true, units: '1' }],
+      observationVersion: 2, previous, approvalMappings: { '3:leave:annual': { type: 'paid_leave' } } });
+    expect(result.complete).toBe(false); expect(result.pending.map(row => row.code)).toContain('SOURCE_DISAPPEARED_UNPROVEN');
+  });
+  it('fences a proof-only source change made while the restarted worker is reading upstream', async () => {
+    const f = approvalFixture(); await f.run('normal');
+    const worker = f.worker(), job = await f.start(worker), original = f.gateway.readRange.getMockImplementation()!;
+    let reached!: () => void, resume!: () => void;
+    const started = new Promise<void>(resolve => { reached = resolve; }), release = new Promise<void>(resolve => { resume = resolve; });
+    f.gateway.readRange.mockImplementationOnce(async query => { reached(); await release; return original(query); });
+    const snapshots = f.state.snapshots.length, pending = worker.dispatch(); await started;
+    const source = f.state.sources.find((row: any) => +row.workDate === +date('2035-11-01'));
+    source.record.proof.evidenceHash = 'c'.repeat(64);
+    resume(); await pending;
+    const listed = (await worker.list(subjectId, month, actor)).find(row => row.id === job.id)!;
+    expect(listed.status).toBe('blocked'); expect(listed.completedCells).toBe(0);
+    expect(listed.issues).toContainEqual(expect.objectContaining({ code: 'SOURCE_STATE_CHANGED' }));
+    expect(f.state.snapshots).toHaveLength(snapshots);
+    expect(f.state.sources.find((row: any) => row.sourceId === source.sourceId).record.proof.evidenceHash).toBe('c'.repeat(64));
+  });
+  it.each(['schema', 'proof', 'scope'])('does not downgrade a malformed %s envelope to a legacy record', async kind => {
+    const f = approvalFixture(); await f.run('normal');
+    const row = f.state.sources.find((source: any) => +source.workDate === +date('2035-11-01')), record = row.record.record ?? row.record;
+    row.record = { schema: kind === 'schema' ? 2 : 1, record: { ...record, ...(kind === 'scope' ? { employeeId: operatorId } : {}) },
+      proof: kind === 'proof' ? { kind: 'derived-normal', identityHash: 'not-a-hash', evidenceHash: 'b'.repeat(64) } : null };
+    await expect(f.readSources()).rejects.toMatchObject({ code: 'SOURCE_STATE_INVALID' });
+  });
   it('enqueues a bounded durable job without making an upstream HTTP call, and replays its request ID', async () => {
     const f = fixture(), input = { subjectId, month, requestId: randomUUID() };
     const job = await f.service.start(input, actor);
@@ -283,6 +378,15 @@ describe('formal attendance durable jobs (fictional persistence and gateway only
     expect(listed.issues).toContainEqual(expect.objectContaining({ mappingKey: '1:fictional leave:', message: expect.any(String) }));
     expect(g.state.snapshots[0].payload.sync.complete).toBe(false);
     expect(JSON.stringify(listed)).not.toMatch(/private-|fictional-secret-token/);
+  });
+  it.each([81, 201])('keeps configurable long mapping keys but never overlong keys (%s)', async size => {
+    const f = fixture(), original = f.gateway.readRange.getMockImplementation()!, key = `3:leave:${'a'.repeat(size)}`;
+    f.gateway.readRange.mockImplementationOnce(async q => ({ ...await original(q), complete: false,
+      pending: [{ code: 'APPROVAL_TYPE_UNMAPPED', mappingKey: key, employeeId, workDate: q.from }] } as any));
+    await f.start(); await f.service.dispatch();
+    const pending = (await f.service.list(subjectId, month, actor))[0].issues.find(row => row.code === 'APPROVAL_TYPE_UNMAPPED');
+    expect(pending).toBeDefined();
+    if (size === 81) expect(pending?.mappingKey).toBe(key); else expect(pending).not.toHaveProperty('mappingKey');
   });
   it('accepts explicit enabled external bindings without inventing a user binding or returning private identities', async () => {
     const f = fixture();

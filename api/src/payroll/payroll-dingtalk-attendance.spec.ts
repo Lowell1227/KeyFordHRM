@@ -1,4 +1,5 @@
 import { DingtalkAttendanceRead } from "../dingtalk/dingtalk-attendance.service";
+import { normalizeAttendance } from "./payroll-attendance-normalizer";
 import {
   convertDingtalkAttendance,
   payrollDingtalkAttendancePendingLabel,
@@ -92,6 +93,433 @@ const approved = () => ({
 });
 
 describe("convertDingtalkAttendance trusted source conversion", () => {
+  it.each([1, 5, 10])(
+    "retains a proven %s-minute Late interval without failing finite-decimal representation",
+    (minutes) => {
+      const source = read();
+      source.days[0].punches[0].result = "Late";
+      source.days[0].punches[0].checkedAt = at(
+        `09:${String(minutes).padStart(2, "0")}`,
+      );
+      const result = convertDingtalkAttendance(source, options());
+      expect(result.complete).toBe(true);
+      expect(result.pending).toEqual([]);
+      const late = result.input.records.filter((row) => row.type === "late");
+      expect(late).toHaveLength(1);
+      expect(late[0]).toMatchObject({
+        startsAt: "2026-11-02T01:00:00.000Z",
+        endsAt: `2026-11-02T01:${String(minutes).padStart(2, "0")}:00.000Z`,
+      });
+      expect(Number(late[0].hours)).toBeCloseTo(minutes / 60, 14);
+      expect(
+        result.input.records.reduce((sum, row) => sum + Number(row.hours), 0),
+      ).toBeCloseTo(8, 12);
+      expect(normalizeAttendance(result.input).issues).toEqual([]);
+    },
+  );
+  it("replays normal to full leave to terminal cancellation after a JSON persistence round trip", () => {
+    const mapped = { "3:leave:annual": { type: "paid_leave" as const } };
+    const first = convertDingtalkAttendance(read(), options());
+    const source = read();
+    source.days[0].approvals = [
+      { ...approved(), endsAt: at("18:00"), duration: "8" },
+    ];
+    const leave = convertDingtalkAttendance(
+      source,
+      options({
+        previous: JSON.parse(JSON.stringify(first.sourceState)),
+        observationVersion: 2,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(leave.complete).toBe(true);
+    source.days[0].approvals = [
+      {
+        ...source.days[0].approvals[0],
+        state: "cancelled",
+        terminalProof: { status: "TERMINATED", fingerprint: "a".repeat(64) },
+      } as any,
+    ];
+    const cancelled = convertDingtalkAttendance(
+      source,
+      options({
+        previous: JSON.parse(JSON.stringify(leave.sourceState)),
+        observationVersion: 3,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(cancelled.complete).toBe(true);
+    expect(
+      normalizeAttendance({
+        ...cancelled.input,
+        records: [
+          ...first.input.records,
+          ...leave.input.records,
+          ...cancelled.input.records,
+        ],
+      }).issues,
+    ).toEqual([]);
+    const replay = convertDingtalkAttendance(
+      source,
+      options({
+        previous: cancelled.sourceState,
+        observationVersion: 4,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(replay.sourceState).toEqual(cancelled.sourceState);
+    expect(replay.complete).toBe(true);
+  });
+  it("does not auto-retire legacy normal records whose derivation proof was not persisted", () => {
+    const first = convertDingtalkAttendance(read(), options());
+    const legacy = first.sourceState.map(({ proof, ...source }) => source);
+    const source = read();
+    source.days[0].approvals = [
+      { ...approved(), endsAt: at("18:00"), duration: "8" },
+    ];
+    const result = convertDingtalkAttendance(
+      source,
+      options({
+        previous: legacy,
+        observationVersion: 2,
+        approvalMappings: { "3:leave:annual": { type: "paid_leave" } },
+      }),
+    );
+    expect(result.complete).toBe(false);
+    expect(result.pending.map((row) => row.code)).toContain(
+      "SOURCE_DISAPPEARED_UNPROVEN",
+    );
+  });
+  it("keeps a first-observed terminal cancellation stable on repeated sync", () => {
+    const source = read();
+    source.days[0].approvals = [
+      {
+        ...approved(),
+        state: "cancelled",
+        terminalProof: { status: "TERMINATED", fingerprint: "a".repeat(64) },
+      } as any,
+    ];
+    const mapped = { "3:leave:annual": { type: "paid_leave" as const } };
+    const first = convertDingtalkAttendance(
+      source,
+      options({ approvalMappings: mapped }),
+    );
+    expect(first.complete).toBe(true);
+    const replay = convertDingtalkAttendance(
+      source,
+      options({
+        previous: first.sourceState,
+        observationVersion: 2,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(replay.complete).toBe(true);
+    expect(replay.sourceState).toEqual(first.sourceState);
+  });
+  it("does not equate a disappeared external leave with a superseded derived normal fact", () => {
+    const source = read();
+    source.days[0].approvals = [
+      { ...approved(), endsAt: at("18:00"), duration: "8" },
+    ];
+    const mapped = { "3:leave:annual": { type: "paid_leave" as const } };
+    const first = convertDingtalkAttendance(
+      source,
+      options({ approvalMappings: mapped }),
+    );
+    const next = convertDingtalkAttendance(
+      read(),
+      options({
+        previous: first.sourceState,
+        observationVersion: 2,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(next.complete).toBe(false);
+    expect(next.pending.map((row) => row.code)).toContain(
+      "SOURCE_DISAPPEARED_UNPROVEN",
+    );
+    expect(next.input.records.some((row) => row.state === "cancelled")).toBe(
+      false,
+    );
+  });
+  it("cannot version a replacement tombstone using the same persisted observation", () => {
+    const first = convertDingtalkAttendance(read(), options());
+    const source = read();
+    source.days[0].approvals = [
+      { ...approved(), endsAt: at("18:00"), duration: "8" },
+    ];
+    const result = convertDingtalkAttendance(
+      source,
+      options({
+        previous: first.sourceState,
+        approvalMappings: { "3:leave:annual": { type: "paid_leave" } },
+      }),
+    );
+    expect(result.complete).toBe(false);
+    expect(result.pending.map((row) => row.code)).toContain(
+      "SOURCE_VERSION_NOT_NEWER",
+    );
+  });
+  it("requires offset-qualified actual punch times for Late facts", () => {
+    const source = read();
+    source.days[0].punches[0].result = "Late";
+    source.days[0].punches[0].checkedAt = "2026-11-02T10:00:00";
+    expect(convertDingtalkAttendance(source, options()).complete).toBe(false);
+  });
+  it("versions obsolete derived normal facts when an approved full-day leave replaces them, including replay", () => {
+    const initial = convertDingtalkAttendance(read(), options());
+    const source = read();
+    source.days[0].approvals = [
+      { ...approved(), endsAt: at("18:00"), duration: "8" },
+    ];
+    const mapped = { "3:leave:annual": { type: "paid_leave" as const } };
+    const next = convertDingtalkAttendance(
+      source,
+      options({
+        previous: initial.sourceState,
+        observationVersion: 2,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(next.complete).toBe(true);
+    expect(
+      next.input.records.filter((row) => row.state === ("superseded" as any)),
+    ).toHaveLength(2);
+    for (const prior of initial.sourceState) {
+      expect(
+        next.sourceState.find((row) => row.sourceId === prior.sourceId),
+      ).toMatchObject({
+        sourceVersion: 2,
+        record: { state: "superseded" },
+        proof: { kind: "superseded-normal" },
+      });
+    }
+    expect(
+      normalizeAttendance({
+        ...next.input,
+        records: [...initial.input.records, ...next.input.records],
+      }).issues,
+    ).toEqual([]);
+    const replay = convertDingtalkAttendance(
+      source,
+      options({
+        previous: next.sourceState,
+        observationVersion: 3,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(replay.complete).toBe(true);
+    expect(replay.sourceState).toEqual(next.sourceState);
+  });
+  it("does not retire a derived normal source without complete current-day proof", () => {
+    const initial = convertDingtalkAttendance(read(), options());
+    const source = read();
+    source.days[0].approvals = [
+      { ...approved(), endsAt: at("18:00"), duration: "8" },
+    ];
+    source.days[0].complete = false;
+    const next = convertDingtalkAttendance(
+      source,
+      options({
+        previous: initial.sourceState,
+        observationVersion: 2,
+        approvalMappings: { "3:leave:annual": { type: "paid_leave" } },
+      }),
+    );
+    expect(next.complete).toBe(false);
+    expect(next.pending.map((row) => row.code)).toContain(
+      "SOURCE_DISAPPEARED_UNPROVEN",
+    );
+    expect(
+      next.input.records.some((row) => row.state === ("superseded" as any)),
+    ).toBe(false);
+  });
+  it("versions a terminal-cancelled leave and restores normal coverage without weakening old revoked facts", () => {
+    const source = read();
+    source.days[0].approvals = [
+      { ...approved(), endsAt: at("18:00"), duration: "8" },
+    ];
+    const mapped = { "3:leave:annual": { type: "paid_leave" as const } };
+    const initial = convertDingtalkAttendance(
+      source,
+      options({ approvalMappings: mapped }),
+    );
+    source.days[0].approvals = [
+      {
+        ...source.days[0].approvals[0],
+        state: "cancelled",
+        terminalProof: { status: "TERMINATED", fingerprint: "a".repeat(64) },
+      } as any,
+    ];
+    const next = convertDingtalkAttendance(
+      source,
+      options({
+        previous: initial.sourceState,
+        observationVersion: 2,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(next.complete).toBe(true);
+    expect(
+      next.input.records.filter((row) => row.state === ("cancelled" as any)),
+    ).toHaveLength(2);
+    expect(
+      next.input.records
+        .filter((row) => row.type === "normal")
+        .reduce((sum, row) => sum + Number(row.hours), 0),
+    ).toBe(8);
+    expect(
+      normalizeAttendance({
+        ...next.input,
+        records: [...initial.input.records, ...next.input.records],
+      }).issues,
+    ).toEqual([]);
+    const replay = convertDingtalkAttendance(
+      source,
+      options({
+        previous: next.sourceState,
+        observationVersion: 3,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(replay.complete).toBe(true);
+    expect(replay.sourceState).toEqual(next.sourceState);
+    source.days[0].approvals = [];
+    const later = convertDingtalkAttendance(
+      source,
+      options({
+        previous: replay.sourceState,
+        observationVersion: 4,
+        approvalMappings: mapped,
+      }),
+    );
+    expect(later.complete).toBe(true);
+    expect(
+      later.input.records.some((row) => row.state === ("cancelled" as any)),
+    ).toBe(true);
+  });
+  it.each(["no_proof", "missing_punch"])(
+    "does not accept cancelled approval without %s coverage",
+    (condition) => {
+      const source = read();
+      source.days[0].approvals = [
+        {
+          ...approved(),
+          state: "cancelled",
+          ...(condition === "no_proof"
+            ? {}
+            : {
+                terminalProof: {
+                  status: "TERMINATED",
+                  fingerprint: "a".repeat(64),
+                },
+              }),
+        } as any,
+      ];
+      if (condition === "missing_punch") source.days[0].punches = [];
+      expect(
+        convertDingtalkAttendance(
+          source,
+          options({
+            approvalMappings: { "3:leave:annual": { type: "paid_leave" } },
+          }),
+        ).complete,
+      ).toBe(false);
+    },
+  );
+  it.each([
+    ["Late", "14:00", "18:00", "4", "0", "4"],
+    ["Early", "09:00", "11:00", "0", "6", "2"],
+    ["Both", "11:00", "14:00", "2", "4", "2"],
+    ["Late", "12:30", "18:00", "3", "0", "5"],
+    ["Early", "09:00", "12:30", "0", "5", "3"],
+  ])(
+    "splits proven %s punches around rests into late/early and normal facts",
+    (kind, on, off, late, early, normal) => {
+      const source = read();
+      source.days[0].punches[0].checkedAt = at(on);
+      source.days[0].punches[1].checkedAt = at(off);
+      if (kind !== "Early") source.days[0].punches[0].result = "Late";
+      if (kind !== "Late") source.days[0].punches[1].result = "Early";
+      const initial = convertDingtalkAttendance(read(), options());
+      const result = convertDingtalkAttendance(
+        source,
+        options({ previous: initial.sourceState, observationVersion: 2 }),
+      );
+      expect(result.complete).toBe(true);
+      const total = (type: string) =>
+        String(
+          result.input.records
+            .filter((row) => row.type === type && row.state === "effective")
+            .reduce((sum, row) => sum + Number(row.hours), 0),
+        );
+      expect([total("late"), total("early"), total("normal")]).toEqual([
+        late,
+        early,
+        normal,
+      ]);
+      expect(
+        normalizeAttendance({
+          ...result.input,
+          records: [...initial.input.records, ...result.input.records],
+        }).issues,
+      ).toEqual([]);
+    },
+  );
+  it.each([
+    "unknown",
+    "wrong_card",
+    "missing_time",
+    "outside_shift",
+    "crossed_punches",
+  ])("keeps %s punch facts pending", (condition) => {
+    const source = read(),
+      [on, off] = source.days[0].punches;
+    on.result = "Late";
+    on.checkedAt = at("10:00");
+    if (condition === "unknown") on.result = "SeriousLate";
+    if (condition === "wrong_card") off.result = "Late";
+    if (condition === "missing_time") on.checkedAt = null;
+    if (condition === "outside_shift") on.checkedAt = at("19:00");
+    if (condition === "crossed_punches") {
+      off.result = "Early";
+      off.checkedAt = at("09:30");
+    }
+    expect(convertDingtalkAttendance(source, options()).complete).toBe(false);
+  });
+  it("retains a configurable 89-character mapping key and enforces total 200 / segment 190 limits", () => {
+    const source = read();
+    source.days[0].approvals = [{ ...approved(), subType: "x".repeat(81) }];
+    const result = convertDingtalkAttendance(source, options());
+    expect(result.complete).toBe(false);
+    expect(result.pending).toContainEqual(
+      expect.objectContaining({
+        code: "APPROVAL_TYPE_UNMAPPED",
+        mappingKey: `3:leave:${"x".repeat(81)}`,
+      }),
+    );
+    source.days[0].approvals = [
+      { ...approved(), tagName: "tagname", subType: "x".repeat(190) },
+    ];
+    expect(convertDingtalkAttendance(source, options()).pending).toContainEqual(
+      expect.objectContaining({
+        code: "APPROVAL_TYPE_UNMAPPED",
+        mappingKey: `3:tagname:${"x".repeat(190)}`,
+      }),
+    );
+    source.days[0].approvals[0].tagName = "tagnames";
+    const tooLong = convertDingtalkAttendance(source, options());
+    expect(tooLong.pending.some((row) => row.mappingKey)).toBe(false);
+    expect(tooLong.pending.map((row) => row.code)).toContain(
+      "APPROVAL_MAPPING_KEY_UNSUPPORTED",
+    );
+    source.days[0].approvals = [{ ...approved(), subType: "x".repeat(191) }];
+    expect(
+      convertDingtalkAttendance(source, options()).pending.some(
+        (row) => row.mappingKey,
+      ),
+    ).toBe(false);
+  });
   it("provides business labels for pending results without echoing unknown payloads or prototype names", () => {
     expect(
       payrollDingtalkAttendancePendingLabel("SCHEDULE_PLAN_CONFLICT"),

@@ -61,6 +61,20 @@ describe('payroll source capture', () => {
       snapshotHash: payrollHash(payrollParameterDefinition('rule', policy as any)) });
     return value;
   }
+  it.each(['late', 'early'])('keeps verified %s hours unconfigured until hourly treatment is explicitly approved', async type => {
+    const value = workdayFixture();
+    value.data.attendance.payload.days[0].records = [{ type, state: 'effective', hours: '0.5', effectiveHours: '0.5', resolution: 'usable', unit: 'hour' }];
+    const pending = await value.capture();
+    expect(pending.gross).toBeNull(); expect(pending.issues.join()).toContain('待遇');
+    (value.data.policies[0].config.paidHourly as any)[type] = '0';
+    const resolved = await value.capture();
+    expect(resolved.issues).toEqual([]);
+    expect(resolved.lines.find(row => row.itemCode === 'absence')?.amount).toBe('-50.00');
+    expect(resolved.gross).toBe('17350.00');
+    (value.data.policies[0].config.paidHourly as any)[type] = '100';
+    const paid = await value.capture();
+    expect(paid.issues).toEqual([]); expect(paid.lines.find(row => row.itemCode === 'absence')?.amount).toBe('0.00');
+  });
   it('selects a reviewed actual payer scope across contract subjects without changing employment history', async () => {
     const value = formalFixture(workdayFixture()); value.data.employments[0].contractSubjectId = 'different-contract';
     const before = JSON.stringify(value.data.employments), result = await value.capture('formal');
