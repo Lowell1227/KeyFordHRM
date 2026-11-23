@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
 import { INTERVIEW_STATUS_LABELS, type TalentInterviewView } from '@/types/talent.types';
@@ -7,6 +7,9 @@ import { formatInterviewTime } from '../interview-time';
 import { interviewApplicationLabel } from '../interview-application';
 import TalentInterviewFeedback from './TalentInterviewFeedback.vue';
 
+const emit = defineEmits<{ changed: [] }>();
+const feedback = ref<InstanceType<typeof TalentInterviewFeedback>>();
+defineExpose({ prepareToLeave: async () => await feedback.value?.prepareToLeave() ?? true });
 const props = defineProps<{ invitation: TalentInterviewView }>();
 const safeLink = computed(() => {
   try {
@@ -20,7 +23,7 @@ const safeLink = computed(() => {
 async function copy() {
   try {
     await navigator.clipboard.writeText([props.invitation.invitationText, safeLink.value].filter(Boolean).join('\n'));
-    ElMessage.success('邀请内容已复制');
+    ElMessage.success('邀请已复制，请人工发送给候选人');
   } catch { ElMessage.error('复制失败，请手动选中邀请内容复制'); }
 }
 </script>
@@ -38,10 +41,10 @@ async function copy() {
       <dt>内部参与人</dt><dd>{{ invitation.participantNames.join('、') }}</dd>
     </dl>
     <div class="interview-content__heading"><h4>会议邀请</h4><el-tooltip content="复制邀请内容"><el-button :icon="CopyDocument" aria-label="复制邀请内容" size="small" @click="copy" /></el-tooltip></div>
-    <p class="interview-invitation-text">{{ invitation.invitationText }}</p>
+    <p class="interview-invitation-text">{{ invitation.invitationText }}</p><p class="interview-content__manual">候选人需经办人工联系，HRM保存安排不代表已送达候选人。</p>
     <a v-if="safeLink" :href="safeLink" target="_blank" rel="noopener noreferrer">打开腾讯会议</a>
-    <template v-if="invitation.note"><h4>安排备注</h4><p class="interview-invitation-text">{{ invitation.note }}</p></template>
-    <TalentInterviewFeedback :key="invitation.id" :interview-id="invitation.id" :interview-version="invitation.version" />
+    <template v-if="invitation.note"><h4>安排备注（内部参与人可见）</h4><p class="interview-invitation-text">{{ invitation.note }}</p></template>
+    <TalentInterviewFeedback ref="feedback" :key="invitation.id" :interview-id="invitation.id" :interview-version="invitation.version" @changed="emit('changed')" />
   </div>
 </template>
 
@@ -52,5 +55,6 @@ async function copy() {
 dl { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; font-size: 14px; }
 dt { color: var(--el-text-color-secondary); } dt small { display: block; font-size: 12px; } dd { margin: 0; }
 .interview-invitation-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; margin: 10px 0; }
+.interview-content__manual { font-size: 12px; color: var(--el-text-color-secondary); }
 a { color: var(--el-color-primary); }
 </style>

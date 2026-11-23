@@ -3,11 +3,15 @@ import type { Paginated } from '@/types/api.types';
 import type {
   TalentApplicationAction, TalentApplicationInput, TalentApplicationView, TalentFeedbackOutcome,
   TalentFeedbackResponse, TalentRecruitmentOwner, TalentReserveReason, RecruitmentWorkbenchGroup,
+  TalentApplicationQueueItem, TalentApplicationQueueQuery,
 } from '@/types/talent.types';
 
 const base = '/talent-recruitment';
 const localError = { skipErrorMessage: true };
 export const talentRecruitmentApi = {
+  queue(query: TalentApplicationQueueQuery): Promise<Paginated<TalentApplicationQueueItem>> {
+    return http.get(`${base}/applications`, { params: query, ...localError }) as unknown as Promise<Paginated<TalentApplicationQueueItem>>;
+  },
   workbench(): Promise<{ groups: RecruitmentWorkbenchGroup[] }> {
     return http.get(`${base}/workbench`, localError) as unknown as Promise<{ groups: RecruitmentWorkbenchGroup[] }>;
   },

@@ -4,7 +4,7 @@ import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
-import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
+import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, TalentInterviewQueueQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
 import { canReadRecruitment, canWriteRecruitment, isApplicationOpenForInterview } from './talent-recruitment-policy';
 
 const include = { participants: { orderBy: { userId: 'asc' as const } }, candidate: { select: { deletedAt: true } },
@@ -45,17 +45,57 @@ export class TalentInterviewsService {
     return actor;
   }
 
-  async list(query: TalentInterviewQueryDto, user: AuthUser) {
+  private listWhere(query: TalentInterviewQueryDto, user: AuthUser) {
+    if (['responsible', 'all'].includes(query.scope ?? '') && !canReadRecruitment(user)) throw new ForbiddenException('无权限查看招聘管理队列');
     if (query.scope === 'created') this.assertWrite(user);
-    if (query.candidateId && !this.canReadTalent(user)) throw new ForbiddenException('无权限查看候选人面试列表');
+    if ((query.candidateId || query.applicationId) && !canReadRecruitment(user)) throw new ForbiddenException('无权限查看候选人面试列表');
     const where: Prisma.TalentInterviewWhereInput = query.scope === 'created'
       ? { createdById: user.id, ...(query.candidateId ? { candidateId: query.candidateId } : {}) }
+      : query.scope === 'responsible' ? { application: { ownerId: user.id } }
+      : query.scope === 'all' ? {}
       : query.candidateId && query.scope !== 'mine'
       ? { candidateId: query.candidateId }
       : { participants: { some: { userId: user.id } } };
+    if (query.candidateId) where.candidateId = query.candidateId;
+    if (query.applicationId) where.applicationId = query.applicationId;
+    if (query.status) where.status = query.status;
+    const conditions: Prisma.TalentInterviewWhereInput[] = [];
+    if (query.keyword?.trim()) conditions.push({ OR: [{ candidateNameSnapshot: { contains: query.keyword.trim(), mode: 'insensitive' } },
+      ...(canReadRecruitment(user) ? [{ application: { positionName: { contains: query.keyword.trim(), mode: 'insensitive' as const } } }] : [])] });
+    if (query.view === 'upcoming') conditions.push({ status: 'scheduled' });
+    if (query.view === 'history') conditions.push({ status: { in: ['completed', 'cancelled'] } });
+    if (query.view === 'feedback') {
+      where.participants = { some: { userId: user.id } };where.feedback = { none: { userId: user.id, status: 'submitted' } };
+      conditions.push({ AND: [
+        { OR: [{ status: 'completed' }, { status: 'scheduled', endsAt: { lte: new Date() } }] },
+        { OR: [{ applicationId: null }, { application: { stage: { in: ['screening', 'interviewing', 'reserve'] } } }] },
+      ] });
+    }
+    if (query.day) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(query.day)) throw new BadRequestException('请选择有效的面试日期');
+      const start = new Date(`${query.day}T00:00:00+08:00`);
+      if (!Number.isFinite(start.getTime())) throw new BadRequestException('请选择有效的面试日期');
+      where.startsAt = { gte: start, lt: new Date(start.getTime() + 86400000) };
+    }
+    if (conditions.length) where.AND = conditions;
+    return where;
+  }
+
+  async list(query: TalentInterviewQueryDto, user: AuthUser) {
+    const where = this.listWhere(query, user);
     const rows = await this.prisma.talentInterview.findMany({ where, include: { ...include, application: canReadRecruitment(user) && include.application },
       orderBy: [{ startsAt: 'desc' }, { id: 'asc' }] });
     return rows.map((row) => this.view(row, user));
+  }
+
+  async queue(query: TalentInterviewQueueQueryDto, user: AuthUser) {
+    const where = this.listWhere(query, user);
+    const [rows, total] = await Promise.all([
+      this.prisma.talentInterview.findMany({ where, include: { ...include, application: canReadRecruitment(user) && include.application },
+        orderBy: [{ startsAt: query.view === 'upcoming' ? 'asc' : 'desc' }, { id: 'asc' }], skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
+      this.prisma.talentInterview.count({ where }),
+    ]);
+    return { items: rows.map(row => this.view(row, user)), total, page: query.page, pageSize: query.pageSize };
   }
 
   async detail(id: string, user: AuthUser) {
@@ -123,6 +163,7 @@ export class TalentInterviewsService {
 
   async create(input: CreateTalentInterviewDto, user: AuthUser) {
     this.assertWrite(user);
+    if (!input.applicationId) throw new BadRequestException('请先选择本次应聘，再安排面试');
     const data = this.validate(input);
     return this.prisma.$transaction(async (tx) => {
       await this.lockCandidate(tx, input.candidateId);
@@ -178,6 +219,7 @@ export class TalentInterviewsService {
         throw new ConflictException('日程同步结果待核对，暂不能修改或重复发送');
       }
       if (action === 'retry') {
+        if (this.syncStatus() === 'unconfigured') throw new BadRequestException('钉钉日程未开通，面试安排已保存在系统中');
         if (before.syncStatus === 'synced') throw new BadRequestException('日程已同步，无需重试');
       }
       const fields = action === 'update' ? this.validate({

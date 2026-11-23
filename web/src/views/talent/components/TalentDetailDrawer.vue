@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, watch } from 'vue';
+import { ref, computed, nextTick, onBeforeUnmount, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
@@ -15,6 +15,7 @@ import {
   type TalentTag,
   type TalentDeleteImpact,
   type TalentApplicationMatch,
+  type TalentApplicationView,
   INTERVIEW_STATUS_LABELS,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
@@ -26,6 +27,7 @@ import TalentShareDrawer from './TalentShareDrawer.vue';
 import TalentInterviewPanel from './TalentInterviewPanel.vue';
 import TalentApplicationPanel from './TalentApplicationPanel.vue';
 import { useTalentPermissions } from '../useTalentPermissions';
+import { useRecruitmentLeaveGuard } from '../useRecruitmentLeaveGuard';
 import { formatInterviewTime } from '../interview-time';
 
 const { canEdit } = useTalentPermissions();
@@ -39,6 +41,7 @@ const props = defineProps<{
   modelValue: boolean;
   candidateId: string | null;
   applicationMatch?: TalentApplicationMatch;
+  startApplication?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -58,6 +61,8 @@ const loading = ref(false);
 const loadError = ref(''), actionError = ref(''), rejecting = ref(false), impactLoading = ref(false);
 const detail = ref<TalentCandidateDetail | null>(null);
 const employmentStatusLabel = computed(() => TALENT_EMPLOYMENT_STATUS_LABELS[detail.value?.employmentStatus ?? 'unknown']);
+const applicationPanel = ref<InstanceType<typeof TalentApplicationPanel>>();
+const currentApplication = ref<TalentApplicationView | null>(null);
 const interviewPanel = ref<InstanceType<typeof TalentInterviewPanel>>();
 const shareVisible = ref(false);
 const shareContext = ref<{ candidateId: string; session: number } | null>(null);
@@ -65,10 +70,17 @@ const deleteImpact = ref<TalentDeleteImpact | null>(null);
 const deleteVisible = ref(false), deleting = ref(false), deleteError = ref('');
 let requestId = 0;
 let session = 0;
+const leave = useRecruitmentLeaveGuard({ dirty: () => false, busy: () => deleting.value || rejecting.value, discard: () => {} }, true);
+async function beforeClose(done: () => void) { if (await leave.prepareToLeave()) done(); }
+async function prepareInterviewSwitch() { return await interviewPanel.value?.prepareToLeave() ?? true; }
+defineExpose({ prepareToLeave: leave.prepareToLeave });
+watch([() => props.startApplication, () => detail.value?.id], async () => {
+  if (props.startApplication && detail.value && props.modelValue) { await nextTick(); await applicationPanel.value?.openNewApplication(); }
+});
 
 watch(() => [props.modelValue, props.candidateId], () => {
   ++session; ++requestId;
-  detail.value = null;
+  detail.value = null; currentApplication.value = null;
   shareVisible.value = false; shareContext.value = null;
   deleteVisible.value = false; deleteImpact.value = null; impactLoading.value = false;
   deleting.value = false; rejecting.value = false; actionError.value = ''; loadError.value = '';
@@ -110,13 +122,13 @@ function tagLabel(tag: string): string {
   return TALENT_TAG_LABELS[tag as TalentTag] ?? tag;
 }
 
-function startEdit() {
-  if (!detail.value || !canEdit.value) return;
+async function startEdit() {
+  if (!detail.value || !canEdit.value || !await leave.prepareToLeave()) return;
   emit('edit', detail.value.id);
 }
 
 async function markRejected() {
-  if (!detail.value || !canEdit.value || rejecting.value) return;
+  if (!detail.value || !canEdit.value || rejecting.value || !await leave.prepareToLeave()) return;
   const target = detail.value;
   const token = session;
   try { await ElMessageBox.confirm(
@@ -135,7 +147,7 @@ async function markRejected() {
 }
 
 async function removeCandidate() {
-  if (!detail.value || !canEdit.value || impactLoading.value) return;
+  if (!detail.value || !canEdit.value || impactLoading.value || !await leave.prepareToLeave()) return;
   const id = detail.value.id, token = session;
   deleteError.value = ''; actionError.value = ''; impactLoading.value = true;
   try {
@@ -177,6 +189,10 @@ function goOnboarding() {
   });
 }
 
+function onInterviewChanged() {
+  onFollowUpChanged();
+  void applicationPanel.value?.refreshSelected();
+}
 function onFollowUpChanged() {
   emit('changed');
   void loadDetail();
@@ -193,7 +209,7 @@ function onShareChanged(context: { candidateId: string; session: number }) {
 
 <template>
   <BusinessDetailDrawer v-model="visible" :title="detail?.name ?? '人才详情'" :loading="loading"
-    variant="standard" class="talent-detail-drawer">
+    :before-close="beforeClose" :saving="leave.saving.value" variant="workflow" class="talent-detail-drawer">
     <el-alert v-if="loadError" :title="loadError" type="error" :closable="false"><el-button link type="primary" @click="loadDetail">重试</el-button></el-alert>
     <div v-if="detail" class="talent-detail">
       <div class="talent-detail__header">
@@ -225,6 +241,9 @@ function onShareChanged(context: { candidateId: string; session: number }) {
         <el-button link type="primary" @click="openEmployeeArchive">查看员工档案：{{ detail.name }}</el-button>
       </el-alert>
 
+      <TalentApplicationPanel ref="applicationPanel" :key="detail.id" :candidate-id="detail.id" :application-match="applicationMatch" :editable="canEdit" :converted-user-id="detail.convertedUserId" :before-switch="prepareInterviewSwitch" @selected="currentApplication = $event" @changed="onFollowUpChanged" @interview="application => interviewPanel?.openForApplication(application)" />
+      <TalentInterviewPanel ref="interviewPanel" :key="detail.id" :candidate-id="detail.id" :candidate-name="detail.name" :application="currentApplication" :editable="canEdit" @changed="onInterviewChanged" />
+      <el-collapse class="talent-detail__supporting"><el-collapse-item title="人才资料与简历" name="profile">
       <h4 class="talent-detail__section-title">基本信息</h4>
       <div class="talent-detail__grid">
         <div class="talent-detail__field"><span class="talent-detail__label">手机</span><span>{{ detail.phone }}</span></div>
@@ -262,11 +281,11 @@ function onShareChanged(context: { candidateId: string; session: number }) {
       <h4 class="talent-detail__section-title">简历文件（{{ detail.files.length }}）</h4>
       <TalentFileList :candidate-id="detail.id" :files="detail.files" :editable="canEdit" @changed="loadDetail" />
 
-      <TalentApplicationPanel :key="detail.id" :candidate-id="detail.id" :application-match="applicationMatch" :editable="canEdit" :converted-user-id="detail.convertedUserId" @changed="onFollowUpChanged" @interview="application => interviewPanel?.openForApplication(application)" />
-      <TalentInterviewPanel ref="interviewPanel" :key="detail.id" :candidate-id="detail.id" :editable="canEdit" @changed="onFollowUpChanged" />
+      </el-collapse-item></el-collapse>
 
-      <h4 class="talent-detail__section-title">跟进</h4>
+      <el-collapse class="talent-detail__supporting"><el-collapse-item title="人才跟进与历史" name="followups">
       <TalentFollowUpTimeline :key="detail.id" :candidate-id="detail.id" :editable="canEdit" @changed="onFollowUpChanged" />
+      </el-collapse-item></el-collapse>
 
       <slot name="extra" />
     </div>

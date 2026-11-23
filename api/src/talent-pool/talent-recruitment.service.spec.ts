@@ -30,7 +30,7 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
       }) },
     talentApplicationEvent: { create: jest.fn().mockImplementation(({ data }) => { (app.events as any[]).push({ id: 'event', ...data, createdAt: new Date() }); return Promise.resolve(data); }) },
     employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null) },
-    talentInterview: { findUnique: jest.fn().mockResolvedValue(interview) },
+    talentInterview: { findUnique: jest.fn().mockResolvedValue(interview), findMany: jest.fn().mockResolvedValue([]) },
     talentInterviewFeedback: { findUnique: jest.fn(({ where }) => { const row = feedbacks.find(row => row.userId === where.interviewId_userId.userId); return Promise.resolve(row ? { ...row } : null); }),
       findMany: jest.fn(({ where }) => Promise.resolve(feedbacks.filter(row => !where.userId || row.userId === where.userId))),
       create: jest.fn(({ data }) => { const row = { ...data, createdAt: new Date(), updatedAt: new Date() }; feedbacks.push(row); return Promise.resolve(row); }),

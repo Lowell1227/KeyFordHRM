@@ -5,11 +5,11 @@ import type { AuthUser } from '@/common/types/auth.types';
 const hr = { id: 'hr', name: 'HR', sysRole: 'hr', deptId: null, isAssessorOnly: false, canViewAll: false } as AuthUser;
 const employee = { ...hr, id: 'participant', sysRole: 'employee' } as AuthUser;
 const reviewer = { ...hr, sysRole: 'hr_user', hrCapabilities: ['employee_archive_review'] } as AuthUser;
-const draft = { candidateId: 'candidate', startsAt: '2026-12-01T02:00:00Z', endsAt: '2026-12-01T03:00:00Z', participantIds: ['participant'], invitationText: '<b>plain invitation</b>', meetingUrl: 'https://meeting.tencent.com/dm/demo', note: 'private' };
+const draft = { candidateId: 'candidate', applicationId: 'application', startsAt: '2026-12-01T02:00:00Z', endsAt: '2026-12-01T03:00:00Z', participantIds: ['participant'], invitationText: '<b>plain invitation</b>', meetingUrl: 'https://meeting.tencent.com/dm/demo', note: 'private' };
 
 function setup(overrides = {}) {
   const actor = { ...hr, status: 'active', archivedAt: null, deletedAt: null };
-  const row = { id: 'invite', candidateId: 'candidate', candidateNameSnapshot: 'Synthetic Candidate', startsAt: new Date(draft.startsAt), endsAt: new Date(draft.endsAt), invitationText: draft.invitationText, meetingUrl: draft.meetingUrl, note: draft.note, status: 'scheduled', version: 1, syncStatus: 'unconfigured', calendarSyncedVersion: 0, participants: [{ userId: 'participant', userNameSnapshot: 'Synthetic Participant' }], candidate: { deletedAt: null }, ...overrides };
+  const row = { id: 'invite', candidateId: 'candidate', applicationId: 'application', candidateNameSnapshot: 'Synthetic Candidate', startsAt: new Date(draft.startsAt), endsAt: new Date(draft.endsAt), invitationText: draft.invitationText, meetingUrl: draft.meetingUrl, note: draft.note, status: 'scheduled', version: 1, syncStatus: 'unconfigured', calendarSyncedVersion: 0, participants: [{ userId: 'participant', userNameSnapshot: 'Synthetic Participant' }], candidate: { deletedAt: null }, ...overrides };
   const prisma = {
     talentCandidate: { findUnique: jest.fn().mockResolvedValue({ id: 'candidate', name: row.candidateNameSnapshot, deletedAt: null }) },
     talentApplication: { findUnique: jest.fn().mockResolvedValue({ id: 'application', candidateId: 'candidate', stage: 'interviewing' }) },
@@ -49,7 +49,7 @@ describe('talent interview safety and access', () => {
     await expect(setup({ applicationId: null, application: null }).sut.detail('invite', hr)).resolves.toMatchObject({ application: null });
   });
   it.each([
-    ['create', null], ['create', 'application'], ['update', null], ['update', 'application'],
+    ['create', 'application'], ['update', null], ['update', 'application'],
     ['cancel', null], ['cancel', 'application'], ['complete', null], ['complete', 'application'],
     ['retrySync', null], ['retrySync', 'application'],
   ] as const)('%s rejects revoked maintenance permission after its last business lock, application=%s', async (action, applicationId) => {
@@ -119,6 +119,7 @@ describe('talent interview safety and access', () => {
   });
   it.each(['cancel', 'complete', 'retrySync'] as const)('keeps %s available to current HR when a historical participant has departed', async action => {
     const { sut, prisma } = setup();
+    if (action === 'retrySync') jest.spyOn(sut as any, 'syncStatus').mockReturnValue('pending');
     prisma.user.findMany.mockResolvedValue([]);
     await expect(sut[action]('invite', { version: 1 }, hr)).resolves.toMatchObject({ version: 2 });
     expect(prisma.user.findMany).not.toHaveBeenCalled();
@@ -164,7 +165,7 @@ describe('talent interview safety and access', () => {
   it('application source is immutable and participates in replay identity', async () => {
     const { sut, prisma } = setup({ applicationId: 'application', createdById: hr.id });
     await expect(sut.update('invite', { version: 1, applicationId: 'other' } as any, hr)).rejects.toThrow(BadRequestException);
-    await expect(sut.create({ ...draft, requestId: 'invite' }, hr)).rejects.toThrow(ConflictException);
+    await expect(sut.create({ ...draft, applicationId: 'other', requestId: 'invite' }, hr)).rejects.toThrow(ConflictException);
     expect(prisma.talentInterview.updateMany).not.toHaveBeenCalled();
   });
   it('locks application between candidate and invitation on linked mutations', async () => {
@@ -237,10 +238,16 @@ describe('talent interview safety and access', () => {
   });
   it('retry only persists the new calendar intent without another business notification', async () => {
     const { sut, prisma, tx } = setup();
+    jest.spyOn(sut as any, 'syncStatus').mockReturnValue('pending');
     await expect(sut.retrySync('invite', { version: 1 }, hr)).resolves.toMatchObject({ version: 2 });
     expect(prisma.talentInterviewSync.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ version: 2 }) }));
     expect(tx.notificationLog.createMany).not.toHaveBeenCalled();
     expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
+  });
+  it('does not create versions or intents by retrying while calendar is disabled', async () => {
+    const { sut, prisma } = setup();
+    await expect(sut.retrySync('invite', { version: 1 }, hr)).rejects.toThrow('钉钉日程未开通');
+    expect(prisma.talentInterview.updateMany).not.toHaveBeenCalled();expect(prisma.talentInterviewSync.create).not.toHaveBeenCalled();
   });
   it('rejects deleted candidate, duplicate participants, and reversed dates', async () => {
     const { sut, prisma } = setup();
@@ -390,6 +397,7 @@ describe('talent interview safety and access', () => {
     const { sut, tx, row } = setup({ participants: [
       { userId: 'participant', userNameSnapshot: 'First' }, { userId: 'removed', userNameSnapshot: 'Second' },
     ] });
+    if (action === 'retrySync') jest.spyOn(sut as any, 'syncStatus').mockReturnValue('pending');
     const updated = await sut.update('invite', { version: 1, participantIds: ['participant'] }, hr);
     Object.assign(row, { version: updated.version, participants: [{ userId: 'participant', userNameSnapshot: 'First' }] });
     const result = await sut[action]('invite', { version: 2 }, hr);
@@ -455,8 +463,8 @@ describe('talent interview safety and access', () => {
     prisma.user.findMany.mockResolvedValue([{ id: 'participant', name: 'First' }]);
     const updated = await sut.update('invite', { version: 1, participantIds: ['participant'] }, hr);
     expect(commits).toBe(2);
-    expect(prisma.$queryRaw.mock.calls.slice(1).map(([sql]) => sql.join('?'))).toEqual([
-      expect.stringContaining('talent_candidates'), expect.stringContaining('talent_interviews'),
+    expect(prisma.$queryRaw.mock.calls.slice(-3).map(([sql]) => sql.join('?'))).toEqual([
+      expect.stringContaining('talent_candidates'), expect.stringContaining('talent_applications'), expect.stringContaining('talent_interviews'),
     ]);
     expect(tx.notificationLog.createMany).toHaveBeenCalledTimes(2);
     expect(tx.notificationLog.createMany.mock.calls[1][0].data.map((log) => [log.userId, log.extraData.version])).toEqual([['participant', 2], ['removed', 2]]);

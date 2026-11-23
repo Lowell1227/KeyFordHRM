@@ -5,7 +5,7 @@ import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { Roles } from '@/common/decorators/roles.decorator';
 import type { AuthUser } from '@/common/types/auth.types';
 import { TalentInterviewsService } from './talent-interviews.service';
-import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
+import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, TalentInterviewQueueQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
 
 @Controller('talent-interviews')
 export class TalentInterviewsController {
@@ -13,6 +13,9 @@ export class TalentInterviewsController {
 
   @Get()
   list(@Query() query: TalentInterviewQueryDto, @CurrentUser() user: AuthUser) { return this.interviews.list(query, user); }
+
+  @Get('queue')
+  queue(@Query() query: TalentInterviewQueueQueryDto, @CurrentUser() user: AuthUser) { return this.interviews.queue(query, user); }
 
   @Get(':id')
   detail(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() user: AuthUser) { return this.interviews.detail(id, user); }

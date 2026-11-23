@@ -17,6 +17,7 @@ import type {
   TalentDeleteImpact,
   TalentInterviewInput,
   TalentInterviewView,
+  TalentInterviewQueueQuery,
 } from '@/types/talent.types';
 
 /**
@@ -135,8 +136,11 @@ export const talentPoolApi = {
 };
 
 export const talentInterviewsApi = {
-  list(query: { scope?: 'mine' | 'created'; candidateId?: string }): Promise<TalentInterviewView[]> {
+  list(query: TalentInterviewQueueQuery): Promise<TalentInterviewView[]> {
     return http.get('/talent-interviews', { params: query }) as unknown as Promise<TalentInterviewView[]>;
+  },
+  queue(query: TalentInterviewQueueQuery): Promise<Paginated<TalentInterviewView>> {
+    return http.get('/talent-interviews/queue', { params: query, skipErrorMessage: true }) as unknown as Promise<Paginated<TalentInterviewView>>;
   },
   detail(id: string): Promise<TalentInterviewView> {
     return http.get(`/talent-interviews/${id}`) as unknown as Promise<TalentInterviewView>;

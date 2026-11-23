@@ -9,6 +9,12 @@ export class TalentOwnerQueryDto extends PaginationDto {
   @IsString() @MaxLength(100) keyword?: string;
 }
 
+export class TalentApplicationQueueQueryDto extends TalentOwnerQueryDto {
+  @IsOptional() @IsIn(['owned', 'all']) scope?: 'owned' | 'all';
+  @IsOptional() @IsIn(['screening', 'interviewing', 'hiring_review', 'offered', 'accepted', 'declined', 'rejected', 'reserve', 'withdrawn', 'onboarding', 'hired']) stage?: string;
+  @IsOptional() @IsUUID() deptId?: string;
+}
+
 class TalentApplicationFields {
   @IsString() @MinLength(1) @MaxLength(100) positionName!: string;
   @IsOptional() @IsString() @MaxLength(100) recruitmentBatch?: string | null;

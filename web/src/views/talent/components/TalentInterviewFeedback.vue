@@ -3,15 +3,25 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { recruitmentError, talentRecruitmentApi } from '@/api/talent-recruitment.api';
 import { FEEDBACK_OUTCOME_LABELS, type TalentFeedbackOutcome, type TalentFeedbackResponse, type TalentInterviewFeedbackView } from '@/types/talent.types';
+import { useRecruitmentLeaveGuard } from '../useRecruitmentLeaveGuard';
 import { formatDate } from '@/utils/date';
 
 const props = defineProps<{ interviewId: string; interviewVersion: number }>();
+const emit = defineEmits<{ changed: [] }>();
 const data = ref<TalentFeedbackResponse | null>(null), loading = ref(false), busy = ref(false), error = ref('');
 const loadFailed = ref(false), conflict = ref(false), dirty = ref(false);
 const form = reactive({ outcome: '' as TalentFeedbackOutcome | '', summary: '' });
 const fieldErrors = reactive({ outcome: '', summary: '' });
 const returningId = ref(''), returnNote = ref(''), returnError = ref('');
 let session = 0;
+const leave = useRecruitmentLeaveGuard({
+  dirty: () => dirty.value || !!returningId.value,
+  busy: () => busy.value,
+  discard: () => { dirty.value = false; returningId.value = ''; returnNote.value = ''; form.outcome = data.value?.own?.outcome ?? ''; form.summary = data.value?.own?.summary ?? ''; },
+});
+defineExpose({ prepareToLeave: leave.prepareToLeave });
+async function cancelReturn() { if (await leave.prepareToLeave()) returningId.value = ''; }
+
 const canEdit = computed(() => data.value?.canEdit && data.value?.own?.status !== 'submitted');
 const otherFeedback = computed(() => data.value?.items.filter(item => item.userId !== data.value?.own?.userId) ?? []);
 const histories = computed(() => [data.value?.own, ...otherFeedback.value].filter((item): item is TalentInterviewFeedbackView => Boolean(item?.history?.length)));
@@ -58,11 +68,11 @@ async function save(submit: boolean) {
   try {
     const result = await talentRecruitmentApi.saveFeedback(id, body);
     if (!valid(token, id)) return;
-    apply(result); conflict.value = false;
+    apply(result); conflict.value = false; emit('changed');
   } catch (cause) { if (valid(token, id)) { error.value = recruitmentError(cause); conflict.value = (cause as { response?: { status: number } }).response?.status === 409; } }
   finally { if (valid(token, id)) busy.value = false; }
 }
-function beginReturn(item: TalentInterviewFeedbackView) { returningId.value = item.userId; returnNote.value = ''; returnError.value = ''; error.value = ''; }
+async function beginReturn(item: TalentInterviewFeedbackView) { if (busy.value || !await leave.prepareToLeave()) return; returningId.value = item.userId; returnNote.value = ''; returnError.value = ''; error.value = ''; }
 async function returnFeedback(item: TalentInterviewFeedbackView) {
   if (!data.value?.canReturn || loading.value || loadFailed.value || conflict.value || busy.value || item.status !== 'submitted') return;
   returnError.value = returnNote.value.trim() ? '' : '请填写退回原因';
@@ -72,7 +82,7 @@ async function returnFeedback(item: TalentInterviewFeedbackView) {
   try {
     const result = await talentRecruitmentApi.returnFeedback(id, item.userId, { interviewVersion: data.value.interviewVersion, expectedRevision: item.revision, note: returnNote.value.trim() });
     if (!valid(token, id)) return;
-    apply(result, dirty.value); returningId.value = ''; conflict.value = false;
+    apply(result, dirty.value); returningId.value = ''; conflict.value = false; emit('changed');
   } catch (cause) { if (valid(token, id)) { error.value = recruitmentError(cause); conflict.value = (cause as { response?: { status: number } }).response?.status === 409; } }
   finally { if (valid(token, id)) busy.value = false; }
 }
@@ -85,7 +95,7 @@ async function returnFeedback(item: TalentInterviewFeedbackView) {
       <el-button v-if="conflict" link type="primary" @click="load(true)">刷新反馈，保留输入</el-button>
       <el-button v-else-if="loadFailed" link type="primary" @click="load(dirty)">重试</el-button>
     </el-alert>
-    <el-form v-if="canEdit" label-position="top" :disabled="busy" class="interview-feedback__form">
+    <el-form v-if="canEdit" label-position="top" :disabled="busy || loading" class="interview-feedback__form">
       <el-form-item label="面试结论" :error="fieldErrors.outcome"><el-radio-group v-model="form.outcome" @change="dirty = true"><el-radio-button v-for="(label, value) in FEEDBACK_OUTCOME_LABELS" :key="value" :value="value">{{ label }}</el-radio-button></el-radio-group></el-form-item>
       <el-form-item label="面试意见" :error="fieldErrors.summary"><el-input v-model="form.summary" type="textarea" :rows="4" maxlength="4000" show-word-limit @input="dirty = true" /></el-form-item>
       <div class="interview-feedback__actions"><el-button :loading="busy" :disabled="conflict || loadFailed || loading" @click="save(false)">保存草稿</el-button><el-button type="primary" :loading="busy" :disabled="conflict || loadFailed || loading" @click="save(true)">提交反馈</el-button></div>
@@ -96,7 +106,7 @@ async function returnFeedback(item: TalentInterviewFeedbackView) {
       <el-button v-if="data.canReturn && data.own.status === 'submitted' && !returningId" size="small" @click="beginReturn(data.own)">退回反馈</el-button>
     </div>
     <p v-else-if="data" class="interview-feedback__muted">暂无本人反馈</p>
-    <div v-if="data && dirty && !canEdit" class="interview-feedback__record">
+    <div v-if="dirty && !canEdit" class="interview-feedback__record">
       <strong>当前已不能提交，以下为本页保留的输入</strong>
       <p v-if="form.outcome">{{ FEEDBACK_OUTCOME_LABELS[form.outcome] }}</p><p v-if="form.summary">{{ form.summary }}</p>
     </div>
@@ -108,7 +118,7 @@ async function returnFeedback(item: TalentInterviewFeedbackView) {
     </div>
     <el-form v-if="returningId && data" label-position="top" :disabled="busy" class="interview-feedback__return">
       <el-form-item label="退回原因" required :error="returnError"><el-input v-model="returnNote" type="textarea" :rows="2" maxlength="2000" /></el-form-item>
-      <div class="interview-feedback__actions"><el-button @click="returningId = ''">取消退回</el-button><el-button type="primary" :loading="busy" :disabled="conflict || loadFailed || loading || !data?.canReturn || data?.items.find(item => item.userId === returningId)?.status !== 'submitted'" @click="returnFeedback(data!.items.find(item => item.userId === returningId)!)">退回修改</el-button></div>
+      <div class="interview-feedback__actions"><el-button @click="cancelReturn">取消退回</el-button><el-button type="primary" :loading="busy" :disabled="conflict || loadFailed || loading || !data?.canReturn || data?.items.find(item => item.userId === returningId)?.status !== 'submitted'" @click="returnFeedback(data!.items.find(item => item.userId === returningId)!)">退回修改</el-button></div>
     </el-form>
     <el-collapse v-if="histories.length" class="interview-feedback__history">
       <el-collapse-item v-for="item in histories" :key="item.userId" :name="item.userId" :title="`${item.userName || '本人'} · 历史反馈（${item.history!.length}）`">

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import type { AuthUser } from '@/common/types/auth.types';
-import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
+import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, TalentApplicationQueueQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
 import { TalentRecruitmentService } from './talent-recruitment.service';
 
 // Per-action authorization is checked against the current database user inside the service.
@@ -11,6 +11,9 @@ export class TalentRecruitmentController {
 
   @Get('owners')
   owners(@Query() query: TalentOwnerQueryDto, @CurrentUser() user: AuthUser) { return this.recruitment.owners(query, user); }
+
+  @Get('applications')
+  queue(@Query() query: TalentApplicationQueueQueryDto, @CurrentUser() user: AuthUser) { return this.recruitment.queue(query, user); }
 
   @Get('hiring-reviews')
   hiringReviews(@CurrentUser() user: AuthUser) { return this.recruitment.hiringReviews(user); }

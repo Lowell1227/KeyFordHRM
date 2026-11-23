@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import { onBeforeRouteUpdate, useRouter } from 'vue-router';
+import { useRouter } from 'vue-router';
 import { Plus, Refresh } from '@element-plus/icons-vue';
-import { type FormInstance, type FormRules } from 'element-plus';
+import { ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
+import { useRecruitmentLeaveGuard } from '../useRecruitmentLeaveGuard';
 import { departmentsApi } from '@/api/departments.api';
 import { recruitmentError, talentRecruitmentApi } from '@/api/talent-recruitment.api';
 import { canAccessRoute } from '@/router/navigation';
@@ -20,8 +21,9 @@ const props = defineProps<{
   editable: boolean;
   convertedUserId?: string | null;
   applicationMatch?: TalentApplicationMatch;
+  beforeSwitch?: () => Promise<boolean>;
 }>();
-const emit = defineEmits<{ changed: []; interview: [application: Pick<TalentApplicationView, 'id' | 'positionName' | 'recruitmentBatch'>] }>();
+const emit = defineEmits<{ changed: []; selected: [application: TalentApplicationView | null]; interview: [application: Pick<TalentApplicationView, 'id' | 'positionName' | 'recruitmentBatch'>] }>();
 const router = useRouter();
 const auth = useAuthStore();
 const rows = ref<TalentApplicationView[]>([]), selectedId = ref(''), current = ref<TalentApplicationView | null>(null);
@@ -58,10 +60,13 @@ const departmentOptions = computed(() => {
 const canOpenHiringReview = computed(() => current.value?.stage === 'hiring_review'
   && current.value.allowedActions.some(action => ['approve_hiring', 'return_hiring'].includes(action))
   && auth.user && canAccessRoute(router.resolve({ name: 'TalentHiringReview' }), auth.user));
-onBeforeRouteUpdate((to, from) => {
-  if ((to.query.candidateId !== from.query.candidateId || to.query.applicationId !== from.query.applicationId)
-    && (busy.value || editing.value || command.value)) return false;
+const leave = useRecruitmentLeaveGuard({
+  dirty: () => editing.value || !!command.value,
+  busy: () => busy.value,
+  discard: () => { resetEditor(); command.value = null; note.value = ''; reserveReasons.value = []; },
 });
+defineExpose({ prepareToLeave: leave.prepareToLeave, openNewApplication: () => openEditor(true), refreshSelected: () => selectedId.value ? select(selectedId.value, true) : loadList() });
+watch(current, value => emit('selected', value));
 function active(token: number, candidateId: string, applicationId?: string) {
   return token === session && candidateId === props.candidateId && (!applicationId || applicationId === selectedId.value);
 }
@@ -71,7 +76,7 @@ function accept(result: TalentApplicationView) {
   if (index < 0) rows.value.unshift(result); else rows.value[index] = result;
 }
 function actionLabel(action: TalentApplicationAction) {
-  return action === 'reject' ? '淘汰本次应聘' : APPLICATION_ACTION_LABELS[action];
+  return action === 'reject' ? '淘汰本次应聘' : action === 'start_interview' ? '进入面试阶段' : APPLICATION_ACTION_LABELS[action];
 }
 async function loadList() {
   if (busy.value || editing.value || command.value) return;
@@ -104,6 +109,8 @@ async function loadList() {
   finally { if (active(token, candidateId)) loading.value = false; }
 }
 async function select(id: string, keepInputs = false) {
+  if (busy.value || loading.value) return;
+  if (!keepInputs && (!await leave.prepareToLeave() || (props.beforeSwitch && !await props.beforeSwitch()))) return;
   const token = ++session, candidateId = props.candidateId;
   selectedId.value = id; loading.value = true; error.value = ''; loadFailed.value = false; selectionError.value = '';
   if (!keepInputs) { current.value = null; command.value = null; editing.value = false; }
@@ -111,11 +118,14 @@ async function select(id: string, keepInputs = false) {
     const result = await talentRecruitmentApi.detail(id);
     if (!active(token, candidateId, id)) return;
     accept(result); conflict.value = false;
+    if (editing.value && !canEditRecord.value) error.value = '当前阶段已不能修改应聘，输入已保留，请取消后核对。';
     if (command.value && !result.allowedActions.includes(command.value)) error.value = '当前阶段已不支持此操作，说明已保留，请取消后核对。';
   } catch (cause) { if (active(token, candidateId, id)) { error.value = recruitmentError(cause); loadFailed.value = true; } }
   finally { if (active(token, candidateId, id)) loading.value = false; }
 }
-watch([() => props.candidateId, () => props.applicationMatch], () => {
+watch([() => props.candidateId, () => props.applicationMatch?.id,
+  () => props.applicationMatch?.applicationPosition, () => props.applicationMatch?.applicationStage,
+  () => props.applicationMatch?.applicationOwnerId], () => {
   ++session; ++ownerSearch; ++optionSession; rows.value = []; selectedId.value = ''; current.value = null;
   editing.value = false; command.value = null; busy.value = false; conflict.value = false; selectionError.value = ''; void loadList();
 }, { immediate: true });
@@ -143,8 +153,9 @@ async function loadOptions() {
     visit(result); departments.value = [...new Map(flat.map(item => [item.id, item])).values()]; departmentsLoaded.value = true;
   } catch (cause) { if (token === optionSession) optionsError.value = recruitmentError(cause); }
 }
-function openEditor(create: boolean) {
+async function openEditor(create: boolean) {
   if (!props.editable || busy.value || (!create && !canEditRecord.value)) return;
+  if (!await leave.prepareToLeave() || (create && props.beforeSwitch && !await props.beforeSwitch())) return;
   creating.value = create; editing.value = true; command.value = null; error.value = ''; departmentError.value = ''; conflict.value = false;
   createRequestId.value = create ? crypto.randomUUID() : '';
   const row = create ? null : current.value;
@@ -152,9 +163,15 @@ function openEditor(create: boolean) {
   owners.value = row ? [{ id: row.ownerId, name: row.ownerName ?? '原应聘负责人', employeeNo: null, deptName: null }] : [];
   formRef.value?.clearValidate(); void loadOptions();
 }
-function cancelEditor() { editing.value = false; createRequestId.value = ''; error.value = ''; conflict.value = false; ++ownerSearch; ++optionSession; }
+function resetEditor() { editing.value = false; createRequestId.value = ''; error.value = ''; conflict.value = false; ++ownerSearch; ++optionSession; }
+async function cancelEditor() { if (await leave.prepareToLeave()) resetEditor(); }
+async function cancelAction() { if (await leave.prepareToLeave()) { command.value = null; error.value = ''; conflict.value = false; } }
 async function save() {
-  if (busy.value || !await formRef.value?.validate().catch(() => false)) return;
+  if (busy.value || loading.value || conflict.value) return;
+  busy.value = true;
+  const valid = await formRef.value?.validate().catch(() => false);
+  busy.value = false;
+  if (!valid || !editing.value) return;
   if (!creating.value && !canEditRecord.value) { error.value = '当前阶段不可修改，输入已保留。'; return; }
   const token = session, candidateId = props.candidateId, row = current.value, isCreate = creating.value;
   const body = { positionName: form.positionName.trim(), recruitmentBatch: form.recruitmentBatch.trim() || null, deptId: form.deptId || null, ownerId: form.ownerId || undefined, expectedEntryDate: form.expectedEntryDate || null };
@@ -163,7 +180,7 @@ async function save() {
     const result = isCreate ? await talentRecruitmentApi.create(candidateId, { ...body, requestId: createRequestId.value })
       : await talentRecruitmentApi.update(row!.id, { ...body, expectedRevision: row!.revision });
     if (!active(token, candidateId)) return;
-    selectedId.value = result.id; selectionError.value = ''; accept(result); cancelEditor(); emit('changed');
+    selectedId.value = result.id; selectionError.value = ''; accept(result); resetEditor(); emit('changed');
   } catch (cause) {
     if (active(token, candidateId)) {
       error.value = recruitmentError(cause);
@@ -177,12 +194,21 @@ async function save() {
   }
   finally { if (active(token, candidateId)) busy.value = false; }
 }
-function beginAction(action: TalentApplicationAction) { command.value = action; note.value = ''; noteError.value = ''; reserveReasons.value = []; error.value = ''; conflict.value = false; }
+async function beginAction(action: TalentApplicationAction) { if (busy.value || !await leave.prepareToLeave()) return; command.value = action; note.value = ''; noteError.value = ''; reserveReasons.value = []; error.value = ''; conflict.value = false; }
 async function execute() {
+  if (loading.value || conflict.value) return;
   const row = current.value, action = command.value;
   if (!row || !action || busy.value || !row.allowedActions.includes(action)) return;
   noteError.value = noteRequired.value && !note.value.trim() ? '请填写原因或录用意见' : '';
   if (noteError.value) return;
+  const summary = row.activitySummary;
+  if (['reject', 'withdraw', 'reserve', 'submit_hiring'].includes(action) && summary && (summary.scheduledCount || summary.unsubmittedFeedbackCount)) {
+    try { await ElMessageBox.confirm(
+      `本次应聘仍有未结束面试 ${summary.scheduledCount} 场、未提交反馈 ${summary.unsubmittedFeedbackCount} 份。继续后反馈可能无法再提交；现有邀约不会自动取消，请经办分别处理。`,
+      '本次应聘仍有待处理事项', { confirmButtonText: '仍然继续', cancelButtonText: '返回处理', type: 'warning' },
+    ); } catch { return; }
+    if (current.value !== row || command.value !== action || busy.value) return;
+  }
   const token = session, candidateId = props.candidateId;
   busy.value = true; error.value = '';
   try {
@@ -206,9 +232,9 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
   <section v-loading="loading" class="application-panel">
     <header><h4>应聘记录</h4><div class="application-panel__actions">
       <el-tooltip content="刷新应聘记录"><el-button :icon="Refresh" size="small" aria-label="刷新应聘记录" :disabled="busy || editing || !!command" @click="loadList" /></el-tooltip>
-      <el-button v-if="editable" size="small" :icon="Plus" :disabled="busy || editing || !!command" @click="openEditor(true)">新增应聘</el-button>
+      <el-button v-if="editable" size="small" :icon="Plus" :disabled="busy || loading" @click="openEditor(true)">新增应聘</el-button>
     </div></header>
-    <el-select v-if="rows.length" :model-value="selectionError ? '' : selectedId" aria-label="选择应聘记录" placeholder="选择应聘记录" fit-input-width :disabled="busy || editing || !!command" @change="(id: string) => select(id)">
+    <el-select v-if="rows.length" :model-value="selectionError ? '' : selectedId" aria-label="选择应聘记录" placeholder="选择应聘记录" fit-input-width :disabled="busy || loading" @change="(id: string) => select(id)">
       <el-option v-for="row in rows" :key="row.id" :value="row.id" :label="[row.positionName, row.recruitmentBatch, APPLICATION_STAGE_LABELS[row.stage]].filter(Boolean).join(' · ')" />
     </el-select>
     <el-alert v-if="selectionError" :title="selectionError" type="warning" :closable="false" />
@@ -216,7 +242,7 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
       <el-button v-if="conflict && current" link type="primary" @click="select(current.id, true)">刷新记录，保留输入</el-button>
       <el-button v-else-if="loadFailed" link type="primary" @click="selectedId ? select(selectedId, editing || !!command) : loadList()">重试</el-button>
     </el-alert>
-    <el-form v-if="editing" ref="formRef" :model="form" :rules="rules" label-position="top" :disabled="busy" class="application-panel__form">
+    <el-form v-if="editing" ref="formRef" :model="form" :rules="rules" label-position="top" :disabled="busy || loading" class="application-panel__form">
       <div class="application-panel__fields">
         <el-form-item label="岗位名称" prop="positionName"><el-input v-model="form.positionName" maxlength="100" /></el-form-item>
         <el-form-item label="招聘批次" prop="recruitmentBatch"><el-input v-model="form.recruitmentBatch" maxlength="100" /></el-form-item>
@@ -225,17 +251,18 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
         <el-form-item label="预计到岗"><el-date-picker v-model="form.expectedEntryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
       </div>
       <el-alert v-if="optionsError" :title="optionsError" type="error" :closable="false"><el-button link type="primary" @click="loadOptions">重试选项</el-button></el-alert>
-      <div class="application-panel__actions"><el-button @click="cancelEditor">取消编辑</el-button><el-button type="primary" :loading="busy" @click="save">保存应聘</el-button></div>
+      <div class="application-panel__actions"><el-button @click="cancelEditor">取消编辑</el-button><el-button type="primary" :loading="busy" :disabled="loading || conflict || (!creating && !canEditRecord)" @click="save">保存应聘</el-button></div>
     </el-form>
     <template v-else-if="current">
       <dl><dt>本次应聘阶段</dt><dd class="application-panel__stage">{{ APPLICATION_STAGE_LABELS[current.stage] }}</dd><dt>应聘负责人</dt><dd>{{ current.ownerName || '未指定' }}</dd><dt>部门</dt><dd>{{ current.departmentNameSnapshot || '未指定' }}</dd><dt>预计到岗</dt><dd>{{ current.expectedEntryDate ? formatDate(current.expectedEntryDate) : '未填写' }}</dd></dl>
+      <p v-if="['screening', 'interviewing', 'reserve'].includes(current.stage)" class="application-panel__muted">下一步：安排本岗位面试，或按实际情况更新应聘阶段。进入面试阶段不会自动创建邀约。</p>
       <p v-if="current.stage === 'hiring_review'" class="application-panel__muted">待其他有录用确认权限的人员办理，提交人不能确认本人提交的申请。</p>
       <p v-else-if="current.stage === 'offered'" class="application-panel__muted">下一步：由经办记录候选人接受或拒绝；候选人接受后，再办理入职。</p>
       <div v-if="!command" class="application-panel__actions">
         <el-button v-if="canOpenHiringReview" size="small" :disabled="busy" @click="router.push({ path: '/talent-hiring', query: { applicationId: current.id } })">录用确认</el-button>
         <el-button v-if="canEditRecord" size="small" :disabled="busy" @click="openEditor(false)">修改应聘</el-button>
         <el-button v-for="action in actions" :key="action" size="small" :disabled="busy" :type="['submit_hiring', 'approve_hiring', 'accept_offer'].includes(action) ? 'primary' : 'default'" @click="beginAction(action)">{{ actionLabel(action) }}</el-button>
-        <el-button v-if="canArrange" size="small" :disabled="busy" @click="emit('interview', current)">安排面试</el-button>
+        <el-button v-if="canArrange" size="small" type="primary" :disabled="busy" @click="emit('interview', current)">安排面试</el-button>
         <el-button v-if="canOnboard" size="small" type="primary" @click="openOnboarding">办理入职</el-button>
         <el-button v-if="current.onboardingRequest" size="small" :type="activeOnboarding ? 'primary' : 'default'" @click="openOnboardingRequest">{{ activeOnboarding ? '查看入职申请' : '查看历史入职' }}</el-button>
         <el-button v-if="current.stage === 'hired' && convertedUserId" size="small" type="primary" @click="router.push({ path: '/users', query: { employeeId: convertedUserId } })">查看员工档案</el-button>
@@ -246,11 +273,11 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
           <el-checkbox-group v-model="reserveReasons" class="application-panel__reason-options"><el-checkbox v-for="(label, reason) in TALENT_RESERVE_REASON_LABELS" :key="reason" :value="reason">{{ label }}</el-checkbox></el-checkbox-group>
         </el-form-item>
         <el-form-item :label="noteRequired ? '原因 / 意见' : '说明（选填）'" :required="!!noteRequired" :error="noteError"><el-input v-model="note" type="textarea" :rows="3" maxlength="2000" show-word-limit /></el-form-item>
-        <div class="application-panel__actions"><el-button @click="command = null; error = ''; conflict = false">取消操作</el-button><el-button type="primary" :loading="busy" :disabled="!current.allowedActions.includes(command)" @click="execute">{{ actionLabel(command) }}</el-button></div>
+        <div class="application-panel__actions"><el-button @click="cancelAction">取消操作</el-button><el-button type="primary" :loading="busy" :disabled="loading || conflict || !current.allowedActions.includes(command)" @click="execute">{{ actionLabel(command) }}</el-button></div>
       </el-form>
-      <h5>应聘时间线</h5>
+      <el-collapse class="application-panel__history"><el-collapse-item title="应聘时间线" name="history">
       <el-timeline v-if="current.events?.length"><el-timeline-item v-for="event in current.events" :key="event.id" :timestamp="formatDate(event.createdAt)"><div>{{ event.actorName || '系统' }} · {{ eventLabel(event.action) }} · {{ APPLICATION_STAGE_LABELS[event.toStage] }}</div><p v-if="event.action === 'reserve' && event.reserveReasons?.length" class="application-panel__event-reasons">储备原因：{{ event.reserveReasons.map(reason => TALENT_RESERVE_REASON_LABELS[reason] || reason).join('、') }}</p><p v-if="event.note" class="application-panel__note">{{ event.note }}</p></el-timeline-item></el-timeline>
-      <p v-else class="application-panel__muted">暂无流程记录</p>
+      <p v-else class="application-panel__muted">暂无流程记录</p></el-collapse-item></el-collapse>
     </template>
     <el-empty v-else-if="!loading && !error && !selectionError && !editing" description="暂无应聘记录" :image-size="40" />
   </section>
@@ -273,5 +300,5 @@ dt, .application-panel__muted { color: var(--el-text-color-secondary); } dd { ma
 .application-panel__reason-options { display: flex; flex-wrap: wrap; gap: 0 14px; }
 .application-panel__reason-options :deep(.el-checkbox) { margin-right: 0; }
 .application-panel :deep(.el-timeline) { padding-left: 12px; }
-@media (max-width: 768px) { .application-panel__fields { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .application-panel__form > .application-panel__actions, .application-panel__command > .application-panel__actions { position: sticky; bottom: -14px; background: var(--el-bg-color); padding: 10px 0; z-index: 2; }  .application-panel__fields { grid-template-columns: 1fr; } }
 </style>

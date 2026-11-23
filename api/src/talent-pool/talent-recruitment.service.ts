@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
-import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
+import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, TalentApplicationQueueQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
 import { allowedApplicationActions, canConfirmTalentHiring, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, TALENT_RESERVE_REASONS, type RecruitmentActor, type TalentReserveReason } from './talent-recruitment-policy';
 
 const actorSelect = { id: true, name: true, sysRole: true, hrCapabilities: true, status: true, deletedAt: true, archivedAt: true, isAssessorOnly: true } satisfies Prisma.UserSelect;
@@ -33,6 +33,27 @@ export class TalentRecruitmentService {
 
   private assertWrite(actor: RecruitmentActor) {
     if (!canWriteRecruitment(actor)) throw new ForbiddenException('无权限维护应聘记录');
+  }
+
+  async queue(query: TalentApplicationQueueQueryDto, user: AuthUser) {
+    const actor = await this.actor(this.prisma, user);this.assertRead(actor);
+    const keyword = query.keyword?.trim();
+    const where: Prisma.TalentApplicationWhereInput = { candidate: { deletedAt: null },
+      ...((query.scope ?? 'owned') === 'owned' ? { ownerId: actor.id } : {}),
+      ...(query.stage ? { stage: query.stage } : {}), ...(query.deptId ? { deptId: query.deptId } : {}),
+      ...(keyword ? { OR: [{ candidate: { name: { contains: keyword, mode: 'insensitive' } } },
+        { positionName: { contains: keyword, mode: 'insensitive' } }, { recruitmentBatch: { contains: keyword, mode: 'insensitive' } }] } : {}) };
+    const [rows, total] = await Promise.all([
+      this.prisma.talentApplication.findMany({ where, select: { id: true, candidateId: true, candidate: { select: { name: true } },
+        positionName: true, recruitmentBatch: true, stage: true, ownerId: true, departmentNameSnapshot: true, expectedEntryDate: true, updatedAt: true,
+        interviews: { where: { status: 'scheduled' }, orderBy: [{ startsAt: 'asc' }, { id: 'asc' }], take: 1,
+          select: { id: true, startsAt: true, endsAt: true, status: true } } },
+        orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
+      this.prisma.talentApplication.count({ where }),
+    ]);
+    const owners = new Map((await this.prisma.user.findMany({ where: { id: { in: [...new Set(rows.map(r => r.ownerId))] } }, select: { id: true, name: true } })).map(u => [u.id, u.name]));
+    return { items: rows.map(({ candidate, interviews, ...row }) => ({ ...row, candidateName: candidate.name, ownerName: owners.get(row.ownerId) ?? null, nextInterview: interviews[0] ?? null })),
+      total, page: query.page, pageSize: query.pageSize };
   }
 
   async owners(query: TalentOwnerQueryDto, user: AuthUser) {
@@ -99,7 +120,11 @@ export class TalentRecruitmentService {
     const visibleEvents = canReadRecruitment(actor) ? events : events.filter(event => !event.action.endsWith('_feedback'));
     const request = onboardingRequests.find(request => !request.cancelledAt && !request.archivedAt
       && activeOnboardingStatuses.includes(request.onboardingStatus as typeof activeOnboardingStatuses[number])) ?? onboardingRequests[0];
-    return { ...fields, candidateName: candidate.name, ownerName: names.get(row.ownerId) ?? null, creatorName: names.get(row.createdById) ?? null,
+    const activity = canReadRecruitment(actor) ? await tx.talentInterview.findMany({ where: { applicationId: row.id, status: { not: 'cancelled' } },
+      select: { status: true, participants: { select: { userId: true } }, feedback: { where: { status: 'submitted' }, select: { userId: true } } } }) : [];
+    const activitySummary = { scheduledCount: activity.filter(i => i.status === 'scheduled').length,
+      unsubmittedFeedbackCount: activity.reduce((n, i) => n + i.participants.filter(p => !i.feedback.some(f => f.userId === p.userId)).length, 0) };
+    return { ...fields, ...(canReadRecruitment(actor) ? { activitySummary } : {}), candidateName: candidate.name, ownerName: names.get(row.ownerId) ?? null, creatorName: names.get(row.createdById) ?? null,
       allowedActions: allowedApplicationActions(actor, row, activeOnboarding ?? await this.hasActiveOnboarding(tx, row.candidateId)),
       events: visibleEvents.map(event => ({ ...event, actorName: names.get(event.actorId) ?? null })),
       onboardingRequest: request ? { id: request.id, onboardingStatus: request.onboardingStatus, recordStatus: request.recordStatus, cancelledAt: request.cancelledAt } : null };

@@ -363,6 +363,22 @@ export interface TalentInterviewInput {
   meetingUrl?: string | null;
   note?: string | null;
 }
+export interface TalentInterviewQueueQuery {
+  scope?: 'mine' | 'created' | 'responsible' | 'all';
+  candidateId?: string; applicationId?: string; keyword?: string; day?: string;
+  status?: TalentInterviewStatus; view?: 'upcoming' | 'feedback' | 'history' | 'all';
+  page?: number; pageSize?: number;
+}
+export interface TalentApplicationQueueQuery {
+  scope?: 'owned' | 'all'; keyword?: string; stage?: TalentApplicationStage; deptId?: string;
+  page?: number; pageSize?: number;
+}
+export interface TalentApplicationQueueItem {
+  id: string; candidateId: string; candidateName: string; positionName: string;
+  recruitmentBatch: string | null; stage: TalentApplicationStage; ownerId: string; ownerName: string | null;
+  departmentNameSnapshot: string | null; expectedEntryDate: string | null; updatedAt: string;
+  nextInterview: { id: string; startsAt: string; endsAt: string; status: TalentInterviewStatus } | null;
+}
 export interface TalentDeleteImpact {
   candidateId: string;
   version: string;
@@ -406,6 +422,7 @@ export interface TalentApplicationEvent {
   createdAt: string;
 }
 export interface TalentApplicationView {
+  activitySummary?: { scheduledCount: number; unsubmittedFeedbackCount: number };
   id: string;
   candidateId: string;
   candidateName?: string;
