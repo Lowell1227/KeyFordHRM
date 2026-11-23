@@ -18,7 +18,7 @@ function updateEvidence(evidenceRef: string) { emit('update:modelValue', { emplo
     <el-alert v-if="loadError" :title="loadError" type="error" :closable="false"><el-button link type="primary" @click="emit('retry')">重新读取</el-button></el-alert>
     <el-alert v-if="conflicts.length" :title="`${conflicts.length}人任职记录冲突，暂不可选择，请先核对员工档案`" type="warning" :closable="false" />
     <el-form-item label="本主体发薪人员" :error="errors.employeeIds">
-      <el-select :model-value="selected" multiple filterable :loading="loading" :disabled="loading || !!loadError" placeholder="请选择已确认的发薪人员" @update:model-value="select">
+      <el-select :model-value="selected" multiple filterable fit-input-width :loading="loading" :disabled="loading || !!loadError" placeholder="请选择已确认的发薪人员" @update:model-value="select">
         <el-option v-for="person in employees" :key="person.id" :value="person.id" :label="`${person.name} ${person.employeeNo ?? ''}${person.unavailableReason ? ' · 任职记录冲突' : ''}`" :disabled="!!person.unavailableReason && !selected.includes(person.id)" />
       </el-select>
     </el-form-item>
