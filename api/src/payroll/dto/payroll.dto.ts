@@ -12,7 +12,7 @@ export class PayrollFixtureDto extends PayrollMonthDto { @IsOptional() @BooleanQ
 export class PayrollVersionDto { @IsInt() @Min(0) expectedVersion!: number; }
 export class PayrollDeductionsPreviewDto extends PayrollVersionDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) payDate!: string;
-  @IsIn(['complete', 'missing']) mode!: 'complete' | 'missing';
+  @IsIn(['complete', 'missing', 'saved']) mode!: 'complete' | 'missing' | 'saved';
 }
 export class PayrollNoteDto extends PayrollVersionDto { @IsString() @Length(1, 500) note!: string; }
 export class PayrollDecisionDto extends PayrollVersionDto {
@@ -47,6 +47,11 @@ export class PayrollRuleDto extends PayrollSubjectDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/) effectiveFrom!: string;
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) effectiveTo?: string;
   @IsObject() config!: object;
+}
+export class PayrollDeductionProfileDto extends PayrollSubjectDto {
+  @IsUUID() employeeId!: string;
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) payDate!: string;
+  @IsObject() settings!: object;
 }
 export class PayrollOpeningDto extends PayrollMonthDto {
   @IsUUID() employeeId!: string;

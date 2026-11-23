@@ -78,6 +78,7 @@ export interface PayrollDeductionsResult {
   evidence: {
     sourceHash: string | null;
     input: unknown;
+    parameter?: { id: string; version: number; releaseId: string; snapshotHash: string };
     grossUnrounded?: string;
     socialInsurance?: PayrollContributionEvidence;
     housingFund?: PayrollContributionEvidence;

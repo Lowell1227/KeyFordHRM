@@ -7,8 +7,9 @@ import { PAYROLL_ITEM_CODES, PayrollCapture, PayrollDomain, PayrollPurpose, Payr
 import { assertPayrollVersion, lockPayrollSubject, payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
 import { assertPayrollFrozenAttendance } from './payroll-data.service';
 import { PayrollDeductionsPreviewDto } from './dto/payroll.dto';
-import { calculatePayrollDeductions, PayrollTaxDeductions } from './payroll-deductions-calculator';
+import { calculatePayrollDeductions, PayrollTaxDeductions, PayrollDeductionsResult } from './payroll-deductions-calculator';
 import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
+import { readReviewedDeductions } from './payroll-reviewed-deductions';
 
 const versionInclude = {
   lines: { include: { settlements: true, reservation: true } },
@@ -182,12 +183,18 @@ export class PayrollBatchesService {
         !gross.eq(this.money(version.gross!.toString(), 18))) throw new ConflictException('完整五项工资明细与核算合计不一致');
       if (batch.status === 'approved') await assertPayrollFrozenAttendance(tx, batch.subjectId, domain, version.sources);
       else await this.assertFresh(tx, batch, version, domain);
-      const rows = [...grossByEmployee.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([employeeId, amount], index) => {
+      const rows: Array<PayrollDeductionsResult & { employeeId: string; employeeName: string }> = [];
+      for (const [index, [employeeId, amount]] of [...grossByEmployee.entries()].sort(([a], [b]) => a.localeCompare(b)).entries()) {
+        if (input.mode === 'saved') {
+          rows.push({ employeeId, employeeName: employeeNames.get(employeeId)!, ...await readReviewedDeductions(tx, {
+            subjectId: batch.subjectId, domain, employeeId, payDate: input.payDate, gross: amount.toFixed(2) }) });
+          continue;
+        }
         const facts = fictionalDeductionsInput({ subjectId: batch.subjectId, employeeId, month: batch.month,
           payDate: input.payDate, gross: amount.toFixed(2) });
         if (input.mode === 'missing' && index === 0) delete (facts.tax.current as Partial<PayrollTaxDeductions>).specialDeduction;
-        return { employeeId, employeeName: employeeNames.get(employeeId)!, ...calculatePayrollDeductions(facts) };
-      });
+        rows.push({ employeeId, employeeName: employeeNames.get(employeeId)!, ...calculatePayrollDeductions(facts) });
+      }
       const sum = (field: 'gross' | 'socialInsurance' | 'housingFund' | 'incomeTax' | 'net') =>
         rows.reduce((total, row) => total.plus(row[field]!), new Decimal(0)).toFixed(2);
       return { batchId: batch.id, batchVersion: batch.version, calculationVersion: version.version, calculationVersionId: version.id,
@@ -198,7 +205,7 @@ export class PayrollBatchesService {
     }, Prisma.TransactionIsolationLevel.ReadCommitted, async (tx, header) => {
       if (!input || typeof input !== 'object' || Array.isArray(input) ||
         Object.keys(input).some(key => !['expectedVersion', 'payDate', 'mode'].includes(key)) ||
-        !['complete', 'missing'].includes(input.mode) || typeof input.payDate !== 'string') {
+        !['complete', 'missing', 'saved'].includes(input.mode) || typeof input.payDate !== 'string') {
         throw new BadRequestException('虚构试算仅接受批次版本、明确发薪日和完整参数或缺项检查模式');
       }
       const metadata = await tx.payrollBatch.findUnique({ where: { id }, select: { version: true, payMonth: true,
@@ -220,7 +227,8 @@ export class PayrollBatchesService {
     if (local?.fictional !== true || base?.fictional !== true) throw new ForbiddenException('仅允许已登记的虚构薪酬预览');
     const dedicated = await marker('payroll_deductions_preview_fixture_v1');
     const monthly = await marker('payroll_monthly_rules_preview_v1');
-    const fixtures = [base, ...[dedicated, monthly].filter((value): value is NonNullable<typeof value> => value?.fictional === true && value.state === 'ready')];
+    const maintained = await marker('payroll_deduction_inputs_preview_v1');
+    const fixtures = [base, ...[dedicated, monthly, maintained].filter((value): value is NonNullable<typeof value> => value?.fictional === true && value.state === 'ready')];
     if (!fixtures.some(({ subjectIds, employeeIds: registered }) => Array.isArray(subjectIds) && subjectIds.includes(subjectId) &&
       Array.isArray(registered) && employeeIds.every(id => registered.includes(id)))) {
       throw new ForbiddenException('主体及全部工资人员必须在同一虚构预览夹具中明确登记');
@@ -229,7 +237,7 @@ export class PayrollBatchesService {
     const employees = await tx.user.findMany({ where: { id: { in: employeeIds } },
       select: { id: true, name: true, employeeNo: true, dingtalkId: true, dingtalkUnionId: true } });
     if (!subject?.name.includes('虚构') || employees.length !== employeeIds.length || employees.some(employee =>
-      !employee.name.includes('虚构') || !/^(PAY-DEMO-|PAY-DEDUCT-|PAY-MONTH-)/.test(employee.employeeNo ?? '') ||
+      !employee.name.includes('虚构') || !/^(PAY-DEMO-|PAY-DEDUCT-|PAY-MONTH-|PAY-PARAM-)/.test(employee.employeeNo ?? '') ||
       employee.dingtalkId || employee.dingtalkUnionId)) throw new ForbiddenException('虚构预览登记与实际主体或员工记录不匹配');
     return new Map(employees.map(employee => [employee.id, employee.name]));
   }

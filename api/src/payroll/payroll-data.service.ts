@@ -8,6 +8,7 @@ import { PayrollDomain, PAYROLL_ITEM_CODES } from './payroll-contracts';
 import { assertPayrollVersion, lockPayrollSubject, payrollDate, payrollDecimal, payrollHash, payrollMonth } from './payroll-transaction';
 import { normalizeAttendance, PayrollAttendanceInput, PayrollAttendanceResult } from './payroll-attendance-normalizer';
 import { normalizePayrollPolicy } from './payroll-policy';
+import { normalizeDeductionSettings } from './payroll-deduction-settings';
 
 export interface PayrollAttendanceScope { employeeIds: string[]; from: string; to: string }
 export interface PayrollAttendanceSync {
@@ -272,6 +273,24 @@ export class PayrollDataService {
   async standards(subjectId: string, actor: AuthUser) {
     await this.access.assert(this.prisma, actor, subjectId, 'payroll_edit'); const domain = await this.domain(this.prisma);
     return this.prisma.payrollStandard.findMany({ where: { subjectId, domain }, include: { employee: { select: { name: true, employeeNo: true } } }, orderBy: [{ employeeId: 'asc' }, { version: 'desc' }], take: 500 });
+  }
+  async deductions(subjectId: string, actor: AuthUser) {
+    await this.access.assert(this.prisma, actor, subjectId, 'payroll_edit'); const domain = await this.domain(this.prisma);
+    return this.prisma.payrollDeductionProfile.findMany({ where: { subjectId, domain },
+      include: { employee: { select: { name: true, employeeNo: true } } }, orderBy: [{ payDate: 'desc' }, { version: 'desc' }], take: 500 });
+  }
+  async saveDeductions(input: { subjectId: string; employeeId: string; payDate: string; settings: unknown }, actor: AuthUser) {
+    return this.prisma.$transaction(async tx => {
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx);
+      await lockPayrollSubject(tx, input.subjectId, domain);
+      const payDate = payrollDate(input.payDate), settings = normalizeDeductionSettings(input, input.settings);
+      const employee = await tx.employmentRecord.findFirst({ where: { AND: [approvedEmploymentSourceWhere, { userId: input.employeeId, contractSubjectId: input.subjectId }] } });
+      if (!employee) throw new BadRequestException('员工不属于该用工主体');
+      const latest = await tx.payrollDeductionProfile.findFirst({ where: { subjectId: input.subjectId, domain, employeeId: input.employeeId, payDate }, orderBy: { version: 'desc' } });
+      const result = await tx.payrollDeductionProfile.create({ data: { subjectId: input.subjectId, employeeId: input.employeeId, domain, payDate,
+        effectiveFrom: payDate, effectiveTo: payDate, settings: payrollJson(settings), version: (latest?.version ?? 0) + 1, createdById: actor.id } });
+      await this.event(tx, input.subjectId, actor.id, 'deduction_draft', { deductionId: result.id }); return result;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
   async rules(subjectId: string, actor: AuthUser) {
     await this.access.assert(this.prisma, actor, subjectId, 'payroll_edit'); const domain = await this.domain(this.prisma);

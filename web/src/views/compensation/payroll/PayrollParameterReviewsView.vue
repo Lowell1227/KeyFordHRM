@@ -10,6 +10,7 @@ import { payrollApi, payrollError } from '@/api/payroll.api';
 import type { PayrollParameterRelease } from '@/types/payroll.types';
 import PayrollScope from './PayrollScope.vue';
 import { usePayrollScope } from './usePayrollScope';
+import PayrollDeductionSettingsForm from './PayrollDeductionSettingsForm.vue';
 
 const auth = useAuthStore();
 const route = useRoute(), router = useRouter();
@@ -20,7 +21,7 @@ const labels = { pending: '待主管审核', approved: '已发布', returned: '�
 const rows = computed(() => entries.value.filter(row => mode.value === 'all' || row.status === 'pending'));
 const mayDecide = computed(() => selected.value?.status === 'pending' && selected.value.reviewerId === auth.user?.id);
 const mayWithdraw = computed(() => selected.value?.status === 'pending' && selected.value.submittedById === auth.user?.id);
-const title = (value: unknown) => { const row = value as PayrollParameterRelease; return `${row.kind === 'standard' ? row.standard?.employee.name ?? '工资标准' : '工资规则'} · V${row.parameterVersion}`; };
+const title = (value: unknown) => { const row = value as PayrollParameterRelease; return `${row.kind === 'standard' ? row.standard?.employee.name ?? '工资标准' : row.kind === 'deduction' ? `${row.deduction?.employee.name ?? '员工'} 扣缴资料` : '工资规则'} · V${row.parameterVersion}`; };
 let sequence = 0;
 async function load() {
   const request = ++sequence; entries.value = [];
@@ -105,6 +106,7 @@ const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN',
             </section>
             <el-collapse><el-collapse-item title="完整参数" name="parameters"><pre>{{ JSON.stringify(selected.snapshot.config, null, 2) }}</pre></el-collapse-item></el-collapse>
           </template>
+          <template v-if="selected.snapshot.settings"><h4>发薪日：{{selected.snapshot.payDate}}</h4><PayrollDeductionSettingsForm :model-value="selected.snapshot.settings" disabled/></template>
           <h4>办理记录</h4>
           <el-timeline><el-timeline-item :timestamp="time(selected.submittedAt)">{{ selected.submittedBy.name }} · 提交主管审核</el-timeline-item><el-timeline-item v-if="selected.decidedAt" :timestamp="time(selected.decidedAt)">{{ selected.status === 'withdrawn' ? selected.submittedBy.name : selected.reviewer.name }} · {{ labels[selected.status] }}<p v-if="selected.note">{{ selected.note }}</p></el-timeline-item></el-timeline>
           <el-form v-if="mayDecide || mayWithdraw" label-position="top" class="action-panel">

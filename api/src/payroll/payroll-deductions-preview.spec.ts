@@ -97,6 +97,15 @@ describe('PayrollBatchesService deductions preview boundary', () => {
   beforeEach(() => { environmentGuard.mockReset(); s = setup(); });
   afterEach(() => s.noWrites());
 
+  it('saved mode leaves every missing employee pending instead of substituting the demonstration settings', async () => {
+    s.tx.payrollDeductionProfile = {findFirst: jest.fn(async () => null)};
+    const result = await s.preview({...input,mode:'saved'});
+    expect(result.totals).toBeNull();expect(result.rows).toHaveLength(2);
+    expect(result.rows.every(row => row.status==='needs_configuration'&&row.net===null)).toBe(true);
+    expect(s.tx.payrollDeductionProfile.findFirst.mock.calls).toHaveLength(2);
+    for(const [query] of s.tx.payrollDeductionProfile.findFirst.mock.calls)expect(query.where).toMatchObject({subjectId:s.batch.subjectId,payDate:new Date(input.payDate),status:'active'});
+  });
+
   it('aggregates every employee from the latest line.amount without changing the approved pipeline', async () => {
     const before = JSON.stringify(s.batch);
     const result = await s.preview();
@@ -323,8 +332,9 @@ describe('PayrollBatchesService deductions preview boundary', () => {
 describe('deductions preview HTTP contract', () => {
   it('rejects injected facts even when the global validation pipe normally strips unknown fields', async () => {
     const s = setup(); environmentGuard.mockReset();
+    const data = {saveDeductions: jest.fn(async input => input)};
     const module = await Test.createTestingModule({ controllers: [PayrollController], providers: [
-      { provide: PayrollAccessService, useValue: s.access }, { provide: PayrollDataService, useValue: {} },
+      { provide: PayrollAccessService, useValue: s.access }, { provide: PayrollDataService, useValue: data },
       { provide: PayrollBatchesService, useValue: s.service }, { provide: PayrollExportService, useValue: {} },
       { provide: PayrollParameterReleasesService, useValue: {} },
     ] }).compile();
@@ -342,6 +352,11 @@ describe('deductions preview HTTP contract', () => {
       s.tx.payrollBatch.findUnique.mockClear(); s.sources.capture.mockClear();
       await request(app.getHttpServer()).post(url).send({ ...input, gross: '1' }).expect(400);
       await request(app.getHttpServer()).post(url).send({ ...input, payDate: '2035-02-30' }).expect(400);
+      const profile = {subjectId:s.batch.id,employeeId:s.batch.id,payDate:input.payDate,settings:{}};
+      await request(app.getHttpServer()).post('/payroll/deduction-profiles').send({...profile,gross:'1'}).expect(400);
+      expect(data.saveDeductions).not.toHaveBeenCalled();
+      await request(app.getHttpServer()).post('/payroll/deduction-profiles').send(profile).expect(201);
+      expect(data.saveDeductions).toHaveBeenCalledWith(expect.objectContaining(profile),editor);
       s.noSalaryReads(); s.noWrites();
     } finally { await app.close(); }
   });

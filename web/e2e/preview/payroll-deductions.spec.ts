@@ -58,7 +58,7 @@ async function runFlow(page: Page, width: number, screenshot: string) {
   await expect(panel).toContainText('15840.00');
   await expect(panel).toContainText('8820.00');
   await expect(panel).toContainText('7020.00');
-  await expect(panel).toContainText('未纳入审批');
+  await expect(panel).toContainText('实发未审批');
   await panel.getByText('缺项检查', { exact: true }).click();
   await expect(panel).not.toContainText('15840.00');
   const missing = page.waitForResponse(response => response.url().includes('/deductions-preview'));
@@ -66,7 +66,7 @@ async function runFlow(page: Page, width: number, screenshot: string) {
   expect((await missing).status()).toBe(201);
   await expect(panel).toContainText('待配置');
   await expect(panel).not.toContainText('15840.00');
-  await panel.getByText('完整参数', { exact: true }).click();
+  await panel.getByText('示例参数', { exact: true }).click();
   // Inject only a transport failure, never a fabricated successful payroll payload.
   await page.route('**/deductions-preview', route => route.abort('failed'), { times: 1 });
   await calculate.click();
@@ -95,7 +95,7 @@ async function runFlow(page: Page, width: number, screenshot: string) {
   await payDate.fill(`${data.payMonth}-05`);
   await calculate.click();
   await expect(panel).toContainText('15840.00');
-  await expect(panel).toContainText('未纳入审批');
+  await expect(panel).toContainText('实发未审批');
 
   await login(page, 'EMP003', data);
   await page.goto(batchUrl(data, 1));

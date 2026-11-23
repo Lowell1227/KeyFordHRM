@@ -59,14 +59,14 @@ async function calculate() {
 
 <template>
   <section class="deductions-preview" data-testid="payroll-deductions-preview" :aria-busy="pending">
-    <header class="preview-heading"><h3>扣缴与实发试算</h3><span class="preview-status">虚构试算 · 未纳入审批</span></header>
+    <header class="preview-heading"><h3>扣缴与实发试算</h3><span class="preview-status">虚构试算 · 实发未审批</span></header>
     <el-form class="preview-form" label-position="top" @submit.prevent="calculate">
       <el-form-item label="试算发薪日" :error="dateError" class="preview-date">
         <el-input v-model="payDate" aria-label="试算发薪日" placeholder="YYYY-MM-DD" :disabled="disabled" :aria-invalid="!!dateError" @blur="dateError = payDate ? validateDate() : ''" />
       </el-form-item>
       <el-form-item label="试算参数" class="preview-mode">
         <el-radio-group v-model="mode" aria-label="试算参数" :disabled="disabled">
-          <el-radio-button value="complete">完整参数</el-radio-button><el-radio-button value="missing">缺项检查</el-radio-button>
+          <el-radio-button value="complete">示例参数</el-radio-button><el-radio-button value="missing">缺项检查</el-radio-button><el-radio-button value="saved">已审核资料</el-radio-button>
         </el-radio-group>
       </el-form-item>
       <el-form-item class="preview-submit"><el-button type="primary" :disabled="disabled || pending" :loading="pending" @click="calculate">试算</el-button></el-form-item>

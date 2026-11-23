@@ -8,11 +8,13 @@ import { assertPayrollVersion, lockPayrollSubject, payrollHash } from './payroll
 import { payrollJson } from './payroll-data.service';
 import { normalizePayrollPolicy } from './payroll-policy';
 import { payrollParameterEligibleUser, payrollParameterReviewerWhere } from './payroll-parameter-access';
-import { payrollParameterDefinition } from './payroll-parameter-definition';
+import { payrollParameterDefinition, PayrollParameter, PayrollParameterKind } from './payroll-parameter-definition';
+import { normalizeDeductionSettings } from './payroll-deduction-settings';
 
-type Kind = 'standard' | 'rule';
-type Parameter = Prisma.PayrollStandardGetPayload<{}> | Prisma.PayrollPolicyGetPayload<{}>;
+type Kind = PayrollParameterKind;
+type Parameter = PayrollParameter;
 const display = { submittedBy: { select: { id: true, name: true } }, reviewer: { select: { id: true, name: true } },
+  deduction: { select: { employee: { select: { name: true, employeeNo: true } } } },
   standard: { select: { employee: { select: { name: true, employeeNo: true } } } } } satisfies Prisma.PayrollParameterReleaseInclude;
 
 @Injectable()
@@ -20,22 +22,27 @@ export class PayrollParameterReleasesService {
   constructor(private readonly prisma: PrismaService, private readonly access: PayrollAccessService) {}
 
   private kind(value: string): Kind {
-    if (value !== 'standard' && value !== 'rule') throw new BadRequestException('不支持的工资参数类型');
-    return value;
+    if (!['standard', 'rule', 'deduction'].includes(value)) throw new BadRequestException('不支持的工资参数类型');
+    return value as Kind;
   }
   private transaction<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(work, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
   private parameter(tx: Prisma.TransactionClient, kind: Kind, id: string): Promise<Parameter | null> {
-    return kind === 'standard' ? tx.payrollStandard.findUnique({ where: { id } }) : tx.payrollPolicy.findUnique({ where: { id } });
+    return kind === 'standard' ? tx.payrollStandard.findUnique({ where: { id } }) : kind === 'rule' ? tx.payrollPolicy.findUnique({ where: { id } }) : tx.payrollDeductionProfile.findUnique({ where: { id } });
   }
   private async setStatus(tx: Prisma.TransactionClient, kind: Kind, id: string, status: string) {
     const data = { status, ...(status === 'active' ? { activatedAt: new Date() } : {}) };
     if (kind === 'standard') await tx.payrollStandard.update({ where: { id }, data });
-    else await tx.payrollPolicy.update({ where: { id }, data });
+    else if (kind === 'rule') await tx.payrollPolicy.update({ where: { id }, data });
+    else await tx.payrollDeductionProfile.update({ where: { id }, data });
   }
   private async head(tx: Prisma.TransactionClient, kind: Kind, row: Parameter) {
     const where = { subjectId: row.subjectId, domain: row.domain, status: 'active' };
+    if (kind === 'deduction') {
+      const profile = row as Prisma.PayrollDeductionProfileGetPayload<{}>;
+      return tx.payrollDeductionProfile.findFirst({ where: { ...where, employeeId: profile.employeeId, payDate: profile.payDate }, orderBy: { version: 'desc' } });
+    }
     return kind === 'standard' ? tx.payrollStandard.findFirst({ where: { ...where, employeeId: (row as { employeeId: string }).employeeId }, orderBy: { version: 'desc' } })
       : tx.payrollPolicy.findFirst({ where, orderBy: { version: 'desc' } });
   }
@@ -52,6 +59,9 @@ export class PayrollParameterReleasesService {
       const value = row as Prisma.PayrollStandardGetPayload<{}>;
       if (value.fixedMonthly === null || !['additional', 'none'].includes(value.performanceMode ?? '') || !value.evidence.trim()
         || value.performanceMode === 'additional' && value.performanceBase === null) throw new ConflictException('请先补齐固定月薪、另计或不适用结构、个人绩效基数及确认依据');
+    } else if (kind === 'deduction') {
+      const profile = row as Prisma.PayrollDeductionProfileGetPayload<{}>;
+      normalizeDeductionSettings({ subjectId: profile.subjectId, employeeId: profile.employeeId, payDate: profile.payDate.toISOString().slice(0, 10) }, profile.settings);
     } else {
       const config = normalizePayrollPolicy((row as Prisma.PayrollPolicyGetPayload<{}>).config);
       if (config.fixedSalaryBasis !== 'monthly_workdays' || config.rounding === null || !config.cutoverMonth
@@ -67,7 +77,8 @@ export class PayrollParameterReleasesService {
     const kind = this.kind(kindValue);
     return this.transaction(async tx => {
       const metadata = kind === 'standard' ? await tx.payrollStandard.findUnique({ where: { id }, select: { subjectId: true, domain: true } })
-        : await tx.payrollPolicy.findUnique({ where: { id }, select: { subjectId: true, domain: true } });
+        : kind === 'rule' ? await tx.payrollPolicy.findUnique({ where: { id }, select: { subjectId: true, domain: true } })
+        : await tx.payrollDeductionProfile.findUnique({ where: { id }, select: { subjectId: true, domain: true } });
       if (!metadata) throw new NotFoundException('工资参数不存在');
       await this.access.assert(tx, actor, metadata.subjectId, 'payroll_edit');
       await this.access.assertDomain(tx, metadata.domain as PayrollDomain);
@@ -79,7 +90,7 @@ export class PayrollParameterReleasesService {
       this.validate(kind, row);
       const reviewerId = await this.manager(tx, actor.id), head = await this.head(tx, kind, row);
       if (head && (row.version <= head.version || row.effectiveFrom < head.effectiveFrom)) throw new ConflictException('已有更新或更晚生效的发布版本，请核对生效日期并复制新草稿');
-      const where = kind === 'standard' ? { standardId: id } : { ruleId: id };
+      const where = kind === 'standard' ? { standardId: id } : kind === 'rule' ? { ruleId: id } : { deductionId: id };
       const previous = await tx.payrollParameterRelease.findFirst({ where, orderBy: { attempt: 'desc' } });
       const snapshot = payrollParameterDefinition(kind, row);
       const request = await tx.payrollParameterRelease.create({ data: { subjectId: row.subjectId, domain: row.domain, kind,
@@ -119,7 +130,7 @@ export class PayrollParameterReleasesService {
       if (release.status !== 'pending') throw new ConflictException('该申请已处理，请刷新查看结果');
       if (!['approve', 'return'].includes(input.decision) || typeof input.note !== 'string' || input.note.length > 500
         || input.decision === 'return' && !input.note.trim()) throw new BadRequestException('退回须填写原因，办理意见不能超过500字');
-      const kind = this.kind(release.kind), parameterId = release.standardId ?? release.ruleId!;
+      const kind = this.kind(release.kind), parameterId = release.standardId ?? release.ruleId ?? release.deductionId!;
       const row = await this.parameter(tx, kind, parameterId);
       if (!row || row.status !== 'pending' || row.version !== release.parameterVersion
         || payrollHash(payrollParameterDefinition(kind, row)) !== release.snapshotHash) throw new ConflictException('待审参数已变化，请撤回后重新提交');
@@ -149,7 +160,7 @@ export class PayrollParameterReleasesService {
       assertPayrollVersion(release.attempt, input.expectedVersion);
       if (release.status !== 'pending') throw new ConflictException('只有待审核申请可以撤回');
       if (typeof input.note !== 'string' || !input.note.trim() || input.note.length > 500) throw new BadRequestException('请填写撤回原因');
-      await this.setStatus(tx, this.kind(release.kind), release.standardId ?? release.ruleId!, 'draft');
+      await this.setStatus(tx, this.kind(release.kind), release.standardId ?? release.ruleId ?? release.deductionId!, 'draft');
       const result = await tx.payrollParameterRelease.update({ where: { id }, data: { status: 'withdrawn', decidedAt: new Date(), note: input.note.trim() }, include: display });
       await this.event(tx, release.subjectId, actor.id, 'parameter_withdrawn', { releaseId: id }); return result;
     });

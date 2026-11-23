@@ -9,7 +9,7 @@ import { PayrollParameterReleasesService } from './payroll-parameter-releases.se
 import { PayrollExceptionFilter } from './payroll-exception.filter';
 import { PayrollResponseInterceptor } from './payroll-response.interceptor';
 import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSyncDto, PayrollBatchQueryDto, PayrollCreateDto, PayrollDecisionDto, PayrollExportDto,
-  PayrollDeductionsPreviewDto, PayrollFixtureDto, PayrollMonthDto, PayrollNoteDto, PayrollOpeningDto, PayrollRemainderDto, PayrollRuleDto,
+  PayrollDeductionProfileDto, PayrollDeductionsPreviewDto, PayrollFixtureDto, PayrollMonthDto, PayrollNoteDto, PayrollOpeningDto, PayrollRemainderDto, PayrollRuleDto,
   PayrollSettlementDto, PayrollStandardDto, PayrollSubjectDto, PayrollVersionDto, PayrollVoidDto } from './dto/payroll.dto';
 
 @Controller('payroll')
@@ -36,6 +36,11 @@ export class PayrollController {
   @Post('attendance/:id/seal') seal(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollVersionDto, @CurrentUser() actor: AuthUser) { return this.data.seal(id, input.expectedVersion, actor); }
   @Get('standards') @Header('Cache-Control', 'no-store, private')
   standards(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.data.standards(query.subjectId, actor); }
+  @Get('deduction-profiles') @Header('Cache-Control', 'no-store, private')
+  deductions(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.data.deductions(query.subjectId, actor); }
+  @Post('deduction-profiles')
+  saveDeductions(@Body(new ValidationPipe({expectedType:PayrollDeductionProfileDto,whitelist:true,forbidNonWhitelisted:true,transform:true})) input: unknown,
+    @CurrentUser() actor: AuthUser) { return this.data.saveDeductions(input as PayrollDeductionProfileDto, actor); }
   @Get('parameter-releases') @Header('Cache-Control', 'no-store, private')
   parameterReleases(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.parameters.list(query.subjectId, actor); }
   @Post('parameters/:kind/:id/submit')

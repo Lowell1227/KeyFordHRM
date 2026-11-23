@@ -25,14 +25,26 @@ export interface PayrollRuleConfig {
 }
 export interface PayrollRuleInput { subjectId: string; effectiveFrom: string; effectiveTo?: string; config: PayrollRuleConfig }
 export interface PayrollRule extends PayrollRuleInput { id: string; version: number; status: string }
+export interface PayrollContributionSettings { status: string; ruleVersion: string; evidenceRef: string; contributionDate: string; effectiveFrom: string; effectiveTo: string | null; items: Array<{code: string; base: string; rate: string}> }
+export type PayrollTaxAmount = 'exemptIncome' | 'standardDeduction' | 'specialDeduction' | 'additionalDeduction' | 'otherDeduction' | 'taxRelief';
+export interface PayrollDeductionSettings {
+  rounding: string; socialInsurance: PayrollContributionSettings; housingFund: PayrollContributionSettings;
+  tax: { method: string; ruleVersion: string; evidenceRef: string; effectiveFrom: string; effectiveTo: string | null;
+    brackets: Array<{upTo: string | null; rate: string; quickDeduction: string}>;
+    opening: Record<PayrollTaxAmount | 'income' | 'taxPaid', string> & {confirmed: boolean; sourceVersion: string; evidenceRef: string};
+    current: Record<PayrollTaxAmount, string> };
+}
+export interface PayrollDeductionProfileInput { subjectId: string; employeeId: string; payDate: string; settings: PayrollDeductionSettings }
+export interface PayrollDeductionProfile extends PayrollDeductionProfileInput { id: string; version: number; status: string; employee: {name: string; employeeNo: string | null} }
 export interface PayrollParameterRelease {
-  id: string; subjectId: string; kind: 'standard' | 'rule'; standardId: string | null; ruleId: string | null;
+  id: string; subjectId: string; kind: 'standard' | 'rule' | 'deduction'; standardId: string | null; ruleId: string | null; deductionId?: string | null;
   attempt: number; parameterVersion: number; previousParameterId: string | null;
   status: 'pending' | 'approved' | 'returned' | 'withdrawn'; submittedById: string; reviewerId: string;
   submittedBy: { id: string; name: string }; reviewer: { id: string; name: string };
   standard?: { employee: { name: string; employeeNo: string | null } } | null;
+  deduction?: { employee: { name: string; employeeNo: string | null } } | null;
   snapshot: { effectiveFrom: string; effectiveTo: string | null; fixedMonthly?: string | null; performanceBase?: string | null;
-    performanceMode?: string | null; evidence?: string; config?: PayrollRuleConfig };
+    performanceMode?: string | null; evidence?: string; config?: PayrollRuleConfig; payDate?: string; settings?: PayrollDeductionSettings };
   submittedAt: string; decidedAt: string | null; note: string;
 }
 export type PayrollPurpose = 'trial' | 'validation' | 'formal';
@@ -42,7 +54,7 @@ export interface PayrollLine { id: string; employeeId: string; attributionMonth:
 export interface PayrollVersion { id: string; version: number; status: PayrollStatus; needsUpdate?: boolean; submittedById?: string | null; sourceHash: string; sources: unknown; issues: string[]; approvalPath: string[]; reviewerCount: number; approvalStep: number; gross: string | null; lines: PayrollLine[]; decisions: unknown[]; exports: unknown[] }
 export interface PayrollBatch { id: string; subjectId: string; month: string; payMonth: string; purpose: PayrollPurpose; status: PayrollStatus; version: number; needsUpdate?: boolean; versions: PayrollVersion[]; events?: unknown[]; correctionOfId?: string | null; additionalMonths?: string[] }
 export interface PayrollBatchInput { subjectId: string; month: string; payMonth: string; purpose: PayrollPurpose; correctionOfId?: string; additionalMonths?: string[] }
-export type PayrollDeductionsPreviewMode = 'complete' | 'missing';
+export type PayrollDeductionsPreviewMode = 'complete' | 'missing' | 'saved';
 export interface PayrollDeductionsPreviewInput { expectedVersion: number; payDate: string; mode: PayrollDeductionsPreviewMode }
 export interface PayrollDeductionsAmounts { gross: string; socialInsurance: string; housingFund: string; incomeTax: string; net: string }
 export interface PayrollDeductionsPreviewRow {
