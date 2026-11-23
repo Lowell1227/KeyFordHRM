@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { assertPayrollVersion, lockPayrollSubject, payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
+import { assertPayrollVersion, lockPayrollAuthorization, lockPayrollSubject, payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
 
 describe('payroll boundaries', () => {
   it('validates real calendar dates and month bounds without local timezone', () => {
@@ -20,5 +20,40 @@ describe('payroll boundaries', () => {
     const tx = { $queryRaw: jest.fn().mockResolvedValue([]) };
     await lockPayrollSubject(tx as any, "untrusted'key", 'validation');
     expect(tx.$queryRaw.mock.calls[0][1]).toBe("payroll:validation:untrusted'key");
+  });
+});
+
+describe('payroll authorization row fence after subject locking', () => {
+  const subjectId = '20000000-0000-4000-8000-000000000001';
+  const fence = (tx: any) => lockPayrollAuthorization(tx, subjectId);
+  it('locks bound subject users and their managers before all grants, in deterministic row order', async () => {
+    const tx = { $queryRaw: jest.fn().mockResolvedValue([]) };
+    await fence(tx);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    const [users, grants] = tx.$queryRaw.mock.calls;
+    const userSql = users[0].join('?').replace(/\s+/g, ' '), grantSql = grants[0].join('?').replace(/\s+/g, ' ');
+    expect(userSql).toMatch(/FROM "users"/); expect(userSql).toContain('"direct_manager_id"');
+    expect(userSql).toMatch(/ORDER BY "u"\."id" FOR SHARE OF "u"/);
+    expect(grantSql).toMatch(/FROM "payroll_grants"/); expect(grantSql).toMatch(/ORDER BY "id" FOR SHARE/);
+    for (const call of [users, grants]) {
+      expect(call.slice(1).length).toBeGreaterThan(0); expect(call.slice(1).every(value => value === subjectId)).toBe(true);
+      expect(call[0].join('')).not.toMatch(/revoked_at|status|archived_at|deleted_at|pg_advisory/);
+    }
+  });
+  it.each([
+    { code: 'P2010', meta: { code: '40001' } }, { code: 'P2010', meta: { code: 40001 } },
+    { code: 'P2034' }, { code: '40001' },
+  ])('turns stale authorization snapshots into a business conflict (%j)', async error => {
+    for (const query of [1, 2]) {
+      const tx = { $queryRaw: jest.fn().mockResolvedValue([]) };
+      if (query === 2) tx.$queryRaw.mockResolvedValueOnce([]);
+      tx.$queryRaw.mockRejectedValueOnce(error);
+      await expect(fence(tx)).rejects.toThrow(ConflictException);
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(query);
+    }
+  });
+  it('does not swallow unrelated database failures', async () => {
+    const error = { code: 'P2010', meta: { code: '42501' } }, tx = { $queryRaw: jest.fn().mockRejectedValue(error) };
+    await expect(fence(tx)).rejects.toBe(error);
   });
 });

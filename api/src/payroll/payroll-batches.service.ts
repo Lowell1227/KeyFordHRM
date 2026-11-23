@@ -4,7 +4,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { PayrollActor, PayrollCapability } from './payroll-access';
 import { PayrollAccessService } from './payroll-access.service';
 import { PAYROLL_ITEM_CODES, PayrollCapture, PayrollDomain, PayrollPurpose, PayrollSourceReader } from './payroll-contracts';
-import { assertPayrollVersion, lockPayrollSubject, payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
+import { assertPayrollVersion, lockPayrollAuthorization, lockPayrollSubject, payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
 import { assertPayrollFrozenAttendance } from './payroll-data.service';
 import { PayrollDeductionsPreviewDto } from './dto/payroll.dto';
 import { calculatePayrollDeductions, PayrollTaxDeductions, PayrollDeductionsResult } from './payroll-deductions-calculator';
@@ -96,6 +96,8 @@ export class PayrollBatchesService {
       await this.access.assert(tx, actor, input.subjectId, 'payroll_edit');
       const domain = await this.access.assertDomain(tx, input.purpose);
       await lockPayrollSubject(tx, input.subjectId, domain);
+      await lockPayrollAuthorization(tx, input.subjectId);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit');
       payrollMonth(input.month); payrollMonth(input.payMonth);
       if (input.purpose === 'formal') await this.access.assertFormalPayrollReady(tx, input.subjectId, input.month);
       const months = input.additionalMonths ?? [];
@@ -308,6 +310,7 @@ export class PayrollBatchesService {
       const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
       if (header.purpose === 'reconciliation') throw new ConflictException('真实资料对账不能办理复核审批');
       await lockPayrollSubject(tx, header.subjectId, domain);
+      await lockPayrollAuthorization(tx, header.subjectId);
       const metadata = await this.scopeBatch(tx, id), step = metadata.versions[0];
       if (!step) throw new ConflictException('请先完成工资核算');
       const capability = step.approvalStep < step.reviewerCount ? 'payroll_review' : 'payroll_approve';
@@ -498,6 +501,8 @@ export class PayrollBatchesService {
       if (previewGuard && header.purpose === 'formal') throw new ForbiddenException('扣缴试算仅限虚构预览，不接受正式批次');
       const domain = await this.access.assertDomain(tx, header.purpose as PayrollPurpose);
       await lockPayrollSubject(tx, header.subjectId, domain);
+      await lockPayrollAuthorization(tx, header.subjectId);
+      await this.access.assert(tx, actor, header.subjectId, capability);
       if (isolationLevel === Prisma.TransactionIsolationLevel.ReadCommitted) {
         const current = await this.lookup(tx, id);
         if (current.subjectId !== header.subjectId || current.purpose !== header.purpose) throw new ConflictException('批次归属已变化，请重新读取');

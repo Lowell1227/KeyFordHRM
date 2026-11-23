@@ -157,6 +157,30 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
   async function approved() { const b = await submitted();
     await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: 'Fictional review' }, reviewer);
     await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: 'Fictional approval' }, approver); return b; }
+  it.each(['create', 'calculate', 'decide'])('fences %s authorization only after the subject lock and before business writes', async operation => {
+    const batch = operation === 'decide' ? await submitted() : operation === 'calculate' ? await calculated() : null;
+    const authorize = jest.spyOn(access, 'assert'); db.tx.$queryRaw.mockClear();
+    if (operation === 'create') await service.create(createInput(), editor);
+    if (operation === 'calculate') await service.calculate(batch!.id, { expectedVersion: batch!.version }, editor);
+    if (operation === 'decide') await service.decide(batch!.id, { expectedVersion: batch!.version, decision: 'approve', note: '' }, reviewer);
+    const sql = db.tx.$queryRaw.mock.calls.map(call => call[0].join(''));
+    expect(sql).toHaveLength(3); expect(sql[0]).toContain('pg_advisory_xact_lock');
+    expect(sql[1]).toContain('FROM "users"'); expect(sql[2]).toContain('FROM "payroll_grants"');
+    expect(authorize.mock.invocationCallOrder[0]).toBeLessThan(db.tx.$queryRaw.mock.invocationCallOrder[0]);
+    expect(authorize.mock.invocationCallOrder.some(order => order > db.tx.$queryRaw.mock.invocationCallOrder[2])).toBe(true);
+  });
+  it.each(['create', 'calculate', 'decide'])('rejects %s when its previously read subject grant changed, without business writes', async operation => {
+    const batch = operation === 'decide' ? await submitted() : operation === 'calculate' ? await calculated() : null;
+    const before = clone(db.state);
+    db.tx.$queryRaw.mockImplementation(async (sql: TemplateStringsArray) => {
+      if (sql.join('').includes('FOR SHARE')) throw { code: 'P2010', meta: { code: '40001' } };
+      return [];
+    });
+    const pending = operation === 'create' ? service.create(createInput(), editor) : operation === 'calculate'
+      ? service.calculate(batch!.id, { expectedVersion: batch!.version }, editor)
+      : service.decide(batch!.id, { expectedVersion: batch!.version, decision: 'approve', note: '' }, reviewer);
+    await expect(pending).rejects.toThrow(ConflictException); expect(db.state).toEqual(before);
+  });
   it('keeps formal batch creation behind subject readiness while real-data reconciliation remains available', async () => {
     jest.spyOn(access, 'assertDomain').mockResolvedValue('formal');
     const readiness = (access as any).assertFormalPayrollReady as jest.Mock;

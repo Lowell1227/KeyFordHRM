@@ -4,7 +4,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { PayrollAccessService } from './payroll-access.service';
 import { PayrollDomain, PayrollPolicyConfig } from './payroll-contracts';
-import { assertPayrollVersion, lockPayrollSubject, payrollHash } from './payroll-transaction';
+import { assertPayrollVersion, lockPayrollAuthorization, lockPayrollSubject, payrollHash } from './payroll-transaction';
 import { payrollJson } from './payroll-data.service';
 import { normalizePayrollPolicy } from './payroll-policy';
 import { payrollParameterEligibleUser, payrollParameterReviewerWhere } from './payroll-parameter-access';
@@ -88,6 +88,8 @@ export class PayrollParameterReleasesService {
       await this.access.assert(tx, actor, metadata.subjectId, 'payroll_edit');
       await this.access.assertDomain(tx, metadata.domain as PayrollDomain);
       await lockPayrollSubject(tx, metadata.subjectId, metadata.domain);
+      await lockPayrollAuthorization(tx, metadata.subjectId);
+      await this.access.assert(tx, actor, metadata.subjectId, 'payroll_edit');
       const row = (await this.parameter(tx, kind, id))!;
       assertPayrollVersion(row.version, expectedVersion);
       if (row.createdById !== actor.id) throw new ForbiddenException('请复制为自己的草稿后提交主管审核');
@@ -144,6 +146,9 @@ export class PayrollParameterReleasesService {
       await this.access.assert(tx, { id: header.submittedById }, header.subjectId, 'payroll_edit');
       if (header.domain === 'formal' && header.kind === 'rule') await lockFormalPayrollScope(tx);
       await lockPayrollSubject(tx, header.subjectId, header.domain);
+      await lockPayrollAuthorization(tx, header.subjectId);
+      await this.access.assert(tx, { id: header.submittedById }, header.subjectId, 'payroll_edit');
+      if (await this.manager(tx, header.submittedById) !== actor.id) throw new ForbiddenException('直属关系已变化，请由经办撤回后重新提交');
       const release = (await tx.payrollParameterRelease.findUnique({ where: { id } }))!;
       assertPayrollVersion(release.attempt, input.expectedVersion);
       if (release.status !== 'pending') throw new ConflictException('该申请已处理，请刷新查看结果');
@@ -176,6 +181,8 @@ export class PayrollParameterReleasesService {
       await this.access.assertDomain(tx, header.domain as PayrollDomain);
       if (header.submittedById !== actor.id) throw new ForbiddenException('只有提交人可以撤回该参数申请');
       await lockPayrollSubject(tx, header.subjectId, header.domain);
+      await lockPayrollAuthorization(tx, header.subjectId);
+      await this.access.assert(tx, actor, header.subjectId, 'payroll_edit');
       const release = (await tx.payrollParameterRelease.findUnique({ where: { id } }))!;
       assertPayrollVersion(release.attempt, input.expectedVersion);
       if (release.status !== 'pending') throw new ConflictException('只有待审核申请可以撤回');

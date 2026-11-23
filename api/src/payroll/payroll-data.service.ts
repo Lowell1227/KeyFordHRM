@@ -5,7 +5,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { approvedEmploymentSourceWhere, selectEmploymentAt } from '@/employee-archives/employment-timeline';
 import { PayrollAccessService } from './payroll-access.service';
 import { PayrollDomain, PAYROLL_ITEM_CODES } from './payroll-contracts';
-import { assertPayrollVersion, lockPayrollSubject, payrollDate, payrollDecimal, payrollHash, payrollMonth } from './payroll-transaction';
+import { assertPayrollVersion, lockPayrollAuthorization, lockPayrollSubject, payrollDate, payrollDecimal, payrollHash, payrollMonth } from './payroll-transaction';
 import { normalizeAttendance, PayrollAttendanceInput, PayrollAttendanceResult } from './payroll-attendance-normalizer';
 import { normalizePayrollPolicy } from './payroll-policy';
 import { normalizeDeductionSettings } from './payroll-deduction-settings';
@@ -200,7 +200,7 @@ export class PayrollDataService {
     }
     const employee = await tx.employmentRecord.findFirst({ where: { AND: [approvedEmploymentSourceWhere,
       { userId: employeeId, ...(domain === 'validation' ? { contractSubjectId: subjectId } : {}) }] } });
-    if (!employee) throw new BadRequestException('员工没有已审有效任职记录');
+    if (!employee) throw new BadRequestException(domain === 'validation' ? '员工不属于当前公司的已审有效任职范围' : '员工没有已审有效任职记录');
     return employee;
   }
   async operators(subjectId: string, actor: AuthUser) {
@@ -266,6 +266,8 @@ export class PayrollDataService {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'attendance_edit');
       const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain);
+      await lockPayrollAuthorization(tx, input.subjectId);
+      await this.access.assert(tx, actor, input.subjectId, 'attendance_edit');
       if (domain === 'formal' && typeof verify !== 'function') throw new ForbiddenException('正式考勤同步缺少服务端核验');
       const verified = verify ? await verify(tx) : undefined;
       const sourceEvidence = verified === undefined ? undefined : payrollJson(verified);
@@ -349,6 +351,8 @@ export class PayrollDataService {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx);
       await lockPayrollSubject(tx, input.subjectId, domain);
+      await lockPayrollAuthorization(tx, input.subjectId);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit');
       const payDate = payrollDate(input.payDate), settings = normalizeDeductionSettings(input, input.settings);
       await this.employeeForWrite(tx, input.subjectId, input.employeeId, domain);
       const latest = await tx.payrollDeductionProfile.findFirst({ where: { subjectId: input.subjectId, domain, employeeId: input.employeeId, payDate }, orderBy: { version: 'desc' } });
@@ -364,6 +368,8 @@ export class PayrollDataService {
   async saveStandard(input: { subjectId: string; employeeId: string; effectiveFrom: string; effectiveTo?: string; fixedMonthly: string | null; performanceBase: string | null; performanceMode: string | null; evidence: string }, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain);
+      await lockPayrollAuthorization(tx, input.subjectId);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit');
       const from = payrollDate(input.effectiveFrom), to = input.effectiveTo ? payrollDate(input.effectiveTo) : null;
       if (to && to < from) throw new BadRequestException('生效结束日期不能早于开始日期');
       if (!input.evidence?.trim() || input.evidence.length > 500 || (input.performanceMode != null && !['none', 'included', 'additional'].includes(input.performanceMode))) throw new BadRequestException('请填写确认依据和有效工资结构');
@@ -378,6 +384,8 @@ export class PayrollDataService {
   async saveRule(input: { subjectId: string; effectiveFrom: string; effectiveTo?: string; config: unknown }, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain);
+      await lockPayrollAuthorization(tx, input.subjectId);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit');
       const from = payrollDate(input.effectiveFrom), to = input.effectiveTo ? payrollDate(input.effectiveTo) : null;
       if (to && to < from) throw new BadRequestException('生效结束日期不能早于开始日期');
       if (!input.config || typeof input.config !== 'object' || Array.isArray(input.config) || JSON.stringify(input.config).length > 50000) throw new BadRequestException('规则参数不正确');
@@ -440,6 +448,8 @@ export class PayrollDataService {
     await this.access.assert(tx, actor, header.subjectId, capability);
     await this.access.assertDomain(tx, header.domain as PayrollDomain);
     await lockPayrollSubject(tx, header.subjectId, header.domain);
+    await lockPayrollAuthorization(tx, header.subjectId);
+    await this.access.assert(tx, actor, header.subjectId, capability);
     const row = await tx.payrollAttendanceSnapshot.findUnique({ where: { id } });
     if (!row || row.subjectId !== header.subjectId || row.domain !== header.domain) throw new ConflictException('考勤版本已变化，请重新读取');
     return row;
@@ -452,6 +462,8 @@ export class PayrollDataService {
     await this.access.assert(tx, actor, header.subjectId, 'payroll_edit');
     await this.access.assertDomain(tx, header.domain as PayrollDomain);
     await lockPayrollSubject(tx, header.subjectId, header.domain);
+    await lockPayrollAuthorization(tx, header.subjectId);
+    await this.access.assert(tx, actor, header.subjectId, 'payroll_edit');
     const row = kind === 'standard' ? await tx.payrollStandard.findUnique({ where: { id } }) : await tx.payrollPolicy.findUnique({ where: { id } });
     if (!row || row.subjectId !== header.subjectId || row.domain !== header.domain) throw new ConflictException('工资配置已变化，请重新读取');
     return row;
@@ -466,7 +478,9 @@ export class PayrollDataService {
   }
   async confirmOpening(input: { subjectId: string; employeeId: string; month: string; itemCode: string; amount: string; reference: string }, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
-      await this.access.assert(tx, actor, input.subjectId, 'payroll_settle'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain); payrollMonth(input.month);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_settle'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain);
+      await lockPayrollAuthorization(tx, input.subjectId);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_settle'); payrollMonth(input.month);
       const employees = await payrollEmployments(tx, input.subjectId, input.month, domain);
       if (!employees.some(row => row.userId === input.employeeId) || !(PAYROLL_ITEM_CODES as readonly string[]).includes(input.itemCode)
         || !input.reference?.trim() || input.reference.length > 200) throw new BadRequestException('请核对期初人员、项目和确认依据');
@@ -507,7 +521,9 @@ export class PayrollDataService {
   }
   async addAdjustment(input: { subjectId: string; employeeId: string; month: string; itemCode: string; amount: string; reason: string; reference: string }, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
-      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain); payrollMonth(input.month);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain);
+      await lockPayrollAuthorization(tx, input.subjectId);
+      await this.access.assert(tx, actor, input.subjectId, 'payroll_edit'); payrollMonth(input.month);
       const employees = await payrollEmployments(tx, input.subjectId, input.month, domain);
       if (!employees.some(row => row.userId === input.employeeId) || !(PAYROLL_ITEM_CODES as readonly string[]).includes(input.itemCode)
         || !input.reason?.trim() || input.reason.length > 500 || !input.reference?.trim() || input.reference.length > 200) throw new BadRequestException('请核对调整人员、项目、原因和依据');

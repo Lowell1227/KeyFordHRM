@@ -64,6 +64,21 @@ function formalRuleSetup() {
 }
 
 describe('payroll parameters require the submitting HR direct manager', () => {
+  it.each(['submit', 'decide', 'withdraw'])('fences %s only after subject locking and before parameter changes', async operation => {
+    const s = fixture(), request = operation === 'submit' ? null : await s.submit();
+    s.tx.$queryRaw.mockClear(); const statuses = s.rows.map(row => row.status), count = s.events.length;
+    s.tx.$queryRaw.mockImplementation(async (sql: TemplateStringsArray) => {
+      if (sql.join('').includes('FOR SHARE')) throw { code: 'P2010', meta: { code: '40001' } };
+      return [];
+    });
+    const action = operation === 'submit' ? s.submit() : operation === 'decide' ? s.decide(request!.id)
+      : s.service.withdraw(request!.id, { expectedVersion: 1, note: 'Fictional' }, hr);
+    await expect(action).rejects.toThrow(ConflictException);
+    const queries = s.tx.$queryRaw.mock.calls.map(call => call[0].join(''));
+    expect(queries).toHaveLength(2); expect(queries[0]).toContain('pg_advisory_xact_lock'); expect(queries[1]).toContain('FOR SHARE');
+    expect(s.rows.map(row => row.status)).toEqual(statuses); expect(s.events).toHaveLength(count);
+    expect(s.access.assert.mock.invocationCallOrder[0]).toBeLessThan(s.tx.$queryRaw.mock.invocationCallOrder[0]);
+  });
   it('requires an explicit formal payer scope at submission rather than approving a contract-derived default', async () => {
     const s = formalRuleSetup(); delete s.row.config.employeeScope;
     await expect(s.submitRule()).rejects.toThrow(ConflictException); expect(s.requests).toHaveLength(0);
@@ -76,7 +91,11 @@ describe('payroll parameters require the submitting HR direct manager', () => {
     s.tx.$queryRaw.mockClear();
     await expect(s.decide(request.id)).rejects.toThrow(ConflictException);
     expect(s.row.status).toBe('pending'); expect(s.events.some(row => row.action === 'parameter_published')).toBe(false);
-    expect(s.tx.$queryRaw.mock.calls.map(call => call[1])).toEqual(['payroll:formal:employee-scope-publication', 'payroll:formal:subject']);
+    expect(s.tx.$queryRaw.mock.calls.filter(call => call[0].join('').includes('pg_advisory_xact_lock')).map(call => call[1]))
+      .toEqual(['payroll:formal:employee-scope-publication', 'payroll:formal:subject']);
+    expect(s.tx.$queryRaw.mock.calls.slice(2).map(call => call[0].join(''))).toEqual([
+      expect.stringContaining('FROM "users"'), expect.stringContaining('FROM "payroll_grants"'),
+    ]);
     expect((s.prisma.$transaction.mock.calls.at(-1) as any[])[1].isolationLevel).toBe('Serializable');
   });
   it('publishes an explicit payer scope and keeps it frozen in the manager-reviewed snapshot', async () => {

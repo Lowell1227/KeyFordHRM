@@ -29,3 +29,25 @@ export function assertPayrollVersion(actual: number, expected: number) {
 export async function lockPayrollSubject(tx: Prisma.TransactionClient, subjectId: string, domain: string): Promise<void> {
   await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${`payroll:${domain}:${subjectId}`}, 0))`;
 }
+
+// Call only after all required subject/domain locks; never from a pre-lock access check.
+export async function lockPayrollAuthorization(tx: Prisma.TransactionClient, subjectId: string): Promise<void> {
+  try {
+    // Parameter reviewers can be direct managers without holding their own payroll grant.
+    await tx.$queryRaw`SELECT "u"."id" FROM "users" AS "u"
+      WHERE "u"."id" IN (
+        SELECT "g"."user_id" FROM "payroll_grants" AS "g" WHERE "g"."subject_id" = ${subjectId}::uuid
+        UNION
+        SELECT "owner"."direct_manager_id" FROM "users" AS "owner"
+          INNER JOIN "payroll_grants" AS "g" ON "g"."user_id" = "owner"."id"
+          WHERE "g"."subject_id" = ${subjectId}::uuid
+      ) ORDER BY "u"."id" FOR SHARE OF "u"`;
+    await tx.$queryRaw`SELECT "id" FROM "payroll_grants" WHERE "subject_id" = ${subjectId}::uuid ORDER BY "id" FOR SHARE`;
+  } catch (error) {
+    const failure = error as { code?: string; meta?: { code?: string | number } } | null;
+    if (failure?.code === 'P2034' || failure?.code === '40001' || failure?.code === 'P2010' && String(failure.meta?.code) === '40001') {
+      throw new ConflictException('薪酬授权或人员状态已变化，请刷新后重试，未保存本次操作');
+    }
+    throw error;
+  }
+}

@@ -144,7 +144,9 @@ describe('PayrollBatchesService deductions preview boundary', () => {
       employeeName: '虚构员工b', status: 'ready', gross: '5000.00', incomeTax: '480.00', net: '4320.00' })]);
     expect(JSON.stringify(s.batch)).toBe(before);
     expect(s.prisma.$transaction.mock.calls[0][1].isolationLevel).toBe('ReadCommitted');
-    expect(s.tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(s.tx.$queryRaw.mock.calls.map(call => call[0].join(''))).toEqual([
+      expect.stringContaining('pg_advisory_xact_lock'), expect.stringContaining('FROM "users"'), expect.stringContaining('FROM "payroll_grants"'),
+    ]);
   });
   it('accepts only a ready, explicitly owned monthly fictional fixture, not arbitrary preview employees', async () => {
     s.markers.payroll_preview_fixture_v1.subjectIds = [];

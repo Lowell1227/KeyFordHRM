@@ -90,6 +90,33 @@ function setup() {
 }
 
 describe('PayrollDataService focused regressions', () => {
+  it.each(['sync', 'review', 'seal', 'saveStandard', 'saveRule', 'saveDeductions', 'clone', 'disable', 'confirmOpening', 'addAdjustment'])(
+    'fences %s after the subject lock, rejecting stale authorization before modifying payroll data', async operation => {
+      const s = setup();
+      s.state.snapshots.push({ id: 'snapshot', subjectId: subject, domain: 'validation' });
+      s.state.standards.push({ id: 'standard', subjectId: subject, domain: 'validation' });
+      const before = clone(s.state);
+      s.tx.$queryRaw.mockImplementation(async (sql: TemplateStringsArray) => {
+        if (sql.join('').trimStart().startsWith('SELECT "id" FROM "payroll_grants"')) throw { code: 'P2010', meta: { code: '40001' } };
+        return [];
+      });
+      const actions: Record<string, () => Promise<unknown>> = {
+        sync: () => s.service.sync(request(), actor), review: () => s.service.review('snapshot', { note: 'Fictional' }, actor),
+        seal: () => s.service.seal('snapshot', 1, actor),
+        saveStandard: () => s.service.saveStandard({ subjectId: subject } as any, actor),
+        saveRule: () => s.service.saveRule({ subjectId: subject } as any, actor),
+        saveDeductions: () => s.service.saveDeductions({ subjectId: subject } as any, actor),
+        clone: () => s.service.clone('standard', 'standard', actor), disable: () => s.service.disable('standard', 'standard', actor),
+        confirmOpening: () => s.service.confirmOpening({ subjectId: subject } as any, finance),
+        addAdjustment: () => s.service.addAdjustment({ subjectId: subject } as any, actor),
+      };
+      await expect(actions[operation]()).rejects.toThrow(ConflictException);
+      const queries = s.tx.$queryRaw.mock.calls.map(call => call[0].join(''));
+      expect(queries).toHaveLength(3); expect(queries[0]).toContain('pg_advisory_xact_lock');
+      expect(queries[1]).toContain('FROM "users"'); expect(queries[2]).toContain('FROM "payroll_grants"');
+      expect(s.access.assert.mock.invocationCallOrder[0]).toBeLessThan(s.tx.$queryRaw.mock.invocationCallOrder[0]);
+      expect(s.state).toEqual(before);
+    });
   function formalSetup() {
     const s = setup(), ids = [randomUUID(), randomUUID()];
     s.state.employments = ids.map(id => employment(id));

@@ -30,5 +30,10 @@ describe('deduction input versions', () => {
     expect(s.tx.payrollDeductionProfile.findMany).not.toHaveBeenCalled();
     s.tx.employmentRecord.findFirst.mockResolvedValue(null);
     await expect(s.service.saveDeductions(s.input, s.actor)).rejects.toThrow('不属于'); expect(s.rows).toEqual([]);
+    expect(s.tx.employmentRecord.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { AND: [
+      expect.any(Object), { userId: s.input.employeeId, contractSubjectId: s.input.subjectId },
+    ] } }));
+    expect(s.tx.payrollDeductionProfile.create).not.toHaveBeenCalled();
+    expect(s.tx.payrollEvent.create).not.toHaveBeenCalled();
   });
 });
