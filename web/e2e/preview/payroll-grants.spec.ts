@@ -71,5 +71,10 @@ test('administrator maintains grants and audit; revocation removes salary access
   const history = page.getByRole('dialog', { name: '授权记录', exact: true });
   await expect(history.getByText('虚构验收：独立工资查看授权', { exact: true })).toBeVisible();
   await expect(history.getByText('虚构验收：办理结束，撤销查看权限', { exact: true })).toBeVisible();
+  if (info.project.name === 'mobile') {
+    await expect.poll(async () => Math.round((await history.boundingBox())?.x ?? -1)).toBe(0);
+    await expect.poll(async () => Math.round((await history.boundingBox())?.width ?? 0)).toBe(info.project.use.viewport!.width);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: info.outputPath('grants-audit.png'), fullPage: true });
 });

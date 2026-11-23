@@ -4,7 +4,7 @@ export const attendanceTypeLabels: Record<string, string> = { paid_leave: '带�
 export function attendanceMappingPayload(rows: AttendanceMappingDraft[]) {
   const errors: Record<string, string> = {}, value: NonNullable<PayrollRuleConfig['attendanceMappings']> = {}, seen = new Set<string>();
   for (const [index, row] of rows.entries()) {
-    if (!/^\d{1,3}:[^:\r\n]{1,80}:[^:\r\n]{0,80}$/.test(row.key) || row.key !== row.key.trim() || seen.has(row.key)) errors[`${index}.key`] = '请填写不重复的原类型标识';
+    if (row.key.length > 200 || !/^\d{1,3}:[^:\r\n]{1,190}:[^:\r\n]{0,190}$/.test(row.key) || row.key !== row.key.trim() || seen.has(row.key)) errors[`${index}.key`] = '请填写不重复的原类型标识（最多200字）';
     seen.add(row.key);
     if (!Object.prototype.hasOwnProperty.call(attendanceTypeLabels, row.type)) errors[`${index}.type`] = '请选择计薪类型';
     if (row.type === 'overtime' && !['weekday', 'restday', 'holiday'].includes(row.overtimeKind)) errors[`${index}.overtimeKind`] = '请选择加班日类型';

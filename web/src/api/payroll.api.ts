@@ -1,4 +1,5 @@
 import http from './http';
+import type { PayrollReadinessDetail, PayrollReadinessInput, PayrollReadinessRequest } from '@/types/payroll-readiness.types';
 import type { PayrollParameterRelease, PayrollDeductionProfile, PayrollDeductionProfileInput, PayrollNetPaymentInput, PayrollCancelNetRemainderInput, PayrollAttendanceSyncJob } from '@/types/payroll.types';
 import type { AxiosResponse } from 'axios';
 import type { PayrollAccess, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollAttendance, PayrollSourceInput, PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollBatch, PayrollBatchInput, PayrollAdjustment, PayrollAdjustmentInput, PayrollOpening, PayrollOpeningInput, PayrollDeductionsPreviewInput, PayrollDeductionsPreviewResult } from '@/types/payroll.types';
@@ -12,6 +13,12 @@ const batchWrite = (id: string, action: string, expectedVersion: number, body: o
 export const payrollApi = {
   access: () => get<PayrollAccess>('/access'),
   readiness: (subjectId: string) => get<{ ready: boolean; firstMonth?: string; reason?: string }>('/readiness', { subjectId }),
+  readinessRequests: (subjectId: string) => get<PayrollReadinessRequest[]>('/readiness/requests', { subjectId }),
+  submitReadiness: (input: PayrollReadinessInput) => post<PayrollReadinessDetail>('/readiness/requests', input),
+  readinessRequest: (id: string) => get<PayrollReadinessDetail>(`/readiness/requests/${encodeURIComponent(id)}`),
+  decideReadiness: (id: string, expectedVersion: number, decision: 'approve' | 'return', note: string) => post<PayrollReadinessDetail>(`/readiness/requests/${encodeURIComponent(id)}/decide`, { expectedVersion, decision, note }),
+  withdrawReadiness: (id: string, expectedVersion: number, note: string) => post<PayrollReadinessDetail>(`/readiness/requests/${encodeURIComponent(id)}/withdraw`, { expectedVersion, note }),
+  revokeReadiness: (id: string, expectedVersion: number, note: string) => post<PayrollReadinessDetail>(`/readiness/requests/${encodeURIComponent(id)}/revoke`, { expectedVersion, note }),
   parameterReleases: (subjectId: string) => get<PayrollParameterRelease[]>('/parameter-releases', { subjectId }),
   submitParameter: (kind: 'standard' | 'rule' | 'deduction', id: string, expectedVersion: number) => post<PayrollParameterRelease>(`/parameters/${kind}/${encodeURIComponent(id)}/submit`, { expectedVersion }),
   deductionProfiles: (subjectId: string) => get<PayrollDeductionProfile[]>('/deduction-profiles', { subjectId }),

@@ -10,6 +10,7 @@ import { payrollApi, payrollError } from '@/api/payroll.api';
 import type { PayrollBatch, PayrollBatchInput, PayrollCapability, PayrollEmployee } from '@/types/payroll.types';
 import PayrollScope from './PayrollScope.vue';
 import PayrollLedger from './PayrollLedger.vue';
+import PayrollReadinessPanel from './PayrollReadinessPanel.vue';
 import { usePayrollScope } from './usePayrollScope';
 import { currentVersion, purposeLabels, statusLabels, batchStatus, needsUpdate } from './payroll-state';
 
@@ -17,7 +18,7 @@ const props = defineProps<{ mode: 'batches' | 'approvals' | 'results' }>();
 const previewMode = import.meta.env.VITE_PREVIEW_MODE === 'true';
 const route = useRoute(), router = useRouter();
 const required: Record<typeof props.mode, PayrollCapability[]> = { batches: ['payroll_edit', 'payroll_view'], approvals: ['payroll_review', 'payroll_approve'], results: ['payroll_view', 'payroll_export', 'payroll_settle'] };
-const { access, subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(computed(() => required[props.mode]));
+const { access, subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(computed(() => required[props.mode]), { syncQuery: true });
 const batches = ref<PayrollBatch[]>([]), employees = ref<PayrollEmployee[]>([]);
 const readiness = ref<{ ready: boolean; firstMonth?: string; reason?: string }>({ ready: false });
 const formalReady = computed(() => readiness.value.ready && !!readiness.value.firstMonth && month.value >= readiness.value.firstMonth);
@@ -28,6 +29,10 @@ const additionalMonths = ref<string[]>([]);
 const status = ref('');
 let sequence = 0, openedFromList = false;
 const detailOpen = computed(() => !!route.params.id);
+const readinessOpen = computed(() => route.query.readiness === 'list' || typeof route.query.readiness === 'string' && /^[a-f0-9-]{36}$/i.test(route.query.readiness));
+const readinessId = computed(() => readinessOpen.value && route.query.readiness !== 'list' ? String(route.query.readiness) : '');
+function selectReadiness(id: string) { void router.push({ path: listPath.value, query: { ...route.query, subjectId: subjectId.value, month: month.value, readiness: id || 'list' } }); }
+function closeReadiness(value: boolean) { if (!value) { const query = { ...route.query }; delete query.readiness; void router.replace({ path: listPath.value, query }); } }
 const listPath = computed(() => `/payroll/${props.mode}`);
 const rows = computed(() => batches.value.filter(row => (!month.value || row.month === month.value) && (!status.value || row.status === status.value)
   && (props.mode === 'batches' || row.purpose !== 'reconciliation')
@@ -100,9 +105,10 @@ async function closeCreate(value: boolean) {
 <template>
   <BusinessListPage variant="workflow" :loading="loading">
     <template #filters>
-      <PayrollScope v-model:subject="subjectId" v-model:month="month" :subjects="subjects" :disabled="busy || detailOpen || open" @refresh="refresh">
+      <PayrollScope v-model:subject="subjectId" v-model:month="month" :subjects="subjects" :disabled="busy || detailOpen || open || readinessOpen" @refresh="refresh">
         <el-select v-model="status" clearable placeholder="全部状态" aria-label="批次状态" class="status-select"><el-option v-for="(label, key) in statusLabels" :key="key" :label="label" :value="key" /></el-select>
         <el-button v-if="mode === 'batches' && has('payroll_edit')" type="primary" :icon="Plus" :disabled="loading || detailOpen" @click="create()">新建核算</el-button>
+        <el-button v-if="!previewMode && mode !== 'results' && subjectId" :disabled="loading || detailOpen || open" @click="selectReadiness('')">首月签收</el-button>
       </PayrollScope>
       <PayrollLedger v-if="mode === 'batches' && has('payroll_edit')" :key="`adjustment-${subjectId}-${month}`" :subject-id="subjectId" :month="month" :employees="employees" kind="adjustment" @changed="load" @busy="busy = $event" />
       <PayrollLedger v-if="mode === 'results' && has('payroll_settle')" :key="`opening-${subjectId}-${month}`" :subject-id="subjectId" :month="month" :employees="employees" kind="opening" @changed="load" @busy="busy = $event" />
@@ -116,6 +122,7 @@ async function closeCreate(value: boolean) {
       <el-empty v-if="!rows.length" description="暂无工资批次" />
     </template>
     <template #detail>
+      <PayrollReadinessPanel v-if="!previewMode && mode !== 'results'" :model-value="readinessOpen" :subject-id="subjectId" :request-id="readinessId" :batches="batches" :can-submit="has('payroll_edit')" @update:model-value="closeReadiness" @select="selectReadiness" @changed="load" />
       <BusinessDetailDrawer :model-value="detailOpen" title="工资批次" variant="workflow" :saving="detailBusy" :before-close="beforeCloseDetail" @update:model-value="closeDetail">
         <RouterView v-slot="{ Component }"><component :is="Component" :access="access" :allow-export="mode === 'results'" @changed="load" @busy="detailBusy = $event" @correct="create" /></RouterView>
       </BusinessDetailDrawer>

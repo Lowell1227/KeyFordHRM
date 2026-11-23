@@ -27,7 +27,7 @@ export interface PayrollRuleConfig {
   monthlyUnits: Record<string, string>;
   rounding: 'item_half_up' | null;
   normalHourly: string | null;
-  paidHourly: { unpaid_leave?: string; sick_leave?: string; absence?: string };
+  paidHourly: { unpaid_leave?: string; sick_leave?: string; absence?: string; late?: string; early?: string };
   overtime: { hourlyBase: string | null; weekday: string | null; restday: string | null; holiday: string | null };
   reviewers: string[]; approvers: string[]; cutoverMonth: string | null;
   performance: Record<string, PayrollPerformanceMapping>;

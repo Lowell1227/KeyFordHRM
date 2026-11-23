@@ -12,6 +12,9 @@ test('attendance classification remains explicit and does not insert a default',
   const row = { key: '1:年假:年假', type: 'paid_leave', overtimeKind: '' };
   assert.deepEqual(attendanceMappingPayload([row]).value, { '1:年假:年假': { type: 'paid_leave' } });
   assert.equal(row.overtimeKind, '');
+  const key = `3:leave:${'a'.repeat(81)}`;
+  assert.deepEqual(attendanceMappingPayload([{ key, type: 'paid_leave', overtimeKind: '' }]).errors, {});
+  assert.ok(attendanceMappingPayload([{ key: `3:leave:${'a'.repeat(201)}`, type: 'paid_leave', overtimeKind: '' }]).errors['0.key']);
 });
 test('duplicates and missing overtime day kind are field errors, not silent overwrites', () => {
   const duplicate = { key: '1:年假:年假', type: 'paid_leave', overtimeKind: '' };

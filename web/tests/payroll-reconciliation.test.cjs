@@ -48,7 +48,7 @@ function view(preview, t) {
     'element-plus': { ElMessageBox: {} }, '@element-plus/icons-vue': {}, '@/api/payroll.api': { payrollApi: {}, payrollError: async e => e.message },
     '@/components/common/business-list/BusinessListPage.vue': { setup: (_, { slots }) => () => vue.h('main', slots.detail?.()) },
     '@/components/common/business-list/BusinessDetailDrawer.vue': pass, '@/components/common/MobileResultCard.vue': pass,
-    './PayrollScope.vue': pass, './PayrollLedger.vue': pass, './payroll-state': state,
+    './PayrollScope.vue': pass, './PayrollLedger.vue': pass, './PayrollReadinessPanel.vue': pass, './payroll-state': state,
     './usePayrollScope': { usePayrollScope: () => ({ access: vue.ref(), subjects: vue.ref([]), subjectId: vue.ref('s'), month: vue.ref('2026-10'), has: () => true, error: vue.ref(''), loading: vue.ref(false), refreshAccess: async () => {} }) },
   }).default;
   const node = (type, text = '') => ({ type, text, children: [], props: {}, parent: null });
