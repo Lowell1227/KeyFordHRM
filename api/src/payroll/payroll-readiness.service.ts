@@ -7,7 +7,7 @@ import { PayrollAccessService } from './payroll-access.service';
 import { PayrollActor, PayrollCapability } from './payroll-access';
 import { PayrollCapture, PayrollSourceReader, PAYROLL_ITEM_CODES } from './payroll-contracts';
 import { assertPayrollVersion, lockPayrollSubject, payrollHash, payrollMonth } from './payroll-transaction';
-import { assertPayrollNetFresh, assertPayrollNetLines, assertPayrollNetShape, netSnapshotHash } from './payroll-net';
+import { assertPayrollNetFresh, assertPayrollNetLines, assertPayrollNetShape, netSnapshotHash, payrollReconciliationGross } from './payroll-net';
 import { parsePayrollReadinessRecord, payrollReadinessRequestHash, PayrollReadinessDecisionDto, PayrollReadinessDetail,
   PayrollReadinessNoteDto, PayrollReadinessRecord, PayrollReadinessRow, PayrollReadinessSubmitDto } from './dto/payroll-readiness.dto';
 
@@ -175,7 +175,7 @@ export class PayrollReadinessService {
     if (batch.purpose !== 'reconciliation' || batch.status !== 'calculated' || version.status !== 'calculated' || version.voidedAt
       || !Array.isArray(version.issues) || version.issues.length || !version.lines.length) throw changed();
     assertPayrollNetShape(version.netSnapshot);
-    assertPayrollNetLines(version.netSnapshot, version.lines, version.gross);
+    assertPayrollNetLines(version.netSnapshot, version.lines, version.gross, 'reconciliation');
     if (version.payDate?.toISOString().slice(0, 10) !== version.netSnapshot.payDate) throw changed();
     for (const line of version.lines) {
       const amounts = [line.entitlement, line.paidBefore, line.amount];
@@ -198,7 +198,7 @@ export class PayrollReadinessService {
     }
     if (payrollHash(captures.map(({ month, capture }) => ({ month, sourceHash: capture.sourceHash }))) !== version.sourceHash
       || netSnapshotHash({ months: captures.map(({ month, capture }) => ({ month, sources: capture.sources })) }) !== netSnapshotHash(version.sources)
-      || !version.gross || !captures.reduce((sum, { capture }) => sum.plus(capture.gross!), new Prisma.Decimal(0)).eq(version.gross)) throw changed();
+      || !version.gross || !new Prisma.Decimal(payrollReconciliationGross(captures.flatMap(({ capture }) => capture.lines))).eq(version.gross)) throw changed();
     const canonical = (lines: Array<{ employeeId: string; attributionMonth: string; itemCode: string; status: string;
       entitlement: Prisma.Decimal | string | null; paidBefore: Prisma.Decimal | string | null; amount: Prisma.Decimal | string | null; evidence: unknown }>) =>
       lines.map(line => ({ employeeId: line.employeeId, attributionMonth: line.attributionMonth, itemCode: line.itemCode, status: line.status,
@@ -230,7 +230,7 @@ export class PayrollReadinessService {
     if (!version) throw changed();
     this.frozen(record, version);
     assertPayrollNetShape(version.netSnapshot);
-    assertPayrollNetLines(version.netSnapshot, version.lines, version.gross);
+    assertPayrollNetLines(version.netSnapshot, version.lines, version.gross, 'reconciliation');
     const actors = await tx.user.findMany({ where: { id: { in: [...new Set([record.submittedById, ...record.approvalPath])] } }, select: { id: true, name: true } });
     return { request: this.row(record), netSnapshot: version.netSnapshot,
       lines: version.lines.map(line => ({ id: line.id, employeeId: line.employeeId, attributionMonth: line.attributionMonth, itemCode: line.itemCode,

@@ -10,7 +10,7 @@ import { PayrollDeductionsPreviewDto } from './dto/payroll.dto';
 import { calculatePayrollDeductions, PayrollTaxDeductions, PayrollDeductionsResult } from './payroll-deductions-calculator';
 import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
 import { readReviewedDeductions } from './payroll-reviewed-deductions';
-import { assertPayrollNetFresh, assertPayrollNetLines, assertPayrollNetShape, capturePayrollNet, netSnapshotHash } from './payroll-net';
+import { assertPayrollNetFresh, assertPayrollNetLines, assertPayrollNetShape, capturePayrollNet, netSnapshotHash, payrollReconciliationGross } from './payroll-net';
 import { randomUUID } from 'node:crypto';
 import { assertPayrollApprovedPerformance } from './payroll-approved-performance';
 
@@ -128,7 +128,7 @@ export class PayrollBatchesService {
       if (!['draft', 'calculated', 'returned', 'withdrawn', 'voided'].includes(batch.status)) throw new ConflictException('请先撤回或作废当前版本后重算');
       if (batch.purpose === 'formal' && !input.payDate) throw new ConflictException('正式工资必须核算扣缴及实发，请明确发薪日');
       const captured = await this.captureForBatch(tx, batch, domain);
-      const net = input.payDate ? await capturePayrollNet(tx, batch, domain, input.payDate, captured.lines) : undefined;
+      const net = input.payDate && captured.gross !== null ? await capturePayrollNet(tx, batch, domain, input.payDate, captured.lines) : undefined;
       const issues = [...captured.issues, ...(net?.rows.flatMap(row => row.result.issues.map(issue => `${row.employeeName}：${issue}`)) ?? [])];
       const version = await tx.payrollVersion.create({ data: {
         batchId: id, version: (batch.versions[0]?.version ?? 0) + 1, sourceHash: captured.sourceHash,
@@ -628,7 +628,8 @@ export class PayrollBatchesService {
       issues: captures.flatMap(({ capture }) => capture.issues), lines: captures.flatMap(({ capture }) => capture.lines),
       approvalPath: [...first.approvalPath], reviewerCount: first.reviewerCount,
       gross: captures.some(({ capture }) => capture.gross === null) ? null :
-        captures.reduce((total, { capture }) => total.plus(this.money(capture.gross!, 18)), new Decimal(0)).toFixed(2) };
+        batch.purpose === 'reconciliation' ? payrollReconciliationGross(captures.flatMap(({ capture }) => capture.lines)) :
+          captures.reduce((total, { capture }) => total.plus(this.money(capture.gross!, 18)), new Decimal(0)).toFixed(2) };
   }
 
   private validateCapture(capture: PayrollCapture, month: string) {

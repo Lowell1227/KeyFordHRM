@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { payrollAttendanceHash } from './payroll-attendance-integrity';
 import { PrismaService } from '@/prisma/prisma.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { approvedEmploymentSourceWhere, selectEmploymentAt } from '@/employee-archives/employment-timeline';
@@ -85,7 +86,7 @@ export function isPayrollEmployment(record: { contractSubjectId: string | null; 
     && (!record.leaveDate || record.leaveDate.getTime() >= payrollDate(day).getTime()));
 }
 
-function employmentDays(records: Awaited<ReturnType<typeof payrollEmployments>>, subjectId: string, month: string) {
+export function employmentDays(records: Awaited<ReturnType<typeof payrollEmployments>>, subjectId: string, month: string) {
   const result: Array<{ employeeId: string; workDate: string; employment: typeof records[number] }> = [];
   for (const employeeId of [...new Set(records.map(row => row.userId))].sort()) for (const workDate of payrollDays(month)) {
     const selection = selectEmploymentAt(records.filter(row => row.userId === employeeId), payrollDate(workDate));
@@ -311,10 +312,21 @@ export class PayrollDataService {
         }
         normalized.version = payrollHash({ version: normalized.version, conflicts });
       }
-      if (sourceEvidence !== undefined) normalized.dingtalk = sourceEvidence;
-      const sourceHash = payrollHash(normalized);
+      if (sourceEvidence !== undefined) {
+        const evidence = sourceEvidence as Record<string, Prisma.InputJsonValue>;
+        if (Array.isArray(evidence.absenceCandidates)) {
+          const prior = (latest?.payload as unknown as AttendancePayload | undefined)?.dingtalk as Record<string, any> | undefined;
+          const retained = Array.isArray(prior?.absenceCandidates) ? prior.absenceCandidates.filter((entry: any) =>
+            !scope.employeeIds.includes(entry.employeeId) || entry.workDate < scope.from || entry.workDate > scope.to) : [];
+          normalized.dingtalk = payrollJson({ ...evidence, absenceCandidates: [...retained, ...evidence.absenceCandidates] });
+        } else normalized.dingtalk = sourceEvidence;
+      }
+      const confirmed = (latest?.payload as { confirmedAbsences?: unknown } | undefined)?.confirmedAbsences;
+      if (Array.isArray(confirmed)) Object.assign(normalized, { confirmedAbsences: payrollJson(confirmed) });
+      const sourceHash = payrollAttendanceHash(normalized);
       const row = await tx.payrollAttendanceSnapshot.create({ data: { subjectId: input.subjectId, month: input.month, domain, version: (latest?.version ?? 0) + 1,
-        sourceKey: input.sourceKey, sourceHash, payload: payrollJson(normalized), createdById: actor.id } });
+        sourceKey: input.sourceKey, sourceHash, payload: payrollJson(normalized),
+        review: Array.isArray(latest?.review) ? payrollJson(latest.review) : [], createdById: actor.id } });
       await this.event(tx, input.subjectId, actor.id, 'attendance_sync', { snapshotId: row.id, version: row.version });
       return row;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });

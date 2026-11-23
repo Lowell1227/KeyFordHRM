@@ -34,6 +34,13 @@ export interface PayrollDingtalkAttendanceOptions {
   /** Persistently allocated BEFORE the upstream read; serialize publication with the saved sourceState. */
   observationVersion: number;
   previous: PayrollDingtalkAttendanceSourceState[];
+  /** Only facts already reviewed by the backend; never accept these from a sync client. */
+  confirmedAbsences?: Array<{
+    employeeId: string;
+    workDate: string;
+    proofHash: string;
+    records: PayrollAttendanceInput["records"];
+  }>;
   approvalMappings: Record<
     string,
     {
@@ -194,6 +201,7 @@ const Hour = Prisma.Decimal.clone({
   rounding: Prisma.Decimal.ROUND_DOWN,
 });
 type Interval = { startsAt: string; endsAt: string };
+type Shift = Interval & { on: string; off: string };
 function safeMappingKey(
   approval: DingtalkAttendanceApproval,
 ): string | undefined {
@@ -269,6 +277,272 @@ function intersect(intervals: Interval[], window: Interval): Interval[] {
       millis(row.endsAt) < millis(window.endsAt) ? row.endsAt : window.endsAt;
     return millis(startsAt) < millis(endsAt) ? [{ startsAt, endsAt }] : [];
   });
+}
+
+function dayInterval(workDate: string): Interval | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(workDate)) return null;
+  const date = new Date(`${workDate}T00:00:00Z`);
+  if (!Number.isFinite(+date) || date.toISOString().slice(0, 10) !== workDate)
+    return null;
+  const startsAt = `${workDate}T00:00:00+08:00`;
+  return {
+    startsAt,
+    endsAt: new Date(millis(startsAt) + 86400000).toISOString(),
+  };
+}
+
+function intervalHours(parts: Interval[]): string | null {
+  const duration = parts.reduce(
+    (sum, row) => sum.plus(millis(row.endsAt) - millis(row.startsAt)),
+    new D(0),
+  );
+  const value = new Hour(duration.toString()).div(3600000);
+  return value.isFinite() &&
+    duration.minus(value.times(3600000)).abs().lte("1e-30")
+    ? value.toString()
+    : null;
+}
+
+/** Plan/rest validation only; callers still enforce identity, complete reads and approvals. */
+export function readPayrollDingtalkDayPlan(
+  day: Pick<
+    DingtalkAttendanceDay,
+    "workDate" | "schedule" | "restsKnown" | "rests"
+  >,
+): {
+  shifts: Shift[];
+  rests: Interval[];
+  working: Interval[];
+  issues: string[];
+} {
+  const pending = (code: string) => ({
+    shifts: [],
+    rests: [],
+    working: [],
+    issues: [code],
+  });
+  const window = dayInterval(day.workDate);
+  if (!window || day.schedule.some((row) => row.workDate !== day.workDate))
+    return pending("RESPONSE_SCOPE_MISMATCH");
+  if (!day.schedule.length) return pending("SCHEDULE_NOT_PROVEN");
+  if (new Set(day.schedule.map((row) => row.id)).size !== day.schedule.length)
+    return pending("SCHEDULE_DUPLICATE");
+  const resting = day.schedule.every((row) => row.isRest);
+  if (!day.restsKnown || (!resting && day.schedule.some((row) => row.isRest)))
+    return pending("CALENDAR_OR_RESTS_UNPROVEN");
+  const schedule = resting
+    ? []
+    : [...day.schedule].sort(
+        (a, b) => millis(a.plannedAt ?? "") - millis(b.plannedAt ?? ""),
+      );
+  const shifts: Shift[] = [];
+  for (let i = 0; i < schedule.length; i += 2) {
+    const on = schedule[i],
+      off = schedule[i + 1];
+    const interval = {
+      startsAt: on.plannedAt ?? "",
+      endsAt: off?.plannedAt ?? "",
+    };
+    if (
+      !off ||
+      !on.id ||
+      !off.id ||
+      on.checkType !== "OnDuty" ||
+      off.checkType !== "OffDuty" ||
+      !on.classId ||
+      on.classId !== off.classId ||
+      !validInterval(interval) ||
+      millis(interval.startsAt) < millis(window.startsAt) ||
+      millis(interval.startsAt) >= millis(window.endsAt) ||
+      millis(interval.endsAt) - millis(interval.startsAt) > 48 * 3600000 ||
+      shifts.some((row) => millis(row.endsAt) > millis(interval.startsAt))
+    )
+      return pending("SHIFT_PAIR_UNPROVEN");
+    shifts.push({ ...interval, on: on.id, off: off.id });
+  }
+  const rests = [...day.rests].sort(
+    (a, b) => millis(a.startsAt) - millis(b.startsAt),
+  );
+  if (
+    rests.some(
+      (rest, index) =>
+        !validInterval(rest) ||
+        (index > 0 &&
+          millis(rests[index - 1].endsAt) > millis(rest.startsAt)) ||
+        !(resting ? [window] : shifts).some(
+          (shift) =>
+            millis(rest.startsAt) >= millis(shift.startsAt) &&
+            millis(rest.endsAt) <= millis(shift.endsAt),
+        ),
+    )
+  )
+    return pending("REST_INTERVAL_UNPROVEN");
+  return { shifts, rests, working: subtract(shifts, rests), issues: [] };
+}
+
+function shiftPunches(day: DingtalkAttendanceDay, shift: Shift) {
+  const on = day.punches.filter((row) => row.planId === shift.on),
+    off = day.punches.filter((row) => row.planId === shift.off);
+  const matched =
+    on.length === 1 &&
+    off.length === 1 &&
+    on[0].checkType === "OnDuty" &&
+    off[0].checkType === "OffDuty" &&
+    millis(on[0].plannedAt) === millis(shift.startsAt) &&
+    millis(off[0].plannedAt) === millis(shift.endsAt);
+  const missing =
+    (!on.length && !off.length) ||
+    (matched &&
+      [...on, ...off].every(
+        (row) =>
+          row.result === "NotSigned" &&
+          row.checkedAt === null &&
+          row.location === "Normal" &&
+          !row.approvalLinked,
+      ));
+  const valid =
+    matched &&
+    ["Normal", "Late"].includes(on[0].result) &&
+    ["Normal", "Early"].includes(off[0].result) &&
+    [...on, ...off].every(
+      (row) =>
+        row.location === "Normal" &&
+        !!row.checkedAt &&
+        /(?:Z|[+-]\d{2}:\d{2})$/.test(row.checkedAt) &&
+        Number.isFinite(millis(row.checkedAt)),
+    ) &&
+    millis(on[0].checkedAt!) <= millis(off[0].checkedAt!) &&
+    (on[0].result !== "Late" ||
+      (millis(shift.startsAt) < millis(on[0].checkedAt!) &&
+        millis(on[0].checkedAt!) < millis(shift.endsAt))) &&
+    (off[0].result !== "Early" ||
+      (millis(shift.startsAt) < millis(off[0].checkedAt!) &&
+        millis(off[0].checkedAt!) < millis(shift.endsAt)));
+  return { on, off, missing, valid };
+}
+
+export function payrollAbsenceCandidate(
+  day: DingtalkAttendanceDay,
+  expected: {
+    employeeId: string;
+    workDate: string;
+    required: boolean;
+    units: string;
+  },
+): {
+  employeeId: string;
+  workDate: string;
+  proofHash: string;
+  intervals: Interval[];
+  hours: string;
+} | null {
+  if (
+    !day.complete ||
+    !day.restsKnown ||
+    day.employeeId !== expected.employeeId ||
+    day.workDate !== expected.workDate ||
+    expected.required !== true ||
+    !/^(?:0|1)(?:\.\d{1,4})?$/.test(expected.units) ||
+    !new D(expected.units).gt(0) ||
+    new D(expected.units).gt(1) ||
+    day.schedule.some((row) => row.approvalLinked) ||
+    day.punches.some(
+      (row) => row.approvalLinked || row.workDate !== day.workDate,
+    ) ||
+    new Set(day.punches.map((row) => row.id)).size !== day.punches.length ||
+    day.approvals.some(
+      (row) =>
+        row.state !== "cancelled" ||
+        row.terminalProof?.status !== "TERMINATED" ||
+        !/^[a-f0-9]{64}$/.test(row.terminalProof.fingerprint),
+    )
+  )
+    return null;
+  const plan = readPayrollDingtalkDayPlan(day);
+  if (
+    plan.issues.length ||
+    !plan.shifts.length ||
+    day.punches.some(
+      (row) =>
+        !plan.shifts.some(
+          (shift) => row.planId === shift.on || row.planId === shift.off,
+        ),
+    )
+  )
+    return null;
+  const missing: Interval[] = [];
+  for (const shift of plan.shifts) {
+    const punches = shiftPunches(day, shift);
+    if (punches.missing)
+      missing.push({ startsAt: shift.startsAt, endsAt: shift.endsAt });
+    else if (!punches.valid) return null;
+  }
+  const intervals = subtract(missing, plan.rests),
+    hours = intervalHours(intervals);
+  if (!intervals.length || hours === null || !new D(hours).gt(0)) return null;
+  return {
+    employeeId: day.employeeId,
+    workDate: day.workDate,
+    intervals,
+    hours,
+    proofHash: hash({
+      schema: "payroll-absence-candidate-v1",
+      day,
+      expected: { ...expected, units: new D(expected.units).toString() },
+    }),
+  };
+}
+
+function confirmedAbsenceRecords(
+  day: DingtalkAttendanceDay,
+  expected: PayrollAttendanceInput["expected"][number],
+  facts: NonNullable<PayrollDingtalkAttendanceOptions["confirmedAbsences"]>,
+): PayrollAttendanceRecord[] | null {
+  const matches = facts.filter(
+    (row) =>
+      row && row.employeeId === day.employeeId && row.workDate === day.workDate,
+  );
+  if (matches.length !== 1) return null;
+  const candidate = payrollAbsenceCandidate(day, expected),
+    fact = matches[0];
+  if (
+    !candidate ||
+    candidate.proofHash !== fact.proofHash ||
+    !Array.isArray(fact.records) ||
+    !fact.records.length
+  )
+    return null;
+  const ids = new Set<string>(),
+    intervals: Interval[] = [];
+  for (const row of fact.records) {
+    if (
+      !row ||
+      row.employeeId !== day.employeeId ||
+      row.workDate !== day.workDate ||
+      row.type !== "absence" ||
+      row.state !== "effective" ||
+      row.unit !== "hour" ||
+      row.overtimeKind !== undefined ||
+      !validInterval(row) ||
+      typeof row.sourceId !== "string" ||
+      !row.sourceId.trim() ||
+      row.sourceId.length > 150 ||
+      ids.has(row.sourceId) ||
+      !Number.isSafeInteger(row.sourceVersion) ||
+      row.sourceVersion < 0 ||
+      typeof row.hours !== "string" ||
+      !/^\d+(?:\.\d+)?$/.test(row.hours) ||
+      !new D(row.hours).eq(intervalHours([row]) ?? "-1") ||
+      subtract([row], candidate.intervals).length ||
+      intervals.some((prior) => intersect([prior], row).length)
+    )
+      return null;
+    ids.add(row.sourceId);
+    intervals.push({ startsAt: row.startsAt, endsAt: row.endsAt });
+  }
+  return subtract(candidate.intervals, intervals).length
+    ? null
+    : structuredClone(fact.records);
 }
 
 /** Callers must persist sourceState and allocate observationVersion transactionally before enabling real synchronization. */
@@ -403,20 +677,13 @@ export function convertDingtalkAttendance(
         note("HRM_EXPECTATION_MISSING", { employeeId, workDate });
   const seenDays = new Set<string>();
   function hours(parts: Interval[], day: DingtalkAttendanceDay): string | null {
-    const duration = parts.reduce(
-      (sum, row) => sum.plus(millis(row.endsAt) - millis(row.startsAt)),
-      new D(0),
-    );
     // Keep exact intervals; a repeating hour fraction must not exceed its source duration.
-    const value = new Hour(duration.toString()).div(3600000);
-    if (
-      !value.isFinite() ||
-      duration.minus(value.times(3600000)).abs().gt("1e-30")
-    ) {
+    const value = intervalHours(parts);
+    if (value === null) {
       note("HOUR_PRECISION_UNPROVEN", day);
       return null;
     }
-    return value.toString();
+    return value;
   }
   function add(
     day: DingtalkAttendanceDay,
@@ -489,6 +756,18 @@ export function convertDingtalkAttendance(
     }
     seenDays.add(key);
     if (!day.complete) note("DAY_COVERAGE_INCOMPLETE", day);
+    const absence = wanted.required
+      ? confirmedAbsenceRecords(day, wanted, options.confirmedAbsences ?? [])
+      : null;
+    if (
+      !absence &&
+      options.confirmedAbsences?.some(
+        (row) =>
+          row.employeeId === day.employeeId && row.workDate === day.workDate,
+      )
+    ) {
+      note("NORMAL_COVERAGE_UNPROVEN", day);
+    }
     if (
       [...day.schedule, ...day.punches].some(
         (row) => row.workDate !== day.workDate,
@@ -524,66 +803,19 @@ export function convertDingtalkAttendance(
       note("SCHEDULE_NOT_PROVEN", day);
       continue;
     }
-    if (day.schedule.every((row) => row.isRest)) {
-      if (wanted.required || day.punches.length || day.approvals.length)
-        note("REST_DAY_CONFLICT", day);
+    const resting = day.schedule.every((row) => row.isRest);
+    if (resting && wanted.required) {
+      note("REST_DAY_CONFLICT", day);
       continue;
     }
-    if (
-      !wanted.required ||
-      day.schedule.some((row) => row.isRest) ||
-      !day.restsKnown
-    ) {
-      note("CALENDAR_OR_RESTS_UNPROVEN", day);
+    if (resting && !day.punches.length && !day.approvals.length) continue;
+    const plan = readPayrollDingtalkDayPlan(day);
+    if (plan.issues.length) {
+      for (const code of plan.issues) note(code, day);
       continue;
     }
-    const schedule = [...day.schedule].sort(
-      (a, b) => millis(a.plannedAt ?? "") - millis(b.plannedAt ?? ""),
-    );
-    const shifts: Array<Interval & { on: string; off: string }> = [];
-    for (let i = 0; i < schedule.length; i += 2) {
-      const on = schedule[i],
-        off = schedule[i + 1];
-      const interval = {
-        startsAt: on.plannedAt ?? "",
-        endsAt: off?.plannedAt ?? "",
-      };
-      if (
-        !off ||
-        on.checkType !== "OnDuty" ||
-        off.checkType !== "OffDuty" ||
-        !on.classId ||
-        on.classId !== off.classId ||
-        !validInterval(interval) ||
-        millis(interval.endsAt) - millis(interval.startsAt) > 48 * 3600000 ||
-        shifts.some((row) => millis(row.endsAt) > millis(interval.startsAt))
-      ) {
-        note("SHIFT_PAIR_UNPROVEN", day);
-        break;
-      }
-      shifts.push({ ...interval, on: on.id, off: off.id });
-    }
-    if (shifts.length * 2 !== schedule.length) continue;
-    const rests = [...day.rests].sort(
-      (a, b) => millis(a.startsAt) - millis(b.startsAt),
-    );
-    if (
-      rests.some(
-        (rest, index) =>
-          !validInterval(rest) ||
-          (index > 0 &&
-            millis(rests[index - 1].endsAt) > millis(rest.startsAt)) ||
-          !shifts.some(
-            (shift) =>
-              millis(rest.startsAt) >= millis(shift.startsAt) &&
-              millis(rest.endsAt) <= millis(shift.endsAt),
-          ),
-      )
-    ) {
-      note("REST_INTERVAL_UNPROVEN", day);
-      continue;
-    }
-    const working = subtract(shifts, rests),
+    const { shifts, rests } = plan;
+    const working = wanted.required ? plan.working : [],
       leave: Interval[] = [];
     for (const approval of day.approvals) {
       const approvalIdentity = hash(["approval", approval.processInstanceId]);
@@ -613,6 +845,11 @@ export function convertDingtalkAttendance(
             row.proof.identityHash === approvalIdentity,
         );
         if (previous.length) {
+          if (
+            !wanted.required &&
+            previous.some((row) => row.record.type !== "overtime")
+          )
+            note("REST_DAY_CONFLICT", day);
           for (const prior of previous)
             save(
               prior.sourceId,
@@ -647,6 +884,10 @@ export function convertDingtalkAttendance(
         note("APPROVAL_TYPE_UNMAPPED", day, mappingKey);
         continue;
       }
+      if (!wanted.required && mapping.type !== "overtime") {
+        note("REST_DAY_CONFLICT", day);
+        continue;
+      }
       if (approval.state !== "approved" && !cancelled)
         note(
           approval.state === "revoked"
@@ -674,6 +915,13 @@ export function convertDingtalkAttendance(
         note("APPROVAL_INTERVAL_UNPROVEN", day);
         continue;
       }
+      if (
+        !wanted.required &&
+        subtract([interval], [dayInterval(day.workDate)!]).length
+      ) {
+        note("APPROVAL_DAILY_ALLOCATION_UNPROVEN", day);
+        continue;
+      }
       const pieces = subtract([interval], rests),
         quantity = hours(pieces, day);
       if (quantity === null || !new D(quantity).eq(approval.duration)) {
@@ -685,6 +933,7 @@ export function convertDingtalkAttendance(
           !["weekday", "restday", "holiday"].includes(
             mapping.overtimeKind ?? "",
           ) ||
+          (!wanted.required && mapping.overtimeKind === "weekday") ||
           working.some(
             (row) =>
               millis(row.startsAt) < millis(interval.endsAt) &&
@@ -692,6 +941,22 @@ export function convertDingtalkAttendance(
           )
         ) {
           note("OVERTIME_CLASSIFICATION_UNPROVEN", day);
+          continue;
+        }
+        if (
+          approval.state === "approved" &&
+          input.records.some(
+            (row) =>
+              row.employeeId === day.employeeId &&
+              row.workDate === day.workDate &&
+              row.type === "overtime" &&
+              row.state === "effective" &&
+              state.get(row.sourceId)?.proof?.identityHash !==
+                approvalIdentity &&
+              intersect(pieces, row).length,
+          )
+        ) {
+          note("INTERVAL_CONFLICT", day);
           continue;
         }
       } else if (subtract(pieces, working).length) {
@@ -718,43 +983,51 @@ export function convertDingtalkAttendance(
     }
     if (
       day.punches.some(
-        (punch) => !schedule.some((row) => row.id === punch.planId),
+        (punch) =>
+          !shifts.some(
+            (row) => row.on === punch.planId || row.off === punch.planId,
+          ),
       )
     )
       note("UNMATCHED_PUNCH", day);
+    if (!wanted.required) {
+      const overtime = input.records.filter(
+        (row) =>
+          row.employeeId === day.employeeId &&
+          row.workDate === day.workDate &&
+          row.type === "overtime" &&
+          row.state === "effective",
+      );
+      for (const shift of shifts) {
+        const pair = shiftPunches(day, shift);
+        if (!pair.on.length && !pair.off.length) continue;
+        if (
+          !pair.valid ||
+          subtract(
+            subtract(
+              [
+                {
+                  startsAt: pair.on[0].checkedAt!,
+                  endsAt: pair.off[0].checkedAt!,
+                },
+              ],
+              rests,
+            ),
+            overtime,
+          ).length
+        ) {
+          note("NORMAL_COVERAGE_UNPROVEN", day);
+        }
+      }
+    }
+    if (absence) input.records.push(...absence);
     for (const shift of shifts) {
+      if (!wanted.required) continue;
       const regular = subtract(subtract([shift], rests), leave);
       if (!regular.length) continue;
-      const on = day.punches.filter((punch) => punch.planId === shift.on),
-        off = day.punches.filter((punch) => punch.planId === shift.off);
-      if (
-        on.length !== 1 ||
-        off.length !== 1 ||
-        on[0].checkType !== "OnDuty" ||
-        off[0].checkType !== "OffDuty" ||
-        !["Normal", "Late"].includes(on[0].result) ||
-        !["Normal", "Early"].includes(off[0].result) ||
-        [on[0], off[0]].some(
-          (punch) =>
-            punch.location !== "Normal" ||
-            !punch.checkedAt ||
-            !/(?:Z|[+-]\d{2}:\d{2})$/.test(punch.checkedAt) ||
-            !Number.isFinite(millis(punch.checkedAt)),
-        ) ||
-        millis(on[0].checkedAt!) > millis(off[0].checkedAt!) ||
-        (on[0].result === "Late" &&
-          !(
-            millis(shift.startsAt) < millis(on[0].checkedAt!) &&
-            millis(on[0].checkedAt!) < millis(shift.endsAt)
-          )) ||
-        (off[0].result === "Early" &&
-          !(
-            millis(shift.startsAt) < millis(off[0].checkedAt!) &&
-            millis(off[0].checkedAt!) < millis(shift.endsAt)
-          )) ||
-        millis(on[0].plannedAt) !== millis(shift.startsAt) ||
-        millis(off[0].plannedAt) !== millis(shift.endsAt)
-      ) {
+      const { on, off, missing, valid } = shiftPunches(day, shift);
+      if (absence && missing && !subtract(regular, absence).length) continue;
+      if (!valid) {
         note("NORMAL_COVERAGE_UNPROVEN", day);
         continue;
       }

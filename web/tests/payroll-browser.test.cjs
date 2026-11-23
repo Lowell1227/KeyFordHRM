@@ -132,6 +132,12 @@ test('monthly workday parameters start unconfirmed and copying a rule preserves 
   assert.ok(calls.some(call => call.path.endsWith('/operators'))); assert.ok(calls.some(call => call.path.endsWith('/performance-cycles')));
   assert.ok(calls.some(call => call.path.endsWith('/employees')));
   await drawer.getByRole('button', { name: '取消', exact: true }).click();
+  const discard = page.getByRole('dialog', { name: '离开编辑', exact: true });
+  await expect(discard).toBeVisible();
+  await expect(discard.getByText('放弃尚未保存的修改？', { exact: true })).toBeVisible();
+  await discard.getByRole('button', { name: '放弃修改', exact: true }).click();
+  await expect(discard).toBeHidden();
+  await expect(drawer).toBeHidden();
   await page.getByRole('button', { name: '复制草稿', exact: true }).first().click();
   await expect(calendar.getByLabel('日历版本', { exact: true })).toHaveValue('fictional-calendar-v1');
   await expect(calendar.getByLabel('日历确认依据', { exact: true })).toHaveValue('虚构日历批准依据');
@@ -146,7 +152,30 @@ test('actual results distinguish not applicable, ready zero and missing; screens
   for (const viewport of [{ width:1440,height:900 }, { width:1024,height:768 }, { width:390,height:844 }]) {
     const { page, errors } = await pageFor(t, { viewport, batch: batch('approved') });
     await page.goto(`${origin}payroll/results/batch?month=2026-11`);
-    await expect(page.locator(viewport.width <= 768 ? '.payroll-lines-mobile' : '.payroll-lines-desktop').getByText(viewport.width <= 768 ? '不适用 · 本批 不适用' : '不适用', { exact: true }).first()).toBeVisible();
+    const cases = [
+      { item: '固定工资', status: '已核算', entitlement: '0.00', paid: '0', amount: '0.00' },
+      { item: '加班工资', status: '不适用', entitlement: '0.00', paid: '0', amount: '不适用' },
+      { item: '个人绩效', status: '待配置', entitlement: '待配置', paid: '待确认', amount: '待核对 / 待配置' },
+    ];
+    if (viewport.width <= 768) {
+      const rows = page.locator('.payroll-lines-mobile .mobile-line');
+      await expect(rows).toHaveCount(3);
+      for (const value of cases) {
+        const row = rows.filter({ has: page.getByText(`2026-11 · ${value.item}`, { exact: true }) });
+        await expect(row.getByText(`${value.status} · 本批待结余额 ${value.amount}`, { exact: true })).toBeVisible();
+        await expect(row.getByText(`全额应发 ${value.entitlement} · 历史已入薪 ${value.paid}`, { exact: true })).toBeVisible();
+      }
+    } else {
+      const rows = page.locator('.payroll-lines-desktop .el-table__body-wrapper .el-table__row');
+      await expect(rows).toHaveCount(3);
+      for (const value of cases) {
+        const cells = rows.filter({ has: page.getByText(value.item, { exact: true }) }).locator('td .cell');
+        await expect(cells.nth(4)).toHaveText(value.status);
+        await expect(cells.nth(5)).toHaveText(value.entitlement);
+        await expect(cells.nth(6)).toHaveText(value.paid);
+        await expect(cells.nth(7)).toHaveText(value.amount);
+      }
+    }
     await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.screenshot({ path: path.join(os.tmpdir(), `payroll-ui-${viewport.width}.png`), fullPage: true });

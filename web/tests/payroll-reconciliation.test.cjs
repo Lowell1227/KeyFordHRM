@@ -64,6 +64,7 @@ function view(preview, t) {
   app.component('el-option', { props: ['value', 'label', 'disabled'], setup(props) { options.push(props); return () => null; } });
   app.component('el-date-picker', { render: () => null });
   app.component('RouterView', { render: () => null });
+  app.component('RouterLink', pass);
   app.mount(node('root')); t.after(() => app.unmount());
   return options.map(p => ({ value: p.value, label: p.label, disabled: p.disabled }));
 }

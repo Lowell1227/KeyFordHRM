@@ -17,6 +17,11 @@ function quantity(value: unknown, nonzero = false): string | null {
   if (typeof value !== 'string' || !/^\d{1,12}(\.\d{1,4})?$/.test(value)) return null;
   const amount = new D(value); return amount.isFinite() && (nonzero ? amount.gt(0) : amount.gte(0)) ? value : null;
 }
+function durationQuantity(value: unknown): string | null {
+  // Verified minute/millisecond intervals can have repeating hourly fractions; do not round them as pricing inputs.
+  if (typeof value !== 'string' || !/^\d{1,12}(\.\d{1,80})?$/.test(value)) return null;
+  const hours = new D(value); return hours.isFinite() && hours.gte(0) ? value : null;
+}
 @Injectable()
 export class PayrollSourcesService implements PayrollSourceReader {
   async capture(tx: Prisma.TransactionClient, subjectId: string, month: string, domain: PayrollDomain): Promise<PayrollCapture> {
@@ -161,7 +166,7 @@ export class PayrollSourcesService implements PayrollSourceReader {
           performanceMode: manual ? 'none' : standard.performanceMode as PayrollSegment['performanceMode'], coefficient });
         for (const record of day.records ?? []) {
           if (record.state !== 'effective' || record.resolution !== 'usable') continue;
-          const hours = quantity(record.effectiveHours);
+          const hours = durationQuantity(record.effectiveHours);
           if (record.unit !== 'hour' || hours === null) { personal.push('原始时长单位或数量待核对'); continue; }
           if (['unpaid_leave', 'sick_leave', 'absence', 'late', 'early'].includes(record.type)) {
             const paidHourly = quantity(config.paidHourly?.[record.type as keyof PayrollPolicyConfig['paidHourly']]), normalHourly = quantity(config.normalHourly);

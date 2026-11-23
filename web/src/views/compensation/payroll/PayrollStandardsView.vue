@@ -13,6 +13,7 @@ import PayrollWorkCalendarEditor from './PayrollWorkCalendarEditor.vue';
 import PayrollManualPerformanceEditor from './PayrollManualPerformanceEditor.vue';
 import PayrollEmployeeScopeEditor from './PayrollEmployeeScopeEditor.vue';
 import PayrollAttendanceMappingsEditor from './PayrollAttendanceMappingsEditor.vue';
+import PayrollParameterComparison from './PayrollParameterComparison.vue';
 import { attendanceMappingPayload, type AttendanceMappingDraft } from './payroll-attendance-mappings';
 import { employeeScopeErrors } from './payroll-employee-scope-form';
 import { isLocalPreview } from '@/utils/preview-mode';
@@ -32,6 +33,9 @@ const fields = reactive<Record<string, string>>({});
 const standard = ref<PayrollStandardInput>(emptyStandard());
 const rule = ref<PayrollRuleInput>(emptyRule());
 const history = ref<PayrollStandard | PayrollRule>();
+const savedDraft = ref<{ kind: 'standard' | 'rule'; row: PayrollStandard | PayrollRule }>();
+const activeRule = computed(() => rules.value.find(row => row.status === 'active' && row.effectiveFrom.slice(0, 7) <= month.value && (!row.effectiveTo || row.effectiveTo.slice(0, 7) >= month.value)));
+const historyPresentation = computed(() => history.value ? { kind: 'config' in history.value ? 'rule' as const : 'standard' as const, snapshot: { ...history.value, effectiveTo: history.value.effectiveTo ?? null }, previousParameterId: null, scopeEmployees: employees.value, manualEmployees: employees.value } : undefined);
 const rows = computed<Array<PayrollStandard | PayrollRule>>(() => tab.value === 'standards' ? standards.value : rules.value);
 const mappings = ref<Array<PayrollPerformanceMapping & { month: string }>>([]);
 const manualPeople = reactive<Record<string, { employees: PayrollEmployee[]; loading: boolean; error: string }>>({});
@@ -39,6 +43,8 @@ const scopePeople = ref<PayrollScopeCandidate[]>([]), scopeLoading = ref(false),
 const attendanceMappings = ref<AttendanceMappingDraft[]>([]);
 const attendanceMappingErrors = computed(() => Object.fromEntries(Object.entries(fields).filter(([key]) => key.startsWith('attendanceMappings.')).map(([key, value]) => [key.slice('attendanceMappings.'.length), value])));
 let baseline = '', sequence = 0, scopeSequence = 0;
+const scopeLoadedFor = ref('');
+function scopeRequestKey() { return JSON.stringify([subjectId.value, month.value, rule.value.effectiveFrom, rule.value.effectiveTo]); }
 onScopeDispose(() => { ++scopeSequence; });
 const reviewerOptions = computed(() => operators.value.filter(person => person.capabilities.includes('payroll_review')));
 const approverOptions = computed(() => operators.value.filter(person => person.capabilities.includes('payroll_approve')));
@@ -72,14 +78,15 @@ async function load() {
   } catch (cause) { if (request === sequence) error.value = await payrollError(cause); }
   finally { if (request === sequence) loading.value = false; }
 }
+function nextPage(path: string) { void router.push({ path, query: { subjectId: subjectId.value, month: month.value } }); }
 async function refresh() { const before = subjectId.value; await refreshAccess(); if (before === subjectId.value) await load(); }
-watch([subjectId, month], () => { if (!open.value) void load(); });
+watch([subjectId, month], () => { savedDraft.value = undefined; history.value = undefined; if (!open.value) void load(); });
 onMounted(refresh);
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)); }
 function showHistory(row: unknown) { history.value = row as PayrollStandard | PayrollRule; }
 function edit(type: 'standard' | 'rule', row?: unknown) {
   ++scopeSequence;
-  kind.value = type; formError.value = ''; Object.keys(fields).forEach(key => delete fields[key]);
+  kind.value = type; formError.value = ''; savedDraft.value = undefined; scopeLoadedFor.value = ''; scopePeople.value = []; Object.keys(fields).forEach(key => delete fields[key]);
   standard.value = type === 'standard' && row ? clone(row as PayrollStandard) : emptyStandard();
   rule.value = type === 'rule' && row ? clone(row as PayrollRule) : emptyRule();
   standard.value.subjectId = subjectId.value; rule.value.subjectId = subjectId.value;
@@ -98,13 +105,14 @@ watch([open, kind, () => rule.value.effectiveFrom, () => rule.value.effectiveTo]
   if (open.value && kind.value === 'rule' && !isLocalPreview) void loadScopePeople();
 });
 async function loadScopePeople() {
-  scopeLoading.value = true; scopeError.value = ''; scopePeople.value = [];
+  scopeLoading.value = true; scopeError.value = ''; scopePeople.value = []; scopeLoadedFor.value = '';
+  const requestKey = scopeRequestKey();
   const request = ++scopeSequence, subject = subjectId.value, period = month.value;
   const from = rule.value.effectiveFrom, to = rule.value.effectiveTo;
   const current = () => request === scopeSequence && open.value && kind.value === 'rule' && subject === subjectId.value && period === month.value && from === rule.value.effectiveFrom && to === rule.value.effectiveTo;
   try {
     const people = await payrollApi.employeeScopeCandidates(subject, period, { effectiveFrom: from || undefined, effectiveTo: to || undefined });
-    if (current()) scopePeople.value = people;
+    if (current()) { scopePeople.value = people; scopeLoadedFor.value = requestKey; }
   } catch (cause) { const message = await payrollError(cause); if (current()) scopeError.value = message; }
   finally { if (current()) scopeLoading.value = false; }
 }
@@ -124,6 +132,14 @@ async function loadManualPeople(attributionMonth: string, retry = false) {
   try { state.employees = await payrollApi.employees(subjectId.value, attributionMonth); }
   catch (cause) { state.error = await payrollError(cause); }
   finally { state.loading = false; }
+}
+function manualPeopleState(attributionMonth: string) {
+  if (!isLocalPreview && attributionMonth === month.value && rule.value.config.employeeScope) {
+    const selected = rule.value.config.employeeScope.employeeIds;
+    return { employees: scopePeople.value.filter(person => selected.includes(person.id) && !person.unavailableReason),
+      loading: scopeLoading.value || scopeLoadedFor.value !== scopeRequestKey(), error: scopeError.value };
+  }
+  return manualPeople[peopleKey(attributionMonth)] ?? { employees: [], loading: true, error: '' };
 }
 watch(() => [subjectId.value, ...mappings.value.filter(mapping => mapping.sourceKind === 'manual').map(mapping => mapping.month)], () => {
   for (const mapping of mappings.value) if (mapping.sourceKind === 'manual') void loadManualPeople(mapping.month);
@@ -161,7 +177,7 @@ async function save() {
     for (const [key, message] of Object.entries(classification.errors)) fields[`attendanceMappings.${key}`] = message;
     config.attendanceMappings = classification.value;
     if (!isLocalPreview) {
-      if (scopeLoading.value || scopeError.value) fields['employeeScope.employeeIds'] = '请先完成发薪人员读取与核对';
+      if (scopeLoading.value || scopeError.value || scopeLoadedFor.value !== scopeRequestKey()) fields['employeeScope.employeeIds'] = '请先完成发薪人员读取与核对';
       else for (const [key, message] of Object.entries(employeeScopeErrors(config.employeeScope, scopePeople.value.filter(person => !person.unavailableReason).map(person => person.id)))) fields[`employeeScope.${key}`] = message;
     }
     if (config.fixedSalaryBasis === 'monthly_workdays') {
@@ -171,15 +187,16 @@ async function save() {
       }
     }
     if (config.monthlyUnits[month.value] && !isDecimal(config.monthlyUnits[month.value])) fields.monthlyUnits = '请填写非负十进制计薪单位';
-    const values = [config.normalHourly, ...Object.values(config.paidHourly), ...Object.values(config.overtime), ...Object.values(config.monthlyUnits)];
-    if (values.some(value => value && !isDecimal(value))) formError.value = '计价参数应为非负十进制数，未确认项请留空';
+    const prices = { normalHourly: config.normalHourly, ...Object.fromEntries(Object.entries(config.paidHourly).map(([key, value]) => [`paidHourly.${key}`, value])), ...Object.fromEntries(Object.entries(config.overtime).map(([key, value]) => [`overtime.${key}`, value])) };
+    for (const [key, value] of Object.entries(prices)) if (value && !isDecimal(value)) fields[key] = '请填写非负十进制数，未确认项请留空';
+    for (const [key, value] of Object.entries(config.monthlyUnits)) if (value && !isDecimal(value)) fields.monthlyUnits = `${key} 计薪单位应为非负十进制数`;
     const seen = new Set<string>();
     for (const [index, mapping] of mappings.value.entries()) {
       const prefix = `performance.${index}.`;
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mapping.month) || seen.has(mapping.month)) fields[`${prefix}month`] = '请选择不重复的绩效归属月';
       seen.add(mapping.month);
       if (mapping.sourceKind === 'manual') {
-        const people = manualPeople[peopleKey(mapping.month)];
+        const people = manualPeopleState(mapping.month);
         if (!people || people.loading || people.error) fields[`${prefix}people`] = '请先完成本月人员核对，读取失败时可重新读取';
         for (const [key, message] of Object.entries(manualPerformanceErrors(mapping, people?.employees.map(person => person.id) ?? []))) fields[`${prefix}${key}`] = message;
         continue;
@@ -198,7 +215,7 @@ async function save() {
   try {
     if (kind.value === 'standard') {
       const s = standard.value;
-      await payrollApi.createStandard({ subjectId: subjectId.value, employeeId: s.employeeId, effectiveFrom: s.effectiveFrom, effectiveTo: s.effectiveTo || undefined, fixedMonthly: s.fixedMonthly || null, performanceBase: s.performanceBase || null, performanceMode: s.performanceMode || null, evidence: s.evidence.trim() });
+      savedDraft.value = { kind: 'standard', row: await payrollApi.createStandard({ subjectId: subjectId.value, employeeId: s.employeeId, effectiveFrom: s.effectiveFrom, effectiveTo: s.effectiveTo || undefined, fixedMonthly: s.fixedMonthly || null, performanceBase: s.performanceBase || null, performanceMode: s.performanceMode || null, evidence: s.evidence.trim() }) };
     } else {
       const r = rule.value, config = clone(r.config);
       config.normalHourly ||= null; config.cutoverMonth ||= null; config.rounding ||= null;
@@ -209,7 +226,7 @@ async function save() {
       config.paidHourly = Object.fromEntries(Object.entries(config.paidHourly).filter(([, value]) => value !== ''));
       for (const key of ['hourlyBase', 'weekday', 'restday', 'holiday'] as const) config.overtime[key] ||= null;
       config.performance = performanceMappingsPayload(mappings.value);
-      await payrollApi.createRule({ subjectId: subjectId.value, effectiveFrom: r.effectiveFrom, effectiveTo: r.effectiveTo || undefined, config });
+      savedDraft.value = { kind: 'rule', row: await payrollApi.createRule({ subjectId: subjectId.value, effectiveFrom: r.effectiveFrom, effectiveTo: r.effectiveTo || undefined, config }) };
     }
     open.value = false; await load();
   } catch (cause) { formError.value = await payrollError(cause); }
@@ -237,10 +254,19 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
     </template>
     <template #feedback>
       <el-alert v-if="error" :title="error" type="error" :closable="false" />
+      <el-alert v-else-if="savedDraft" title="草稿已保存，尚未生效" type="success" :closable="false">
+        <p>下一步：提交经办人的直属主管审核。名单与规则发布后，录入个人工资标准；人工绩效可随规则草稿一并填写。</p>
+        <el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy || open" @click="submit(savedDraft.kind, savedDraft.row)">提交主管审核</el-button>
+      </el-alert>
       <el-alert v-else-if="!isLocalPreview && subjectId && !loading && !rules.length" title="尚未配置工资规则" type="info" :closable="false">
         <p>先维护发薪人员、工作日日历及计薪规则，提交经办人的直属主管审核。</p>
         <el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy || open" @click="tab = 'rules'; edit('rule')">新建工资规则</el-button>
       </el-alert>
+      <el-alert v-else-if="!isLocalPreview && subjectId && !loading && rules.length && !activeRule" title="本月发薪名单与规则尚未发布" type="info" :closable="false">
+        <p>先提交名单及规则，由经办人的直属主管审核；发布后再录个人工资标准。工资批次的复核、审批另行办理。</p>
+        <el-button link type="primary" @click="tab = 'rules'">查看规则草稿</el-button><el-button link type="primary" @click="nextPage('/payroll/parameter-reviews')">查看主管审核进度</el-button>
+      </el-alert>
+      <div v-if="activeRule && !loading" class="month-next" role="status"><span>{{ month }} 名单与规则已发布 · 下一步：{{ standards.some(row => row.status === 'active') ? '核对个人标准、扣缴资料及考勤' : '录入个人工资标准' }}</span><el-button v-if="has('payroll_edit')" link type="primary" :disabled="open || busy" @click="tab = 'standards'; edit('standard')">录入工资标准</el-button><el-button link type="primary" @click="nextPage('/payroll/deductions')">扣缴资料</el-button><el-button v-if="has('attendance_edit') || has('attendance_seal')" link type="primary" @click="nextPage('/payroll/attendance')">考勤核对与封账</el-button><el-button link type="primary" @click="nextPage('/payroll/batches')">月度试算与核算</el-button></div>
     </template>
     <template #desktop-list>
       <el-table :data="rows" height="100%" empty-text="尚未配置">
@@ -271,6 +297,7 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
             <el-form-item label="结束日期" :error="fields.effectiveTo"><el-date-picker v-if="kind === 'standard'" v-model="standard.effectiveTo" type="date" value-format="YYYY-MM-DD" clearable /><el-date-picker v-else v-model="rule.effectiveTo" type="date" value-format="YYYY-MM-DD" clearable /></el-form-item>
           </div>
           <template v-if="kind === 'standard'">
+            <p v-if="!isLocalPreview && !employees.length" class="form-note" role="status">本月暂无已审核发薪人员。请先提交工资规则中的名单，由直属主管审核发布后再录个人标准。</p>
             <el-form-item label="员工" :error="fields.employeeId"><el-select v-model="standard.employeeId" filterable><el-option v-for="person in employees" :key="person.id" :value="person.id" :label="`${person.name} ${person.employeeNo}`" /></el-select></el-form-item>
             <div class="form-grid"><el-form-item label="固定月标准" :error="fields.fixedMonthly"><el-input v-model="standard.fixedMonthly" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="个人绩效基数（自动关联时使用）" :error="fields.performanceBase"><el-input v-model="standard.performanceBase" inputmode="decimal" placeholder="人工填写绩效金额时可留空" /></el-form-item></div>
             <el-form-item label="绩效工资结构"><el-select v-model="standard.performanceMode" clearable><el-option v-if="standard.performanceMode === 'included'" label="含薪（历史配置）" value="included" /><el-option label="另计" value="additional" /><el-option label="不适用" value="none" /></el-select></el-form-item>
@@ -281,19 +308,19 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
             <h3>计薪参数</h3>
             <el-form-item label="固定工资折算"><el-select v-model="rule.config.fixedSalaryBasis"><el-option label="按当月应出勤工作日" value="monthly_workdays" /></el-select></el-form-item>
             <PayrollWorkCalendarEditor v-if="rule.config.fixedSalaryBasis === 'monthly_workdays'" v-model="rule.config.workCalendars![month]" :month="month" :error="fields.calendar" @update:model-value="fields.calendar = ''" />
-            <div class="form-grid"><el-form-item v-if="rule.config.fixedSalaryBasis !== 'monthly_workdays'" :label="`${month} 计薪单位`" :error="fields.monthlyUnits"><el-input v-model="rule.config.monthlyUnits[month]" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="舍入规则"><el-select v-model="rule.config.rounding" clearable><el-option label="按员工工资项汇总后四舍五入到分" value="item_half_up" /></el-select></el-form-item><el-form-item label="正常计薪小时单价"><el-input v-model="rule.config.normalHourly" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="正式启用归属月切点"><el-date-picker v-model="rule.config.cutoverMonth" type="month" value-format="YYYY-MM" clearable /></el-form-item></div>
-            <h3>假勤小时待遇</h3><div class="form-grid"><el-form-item label="事假"><el-input v-model="rule.config.paidHourly.unpaid_leave" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="病假"><el-input v-model="rule.config.paidHourly.sick_leave" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="确认旷工"><el-input v-model="rule.config.paidHourly.absence" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
-            <div class="form-grid"><el-form-item label="迟到时段小时待遇"><el-input v-model="rule.config.paidHourly.late" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="早退时段小时待遇"><el-input v-model="rule.config.paidHourly.early" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
+            <el-alert v-if="fields.monthlyUnits && rule.config.fixedSalaryBasis === 'monthly_workdays'" :title="fields.monthlyUnits" type="error" :closable="false" />
+            <div class="form-grid"><el-form-item v-if="rule.config.fixedSalaryBasis !== 'monthly_workdays'" :label="`${month} 计薪单位`" :error="fields.monthlyUnits"><el-input v-model="rule.config.monthlyUnits[month]" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="舍入规则"><el-select v-model="rule.config.rounding" clearable><el-option label="按员工工资项汇总后四舍五入到分" value="item_half_up" /></el-select></el-form-item><el-form-item label="正常计薪小时单价" :error="fields.normalHourly"><el-input v-model="rule.config.normalHourly" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="正式启用归属月切点"><el-date-picker v-model="rule.config.cutoverMonth" type="month" value-format="YYYY-MM" clearable /></el-form-item></div>
+            <h3>假勤小时待遇</h3><div class="form-grid"><el-form-item v-for="(label, key) in ({ unpaid_leave: '事假', sick_leave: '病假', absence: '确认旷工', late: '迟到时段小时待遇', early: '早退时段小时待遇' } as const)" :key="key" :label="label" :error="fields[`paidHourly.${key}`]"><el-input v-model="rule.config.paidHourly[key]" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
             <PayrollAttendanceMappingsEditor v-model="attendanceMappings" :errors="attendanceMappingErrors" />
-            <h3>加班</h3><div class="form-grid"><el-form-item label="小时基数"><el-input v-model="rule.config.overtime.hourlyBase" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="工作日倍率"><el-input v-model="rule.config.overtime.weekday" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="休息日倍率"><el-input v-model="rule.config.overtime.restday" inputmode="decimal" placeholder="未确认" /></el-form-item><el-form-item label="节假日倍率"><el-input v-model="rule.config.overtime.holiday" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
-            <h3>复核与审批</h3><div class="form-grid"><el-form-item label="复核人（按选择顺序）"><el-select v-model="rule.config.reviewers" multiple filterable><el-option v-for="person in reviewerOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item><el-form-item label="审批人（按选择顺序）"><el-select v-model="rule.config.approvers" multiple filterable><el-option v-for="person in approverOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item></div>
+            <h3>加班</h3><div class="form-grid"><el-form-item v-for="(label, key) in ({ hourlyBase: '小时基数', weekday: '工作日倍率', restday: '休息日倍率', holiday: '节假日倍率' } as const)" :key="key" :label="label" :error="fields[`overtime.${key}`]"><el-input v-model="rule.config.overtime[key]" inputmode="decimal" placeholder="未确认" /></el-form-item></div>
+            <h3>工资批次复核与审批</h3><div class="form-grid"><el-form-item label="复核人（按选择顺序）"><el-select v-model="rule.config.reviewers" multiple filterable><el-option v-for="person in reviewerOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item><el-form-item label="审批人（按选择顺序）"><el-select v-model="rule.config.approvers" multiple filterable><el-option v-for="person in approverOptions" :key="person.id" :value="person.id" :label="person.name" /></el-select></el-form-item></div>
             <h3>个人绩效归属</h3>
             <section v-for="(mapping, index) in mappings" :key="index" class="mapping-row">
               <div class="form-grid"><el-form-item label="归属月" :error="fields[`performance.${index}.month`]"><el-date-picker v-model="mapping.month" type="month" value-format="YYYY-MM" @update:model-value="clearMappingErrors(index)" /></el-form-item><el-form-item label="来源类型"><el-select v-model="mapping.sourceKind" clearable @update:model-value="clearMappingErrors(index)"><el-option label="HR填写金额" value="manual" /><el-option label="正式公示结果" value="official" /><el-option label="虚构验收来源" value="fictional" /></el-select></el-form-item></div>
               <PayrollManualPerformanceEditor v-if="mapping.sourceKind === 'manual'" :model-value="mapping" :month="mapping.month"
-                :employees="manualPeople[peopleKey(mapping.month)]?.employees ?? []" :loading="manualPeople[peopleKey(mapping.month)]?.loading"
-                :load-error="manualPeople[peopleKey(mapping.month)]?.error" :errors="mappingErrors(index)"
-                @retry="loadManualPeople(mapping.month, true)" @update:model-value="updateMapping(index, $event)" />
+                :employees="manualPeopleState(mapping.month).employees" :loading="manualPeopleState(mapping.month).loading"
+                :load-error="manualPeopleState(mapping.month).error" :errors="mappingErrors(index)"
+                @retry="!isLocalPreview && mapping.month === month && rule.config.employeeScope ? loadScopePeople() : loadManualPeople(mapping.month, true)" @update:model-value="updateMapping(index, $event)" />
               <template v-else>
                 <el-form-item label="绩效周期" :error="fields[`performance.${index}.cycleIds`]"><el-select v-model="mapping.cycleIds" multiple filterable><el-option v-for="cycle in cycles" :key="cycle.id" :value="cycle.id" :label="cycle.name" :disabled="rule.config.fixedSalaryBasis === 'monthly_workdays' && (cycle.type !== 'monthly' || cycle.startDate?.slice(0, 7) !== mapping.month || cycle.endDate?.slice(0, 7) !== mapping.month)" /></el-select></el-form-item>
                 <div class="form-grid"><el-form-item label="统一系数表版本" :error="fields[`performance.${index}.coefficientVersion`]"><el-input v-model="mapping.coefficientVersion" maxlength="200" /></el-form-item><el-form-item label="系数确认依据" :error="fields[`performance.${index}.evidenceRef`]"><el-input v-model="mapping.evidenceRef" maxlength="200" /></el-form-item></div>
@@ -307,7 +334,7 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
         </el-form>
         <template #footer><el-button :disabled="busy" @click="closeForm(false)">取消</el-button><el-button type="primary" :loading="busy" @click="save">保存草稿</el-button></template>
       </BusinessDetailDrawer>
-      <BusinessDetailDrawer :model-value="!!history" title="版本依据" @update:model-value="history = undefined"><pre>{{ JSON.stringify(history, null, 2) }}</pre></BusinessDetailDrawer>
+      <BusinessDetailDrawer :model-value="!!history" title="版本依据" @update:model-value="history = undefined"><PayrollParameterComparison v-if="historyPresentation" :release="historyPresentation" current-only /><details><summary>高级追溯 · 完整版本</summary><pre>{{ JSON.stringify(history, null, 2) }}</pre></details></BusinessDetailDrawer>
     </template>
   </BusinessListPage>
 </template>
@@ -319,6 +346,10 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
 h3 { font-size: 15px; margin: 22px 0 14px; }
 .mapping-row { border-top: 1px solid var(--el-border-color-lighter); padding-top: 14px; }
 .form-feedback { margin-top: 16px; }
+.month-next {display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-size:13px;line-height:1.6;}
+.form-note {font-size:13px;color:var(--el-text-color-secondary);line-height:1.6;overflow-wrap:anywhere;}
+:deep(.el-form-item__error) {position:static;line-height:1.5;overflow-wrap:anywhere;}
+:deep(.el-form-item__label) {height:auto;line-height:1.5;overflow-wrap:anywhere;}
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @media(max-width:768px) { .form-grid { grid-template-columns: minmax(0,1fr); } .coefficient-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 </style>

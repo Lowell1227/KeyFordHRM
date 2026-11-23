@@ -64,6 +64,8 @@ export interface PayrollParameterRelease {
   scopeEmployees?: Array<{ id: string; name: string; employeeNo: string | null }>;
   snapshot: { effectiveFrom: string; effectiveTo: string | null; fixedMonthly?: string | null; performanceBase?: string | null;
     performanceMode?: string | null; evidence?: string; config?: PayrollRuleConfig; payDate?: string; settings?: PayrollDeductionSettings };
+  previousSnapshot?: PayrollParameterRelease['snapshot'];
+  comparisonUnavailable?: string;
   submittedAt: string; decidedAt: string | null; note: string;
 }
 export type PayrollPurpose = 'trial' | 'validation' | 'formal' | 'reconciliation';

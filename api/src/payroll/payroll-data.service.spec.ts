@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import { Prisma } from '@prisma/client';
 import { AuthUser } from '@/common/types/auth.types';
 import { PayrollDataService } from './payroll-data.service';
+import { payrollAttendanceHash } from './payroll-attendance-integrity';
 import { normalizeAttendance, PayrollAttendanceInput } from './payroll-attendance-normalizer';
 import { assertPayrollGrant, payrollAccess } from './payroll-access';
 import { randomUUID } from 'node:crypto';
@@ -154,7 +155,7 @@ describe('PayrollDataService focused regressions', () => {
     const s = formalSetup(), evidence = { sourceState: { schema: 1, cursor: 'fictional-v2' }, contextHash: 'fictional-reviewed-context' };
     const verify = jest.fn(async tx => { expect(tx).toBe(s.tx); expect(s.tx.$queryRaw).toHaveBeenCalled(); return evidence; });
     const row = await s.service.syncVerified(s.input, actor, verify);
-    expect(row.payload).toMatchObject({ dingtalk: evidence }); expect(row.sourceHash).toBe(payrollHash(row.payload));
+    expect(row.payload).toMatchObject({ dingtalk: evidence }); expect(row.sourceHash).toBe(payrollAttendanceHash(row.payload));
     expect(s.tx.payrollAttendanceSnapshot.create).toHaveBeenCalledTimes(1); expect(s.tx.payrollAttendanceSnapshot.update).not.toHaveBeenCalled();
     expect(s.state.snapshots[0].payload.dingtalk).toEqual(evidence);
   });

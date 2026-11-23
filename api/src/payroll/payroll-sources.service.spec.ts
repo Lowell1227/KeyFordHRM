@@ -3,6 +3,9 @@ import { PayrollSourcesService } from './payroll-sources.service';
 import { payrollDays } from './payroll-data.service';
 import { payrollHash } from './payroll-transaction';
 import { payrollParameterDefinition } from './payroll-parameter-definition';
+import { convertDingtalkAttendance } from './payroll-dingtalk-attendance';
+import { normalizeAttendance } from './payroll-attendance-normalizer';
+import type { DingtalkAttendanceRead } from '@/dingtalk/dingtalk-attendance.service';
 
 describe('payroll source capture', () => {
   const month = '2026-11', subjectId = 'subject', employeeId = '00000000-0000-4000-8000-000000000001';
@@ -61,6 +64,50 @@ describe('payroll source capture', () => {
       snapshotHash: payrollHash(payrollParameterDefinition('rule', policy as any)) });
     return value;
   }
+  it.each([
+    { minutes: 1, absence: '-205.76', gross: '17194.24' },
+    { minutes: 5, absence: '-1028.81', gross: '16371.19' },
+    { minutes: 10, absence: '-2057.61', gross: '15342.39' },
+  ])('calculates a verified $minutes-minute lateness through adapter, normalization and formal sources without rounding hours', async expected => {
+    const { minutes } = expected;
+    const value = formalFixture(workdayFixture()), workDate = `${month}-01`;
+    const at = (time: string) => `${workDate}T${time}:00+08:00`;
+    const lateAt = at(`09:${String(minutes).padStart(2, '0')}`);
+    const read: DingtalkAttendanceRead = {
+      month, organizationKey: 'fictional-organization', scope: { employeeIds: [employeeId], from: workDate, to: workDate },
+      complete: true, pending: [], days: [{ employeeId, workDate, complete: true, restsKnown: true,
+        rests: [{ startsAt: at('12:00'), endsAt: at('13:00') }], approvals: [],
+        schedule: [
+          { id: '1', classId: 'fictional-class', workDate, checkType: 'OnDuty', plannedAt: at('09:00'), isRest: false, approvalLinked: false },
+          { id: '2', classId: 'fictional-class', workDate, checkType: 'OffDuty', plannedAt: at('18:00'), isRest: false, approvalLinked: false },
+        ], punches: [
+          { id: 'p1', planId: '1', workDate, checkType: 'OnDuty', plannedAt: at('09:00'), checkedAt: lateAt, result: 'Late', location: 'Normal', approvalLinked: false },
+          { id: 'p2', planId: '2', workDate, checkType: 'OffDuty', plannedAt: at('18:00'), checkedAt: at('18:00'), result: 'Normal', location: 'Normal', approvalLinked: false },
+        ] }],
+    };
+    const converted = convertDingtalkAttendance(read, { expected: [{ employeeId, workDate, units: '1', required: true }],
+      observationVersion: 1, previous: [], approvalMappings: {} });
+    expect(converted.complete).toBe(true);
+    const normalized = normalizeAttendance(converted.input);
+    expect(normalized.issues).toEqual([]);
+    Object.assign(value.data.attendance.payload.days[0], normalized.days[0]);
+    value.data.policies[0].config.normalHourly = '12345.67';
+    (value.data.policies[0].config.paidHourly as any).late = '0';
+    value.data.releases[0].snapshotHash = payrollHash(payrollParameterDefinition('rule', value.data.policies[0] as any));
+    const before = JSON.stringify(value.data), result = await value.capture('formal');
+    expect(result.issues).toEqual([]);
+    expect(result.lines.find(row => row.itemCode === 'absence')?.amount).toBe(expected.absence);
+    expect(result.gross).toBe(expected.gross);
+    expect(JSON.stringify(value.data)).toBe(before);
+  });
+  it('does not relax four-decimal pricing configuration when accepting precise attendance durations', async () => {
+    const value = formalFixture(workdayFixture());
+    value.data.policies[0].config.normalHourly = '100.12345';
+    value.data.releases[0].snapshotHash = payrollHash(payrollParameterDefinition('rule', value.data.policies[0] as any));
+    const result = await value.capture('formal');
+    expect(result.gross).toBeNull();
+    expect(result.issues.join()).toContain('单位价');
+  });
   it.each(['late', 'early'])('keeps verified %s hours unconfigured until hourly treatment is explicitly approved', async type => {
     const value = workdayFixture();
     value.data.attendance.payload.days[0].records = [{ type, state: 'effective', hours: '0.5', effectiveHours: '0.5', resolution: 'usable', unit: 'hour' }];
