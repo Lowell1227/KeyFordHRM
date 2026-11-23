@@ -123,6 +123,30 @@ describe('PayrollDataService focused regressions', () => {
     expect(verify).toHaveBeenCalledTimes(1); expect(s.state.snapshots).toHaveLength(1);
     expect(s.state.snapshots[0].payload.sync.complete).toBe(true);
   });
+  it('stores server-returned source evidence in the original snapshot create and its content hash', async () => {
+    const s = formalSetup(), evidence = { sourceState: { schema: 1, cursor: 'fictional-v2' }, contextHash: 'fictional-reviewed-context' };
+    const verify = jest.fn(async tx => { expect(tx).toBe(s.tx); expect(s.tx.$queryRaw).toHaveBeenCalled(); return evidence; });
+    const row = await s.service.syncVerified(s.input, actor, verify);
+    expect(row.payload).toMatchObject({ dingtalk: evidence }); expect(row.sourceHash).toBe(payrollHash(row.payload));
+    expect(s.tx.payrollAttendanceSnapshot.create).toHaveBeenCalledTimes(1); expect(s.tx.payrollAttendanceSnapshot.update).not.toHaveBeenCalled();
+    expect(s.state.snapshots[0].payload.dingtalk).toEqual(evidence);
+  });
+  it('does not retain source evidence or the attendance snapshot when the containing transaction fails', async () => {
+    const s = formalSetup(), evidence = { sourceState: { schema: 1, cursor: 'fictional-v2' } };
+    s.tx.payrollEvent.create.mockImplementation(async () => { throw new ConflictException('Fictional audit failure'); });
+    await expect(s.service.syncVerified(s.input, actor, async () => evidence)).rejects.toThrow(ConflictException);
+    expect(s.tx.payrollAttendanceSnapshot.create.mock.calls[0][0].data.payload.dingtalk).toEqual(evidence);
+    expect(s.state.snapshots).toEqual([]); expect(s.state.events).toEqual([]);
+  });
+  it('includes server evidence in replay identity and never trusts client-supplied evidence', async () => {
+    const s = formalSetup(), evidence = { sourceState: { cursor: 'fictional-v2' } };
+    const first = await s.service.syncVerified(s.input, actor, async () => evidence);
+    expect((await s.service.syncVerified(s.input, actor, async () => evidence)).id).toBe(first.id);
+    await expect(s.service.syncVerified(s.input, actor, async () => ({ sourceState: { cursor: 'changed' } }))).rejects.toThrow(ConflictException);
+    expect(s.state.snapshots).toHaveLength(1);
+    const preview = setup(), input: any = request('untrusted-evidence'); input.dingtalk = evidence; input.sourceEvidence = evidence;
+    expect((await preview.service.sync(input, actor)).payload).not.toHaveProperty('dingtalk');
+  });
   it('does not use contract employment as a formal payer scope when no reviewed assignment exists', async () => {
     const s = setup(); s.access.maintenancePurpose.mockReturnValue('formal');
     s.access.assertDomain.mockImplementation(async () => 'formal');

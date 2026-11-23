@@ -20,7 +20,7 @@ export interface PayrollAttendanceSync {
   complete?: boolean;
 }
 type CoverageDay = { employeeId: string; workDate: string; complete: boolean };
-type AttendancePayload = PayrollAttendanceResult & { sync?: {
+type AttendancePayload = PayrollAttendanceResult & { dingtalk?: Prisma.InputJsonValue; sync?: {
   requestHash: string; scope: PayrollAttendanceScope; queryComplete: boolean; complete: boolean; coverage: CoverageDay[];
 } };
 const attendanceKey = (row: { employeeId: string; workDate: string }) => JSON.stringify([row.employeeId, row.workDate]);
@@ -258,29 +258,31 @@ export class PayrollDataService {
     if (this.access.maintenancePurpose() !== 'validation') throw new ForbiddenException('正式考勤仅接受服务端核验的钉钉取数，不能提交客户端考勤或完整性声明');
     return this.persistSync(input, actor);
   }
-  async syncVerified(input: PayrollAttendanceSync, actor: AuthUser, verify: (tx: Prisma.TransactionClient) => Promise<void>) {
+  async syncVerified(input: PayrollAttendanceSync, actor: AuthUser, verify: (tx: Prisma.TransactionClient) => Promise<Prisma.InputJsonValue | undefined>) {
     if (typeof verify !== 'function') throw new ForbiddenException('正式考勤同步缺少服务端核验');
     return this.persistSync(input, actor, verify);
   }
-  private async persistSync(input: PayrollAttendanceSync, actor: AuthUser, verify?: (tx: Prisma.TransactionClient) => Promise<void>) {
+  private async persistSync(input: PayrollAttendanceSync, actor: AuthUser, verify?: (tx: Prisma.TransactionClient) => Promise<Prisma.InputJsonValue | undefined>) {
     return this.prisma.$transaction(async tx => {
       await this.access.assert(tx, actor, input.subjectId, 'attendance_edit');
       const domain = await this.domain(tx); await lockPayrollSubject(tx, input.subjectId, domain);
       if (domain === 'formal' && typeof verify !== 'function') throw new ForbiddenException('正式考勤同步缺少服务端核验');
-      if (verify) await verify(tx);
+      const verified = verify ? await verify(tx) : undefined;
+      const sourceEvidence = verified === undefined ? undefined : payrollJson(verified);
       if (!input.sourceKey?.trim() || input.sourceKey.length > 100 || input.input?.month !== input.month) throw new BadRequestException('同步来源或月份不正确');
       if (!Array.isArray(input.input?.expected) || !Array.isArray(input.input?.records) || input.input.expected.length > 10000 || input.input.records.length > 20000) throw new BadRequestException('考勤输入不完整或超过单次范围');
       const eligible = employmentDays(await payrollEmployments(tx, input.subjectId, input.month, domain), input.subjectId, input.month);
       if (!eligible.length) throw new BadRequestException('该主体当月没有可核对的任职人员');
       const scope = attendanceScope(input, eligible), incoming = normalizeAttendance(input.input);
-      const requestHash = payrollHash({ scope, complete: input.complete === true, input: incoming });
+      const requestHash = payrollHash({ scope, complete: input.complete === true, input: incoming,
+        ...(sourceEvidence !== undefined ? { dingtalk: sourceEvidence } : {}) });
       const existing = await tx.payrollAttendanceSnapshot.findUnique({ where: { subjectId_domain_month_sourceKey: { subjectId: input.subjectId, domain, month: input.month, sourceKey: input.sourceKey } } });
       if (existing) {
         if ((existing.payload as unknown as AttendancePayload)?.sync?.requestHash !== requestHash) throw new ConflictException('同一同步来源内容变化，请使用新的来源版本');
         return existing;
       }
       const latest = await tx.payrollAttendanceSnapshot.findFirst({ where: { subjectId: input.subjectId, domain, month: input.month }, orderBy: { version: 'desc' } });
-      const normalized = mergedAttendance(input, scope, eligible, latest?.payload as unknown as AttendancePayload | undefined, incoming, requestHash);
+      const normalized: AttendancePayload = mergedAttendance(input, scope, eligible, latest?.payload as unknown as AttendancePayload | undefined, incoming, requestHash);
       const conflicts = await payrollAttendanceConflicts(tx, input.subjectId, domain, input.month, normalized);
       if (conflicts.length) {
         const ids = new Set(conflicts.flatMap(row => row.sourceIds));
@@ -292,6 +294,7 @@ export class PayrollDataService {
         }
         normalized.version = payrollHash({ version: normalized.version, conflicts });
       }
+      if (sourceEvidence !== undefined) normalized.dingtalk = sourceEvidence;
       const sourceHash = payrollHash(normalized);
       const row = await tx.payrollAttendanceSnapshot.create({ data: { subjectId: input.subjectId, month: input.month, domain, version: (latest?.version ?? 0) + 1,
         sourceKey: input.sourceKey, sourceHash, payload: payrollJson(normalized), createdById: actor.id } });
