@@ -8,6 +8,7 @@ import { payrollHash } from './payroll-transaction';
 import { payrollParameterDefinition } from './payroll-parameter-definition';
 import { payrollCalendarDays } from './payroll-work-calendar';
 import { convertDingtalkAttendance, PayrollDingtalkAttendanceSourceState } from './payroll-dingtalk-attendance';
+import { PayrollAbsenceService } from './payroll-absence.service';
 
 const subjectId = '20000000-0000-4000-8000-000000000001', employeeId = '20000000-0000-4000-8000-000000000002';
 const operatorId = '20000000-0000-4000-8000-000000000003', otherSubject = '20000000-0000-4000-8000-000000000004';
@@ -76,6 +77,7 @@ function fixture() {
       if (name === 'jobs' && state.jobs.some((row: any) => row.requestId === data.requestId ||
         ['queued', 'processing'].includes(data.status ?? 'queued') && ['queued', 'processing'].includes(row.status) && row.subjectId === data.subjectId && row.month === data.month && row.domain === data.domain)) throw { code: 'P2002' };
       const row = { id: randomUUID(), createdAt: new Date(), updatedAt: new Date(),
+        ...(name === 'snapshots' ? { status: 'draft', review: [] } : {}),
         ...(name === 'jobs' ? { observationVersion: ++observation, status: 'queued', cursor: 0, pendingCells: 0, attempts: 0, leaseToken: null, leaseUntil: null, finishedAt: null } : {}), ...structuredClone(data) };
       state[name].push(row); return structuredClone(row);
     };
@@ -112,7 +114,7 @@ function fixture() {
   }) };
   const worker = () => new PayrollAttendanceSyncService(prisma, access, data, gateway as any, dingtalk as any, config);
   const refreshRule = () => { state.releases[0].snapshotHash = payrollHash(payrollParameterDefinition('rule', state.policies[0])); };
-  return { state, cfg, prisma, tx, data, gateway, dingtalk, worker, service: worker(), refreshRule,
+  return { state, cfg, prisma, tx, access, data, gateway, dingtalk, worker, service: worker(), refreshRule,
     start: (service = worker()) => service.start({ subjectId, month, requestId: randomUUID() }, actor) };
 }
 
@@ -147,6 +149,34 @@ function approvalFixture() {
 describe('formal attendance durable jobs (fictional persistence and gateway only)', () => {
   beforeAll(() => jest.spyOn(global, 'fetch').mockRejectedValue(new Error('Live requests forbidden in this suite')));
   afterAll(() => jest.restoreAllMocks());
+  it('persists confirmed absence through restart, resync and sealing, but blocks changed plan evidence', async () => {
+    const f = fixture(), original = f.gateway.readRange.getMockImplementation()!;
+    let changed = false;
+    f.gateway.readRange.mockImplementation(async query => {
+      const read = await original(query), day = read.days.find(row => row.workDate === '2035-11-01');
+      if (day) { day.punches = []; if (changed) day.schedule[0].plannedAt = `${day.workDate}T08:00:00+08:00`; }
+      return read;
+    });
+    const sealerId = randomUUID(); f.state.users.push({ ...f.state.users[0], id: sealerId });
+    f.state.grants.push({ userId: sealerId, subjectId, revokedAt: null, capabilities: ['attendance_seal'] });
+    const job = await f.start(); await f.service.dispatch();
+    expect(f.state.jobs.find((row: any) => row.id === job.id).status).toBe('blocked');
+    const prior = f.state.snapshots.at(-1), proposalId = randomUUID(), absence = new PayrollAbsenceService(f.prisma, f.access);
+    expect(prior.payload.dingtalk.absenceCandidates[0].hours).toBe('7');
+    await absence.propose(prior.id, { expectedVersion: prior.version, employeeId, workDate: '2035-11-01', reference: 'Fictional signed attendance decision', requestId: proposalId }, actor);
+    await absence.decide(prior.id, proposalId, { expectedVersion: prior.version, decision: 'approve', note: 'Fictional sealer verification' }, { id: sealerId } as any);
+    const retried = await f.service.retry(job.id, { requestId: randomUUID() }, actor); await f.service.dispatch();
+    const retriedState = f.state.jobs.find((row: any) => row.id === retried.id);
+    expect({ status: retriedState.status, issues: retriedState.issues }).toEqual({ status: 'completed', issues: [] });
+    const complete = f.state.snapshots.at(-1);
+    expect(complete.payload.issues).toEqual([]); expect(complete.payload.confirmedAbsences[0].id).toBe(proposalId);
+    expect(complete.payload.days.find((row: any) => row.workDate === '2035-11-01').records.some((row: any) => row.type === 'absence' && row.effectiveHours === '3')).toBe(true);
+    expect(f.state.sources.some((row: any) => row.sourceId.startsWith('hr-absence:'))).toBe(false);
+    await f.data.seal(complete.id, complete.version, { id: sealerId } as any);
+    changed = true; const refreshed = await f.start(); await f.service.dispatch();
+    expect(f.state.jobs.find((row: any) => row.id === refreshed.id).status).toBe('blocked');
+    expect(f.state.snapshots.at(-1).payload.sync.complete).toBe(false);
+  });
   it('persists a schema-1 record/proof envelope and reloads the complete proof through a restarted sources reader', async () => {
     const f = approvalFixture(); expect((await f.run('normal')).status).toBe('completed');
     const expected = f.state.snapshots[0].payload.dingtalk.sourceState.filter((row: any) => row.record.workDate === '2035-11-01');

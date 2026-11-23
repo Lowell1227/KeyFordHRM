@@ -12,10 +12,12 @@ import PayrollScope from './PayrollScope.vue';
 import { usePayrollScope } from './usePayrollScope';
 import PayrollDeductionSettingsForm from './PayrollDeductionSettingsForm.vue';
 import { attendanceTypeLabels } from './payroll-attendance-mappings';
+import PayrollParameterComparison from './PayrollParameterComparison.vue';
+import { payrollTime } from './payroll-workflow-presentation';
 
 const auth = useAuthStore();
 const route = useRoute(), router = useRouter();
-const { subjects, subjectId, month, error, loading, refreshAccess } = usePayrollScope(['payroll_edit', 'payroll_parameter_review'], { persistQuery: true });
+const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['payroll_edit', 'payroll_parameter_review'], { persistQuery: true });
 const entries = ref<PayrollParameterRelease[]>([]), selected = ref<PayrollParameterRelease>();
 const mode = ref('pending'), note = ref(''), fieldError = ref(''), actionError = ref(''), busy = ref(false);
 const labels = { pending: '待主管审核', approved: '已发布', returned: '已退回', withdrawn: '已撤回' };
@@ -68,7 +70,8 @@ function scopeEmployeeLabel(id: string) {
   const person = selected.value?.scopeEmployees?.find(employee => employee.id === id);
   return person ? `${person.name}${person.employeeNo ? ` · ${person.employeeNo}` : ''}` : `记录不可用（${id.slice(-8)}）`;
 }
-const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value)) : '';
+const time = payrollTime;
+function goToStandards() { void router.push({ path: '/payroll/standards', query: { subjectId: subjectId.value, month: month.value, tab: 'standards' } }); }
 </script>
 <template>
   <BusinessListPage variant="workflow" :loading="loading">
@@ -99,14 +102,13 @@ const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN',
       <el-empty v-if="!rows.length" description="暂无参数审核记录" />
     </template>
     <template #detail>
-      <BusinessDetailDrawer :model-value="!!selected" title="参数审核" variant="standard" :saving="busy" :before-close="beforeClose" @update:model-value="close">
+      <BusinessDetailDrawer :model-value="!!selected" title="工资资料审核" variant="wide" :saving="busy" :before-close="beforeClose" @update:model-value="close">
         <template v-if="selected">
           <h3>{{ title(selected) }}</h3>
           <dl class="parameter-grid"><div><dt>状态</dt><dd>{{ labels[selected.status] }}</dd></div><div><dt>生效日期</dt><dd>{{ selected.snapshot.effectiveFrom }}</dd></div><div><dt>结束日期</dt><dd>{{ selected.snapshot.effectiveTo ?? '长期' }}</dd></div><div><dt>替代版本</dt><dd>{{ selected.previousParameterId ? '替代前一已发布版本' : '首次发布' }}</dd></div></dl>
-          <dl v-if="selected.kind === 'standard'" class="parameter-grid">
-            <div><dt>固定月薪</dt><dd>{{ selected.snapshot.fixedMonthly ?? '待配置' }}</dd></div><div><dt>个人绩效基数</dt><dd>{{ selected.snapshot.performanceBase ?? '未配置（人工金额不使用）' }}</dd></div>
-            <div><dt>绩效结构</dt><dd>{{ selected.snapshot.performanceMode === 'additional' ? '固定月薪之外另计' : '不适用' }}</dd></div><div><dt>确认依据</dt><dd>{{ selected.snapshot.evidence }}</dd></div>
-          </dl>
+          <p class="review-path">{{ selected.submittedBy.name }} 提交 → 直属主管 {{ selected.reviewer.name }} 审核资料；工资批次另走已配置的复核、审批。</p>
+          <PayrollParameterComparison v-if="selected.kind !== 'deduction'" :release="selected" />
+          <p v-if="selected.kind === 'standard' && selected.snapshot.performanceBase == null" class="review-path">个人绩效基数：未配置（人工金额不使用）</p>
           <template v-if="selected.snapshot.config">
             <section v-if="selected.snapshot.config.employeeScope" class="parameter-section">
               <h4>发薪人员 · {{ selected.snapshot.config.employeeScope.employeeIds.length }}人</h4>
@@ -133,11 +135,12 @@ const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN',
                 <dl class="parameter-grid"><div v-for="(value, grade) in mapping.coefficients" :key="grade"><dt>{{ grade }}等</dt><dd>{{ value }}</dd></div></dl>
               </template>
             </section>
-            <el-collapse><el-collapse-item title="完整参数" name="parameters"><pre>{{ JSON.stringify(selected.snapshot.config, null, 2) }}</pre></el-collapse-item></el-collapse>
+            <el-collapse><el-collapse-item title="高级追溯 · 完整参数" name="parameters"><pre>{{ JSON.stringify(selected.snapshot.config, null, 2) }}</pre></el-collapse-item></el-collapse>
           </template>
           <template v-if="selected.snapshot.settings"><h4>发薪日：{{selected.snapshot.payDate}}</h4><PayrollDeductionSettingsForm :model-value="selected.snapshot.settings" disabled/></template>
           <h4>办理记录</h4>
           <el-timeline><el-timeline-item :timestamp="time(selected.submittedAt)">{{ selected.submittedBy.name }} · 提交主管审核</el-timeline-item><el-timeline-item v-if="selected.decidedAt" :timestamp="time(selected.decidedAt)">{{ selected.status === 'withdrawn' ? selected.submittedBy.name : selected.reviewer.name }} · {{ labels[selected.status] }}<p v-if="selected.note">{{ selected.note }}</p></el-timeline-item></el-timeline>
+          <p v-if="selected.kind === 'rule' && selected.status === 'approved'" class="review-path">名单及规则已发布，下一步录入个人工资标准、核对绩效金额与扣缴资料。<el-button v-if="has?.('payroll_edit')" link type="primary" @click="goToStandards">录入个人工资标准</el-button></p>
           <el-form v-if="mayDecide || mayWithdraw" label-position="top" class="action-panel">
             <el-form-item label="办理意见" :error="fieldError"><el-input v-model="note" type="textarea" :rows="3" maxlength="500" :disabled="busy" /></el-form-item>
             <el-alert v-if="actionError" :title="actionError" type="error" :closable="false" />
@@ -166,6 +169,7 @@ h4 { font-size: 15px; margin: 18px 0 10px; }
 .manual-amounts dt { overflow-wrap: anywhere; }
 .manual-amounts dd { margin: 0; font-variant-numeric: tabular-nums; }
 .action-panel { border-top: 1px solid var(--el-border-color-lighter); padding-top: 16px; }
+.review-path {font-size:13px;line-height:1.7;overflow-wrap:anywhere;}
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @media(max-width:480px) { .parameter-grid { gap: 14px 12px; } }
 </style>

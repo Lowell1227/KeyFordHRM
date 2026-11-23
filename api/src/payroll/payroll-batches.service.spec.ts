@@ -276,6 +276,67 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
       db.tx.payrollNetReservation = { createMany: jest.fn(), deleteMany: jest.fn(), findUnique: jest.fn() };
       db.tx.payrollNetPayment = { create: jest.fn(), findMany: jest.fn(async () => []) };
     });
+    it.each([
+      { purpose: 'reconciliation', paid: '1000.00', remaining: '0.00', gross: '1000.00', tax: '80.00', net: '720.00' },
+      { purpose: 'reconciliation', paid: '400.00', remaining: '600.00', gross: '1000.00', tax: '80.00', net: '720.00' },
+      { purpose: 'formal', paid: '400.00', remaining: '600.00', gross: '600.00', tax: '40.00', net: '360.00' },
+    ])('keeps $purpose tax/net and refreshed summary on its own basis after $paid was paid', async expected => {
+      const month = expected.purpose === 'reconciliation' ? '2026-10' : '2026-11';
+      const payDate = expected.purpose === 'reconciliation' ? '2026-11-10' : '2026-12-10';
+      const { gross, subjectId, employeeId, payDate: date, ...settings } = fictionalDeductionsInput({
+        subjectId: subject, employeeId: employee, month, payDate, gross: '1000.00' });
+      const { subjectId: s, employeeId: e, year, ...opening } = settings.tax.opening;
+      const profile: any = { id: randomUUID(), subjectId, employeeId, domain: 'formal', version: 1, status: 'active',
+        payDate: new Date(date), effectiveFrom: new Date(date), effectiveTo: new Date(date), settings: {
+          ...settings, tax: { ...settings.tax, opening }, ledger: { startDate: '2026-01-01',
+            priorInPayMonth: Object.fromEntries(Object.keys(settings.tax.current).map(key => [key, '0'])), priorSocialInsurance: '0', priorHousingFund: '0' },
+        } };
+      profile.releases = [{ id: randomUUID(), parameterVersion: 1, submittedById: editor.id, reviewerId: reviewer.id,
+        snapshotHash: payrollHash(payrollParameterDefinition('deduction', profile)) }];
+      db.tx.payrollDeductionProfile = { findFirst: jest.fn(async () => profile) };
+      db.tx.payrollNetPayment.findFirst = jest.fn(async () => null);
+      db.tx.payrollEvent.findFirst = jest.fn(async () => null);
+      capture.gross = expected.remaining;
+      capture.sources = { subjectId: subject, month, domain: 'formal' };
+      capture.lines = ['fixed', 'absence', 'overtime', 'performance', 'adjustment'].map(itemCode => ({
+        employeeId: employee, attributionMonth: month, itemCode: itemCode as any, status: 'ready',
+        entitlement: itemCode === 'fixed' ? '1000.00' : '0.00', paidBefore: itemCode === 'fixed' ? expected.paid : '0.00',
+        amount: itemCode === 'fixed' ? expected.remaining : '0.00', evidence: { employeeName: 'Fictional employee', employeeNo: 'FICTIONAL-1' },
+      }));
+      const before = clone(capture), readiness = jest.spyOn(access, 'assertFormalPayrollReady').mockResolvedValue(undefined);
+      try {
+        const batch = await service.create({ ...input(), month, payMonth: payDate.slice(0, 7), purpose: expected.purpose as any }, editor);
+        await service.calculate(batch.id, { expectedVersion: 0, payDate }, editor);
+        const version: any = (await service.detail(batch.id, editor)).versions[0];
+        expect(version.gross.toFixed(2)).toBe(expected.gross);
+        expect(version.netSnapshot.totals).toEqual({ gross: expected.gross, socialInsurance: '100.00', housingFund: '100.00', incomeTax: expected.tax, net: expected.net });
+        expect(version.lines[0].entitlement.toFixed(2)).toBe('1000.00');
+        expect(version.lines[0].paidBefore.toFixed(2)).toBe(expected.paid);
+        expect(version.lines[0].amount.toFixed(2)).toBe(expected.remaining);
+        expect(netHelpers.payrollReconciliationGross(capture.lines)).toBe('1000.00');
+        expect(capture.gross).toBe(expected.remaining);
+        expect(() => netHelpers.assertPayrollNetLines(version.netSnapshot, version.lines, version.gross, expected.purpose)).not.toThrow();
+        await expect(netHelpers.assertPayrollNetFresh(db.tx, db.state.batches[0], version.netSnapshot, 'formal', version.id)).resolves.toBeUndefined();
+        const firstSnapshot = clone(version.netSnapshot);
+        expect((await service.detail(batch.id, editor)).versions[0].gross?.toFixed(2)).toBe(expected.gross);
+        await service.calculate(batch.id, { expectedVersion: 1, payDate }, editor);
+        expect(db.state.versions[1].gross.toFixed(2)).toBe(expected.gross);
+        expect(db.state.versions[1].netSnapshot).toEqual(firstSnapshot);
+        expect(capture).toEqual(before);
+        expect(db.state.reservations).toEqual([]); expect(db.state.settlements).toEqual([]);
+        expect(db.tx.payrollNetPayment.create).not.toHaveBeenCalled();
+        profile.settings.tax.opening.sourceVersion = 'fictional-approved-correction';
+        profile.releases[0].snapshotHash = payrollHash(payrollParameterDefinition('deduction', profile));
+        await expect(netHelpers.assertPayrollNetFresh(db.tx, db.state.batches[0], version.netSnapshot, 'formal', version.id)).rejects.toThrow(ConflictException);
+      } finally { readiness.mockRestore(); }
+    });
+    it.each(['equation', 'total'])('validates the original reconciliation source %s before switching to full entitlement', async fault => {
+      if (fault === 'equation') capture.lines[0].paidBefore = '1.00';
+      else capture.gross = '199.99';
+      const batch = await service.create(input(), editor);
+      await expect(service.calculate(batch.id, { expectedVersion: 0 }, editor)).rejects.toThrow(ConflictException);
+      expect(db.state.versions).toEqual([]); expect(db.state.lines).toEqual([]);
+    });
     it('creates and repeatedly calculates real sources without a preview marker or formal reservations', async () => {
       const batch = await service.create(input(), editor);
       await service.calculate(batch.id, { expectedVersion: 0 }, editor);

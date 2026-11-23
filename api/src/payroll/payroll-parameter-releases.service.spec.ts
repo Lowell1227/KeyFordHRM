@@ -194,6 +194,19 @@ describe('payroll parameters require the submitting HR direct manager', () => {
     expect(s.releases.findMany.mock.calls).toContainEqual([expect.objectContaining({ where: expect.objectContaining({ status: 'pending' }) })]);
     expect(s.releases.findMany.mock.calls.find(([input]) => input.where.status === 'pending')?.[0].take).toBeUndefined();
   });
+  it('returns the hash-anchored preceding snapshot only for the assigned review', async () => {
+    const s = fixture(); await s.submit();
+    const rows = await s.service.list('subject', manager) as any[];
+    expect(rows[0].previousSnapshot).toMatchObject({ fixedMonthly: '10000', evidence: 'Fictional approval' });
+    s.rows[0].fixedMonthly = new Prisma.Decimal('9999');
+    const changed = await s.service.list('subject', manager) as any[];
+    expect(changed[0].previousSnapshot).toBeUndefined(); expect(changed[0].comparisonUnavailable).toBeTruthy();
+  });
+  it('does not attach a preceding parameter from a different subject or domain', async () => {
+    const s = fixture(); await s.submit(); s.rows[0].subjectId = 'different';
+    const rows = await s.service.list('subject', manager) as any[];
+    expect(rows[0].previousSnapshot).toBeUndefined(); expect(rows[0].comparisonUnavailable).toBeTruthy();
+  });
   it('shows names only for payer scope identities in this assigned parameter snapshot', async () => {
     const s = fixture(), request = await s.submit();
     Object.assign(s.requests[0], { kind: 'rule', snapshot: { config: { employeeScope: { employeeIds: ['scope-employee'], evidenceRef: 'Fictional payer confirmation' }, performance: {} } } });

@@ -91,7 +91,8 @@ function mountStandards(t, employeesForMonth = () => [{ id: 'employee', name: 'F
   const scope = { subjectId: vue.ref('subject'), month: vue.ref('2037-01'), subjects: vue.ref([]),
     has: () => true, error: vue.ref(''), loading: vue.ref(false), refreshAccess: async () => {} };
   loaded.require = id => {
-    if (id === 'vue-router') return { onBeforeRouteLeave() {}, useRouter: () => ({ push: async () => {} }) };
+    if (id === '@/utils/preview-mode') return { isLocalPreview: true };
+    if (id === 'vue-router') return { onBeforeRouteLeave() {}, useRoute: () => ({ query: {} }), useRouter: () => ({ push: async () => {} }) };
     if (id === 'element-plus') return { ElMessageBox: { confirm: async message => { confirmations.push(message); throw Error('keep editing'); } } };
     if (id === '@element-plus/icons-vue' || id.endsWith('.vue')) return {};
     if (id === './usePayrollScope') return { usePayrollScope: () => scope };
@@ -102,6 +103,11 @@ function mountStandards(t, employeesForMonth = () => [{ id: 'employee', name: 'F
       employees: async (subject, month) => { reads.push([subject, month]); return employeesForMonth(month); },
       createRule: async value => { writes.push(value); }, createStandard: async value => { writes.push(value); },
     } };
+    if (id.startsWith('./') && fs.existsSync(path.resolve(path.dirname(viewFile), `${id}.ts`))) {
+      const file = path.resolve(path.dirname(viewFile), `${id}.ts`), helper = new Module(file, module);
+      helper._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, file);
+      return helper.exports;
+    }
     return original(id);
   };
   loaded._compile(ts.transpileModule(compileScript(descriptor, { id: viewFile }).content, {

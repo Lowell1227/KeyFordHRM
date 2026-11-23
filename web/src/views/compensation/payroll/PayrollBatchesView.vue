@@ -86,6 +86,10 @@ async function save() {
   finally { busy.value = false; }
 }
 function gross(row: unknown) { return currentVersion(row as PayrollBatch)?.gross ?? '待核算'; }
+const monthQuery = computed(() => ({ subjectId: subjectId.value, month: month.value }));
+const monthState = computed(() => !rows.value.length ? '本月尚无核算批次，先核对已审核工资资料及已封账考勤。' : rows.value.some(row => row.purpose === 'reconciliation')
+  ? '真实资料对账核对历史全额；正式工资仅办理待结余额。对账须核到税后实发，再办理首月签收。'
+  : '打开本月批次查看待办；复核审批通过后，再到工资结果办理下载或实发登记。');
 function openDetail(value: unknown) { const row = value as PayrollBatch; openedFromList = true; void router.push({ path: `${listPath.value}/${row.id}`, query: { ...route.query, subjectId: subjectId.value, month: month.value } }); }
 function closeDetail(value: boolean) {
   if (value || detailBusy.value) return;
@@ -117,12 +121,13 @@ async function closeCreate(value: boolean) {
       <el-alert v-if="error" :title="error" type="error" :closable="false" />
       <el-alert v-else-if="!previewMode && subjectId && !loading && mode === 'batches' && !formalReady" title="正式工资待首月签收" type="info" :closable="false" description="先用已审核资料核对税后实发，再提交首月签收，由指定工资复核人、审批人依次办理。资料本身由经办人的直属主管审核。" />
       <el-alert v-else-if="!previewMode && subjectId && !loading && mode === 'results' && !rows.length" title="暂无已审批的工资结果" type="info" :closable="false" description="工资全部审批通过后，才能下载最终结果和登记实际发放。" />
+      <div v-if="mode === 'batches' && subjectId && !loading && has('payroll_edit')" class="month-next" role="status"><span>{{ month }} · {{ monthState }}</span><nav aria-label="本月下一步"><RouterLink :to="{ path: '/payroll/standards', query: monthQuery }">工资资料</RouterLink><RouterLink :to="{ path: '/payroll/deductions', query: monthQuery }">扣缴资料</RouterLink><RouterLink v-if="has('attendance_edit') || has('attendance_seal')" :to="{ path: '/payroll/attendance', query: monthQuery }">考勤核对与封账</RouterLink></nav></div>
     </template>
     <template #desktop-list>
-      <el-table :data="rows" height="100%" empty-text="暂无工资批次"><el-table-column label="批次" min-width="150"><template #default="{ row }">{{ row.month }} · V{{ row.version }}</template></el-table-column><el-table-column prop="payMonth" label="发放月" width="110" /><el-table-column label="用途" width="110"><template #default="{ row }">{{ purposeLabels[row.purpose as keyof typeof purposeLabels] }}</template></el-table-column><el-table-column label="状态" min-width="180"><template #default="{ row }">{{ batchStatus(row as PayrollBatch) }}<el-tag v-if="needsUpdate(row as PayrollBatch)" type="warning" size="small">来源待更新</el-tag></template></el-table-column><el-table-column label="税前应发" min-width="130"><template #default="{ row }">{{ gross(row) }}</template></el-table-column><el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDetail(row)">查看办理</el-button></template></el-table-column></el-table>
+      <el-table :data="rows" height="100%" empty-text="暂无工资批次"><el-table-column label="批次" min-width="150"><template #default="{ row }">{{ row.month }} · V{{ row.version }}</template></el-table-column><el-table-column prop="payMonth" label="发放月" width="110" /><el-table-column label="用途" width="130"><template #default="{ row }">{{ purposeLabels[row.purpose as keyof typeof purposeLabels] }}</template></el-table-column><el-table-column label="状态" min-width="180"><template #default="{ row }">{{ batchStatus(row as PayrollBatch) }}<el-tag v-if="needsUpdate(row as PayrollBatch)" type="warning" size="small">来源待更新</el-tag></template></el-table-column><el-table-column label="税前核算金额" min-width="150"><template #default="{ row }">{{ gross(row) }}<small class="amount-basis">{{ row.purpose === 'reconciliation' ? '历史全额对账 · 非待付' : '本批待结余额' }}</small></template></el-table-column><el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDetail(row)">查看办理</el-button></template></el-table-column></el-table>
     </template>
     <template #mobile-list>
-      <MobileResultCard v-for="row in rows" :key="row.id"><template #title>{{ row.month }} · V{{ row.version }}</template><template #status>{{ purposeLabels[row.purpose] }}</template><div>{{ batchStatus(row) }}{{ needsUpdate(row) ? ' · 来源待更新' : '' }}</div><div>发放月：{{ row.payMonth }}</div><div>税前应发：{{ currentVersion(row)?.gross ?? '待核算' }}</div><template #actions><el-button link type="primary" @click="openDetail(row)">查看办理</el-button></template></MobileResultCard>
+      <MobileResultCard v-for="row in rows" :key="row.id"><template #title>{{ row.month }} · V{{ row.version }}</template><template #status>{{ purposeLabels[row.purpose] }}</template><div>{{ batchStatus(row) }}{{ needsUpdate(row) ? ' · 来源待更新' : '' }}</div><div>发放月：{{ row.payMonth }}</div><div>{{ row.purpose === 'reconciliation' ? '税前全额对账（非待付）' : '本批税前待结余额' }}：{{ currentVersion(row)?.gross ?? '待核算' }}</div><template #actions><el-button link type="primary" @click="openDetail(row)">查看办理</el-button></template></MobileResultCard>
       <el-empty v-if="!rows.length" description="暂无工资批次" />
     </template>
     <template #detail>
@@ -148,4 +153,7 @@ async function closeCreate(value: boolean) {
 .additional-months { display: grid; gap: 8px; max-width: 100%; }
 .month-row { display: flex; gap: 8px; max-width: 100%; }
 .month-row :deep(.el-date-editor) { width: 190px; max-width: calc(100% - 44px); }
+.amount-basis {display:block;font-size:12px;color:var(--el-text-color-secondary);line-height:1.6;}
+.month-next {display:grid;gap:6px;font-size:13px;line-height:1.6;overflow-wrap:anywhere;}
+.month-next nav {display:flex;flex-wrap:wrap;gap:8px 16px;}.month-next a {color:var(--el-color-primary);}
 </style>

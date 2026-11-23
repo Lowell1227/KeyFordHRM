@@ -25,6 +25,11 @@ async function renderReview(t, release) {
     if (id === '@/api/payroll.api') return { payrollApi: { parameterReleases: async () => [release] }, payrollError: async error => error.message };
     if (id.endsWith('BusinessListPage.vue')) return { setup: (_, { slots }) => () => vue.h('main', slots.detail?.()) };
     if (id.endsWith('.vue')) return pass;
+    if (id.startsWith('./') && fs.existsSync(path.resolve(path.dirname(filename), `${id}.ts`))) {
+      const file = path.resolve(path.dirname(filename), `${id}.ts`), helper = new Module(file, module);
+      helper._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, file);
+      return helper.exports;
+    }
     return original(id);
   };
   loaded._compile(ts.transpileModule(`${script.content}\n${template.code}\nReview.render = render;\nexport default Review;`, {

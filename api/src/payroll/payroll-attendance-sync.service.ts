@@ -12,7 +12,7 @@ import { withDingtalkDeadline } from '@/dingtalk/dingtalk-request-deadline';
 import { PayrollAccessService } from './payroll-access.service';
 import { PayrollDataService } from './payroll-data.service';
 import { AttendanceSyncIssue, AttendanceSyncJob, AttendanceSyncStatus, PayrollAttendanceSyncStartDto, PayrollAttendanceSyncRetryDto } from './dto/payroll-attendance-sync.dto';
-import { convertDingtalkAttendance, PayrollDingtalkAttendanceOptions, PayrollDingtalkAttendanceSourceState } from './payroll-dingtalk-attendance';
+import { convertDingtalkAttendance, payrollAbsenceCandidate, PayrollDingtalkAttendanceOptions, PayrollDingtalkAttendanceSourceState } from './payroll-dingtalk-attendance';
 import { payrollScopeEmploymentDays, readFormalPayrollEmployments, readReviewedPayrollScopePolicies } from './payroll-employment-scope';
 import { effectivePayrollParameters } from './payroll-parameter-timeline';
 import { normalizePayrollWorkCalendar } from './payroll-work-calendar';
@@ -25,7 +25,8 @@ type Binding = DingtalkAttendanceBinding & { unionId: string };
 type Context = { hash: string; cells: Cell[]; bindings: Binding[]; operator: Binding; corpId: string;
   mappings: Map<string, PayrollDingtalkAttendanceOptions['approvalMappings']>; workflowRead: boolean };
 type Claim = { job: PayrollAttendanceSyncJob; actor: AuthUser; context: Context; cells: Cell[]; token: string;
-  previous: PayrollDingtalkAttendanceSourceState[]; previousHash: string; snapshotHash: string };
+  previous: PayrollDingtalkAttendanceSourceState[]; previousHash: string; snapshotHash: string;
+  confirmedAbsences: PayrollDingtalkAttendanceOptions['confirmedAbsences'] };
 const active = ['queued', 'processing'];
 const retriable = ['failed', 'blocked', 'cancelled'];
 const leaseMs = 120_000;
@@ -191,7 +192,9 @@ export class PayrollAttendanceSyncService {
         const token = randomUUID();
         await tx.payrollAttendanceSyncJob.update({ where: { id }, data: { status: 'processing', leaseToken: token,
           leaseUntil: new Date(Date.now() + leaseMs), attempts: { increment: 1 }, issues: [], pendingCells: 0, finishedAt: null } });
-        return { job, actor, context, cells, token, previous, previousHash: hash(previous), snapshotHash: this.snapshotHash(snapshot) };
+        const confirmed = (snapshot?.payload as { confirmedAbsences?: PayrollDingtalkAttendanceOptions['confirmedAbsences'] } | undefined)?.confirmedAbsences;
+        return { job, actor, context, cells, token, previous, previousHash: hash(previous), snapshotHash: this.snapshotHash(snapshot),
+          confirmedAbsences: Array.isArray(confirmed) ? confirmed : [] };
       } catch (error) {
         await tx.payrollAttendanceSyncJob.update({ where: { id }, data: { status: 'blocked', issues: json([this.errorIssue(error)]),
           leaseToken: null, leaseUntil: null, finishedAt: new Date() } });
@@ -210,7 +213,14 @@ export class PayrollAttendanceSyncService {
     if (read.month !== claim.job.month || read.scope.from !== first.workDate || read.scope.to !== last.workDate
       || read.scope.employeeIds.length !== 1 || read.scope.employeeIds[0] !== first.employeeId) throw new Blocked('UPSTREAM_SCOPE_MISMATCH');
     const converted = convertDingtalkAttendance(read, { expected: claim.cells.map(({ policyId, ...cell }) => cell),
-      observationVersion: claim.job.observationVersion, previous: claim.previous, approvalMappings: claim.context.mappings.get(first.policyId)! });
+      observationVersion: claim.job.observationVersion, previous: claim.previous, confirmedAbsences: claim.confirmedAbsences,
+      approvalMappings: claim.context.mappings.get(first.policyId)! });
+    const absenceCandidates = read.days.flatMap(day => {
+      const expected = claim.cells.find(cell => cell.employeeId === day.employeeId && cell.workDate === day.workDate);
+      if (!expected || read.pending.some(issue => !issue.employeeId || issue.employeeId === day.employeeId && (!issue.workDate || issue.workDate === day.workDate))) return [];
+      const candidate = payrollAbsenceCandidate(day, { employeeId: expected.employeeId, workDate: expected.workDate,
+        required: expected.required, units: expected.units }); return candidate ? [candidate] : [];
+    });
     const issues = [...new Map(converted.pending.map(entry => {
       const value = issue(entry.code, (entry as DingtalkAttendancePending & { mappingKey?: string }).mappingKey);
       return [hash(value), value] as const;
@@ -250,7 +260,7 @@ export class PayrollAttendanceSyncService {
       } });
       return json({ schema: 1, provider: 'dingtalk', jobId: current.id, observationVersion: current.observationVersion,
         contextHash: context.hash, completedCells: cursor, totalCells: current.totalCells, complete,
-        sourceStateHash: hash(converted.sourceState), sourceState: converted.sourceState, issues });
+        sourceStateHash: hash(converted.sourceState), sourceState: converted.sourceState, absenceCandidates, issues });
     });
   }
 

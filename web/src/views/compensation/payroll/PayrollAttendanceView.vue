@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessageBox } from 'element-plus';
-import { useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
@@ -12,6 +12,11 @@ import { attendanceIssueLabels } from './payroll-state';
 import PayrollScope from './PayrollScope.vue';
 import { usePayrollScope } from './usePayrollScope';
 import PayrollAttendanceSyncPanel from './PayrollAttendanceSyncPanel.vue';
+import { payrollAbsenceApi } from '@/api/payroll-absence.api';
+import { payrollRecoveryApi } from '@/api/payroll-recovery.api';
+import type { PayrollAbsenceDetail, PayrollAttendanceReview } from '@/types/payroll-absence.types';
+import type { PayrollScopeDiff } from '@/types/payroll-recovery.types';
+import { attendanceDayReviews, attendanceRecordRows, attendanceReviewLabels, attendanceTime, pendingAbsenceProposals } from './payroll-attendance-review';
 
 const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['attendance_edit', 'attendance_seal'], { persistQuery: true });
 const router = useRouter();
@@ -37,6 +42,17 @@ const busy = ref(false);
 const feedback = ref('');
 const syncOpen = ref(false), syncBusy = ref(false), syncError = ref(''), syncJobs = ref<PayrollAttendanceSyncJob[]>([]);
 const syncRequests = new Map<string, string>();
+const absenceState = ref<PayrollAbsenceDetail>(), absenceLoading = ref(false), absenceError = ref('');
+const absenceReference = ref(''), absenceNote = ref(''), absenceReferenceError = ref('');
+const scopeDiff = ref<PayrollScopeDiff>(), scopeOpen = ref(false), scopeReason = ref(''), scopeError = ref('');
+let absenceSequence = 0, absenceRequest = '', scopeRequest = '';
+const absenceCandidate = computed(() => detail.value && absenceState.value?.candidates.find(row => row.employeeId === detail.value!.employeeId && row.workDate === detail.value!.workDate));
+const absenceProposals = computed(() => detail.value && absenceState.value ? pendingAbsenceProposals(absenceState.value.review, absenceState.value.confirmed, detail.value) : []);
+const approvedAbsences = computed(() => absenceState.value?.confirmed.filter(row => row.employeeId === detail.value?.employeeId && row.workDate === detail.value?.workDate) ?? []);
+const dayReviews = computed(() => detail.value ? attendanceDayReviews(absenceState.value?.review ?? (current.value?.review ?? []) as PayrollAttendanceReview[], detail.value) : []);
+const recordRows = computed(() => attendanceRecordRows(detail.value?.records ?? []));
+const scopeChanged = computed(() => !!scopeDiff.value && !!(scopeDiff.value.added.length || scopeDiff.value.removed.length));
+const reviewerName = (id: string) => absenceState.value?.actors.find(row => row.id === id)?.name ?? '办理人记录不可用';
 let pollTimer: ReturnType<typeof setTimeout> | undefined, jobsSequence = 0, disposed = false;
 let sequence = 0;
 const employeeName = (id: string) => employees.value.find(person => person.id === id)?.name ?? id;
@@ -44,6 +60,7 @@ function issueText(day: AttendanceDay) { return day.issues?.map(issue => typeof 
 async function load() {
   const request = ++sequence;
   snapshots.value = []; employees.value = []; selectedId.value = ''; detail.value = undefined;
+  scopeDiff.value = undefined; absenceState.value = undefined; ++absenceSequence;
   feedback.value = '';
   if (!subjectId.value || !month.value) return;
   error.value = '';
@@ -52,6 +69,10 @@ async function load() {
     const [rows, people] = await Promise.all([payrollApi.attendance(subjectId.value, month.value), payrollApi.employees(subjectId.value, month.value)]);
     if (request !== sequence) return;
     snapshots.value = [...rows].sort((a, b) => b.version - a.version); employees.value = people;
+    if (rows.length && has('attendance_edit') && has('attendance_seal')) {
+      const difference = await payrollRecoveryApi.scopeDiff(snapshots.value[0]!.id);
+      if (request === sequence) scopeDiff.value = difference;
+    }
   } catch (cause) { if (request === sequence) error.value = await payrollError(cause); }
   finally { if (request === sequence) loading.value = false; }
 }
@@ -93,8 +114,76 @@ async function cancelJob(job: PayrollAttendanceSyncJob) {
 watch([subjectId, month], () => { sourceOpen.value = false; sourceText.value = ''; sourceKey.value = ''; employeeFilter.value = ''; syncJobs.value = []; syncOpen.value = false; syncError.value = ''; ++jobsSequence; stopPolling(); void load(); void loadJobs(); });
 onMounted(refresh);
 onMounted(() => { void loadJobs(); });
-onUnmounted(() => { disposed = true; ++jobsSequence; stopPolling(); });
-function openDay(day: unknown) { detail.value = day as AttendanceDay; note.value = ''; noteError.value = ''; }
+onUnmounted(() => { disposed = true; ++jobsSequence; ++absenceSequence; stopPolling(); });
+async function loadAbsence() {
+  const row = current.value, selected = detail.value, request = ++absenceSequence;
+  absenceState.value = undefined; absenceError.value = '';
+  if (!row || !selected) return;
+  absenceLoading.value = true;
+  try {
+    const data = await payrollAbsenceApi.detail(row.id);
+    if (!disposed && request === absenceSequence && current.value?.id === row.id && detail.value === selected) absenceState.value = data;
+  } catch (cause) { if (request === absenceSequence && !disposed) absenceError.value = await payrollError(cause); }
+  finally { if (request === absenceSequence) absenceLoading.value = false; }
+}
+function openDay(day: unknown) {
+  detail.value = day as AttendanceDay; note.value = ''; noteError.value = ''; absenceReference.value = ''; absenceNote.value = ''; absenceReferenceError.value = ''; absenceRequest = '';
+  void loadAbsence();
+}
+async function mayLeaveDetail() {
+  if (busy.value) return false;
+  if (!note.value.trim() && !absenceReference.value.trim() && !absenceNote.value.trim() && !scopeReason.value.trim()) return true;
+  try { await ElMessageBox.confirm('放弃尚未保存的核对内容？', '离开核对', { confirmButtonText: '放弃修改', cancelButtonText: '继续核对' }); return true; } catch { return false; }
+}
+async function closeDay() { if (await mayLeaveDetail()) { detail.value = undefined; ++absenceSequence; note.value = ''; absenceReference.value = ''; absenceNote.value = ''; } }
+onBeforeRouteLeave(mayLeaveDetail);
+async function refreshDay(message: string) {
+  const selected = detail.value;
+  note.value = ''; absenceReference.value = ''; absenceNote.value = ''; absenceRequest = '';
+  await load();
+  if (selected) { detail.value = current.value?.payload.days.find(row => row.employeeId === selected.employeeId && row.workDate === selected.workDate); await loadAbsence(); }
+  feedback.value = message;
+}
+async function proposeAbsence() {
+  const row = current.value, day = detail.value;
+  absenceReferenceError.value = ''; absenceError.value = '';
+  if (!absenceReference.value.trim()) { absenceReferenceError.value = '请填写已核定缺勤的依据'; return; }
+  if (!row || !day || !absenceCandidate.value || busy.value) return;
+  busy.value = true; absenceRequest ||= crypto.randomUUID();
+  try {
+    await payrollAbsenceApi.propose(row.id, { expectedVersion: row.version, employeeId: day.employeeId, workDate: day.workDate, reference: absenceReference.value.trim(), requestId: absenceRequest });
+    absenceReference.value = ''; absenceRequest = ''; await loadAbsence(); feedback.value = '核定已提出，待封账人员核对；尚未计入缺勤';
+  } catch (cause) { absenceError.value = await payrollError(cause); }
+  finally { busy.value = false; }
+}
+async function decideAbsence(id: string, decision: 'approve' | 'return' | 'revoke') {
+  const row = current.value; if (!row || busy.value) return;
+  absenceError.value = '';
+  if (decision !== 'approve' && !absenceNote.value.trim()) { absenceError.value = '请填写退回或撤销原因'; return; }
+  if (decision !== 'return') {
+    try { await ElMessageBox.confirm(decision === 'approve' ? '已核对排班区间、缺勤事实和依据，将生成新考勤版本？' : '撤销后该人日重新待核，将保留原核定记录。继续？',
+      decision === 'approve' ? '通过缺勤核定' : '撤销缺勤核定', { confirmButtonText: decision === 'approve' ? '通过核定' : '撤销核定', cancelButtonText: '取消', type: 'warning' }); } catch { return; }
+  }
+  busy.value = true;
+  try {
+    await payrollAbsenceApi.decide(row.id, id, { expectedVersion: row.version, decision, note: absenceNote.value.trim() });
+    await refreshDay(decision === 'approve' ? '核定已通过；查询覆盖未齐时请重新同步，再核对封账' : decision === 'return' ? '核定已退回经办' : '核定已撤销，请重新核对原始来源');
+  } catch (cause) { absenceError.value = await payrollError(cause); }
+  finally { busy.value = false; }
+}
+function openScopeRecovery() { scopeOpen.value = true; scopeReason.value = ''; scopeError.value = ''; scopeRequest = crypto.randomUUID(); }
+async function closeScopeRecovery() { if (await mayLeaveDetail()) { scopeOpen.value = false; scopeReason.value = ''; } }
+async function recoverScope() {
+  const value = scopeDiff.value; if (!value || busy.value) return;
+  if (!scopeReason.value.trim()) { scopeError.value = '请填写人员或日期范围调整的依据'; return; }
+  busy.value = true; scopeError.value = '';
+  try {
+    await payrollRecoveryApi.recoverScope(value.snapshotId, { snapshotVersion: value.snapshotVersion, snapshotHash: value.snapshotHash,
+      scopeHash: value.scopeHash, reason: scopeReason.value.trim(), requestId: scopeRequest });
+    scopeReason.value = ''; scopeOpen.value = false; await load(); feedback.value = '已生成范围调整后的考勤版本，新增人员或日期需同步后再封账';
+  } catch (cause) { scopeError.value = await payrollError(cause); }
+  finally { busy.value = false; }
+}
 async function loadFixture(corrected: boolean) {
   sourceError.value = ''; busy.value = true;
   try { const value = await payrollApi.fixture(subjectId.value, month.value, corrected); sourceKey.value = value.sourceKey; sourceText.value = JSON.stringify(value.input, null, 2); sourceComplete.value = value.complete === true; }
@@ -155,7 +244,7 @@ async function seal() {
 <template>
   <BusinessListPage variant="record" :loading="loading">
     <template #filters>
-      <PayrollScope v-model:subject="subjectId" v-model:month="month" :subjects="subjects" :disabled="busy" @refresh="refresh">
+      <PayrollScope v-model:subject="subjectId" v-model:month="month" :subjects="subjects" :disabled="busy || !!detail || scopeOpen" @refresh="refresh">
         <el-button v-if="has('attendance_edit') && isLocalPreview" :disabled="loading" @click="sourceOpen = true; sourceError = ''; sourceComplete = false; partial = false">接收考勤</el-button>
         <el-button v-if="has('attendance_edit') && !isLocalPreview" :loading="syncBusy" :disabled="loading || busy || !!error || !employees.length || syncJobs.some(job => ['queued', 'processing'].includes(job.status))" @click="syncDingtalk()">同步钉钉考勤</el-button>
         <el-button v-if="!isLocalPreview && (syncJobs.length || syncError)" :disabled="busy" @click="syncOpen = true; loadJobs()">同步记录</el-button>
@@ -163,7 +252,7 @@ async function seal() {
       </PayrollScope>
       <el-tabs v-model="tab"><el-tab-pane label="月度汇总" name="summary" /><el-tab-pane label="异常核对" name="issues" /><el-tab-pane label="封账记录" name="history" /></el-tabs>
       <div v-if="tab !== 'history'" class="attendance-filters">
-        <el-select v-model="selectedId" aria-label="考勤版本" placeholder="最新版本"><el-option v-for="row in snapshots" :key="row.id" :value="row.id" :label="`第 ${row.version} 版 · ${row.status === 'sealed' ? '已封账' : '待核对'}`" /></el-select>
+        <el-select v-model="selectedId" aria-label="考勤版本" placeholder="最新版本" :disabled="busy || !!detail"><el-option v-for="row in snapshots" :key="row.id" :value="row.id" :label="`第 ${row.version} 版 · ${row.status === 'sealed' ? '已封账' : '待核对'}`" /></el-select>
         <el-select v-model="employeeFilter" aria-label="员工" placeholder="全部员工" filterable clearable><el-option v-for="person in employees" :key="person.id" :label="`${person.name} ${person.employeeNo}`" :value="person.id" /></el-select>
         <span v-if="current">{{ current.payload.days.length }} 人日 · {{ current.payload.issues.length }} 项异常</span>
       </div>
@@ -176,6 +265,10 @@ async function seal() {
       </el-alert>
       <el-alert v-else-if="!isLocalPreview && subjectId && !loading && !snapshots.length" title="本月尚未同步考勤" type="info" :closable="false" />
       <el-alert v-if="feedback" :title="feedback" type="success" :closable="false" />
+      <el-alert v-if="scopeChanged" title="已审核发薪范围与当前考勤不一致" type="warning" :closable="false">
+        <span>新增 {{ scopeDiff?.added.length }} 人日，移出 {{ scopeDiff?.removed.length }} 人日。</span>
+        <el-button link type="primary" :disabled="busy" @click="openScopeRecovery">核对范围变化</el-button>
+      </el-alert>
     </template>
     <template #desktop-list>
       <el-table v-if="tab === 'history'" :data="snapshots" height="100%"><el-table-column prop="month" label="考勤月" /><el-table-column prop="version" label="版本" /><el-table-column label="状态"><template #default="{ row }">{{ row.status === 'sealed' ? '已封账' : '待核对' }}</template></el-table-column><el-table-column prop="sealedAt" label="封账时间" min-width="180" /></el-table>
@@ -187,8 +280,55 @@ async function seal() {
       <el-empty v-if="!days.length && tab !== 'history'" description="暂无考勤记录" />
     </template>
     <template #detail>
-      <BusinessDetailDrawer :model-value="!!detail" :title="detail ? `${employeeName(detail.employeeId)} · ${detail.workDate}` : '日明细'" :saving="busy" @update:model-value="detail = undefined">
-        <template v-if="detail"><pre>{{ JSON.stringify(detail, null, 2) }}</pre><h3>核对记录</h3><pre>{{ JSON.stringify(current?.review ?? [], null, 2) }}</pre><el-form v-if="has('attendance_edit') && current?.status !== 'sealed'" label-position="top"><el-form-item label="核对结论与依据" :error="noteError"><el-input v-model="note" type="textarea" :rows="3" maxlength="500" /></el-form-item><el-button type="primary" :loading="busy" @click="review">保存核对记录</el-button></el-form></template>
+      <BusinessDetailDrawer :model-value="!!detail" :title="detail ? `${employeeName(detail.employeeId)} · ${detail.workDate}` : '考勤核对'" :saving="busy" :before-close="() => { void closeDay(); }" @update:model-value="value => { if (!value) void closeDay(); }">
+        <template v-if="detail">
+          <dl class="day-summary"><div><dt>应出勤天数</dt><dd>{{ detail.units ?? '待核对' }}</dd></div><div><dt>考勤要求</dt><dd>{{ detail.required === true ? '应出勤' : detail.required === false ? '无需正常出勤' : '待核对' }}</dd></div></dl>
+          <el-alert v-if="issueText(detail)" :title="issueText(detail)" type="warning" :closable="false" />
+          <el-table class="records-desktop" :data="recordRows" empty-text="尚无有效出勤记录">
+            <el-table-column prop="typeLabel" label="类型" min-width="110" /><el-table-column prop="range" label="北京时间" min-width="220" />
+            <el-table-column prop="hours" label="有效小时" min-width="90" /><el-table-column prop="status" label="状态" min-width="100" />
+          </el-table>
+          <div class="records-mobile"><MobileResultCard v-for="(row, index) in recordRows" :key="index"><template #title>{{ row.typeLabel }}</template><template #status>{{ row.status }}</template><div>{{ row.range }}</div><div>有效小时：{{ row.hours }}</div></MobileResultCard></div>
+          <el-alert v-if="absenceError" :title="absenceError" type="error" :closable="false" />
+          <div v-if="absenceLoading" role="status">正在读取核定记录…</div>
+          <section v-if="absenceCandidate && !absenceProposals.length && !approvedAbsences.length && has('attendance_edit') && current?.status !== 'sealed'" class="review-action">
+            <h3>已核定缺勤</h3><p>排班待核区间共 {{ absenceCandidate.hours }} 小时，提出申请后由封账人员核对。</p>
+            <p v-for="(interval, index) in absenceCandidate.intervals" :key="index">{{ attendanceTime(interval.startsAt) }} 至 {{ attendanceTime(interval.endsAt) }}</p>
+            <el-form label-position="top"><el-form-item label="缺勤核定依据" :error="absenceReferenceError"><el-input v-model="absenceReference" type="textarea" :rows="3" maxlength="500" :disabled="busy" /></el-form-item></el-form>
+            <el-button type="primary" :loading="busy" @click="proposeAbsence">提出缺勤核定</el-button>
+          </section>
+          <section v-for="proposal in absenceProposals" :key="proposal.id" class="review-action">
+            <h3>待封账人员核对</h3><p>提出人：{{ reviewerName(proposal.actorId) }} · {{ proposal.hours }} 小时</p><p>依据：{{ proposal.reference }}</p>
+            <template v-if="has('attendance_seal') && current?.status !== 'sealed'">
+              <el-form label-position="top"><el-form-item label="核对意见（退回时必填）"><el-input v-model="absenceNote" type="textarea" :rows="2" :disabled="busy" maxlength="500" /></el-form-item></el-form>
+              <el-button :disabled="busy" @click="decideAbsence(proposal.id!, 'return')">退回核定</el-button><el-button type="primary" :loading="busy" @click="decideAbsence(proposal.id!, 'approve')">通过核定</el-button>
+            </template>
+          </section>
+          <section v-for="fact in approvedAbsences" :key="fact.id" class="review-action">
+            <h3>已通过缺勤核定 · {{ fact.hours }} 小时</h3><p>{{ fact.reference }}</p><p>核对人：{{ reviewerName(fact.approvedById) }} · {{ attendanceTime(fact.approvedAt) }}</p>
+            <template v-if="has('attendance_seal') && current?.status !== 'sealed'"><el-form label-position="top"><el-form-item label="撤销原因"><el-input v-model="absenceNote" :disabled="busy" maxlength="500" /></el-form-item></el-form><el-button :disabled="busy" @click="decideAbsence(fact.id, 'revoke')">撤销核定</el-button></template>
+          </section>
+          <h3>核对记录</h3>
+          <el-timeline><el-timeline-item v-for="(entry, index) in dayReviews" :key="index" :timestamp="attendanceTime(entry.at)">
+            <strong>{{ reviewerName(entry.actorId) }} · {{ attendanceReviewLabels[entry.kind ?? ''] ?? '记录核对' }}</strong><p>{{ entry.reference || entry.note }}</p>
+          </el-timeline-item></el-timeline><el-empty v-if="!dayReviews.length" description="暂无核对记录" :image-size="48" />
+          <el-form v-if="has('attendance_edit') && current?.status !== 'sealed'" label-position="top" class="review-action">
+            <el-form-item label="核对说明" :error="noteError"><el-input v-model="note" type="textarea" :rows="3" maxlength="500" /></el-form-item>
+            <p class="muted">记录说明不会消除异常；补卡、假勤或排班更正后需重新同步。</p><el-button :loading="busy" @click="review">保存核对说明</el-button>
+          </el-form>
+          <el-collapse class="source-details"><el-collapse-item title="原始依据" name="source"><pre>{{ JSON.stringify(detail, null, 2) }}</pre></el-collapse-item></el-collapse>
+        </template>
+        <template #footer><el-button :disabled="busy" @click="closeDay">关闭</el-button></template>
+      </BusinessDetailDrawer>
+      <BusinessDetailDrawer :model-value="scopeOpen" title="核对发薪范围变化" :saving="busy" :before-close="() => { void closeScopeRecovery(); }" @update:model-value="value => { if (!value) void closeScopeRecovery(); }">
+        <template v-if="scopeDiff">
+          <el-alert v-if="scopeDiff.blockedReason" :title="scopeDiff.blockedReason" type="warning" :closable="false" />
+          <h3>移出的人员或日期 · {{ scopeDiff.removed.length }} 人日</h3><p v-for="row in scopeDiff.removed" :key="`${row.employeeId}:${row.workDate}`">{{ row.name }} · {{ row.workDate }}</p>
+          <h3>新增的人员或日期 · {{ scopeDiff.added.length }} 人日</h3><p v-for="row in scopeDiff.added" :key="`${row.employeeId}:${row.workDate}`">{{ row.name }} · {{ row.workDate }} · 待同步</p>
+          <p>原考勤版本保留；只为已审核的新范围生成待核版本。</p>
+          <el-form label-position="top"><el-form-item label="范围变化依据" :error="scopeError"><el-input v-model="scopeReason" type="textarea" :rows="3" maxlength="500" :disabled="busy" /></el-form-item></el-form>
+        </template>
+        <template #footer><el-button :disabled="busy" @click="closeScopeRecovery">取消</el-button><el-button type="primary" :loading="busy" :disabled="!!scopeDiff?.blockedReason" @click="recoverScope">确认范围并生成新版本</el-button></template>
       </BusinessDetailDrawer>
       <BusinessDetailDrawer v-if="!isLocalPreview" v-model="syncOpen" title="钉钉考勤同步" :saving="syncBusy"><PayrollAttendanceSyncPanel :jobs="syncJobs" :busy="syncBusy" :error="syncError" @cancel="cancelJob" @retry="syncDingtalk" @refresh="loadJobs" /><template #footer><el-button :disabled="syncBusy" @click="syncOpen = false">关闭</el-button></template></BusinessDetailDrawer>
       <BusinessDetailDrawer v-if="isLocalPreview" v-model="sourceOpen" title="接收考勤" :saving="busy">
@@ -210,5 +350,11 @@ async function seal() {
 <style scoped>
 .attendance-filters, .fixture-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .attendance-filters :deep(.el-select) { width: 220px; max-width: 100%; }
+.day-summary { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 0 16px; }
+.day-summary dt,.muted {color:var(--el-text-color-secondary);font-size:13px;} .day-summary dd {margin:5px 0 0;}
+.review-action {border-top:1px solid var(--el-border-color-lighter);margin-top:20px;padding-top:14px;}
+h3 {font-size:15px;margin:8px 0 12px;} p {font-size:13px;line-height:1.7;overflow-wrap:anywhere;}
+.source-details {margin-top:20px;} .records-mobile {display:none;} .records-desktop {margin:16px 0;}
+@media(max-width:768px){.records-desktop{display:none;}.records-mobile{display:grid;gap:10px;margin:16px 0;}}
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: var(--el-fill-color-light); padding: 12px; border-radius: 4px; }
 </style>

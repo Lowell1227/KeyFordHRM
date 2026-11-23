@@ -6,7 +6,15 @@ const {parse,compileScript}=require('@vue/compiler-sfc'),vue=require('vue');
 const root=path.resolve(__dirname,'../src');
 function moduleFrom(filename,source,dependencies={}) {
   const m=new Module(filename,module);m.paths=module.paths;
-  m.require=id=>Object.hasOwn(dependencies,id)?dependencies[id]:require(id);
+  m.require=id=>{
+    if(Object.hasOwn(dependencies,id))return dependencies[id];
+    if(id.endsWith('.vue'))return {};
+    if(id.startsWith('./')){
+      const file=path.resolve(path.dirname(filename),`${id}.ts`);
+      if(fs.existsSync(file))return moduleFrom(file,fs.readFileSync(file,'utf8'),dependencies);
+    }
+    return require(id);
+  };
   m._compile(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,filename);
   return m.exports;
 }

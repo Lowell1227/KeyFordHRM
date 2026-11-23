@@ -122,17 +122,31 @@ export class PayrollParameterReleasesService {
       const pending = await tx.payrollParameterRelease.findMany({ where: { ...where, status: 'pending' }, include: display, orderBy: { submittedAt: 'desc' } });
       const recent = await tx.payrollParameterRelease.findMany({ where: { ...where, status: { not: 'pending' } }, include: display, orderBy: { submittedAt: 'desc' }, take: 100 });
       const rows = [...pending, ...recent];
-      const manualIds = (row: typeof rows[number]) => row.kind === 'rule' ? Object.values(
+      const prior = new Map<string, Prisma.InputJsonValue>();
+      const cache = new Map<string, Parameter | null>();
+      for (const row of rows) if (row.previousParameterId && row.previousHash) {
+        const cacheKey = `${row.kind}:${row.previousParameterId}`;
+        if (!cache.has(cacheKey)) cache.set(cacheKey, await this.parameter(tx, this.kind(row.kind), row.previousParameterId));
+        const parameter = cache.get(cacheKey);
+        if (parameter?.subjectId === subjectId && parameter.domain === domain) {
+          const definition = payrollParameterDefinition(this.kind(row.kind), parameter);
+          if (payrollHash(definition) === row.previousHash) prior.set(row.id, definition);
+        }
+      }
+      const manualIds = (row: { kind: string; snapshot: unknown }) => row.kind === 'rule' ? Object.values(
         (row.snapshot as unknown as { config?: PayrollPolicyConfig })?.config?.performance ?? {},
       ).flatMap(mapping => mapping.sourceKind === 'manual' ? Object.keys(mapping.manualAmounts ?? {}) : []) : [];
-      const scopeIds = (row: typeof rows[number]) => row.kind === 'rule'
+      const scopeIds = (row: { kind: string; snapshot: unknown }) => row.kind === 'rule'
         ? (row.snapshot as unknown as { config?: PayrollPolicyConfig })?.config?.employeeScope?.employeeIds ?? [] : [];
-      const ids = [...new Set(rows.flatMap(row => [...manualIds(row), ...scopeIds(row)]))].sort();
+      const priorRow = (row: typeof rows[number]) => ({ kind: row.kind, snapshot: prior.get(row.id) });
+      const ids = [...new Set(rows.flatMap(row => [...manualIds(row), ...scopeIds(row), ...manualIds(priorRow(row)), ...scopeIds(priorRow(row))]))].sort();
       const employees = ids.length ? await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, employeeNo: true } }) : [];
       return rows.map(row => {
-        const visible = new Set(manualIds(row));
-        const scope = new Set(scopeIds(row));
-        return { ...row, ...(visible.size ? { manualEmployees: employees.filter(person => visible.has(person.id)) } : {}),
+        const visible = new Set([...manualIds(row), ...manualIds(priorRow(row))]);
+        const scope = new Set([...scopeIds(row), ...scopeIds(priorRow(row))]);
+        return { ...row, ...(prior.has(row.id) ? { previousSnapshot: prior.get(row.id) }
+          : row.previousParameterId ? { comparisonUnavailable: '前版依据已变化或不可用，请先核查，不能按零值比较' } : {}),
+          ...(visible.size ? { manualEmployees: employees.filter(person => visible.has(person.id)) } : {}),
           ...(scope.size ? { scopeEmployees: employees.filter(person => scope.has(person.id)) } : {}) };
       });
     });

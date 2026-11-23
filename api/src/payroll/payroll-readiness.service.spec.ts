@@ -3,8 +3,11 @@ import { Prisma } from '@prisma/client';
 import { PayrollReadinessService } from './payroll-readiness.service';
 import { PayrollAccessService } from './payroll-access.service';
 import { PAYROLL_ITEM_CODES } from './payroll-contracts';
-import { assertPayrollNetFresh, netSnapshotHash } from './payroll-net';
+import { assertPayrollNetFresh, capturePayrollNet, netSnapshotHash } from './payroll-net';
 import { payrollHash } from './payroll-transaction';
+import { payrollParameterDefinition } from './payroll-parameter-definition';
+import { fictionalDeductionsInput } from './payroll-deductions-preview.fixture';
+import { PayrollBatchesService } from './payroll-batches.service';
 
 jest.mock('./payroll-net', () => ({ ...jest.requireActual('./payroll-net'), assertPayrollNetFresh: jest.fn() }));
 
@@ -93,7 +96,73 @@ function fixture() {
   return { service, prisma, tx, sources, access, configs, events, grants, active, batch, version, capture, input, submit, review, approve };
 }
 
+async function historicalFixture(paid: string) {
+  const f = fixture(), payDate = '2026-11-10';
+  f.version.lines[0].entitlement = new Prisma.Decimal('1000.00');
+  f.version.lines[0].paidBefore = new Prisma.Decimal(paid);
+  f.version.lines[0].amount = new Prisma.Decimal('1000.00').minus(paid);
+  f.capture.lines = f.version.lines.map((line: any) => ({ ...line, entitlement: line.entitlement.toFixed(2),
+    paidBefore: line.paidBefore.toFixed(2), amount: line.amount.toFixed(2) }));
+  f.capture.gross = f.version.lines[0].amount.toFixed(2);
+  const { subjectId, employeeId, gross, payDate: date, ...settings } = fictionalDeductionsInput({
+    subjectId: ids.subject, employeeId: ids.employee, month: '2026-10', payDate, gross: '1000.00' });
+  const { subjectId: subject, employeeId: employee, year, ...opening } = settings.tax.opening;
+  const profile: any = { id: 'fictional-reviewed-profile', subjectId, employeeId, domain: 'formal', version: 1, status: 'active',
+    payDate: new Date(date), effectiveFrom: new Date(date), effectiveTo: new Date(date), settings: {
+      ...settings, tax: { ...settings.tax, opening }, ledger: { startDate: '2026-01-01',
+        priorInPayMonth: Object.fromEntries(Object.keys(settings.tax.current).map(key => [key, '0'])), priorSocialInsurance: '0', priorHousingFund: '0' },
+    } };
+  profile.releases = [{ id: 'fictional-profile-release', parameterVersion: 1, submittedById: ids.editor, reviewerId: ids.reviewer,
+    snapshotHash: payrollHash(payrollParameterDefinition('deduction', profile)) }];
+  f.tx.payrollDeductionProfile = { findFirst: jest.fn(async () => profile) };
+  f.tx.payrollNetPayment = { findMany: jest.fn(async () => []), findFirst: jest.fn(async () => null), create: jest.fn() };
+  f.tx.payrollEvent.findFirst = jest.fn(async () => null);
+  f.version.netSnapshot = await capturePayrollNet(f.tx, f.batch, 'formal', payDate, f.capture.lines);
+  f.version.gross = new Prisma.Decimal('1000.00');
+  jest.mocked(assertPayrollNetFresh).mockImplementation(jest.requireActual<typeof import('./payroll-net')>('./payroll-net').assertPayrollNetFresh);
+  return { ...f, profile };
+}
+
 describe('first-month payroll readiness requests', () => {
+  it.each(['1000.00', '400.00'])('submits, refreshes and signs full historical net after %s was paid without changing wage facts or opening payment gates', async paid => {
+    const f = await historicalFixture(paid), before = JSON.stringify({ batch: f.batch, capture: f.capture });
+    expect(f.version.netSnapshot.totals).toEqual({ gross: '1000.00', socialInsurance: '100.00', housingFund: '100.00', incomeTax: '80.00', net: '720.00' });
+    await expect(f.access.assertFormalPayrollReady(f.tx, ids.subject, '2026-11')).rejects.toThrow(ConflictException);
+    const submitted = await f.submit();
+    expect(submitted.netSnapshot.totals?.net).toBe('720.00');
+    expect(submitted.lines[0]).toMatchObject({ entitlement: '1000.00', paidBefore: paid, amount: paid === '1000.00' ? '0.00' : '600.00' });
+    expect((await f.service.detail(ids.request, actor(ids.editor))).netSnapshot).toEqual(submitted.netSnapshot);
+    expect((await f.submit()).request.id).toBe(ids.request);
+    expect(f.events).toHaveLength(1);
+    expect((await f.review()).request.status).toBe('pending');
+    await expect(f.access.assertFormalPayrollReady(f.tx, ids.subject, '2026-11')).rejects.toThrow(ConflictException);
+    expect((await f.approve()).request.status).toBe('approved');
+    expect((await f.service.detail(ids.request, actor(ids.approver))).netSnapshot).toEqual(submitted.netSnapshot);
+    await expect(f.access.assertFormalPayrollReady(f.tx, ids.subject, '2026-11')).resolves.toBeUndefined();
+    await expect(f.access.assertFormalPayrollReady(f.tx, ids.subject, '2026-10')).rejects.toThrow(ConflictException);
+    await expect(f.access.assert(f.tx, actor(ids.editor), ids.subject, 'payroll_settle')).rejects.toThrow(ForbiddenException);
+    f.grants.set(ids.editor, ['payroll_edit', 'payroll_settle']);
+    const wages = new PayrollBatchesService(f.prisma, f.access, f.sources);
+    await expect(wages.netPayment(ids.batch, { expectedVersion: f.batch.version, employeeId: ids.employee, requestId: ids.second,
+      payDate: '2026-11-10', reference: 'Fictional blocked reconciliation payment' }, actor(ids.editor))).rejects.toThrow(/对账/);
+    expect(f.tx.payrollNetPayment.create).not.toHaveBeenCalled();
+    await f.service.revoke(ids.request, { expectedVersion: 3, note: 'Fictional acceptance withdrawn' }, actor(ids.approver));
+    await expect(f.access.assertFormalPayrollReady(f.tx, ids.subject, '2026-11')).rejects.toThrow(ConflictException);
+    expect(JSON.stringify({ batch: f.batch, capture: f.capture })).toBe(before);
+  });
+
+  it('rejects readiness review after the approved historical deduction source changes and keeps the frozen full-net detail', async () => {
+    const f = await historicalFixture('400.00');
+    const frozen = (await f.submit()).netSnapshot;
+    f.profile.settings.tax.opening.sourceVersion = 'fictional-approved-opening-correction';
+    f.profile.releases[0].snapshotHash = payrollHash(payrollParameterDefinition('deduction', f.profile));
+    await expect(f.review()).rejects.toThrow(ConflictException);
+    expect(f.configs.get(requestKey())).toMatchObject({ version: 1, approvalStep: 0, status: 'pending', decisions: [] });
+    expect((await f.service.detail(ids.request, actor(ids.reviewer))).netSnapshot).toEqual(frozen);
+    await expect(f.access.assertFormalPayrollReady(f.tx, ids.subject, '2026-11')).rejects.toThrow(ConflictException);
+    expect(f.tx.payrollNetPayment.create).not.toHaveBeenCalled();
+  });
+
   it('freezes a complete formal reconciliation with an independent approved path without touching payroll facts', async () => {
     const f = fixture(), before = JSON.stringify(f.batch);
     const result = await f.submit();

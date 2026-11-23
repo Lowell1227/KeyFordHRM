@@ -38,14 +38,29 @@ export function assertPayrollNetShape(raw: unknown): asserts raw is PayrollNetSn
     !new D(s.totals![key]).eq(s.rows.reduce((sum, row) => sum.plus(row.result[key]!), new D(0)))) fail();
 }
 
-export function assertPayrollNetLines(raw: unknown, lines: Array<{ employeeId: string; attributionMonth: string; itemCode: string; amount: Prisma.Decimal | null }>, gross: Prisma.Decimal | null) {
+export function payrollReconciliationGross(lines: Array<{ entitlement?: Prisma.Decimal | string | null }>): string {
+  let total = new D(0);
+  for (const line of lines) {
+    if (line.entitlement == null) throw new ConflictException('历史对账缺少完整核定应发');
+    const amount = new D(line.entitlement);
+    if (!amount.isFinite() || amount.decimalPlaces() > 2) throw new ConflictException('历史对账核定应发必须是精确到分的金额');
+    total = total.plus(amount);
+  }
+  return total.toFixed(2);
+}
+
+export function assertPayrollNetLines(raw: unknown, lines: Array<{ employeeId: string; attributionMonth: string; itemCode: string;
+  entitlement?: Prisma.Decimal | null; paidBefore?: Prisma.Decimal | null; amount: Prisma.Decimal | null }>, gross: Prisma.Decimal | null, purpose?: string) {
   assertPayrollNetShape(raw);
   const groups = new Map<string, Set<string>>(), totals = new Map<string, Prisma.Decimal>();
   for (const line of lines) {
     const key = `${line.employeeId}:${line.attributionMonth}`, items = groups.get(key) ?? new Set<string>();
     if (items.has(line.itemCode) || !(PAYROLL_ITEM_CODES as readonly string[]).includes(line.itemCode) || line.amount === null) throw new ConflictException('实发工资缺少完整五项税前明细');
+    if (purpose === 'reconciliation' && (line.entitlement == null || line.paidBefore == null
+      || !line.entitlement.minus(line.paidBefore).eq(line.amount))) throw new ConflictException('历史对账的核定应发、已付与待结差额不一致');
     items.add(line.itemCode); groups.set(key, items);
-    totals.set(line.employeeId, (totals.get(line.employeeId) ?? new D(0)).plus(line.amount));
+    const amount = purpose === 'reconciliation' ? payrollReconciliationGross([line]) : line.amount;
+    totals.set(line.employeeId, (totals.get(line.employeeId) ?? new D(0)).plus(amount));
   }
   if (groups.size === 0 || [...groups.values()].some(items => items.size !== 5) || totals.size !== raw.rows.length || gross === null ||
     !gross.eq(raw.totals!.gross) || raw.rows.some(row => !totals.get(row.employeeId)?.eq(row.result.gross!))) throw new ConflictException('实发人员、税前明细或合计不一致');
@@ -99,14 +114,16 @@ async function readNetRow(tx: Prisma.TransactionClient, input: { subjectId: stri
   } catch { return blocked('已审核资料缺少累计基准或不适用于该发薪日，请补充审核'); }
 }
 
-export async function capturePayrollNet(tx: Prisma.TransactionClient, batch: { subjectId: string; payMonth: string }, domain: string,
-  payDate: string, lines: Array<{ employeeId: string; amount: string | null; evidence: unknown }>): Promise<PayrollNetSnapshot> {
+export async function capturePayrollNet(tx: Prisma.TransactionClient, batch: { subjectId: string; payMonth: string; purpose?: string }, domain: string,
+  payDate: string, lines: Array<{ employeeId: string; entitlement?: string | null; amount: string | null; evidence: unknown }>): Promise<PayrollNetSnapshot> {
   payrollDate(payDate);
   if (payDate.slice(0, 7) !== batch.payMonth) throw new ConflictException('发薪日必须属于批次发放月');
+  if (batch.purpose === 'reconciliation' && domain !== 'formal') throw new ConflictException('历史对账须使用正式域已核定资料');
   const groups = new Map<string, { gross: Prisma.Decimal; employeeName: string; employeeNo: string }>();
   for (const line of lines) {
     const prior = groups.get(line.employeeId), evidence = line.evidence as { employeeName?: string; employeeNo?: string };
-    groups.set(line.employeeId, { gross: (prior?.gross ?? new D(0)).plus(line.amount ?? 0),
+    const amount = batch.purpose === 'reconciliation' ? payrollReconciliationGross([line]) : line.amount ?? 0;
+    groups.set(line.employeeId, { gross: (prior?.gross ?? new D(0)).plus(amount),
       employeeName: prior?.employeeName ?? evidence?.employeeName ?? line.employeeId, employeeNo: prior?.employeeNo ?? evidence?.employeeNo ?? '' });
   }
   const rows: PayrollNetRow[] = [];
