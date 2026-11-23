@@ -29,11 +29,18 @@ describe('locked payroll export', () => {
       payrollExportRecord: { create: jest.fn(async () => ({})) }, contractSubject: { findUniqueOrThrow: jest.fn(async () => ({ name: '虚构薪酬主体' })) },
       $queryRaw: jest.fn(async () => []), payrollSettlement: { create: jest.fn() } };
     const prisma = { $transaction: async (work: (tx: any) => any) => work(tx) };
-    const access = { assert: jest.fn(async () => undefined), assertDomain: jest.fn(async () => 'validation') };
+    const access = { assert: jest.fn(async () => undefined), assertDomain: jest.fn(async () => 'validation'), assertFormalPayrollReady: jest.fn(async () => undefined) };
     const crypto = { encryptWorkbook: jest.fn<Promise<Buffer>, [Buffer, string]>(async plain => Buffer.from(plain)) };
     return { batch, version, tx, access, crypto, service: new PayrollExportService(prisma as any, access as any, crypto as any) };
   }
   const actor = { id: 'exporter', sysRole: 'employee' } as any;
+  it('requires subject readiness before constructing a formal final Excel, even after payroll approval', async () => {
+    const s = netFixture(); s.batch.purpose = 'formal';
+    s.access.assertFormalPayrollReady.mockRejectedValue(new ConflictException('正式发薪待首月签收'));
+    await expect(s.service.download('batch', { expectedVersion: 4, filePassword: 'fictional-only' }, actor)).rejects.toThrow('正式发薪待首月签收');
+    expect(s.access.assertFormalPayrollReady).toHaveBeenCalledWith(s.tx, s.batch.subjectId, s.batch.month);
+    expect(s.crypto.encryptWorkbook).not.toHaveBeenCalled(); expect(s.tx.payrollExportRecord.create).not.toHaveBeenCalled();
+  });
   it('rejects a real reconciliation final Excel even with a forged approved version and export permission', async () => {
     const s = fixture(); s.batch.purpose = 'reconciliation';
     await expect(s.service.download('batch', { expectedVersion: 4, filePassword: 'fictional-only' }, actor)).rejects.toThrow(ForbiddenException);

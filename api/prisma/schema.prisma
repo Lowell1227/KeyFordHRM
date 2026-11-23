@@ -772,6 +772,8 @@ model PersonnelReferenceData {
 }
 
 model ContractSubject {
+  payrollAttendanceSyncJobs PayrollAttendanceSyncJob[]
+  payrollAttendanceSyncSources PayrollAttendanceSyncSource[]
   payrollNetPayments PayrollNetPayment[]
   payrollGrants PayrollGrant[]
   payrollPolicies PayrollPolicy[]
@@ -2800,4 +2802,53 @@ model PayrollAdjustment {
   employee User @relation(fields: [employeeId], references: [id], onDelete: Restrict)
   @@index([subjectId, employeeId, domain, month])
   @@map("payroll_adjustments")
+}
+
+model PayrollAttendanceSyncJob {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  month String @db.VarChar(7)
+  domain String @default("formal") @db.VarChar(20)
+  requestId String @unique @map("request_id") @db.Uuid
+  requestHash String @map("request_hash") @db.VarChar(64)
+  observationVersion Int @unique @default(autoincrement()) @map("observation_version")
+  status String @default("queued") @db.VarChar(20)
+  createdById String @map("created_by_id") @db.Uuid
+  contextHash String? @map("context_hash") @db.VarChar(64)
+  cells Json @default("[]") @db.JsonB
+  totalCells Int @default(0) @map("total_cells")
+  cursor Int @default(0)
+  pendingCells Int @default(0) @map("pending_cells")
+  snapshotVersion Int @default(0) @map("snapshot_version")
+  attempts Int @default(0)
+  issues Json @default("[]") @db.JsonB
+  leaseToken String? @map("lease_token") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(6)
+  retryOfId String? @map("retry_of_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict, map: "payroll_attendance_sync_jobs_subject_fkey")
+  retryOf PayrollAttendanceSyncJob? @relation("AttendanceSyncRetries", fields: [retryOfId], references: [id], onDelete: Restrict, map: "payroll_attendance_sync_jobs_retry_fkey")
+  retries PayrollAttendanceSyncJob[] @relation("AttendanceSyncRetries")
+  @@index([subjectId, month, domain, createdAt], map: "payroll_attendance_sync_jobs_subject_month_idx")
+  @@index([status, leaseUntil, createdAt], map: "payroll_attendance_sync_jobs_dispatch_idx")
+  @@map("payroll_attendance_sync_jobs")
+}
+
+model PayrollAttendanceSyncSource {
+  subjectId String @map("subject_id") @db.Uuid
+  month String @db.VarChar(7)
+  domain String @default("formal") @db.VarChar(20)
+  sourceId String @map("source_id") @db.VarChar(80)
+  employeeId String @map("employee_id") @db.Uuid
+  workDate DateTime @map("work_date") @db.Date
+  sourceVersion Int @map("source_version")
+  fingerprint String @db.VarChar(64)
+  record Json @db.JsonB
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict, map: "payroll_attendance_sync_sources_subject_fkey")
+  @@id([subjectId, month, domain, sourceId])
+  @@index([subjectId, month, domain, employeeId, workDate], map: "payroll_attendance_sync_sources_scope_idx")
+  @@map("payroll_attendance_sync_sources")
 }

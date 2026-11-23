@@ -152,6 +152,14 @@ describe('payroll parameters require the submitting HR direct manager', () => {
     expect(s.releases.findMany.mock.calls).toContainEqual([expect.objectContaining({ where: expect.objectContaining({ status: 'pending' }) })]);
     expect(s.releases.findMany.mock.calls.find(([input]) => input.where.status === 'pending')?.[0].take).toBeUndefined();
   });
+  it('shows names only for payer scope identities in this assigned parameter snapshot', async () => {
+    const s = fixture(), request = await s.submit();
+    Object.assign(s.requests[0], { kind: 'rule', snapshot: { config: { employeeScope: { employeeIds: ['scope-employee'], evidenceRef: 'Fictional payer confirmation' }, performance: {} } } });
+    s.tx.user.findMany = jest.fn(async () => [{ id: 'scope-employee', name: 'Fictional scoped employee', employeeNo: 'SCOPED' }, { id: 'unrelated', name: 'Must not be returned', employeeNo: 'OTHER' }]);
+    const result = await s.service.list('subject', manager) as any[];
+    expect(result.find(row => row.id === request.id).scopeEmployees).toEqual([{ id: 'scope-employee', name: 'Fictional scoped employee', employeeNo: 'SCOPED' }]);
+    expect(s.tx.user.findMany).toHaveBeenCalledWith({ where: { id: { in: ['scope-employee'] } }, select: { id: true, name: true, employeeNo: true } });
+  });
   it('uses the server-selected formal domain for both reviewer qualification and list queries', async () => {
     const s = fixture(); await s.submit();
     s.access.maintenancePurpose.mockReturnValue('formal'); s.access.assertDomain.mockResolvedValue('formal');

@@ -362,6 +362,15 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/system/payroll-grants',
+    name: 'PayrollGrants',
+    component: () => import('@/views/system/PayrollGrantsView.vue'),
+    meta: {
+      requiresAuth: true, title: '薪酬授权', roles: ['system_admin'],
+      navigation: { module: 'system', label: '薪酬授权', order: 30 },
+    },
+  },
+  {
     path: '/manager/scoring',
     name: 'ManagerScoring',
     redirect: (to) => ({ path: '/tasks', query: { ...to.query, scope: 'team', stage: 'manager-eval' } }),

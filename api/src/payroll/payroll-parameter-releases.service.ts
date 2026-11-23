@@ -122,11 +122,15 @@ export class PayrollParameterReleasesService {
       const manualIds = (row: typeof rows[number]) => row.kind === 'rule' ? Object.values(
         (row.snapshot as unknown as { config?: PayrollPolicyConfig })?.config?.performance ?? {},
       ).flatMap(mapping => mapping.sourceKind === 'manual' ? Object.keys(mapping.manualAmounts ?? {}) : []) : [];
-      const ids = [...new Set(rows.flatMap(manualIds))].sort();
+      const scopeIds = (row: typeof rows[number]) => row.kind === 'rule'
+        ? (row.snapshot as unknown as { config?: PayrollPolicyConfig })?.config?.employeeScope?.employeeIds ?? [] : [];
+      const ids = [...new Set(rows.flatMap(row => [...manualIds(row), ...scopeIds(row)]))].sort();
       const employees = ids.length ? await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, employeeNo: true } }) : [];
       return rows.map(row => {
         const visible = new Set(manualIds(row));
-        return visible.size ? { ...row, manualEmployees: employees.filter(person => visible.has(person.id)) } : row;
+        const scope = new Set(scopeIds(row));
+        return { ...row, ...(visible.size ? { manualEmployees: employees.filter(person => visible.has(person.id)) } : {}),
+          ...(scope.size ? { scopeEmployees: employees.filter(person => scope.has(person.id)) } : {}) };
       });
     });
   }

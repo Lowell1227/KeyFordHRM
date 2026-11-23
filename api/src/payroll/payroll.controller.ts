@@ -21,8 +21,12 @@ export class PayrollController {
     private readonly parameters: PayrollParameterReleasesService) {}
   @Get('access') @Header('Cache-Control', 'no-store, private')
   accessForUser(@CurrentUser() actor: AuthUser) { return this.access.getAccess(actor); }
+  @Get('readiness') @Header('Cache-Control', 'no-store, private')
+  readiness(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.access.readiness(query.subjectId, actor); }
   @Get('employees') @Header('Cache-Control', 'no-store, private')
   employees(@Query() query: PayrollMonthDto, @CurrentUser() actor: AuthUser) { return this.data.employees(query.subjectId, query.month, actor); }
+  @Get('employee-scope-candidates') @Header('Cache-Control', 'no-store, private')
+  employeeScopeCandidates(@Query() query: PayrollMonthDto, @CurrentUser() actor: AuthUser) { return this.data.employeeScopeCandidates(query.subjectId, query.month, actor); }
   @Get('operators') @Header('Cache-Control', 'no-store, private')
   operators(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.data.operators(query.subjectId, actor); }
   @Get('performance-cycles') @Header('Cache-Control', 'no-store, private')

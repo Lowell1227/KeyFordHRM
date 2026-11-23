@@ -125,6 +125,7 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
     jest.spyOn(access, 'assertDomain').mockImplementation(async (_tx, purpose) => {
       if (!domainAllowed || purpose === 'formal') throw new ForbiddenException(); return 'validation';
     });
+    (access as any).assertFormalPayrollReady = jest.fn(async () => undefined);
     capture = { sourceHash: 'a'.repeat(64), sources: { attendanceVersion: 1 }, issues: [],
       approvalPath: [reviewer.id, approver.id], reviewerCount: 1, gross: '200.00', lines: [{
         employeeId: employee, attributionMonth: '2026-11', itemCode: 'fixed', status: 'ready', entitlement: '200.00',
@@ -156,6 +157,35 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
   async function approved() { const b = await submitted();
     await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: 'Fictional review' }, reviewer);
     await service.decide(b.id, { expectedVersion: b.version, decision: 'approve', note: 'Fictional approval' }, approver); return b; }
+  it('keeps formal batch creation behind subject readiness while real-data reconciliation remains available', async () => {
+    jest.spyOn(access, 'assertDomain').mockResolvedValue('formal');
+    const readiness = (access as any).assertFormalPayrollReady as jest.Mock;
+    readiness.mockRejectedValue(new ConflictException('正式发薪待首月签收'));
+    await expect(service.create({ ...createInput(), purpose: 'formal' }, editor)).rejects.toThrow('正式发薪待首月签收');
+    expect(db.tx.payrollBatch.create).not.toHaveBeenCalled();
+    await expect(service.create({ ...createInput(), purpose: 'reconciliation' }, editor)).resolves.toMatchObject({ purpose: 'reconciliation' });
+    expect(readiness).toHaveBeenCalledTimes(1);
+  });
+  it('also gates recalculation and submission of existing formal drafts before reading wage sources', async () => {
+    const batch = await calculated(); batch.purpose = 'formal';
+    jest.spyOn(access, 'assertDomain').mockResolvedValue('formal');
+    (access as any).assertFormalPayrollReady.mockRejectedValue(new ConflictException('正式发薪待首月签收'));
+    sources.capture.mockClear();
+    await expect(service.calculate(batch.id, { expectedVersion: batch.version, payDate: '2026-12-10' }, editor)).rejects.toThrow('正式发薪待首月签收');
+    await expect(service.submit(batch.id, { expectedVersion: batch.version }, editor)).rejects.toThrow('正式发薪待首月签收');
+    expect(sources.capture).not.toHaveBeenCalled(); expect(db.state.reservations).toHaveLength(0);
+  });
+  it('gates a formal approval but still permits its assigned reviewer to return the pending batch', async () => {
+    const batch = await submitted(); batch.purpose = 'formal';
+    jest.spyOn(access, 'assertDomain').mockResolvedValue('formal');
+    const readiness = (access as any).assertFormalPayrollReady as jest.Mock;
+    readiness.mockRejectedValue(new ConflictException('正式发薪待首月签收'));
+    await expect(service.decide(batch.id, { expectedVersion: batch.version, decision: 'approve', note: '' }, reviewer)).rejects.toThrow('正式发薪待首月签收');
+    expect(readiness).toHaveBeenCalledWith(db.tx, subject, batch.month);
+    readiness.mockClear();
+    await expect(service.decide(batch.id, { expectedVersion: batch.version, decision: 'return', note: '撤回签收后退回' }, reviewer)).resolves.toMatchObject({ status: 'returned' });
+    expect(readiness).not.toHaveBeenCalled();
+  });
   async function approvedPerformance() {
     const task: any = { id: 'fictional-task', employeeId: employee, cycleId: 'monthly-cycle', status: 'published',
       isExempt: false, participantDisposition: 'active', publishedAt: new Date('2026-11-30'),
@@ -280,6 +310,7 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
       expect(db.tx.payrollReservation.createMany).not.toHaveBeenCalled(); expect(db.tx.payrollReservation.deleteMany).not.toHaveBeenCalled();
     });
     it('requires formal net calculation for formal purpose even if an operator intended reconciliation', async () => {
+      jest.spyOn(access, 'assertFormalPayrollReady').mockResolvedValue(undefined);
       const b = await service.create({ ...input(), purpose: 'formal' }, editor);
       await expect(service.calculate(b.id, { expectedVersion: 0 }, editor)).rejects.toThrow('正式工资必须核算扣缴及实发');
       expect(db.state.versions).toEqual([]);

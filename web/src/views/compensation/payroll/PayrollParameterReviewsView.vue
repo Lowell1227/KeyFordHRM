@@ -11,6 +11,7 @@ import type { PayrollParameterRelease } from '@/types/payroll.types';
 import PayrollScope from './PayrollScope.vue';
 import { usePayrollScope } from './usePayrollScope';
 import PayrollDeductionSettingsForm from './PayrollDeductionSettingsForm.vue';
+import { attendanceTypeLabels } from './payroll-attendance-mappings';
 
 const auth = useAuthStore();
 const route = useRoute(), router = useRouter();
@@ -63,6 +64,10 @@ function manualEmployeeLabel(id: string) {
   const person = selected.value?.manualEmployees?.find(employee => employee.id === id);
   return person ? `${person.name}${person.employeeNo ? ` · ${person.employeeNo}` : ''}` : `记录不可用（${id.slice(-8)}）`;
 }
+function scopeEmployeeLabel(id: string) {
+  const person = selected.value?.scopeEmployees?.find(employee => employee.id === id);
+  return person ? `${person.name}${person.employeeNo ? ` · ${person.employeeNo}` : ''}` : `记录不可用（${id.slice(-8)}）`;
+}
 const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value)) : '';
 </script>
 <template>
@@ -100,6 +105,14 @@ const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN',
             <div><dt>绩效结构</dt><dd>{{ selected.snapshot.performanceMode === 'additional' ? '固定月薪之外另计' : '不适用' }}</dd></div><div><dt>确认依据</dt><dd>{{ selected.snapshot.evidence }}</dd></div>
           </dl>
           <template v-if="selected.snapshot.config">
+            <section v-if="selected.snapshot.config.employeeScope" class="parameter-section">
+              <h4>发薪人员 · {{ selected.snapshot.config.employeeScope.employeeIds.length }}人</h4>
+              <p>{{ selected.snapshot.config.employeeScope.evidenceRef }}</p>
+              <p>{{ selected.snapshot.config.employeeScope.employeeIds.map(scopeEmployeeLabel).join('、') }}</p>
+            </section>
+            <section v-if="Object.keys(selected.snapshot.config.attendanceMappings ?? {}).length" class="parameter-section">
+              <h4>钉钉假勤分类</h4><dl class="manual-amounts"><div v-for="(mapping, key) in selected.snapshot.config.attendanceMappings" :key="key"><dt>{{ key }}</dt><dd>{{ attendanceTypeLabels[mapping.type] }}{{ mapping.overtimeKind ? ` · ${{ weekday: '工作日', restday: '休息日', holiday: '节假日' }[mapping.overtimeKind]}` : '' }}</dd></div></dl>
+            </section>
             <section v-for="(calendar, key) in selected.snapshot.config.workCalendars" :key="key" class="parameter-section">
               <h4>{{ key }} 工作日日历 · {{ workdays(calendar.days) }}天</h4><p>{{ calendar.sourceVersion }} · {{ calendar.evidenceRef }}</p>
               <p>应出勤：{{ calendar.days.filter(day => Number(day.units) > 0).map(day => `${day.workDate.slice(-2)}日${day.units !== '1' ? `(${day.units})` : ''}`).join('、') }}</p>

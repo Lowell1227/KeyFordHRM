@@ -26,8 +26,21 @@ function reference(value: unknown): string | null {
   return value.trim();
 }
 export function normalizePayrollPolicy(input: unknown): PayrollPolicyWithScope {
-  const raw = object(input, ['employeeScope', 'fixedSalaryBasis', 'workCalendars', 'rounding', 'monthlyUnits', 'normalHourly', 'paidHourly', 'overtime', 'reviewers', 'approvers', 'cutoverMonth', 'performance']);
+  const raw = object(input, ['employeeScope', 'attendanceMappings', 'fixedSalaryBasis', 'workCalendars', 'rounding', 'monthlyUnits', 'normalHourly', 'paidHourly', 'overtime', 'reviewers', 'approvers', 'cutoverMonth', 'performance']);
   const employeeScope = raw.employeeScope === undefined ? undefined : normalizePayrollEmployeeScope(raw.employeeScope);
+  const attendanceMappings: NonNullable<PayrollPolicyConfig['attendanceMappings']> = {};
+  const attendanceEntries = Object.entries(object(raw.attendanceMappings));
+  if (attendanceEntries.length > 100) throw new BadRequestException('假勤类别映射最多100项');
+  for (const [key, value] of attendanceEntries) {
+    const mapping = object(value, ['type', 'overtimeKind']);
+    if (!/^\d{1,3}:[^:\r\n]{1,80}:[^:\r\n]{0,80}$/.test(key) || key !== key.trim()
+      || !['paid_leave', 'unpaid_leave', 'sick_leave', 'business_trip', 'outing', 'makeup', 'overtime'].includes(mapping.type as string)
+      || (mapping.type === 'overtime' ? !['weekday', 'restday', 'holiday'].includes(mapping.overtimeKind as string) : mapping.overtimeKind !== undefined)) {
+      throw new BadRequestException('请明确钉钉假勤原类型及计薪类型，加班还需指定日类型');
+    }
+    attendanceMappings[key] = { type: mapping.type as NonNullable<PayrollPolicyConfig['attendanceMappings']>[string]['type'],
+      ...(mapping.type === 'overtime' ? { overtimeKind: mapping.overtimeKind as 'weekday' | 'restday' | 'holiday' } : {}) };
+  }
   if (raw.fixedSalaryBasis != null && raw.fixedSalaryBasis !== 'monthly_workdays') throw new BadRequestException('固定工资折算依据不正确');
   const calendarEntries = Object.entries(object(raw.workCalendars));
   if (calendarEntries.length > 24) throw new BadRequestException('请按有效期拆分工作日日历');
@@ -66,7 +79,7 @@ export function normalizePayrollPolicy(input: unknown): PayrollPolicyWithScope {
   }
   if (Object.keys(monthlyUnits).length > 24 || Object.keys(performance).length > 24) throw new BadRequestException('请按有效期拆分规则版本');
   if (raw.cutoverMonth != null) { if (typeof raw.cutoverMonth !== 'string') throw new BadRequestException('启用切点不正确'); payrollMonth(raw.cutoverMonth); }
-  return { ...(employeeScope ? { employeeScope } : {}), ...(raw.fixedSalaryBasis != null ? { fixedSalaryBasis: 'monthly_workdays' as const } : {}),
+  return { ...(employeeScope ? { employeeScope } : {}), ...(raw.attendanceMappings !== undefined ? { attendanceMappings } : {}), ...(raw.fixedSalaryBasis != null ? { fixedSalaryBasis: 'monthly_workdays' as const } : {}),
     ...(calendarEntries.length ? { workCalendars } : {}), rounding: raw.rounding == null ? null : 'item_half_up', monthlyUnits,
     normalHourly: decimal(raw.normalHourly), paidHourly,
     overtime: { hourlyBase: decimal(ot.hourlyBase), weekday: decimal(ot.weekday), restday: decimal(ot.restday), holiday: decimal(ot.holiday) },

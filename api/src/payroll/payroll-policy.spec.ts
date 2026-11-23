@@ -3,6 +3,19 @@ import { normalizePayrollPolicy } from './payroll-policy';
 import { payrollCalendarDays } from './payroll-work-calendar';
 
 describe('payroll policy config', () => {
+  it('retains only explicit reviewed DingTalk attendance type mappings', () => {
+    expect(normalizePayrollPolicy({ attendanceMappings: { '1:年假:年假': { type: 'paid_leave' }, '3:加班:工作日': { type: 'overtime', overtimeKind: 'weekday' } } })).toMatchObject({
+      attendanceMappings: { '1:年假:年假': { type: 'paid_leave' }, '3:加班:工作日': { type: 'overtime', overtimeKind: 'weekday' } },
+    });
+    expect(normalizePayrollPolicy({})).not.toHaveProperty('attendanceMappings');
+  });
+  it.each([
+    { invalid: { type: 'paid_leave' } }, { '1:病假:病假': { type: 'normal' } },
+    { '3:加班:工作日': { type: 'overtime' } }, { '1:年假:年假': { type: 'paid_leave', overtimeKind: 'weekday' } },
+    { '1:年假:年假': { type: 'paid_leave', hourly: '1' } },
+  ])('rejects guessed or incomplete attendance classification: %j', attendanceMappings => {
+    expect(() => normalizePayrollPolicy({ attendanceMappings })).toThrow(BadRequestException);
+  });
   const person = '00000000-0000-4000-8000-000000000001';
   it('normalizes explicit payer assignments without inferring a contract subject', () => {
     expect((normalizePayrollPolicy({ employeeScope: { employeeIds: [person], evidenceRef: '  Fictional payer approval  ' } }) as any).employeeScope)

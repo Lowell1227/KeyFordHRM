@@ -8,11 +8,20 @@ export interface AttendanceIssue { employeeId?: string; workDate?: string; code:
 export interface AttendanceDay { employeeId: string; workDate: string; units: unknown; required: unknown; records: unknown[]; issues: Array<AttendanceIssue | string> }
 export interface PayrollAttendance { id: string; month: string; version: number; status: string; payload: { month: string; days: AttendanceDay[]; issues: AttendanceIssue[]; version: string }; review: unknown[]; sealedAt: string | null }
 export interface PayrollSourceInput { sourceKey: string; input: Record<string, unknown>; complete?: boolean; scope?: { employeeIds: string[]; from: string; to: string } }
+export interface PayrollAttendanceSyncJob {
+  id: string; subjectId: string; month: string; domain: 'formal';
+  status: 'queued' | 'processing' | 'completed' | 'blocked' | 'failed' | 'cancelled';
+  observationVersion: number; totalCells: number; completedCells: number; pendingCells: number; attempts: number;
+  issues: Array<{ code: string; message: string; mappingKey?: string }>;
+  createdAt: string; updatedAt: string; finishedAt: string | null; canCancel: boolean; canRetry: boolean;
+}
 export interface PayrollStandardInput { subjectId: string; employeeId: string; effectiveFrom: string; effectiveTo?: string; fixedMonthly: string | null; performanceBase: string | null; performanceMode: 'included' | 'additional' | 'none' | null; evidence: string }
 export interface PayrollStandard extends PayrollStandardInput { id: string; version: number; status: string }
 export interface PayrollPerformanceMapping { cycleIds: string[]; coefficients: Partial<Record<'A' | 'B' | 'C' | 'D', string>>; sourceKind?: 'manual' | 'official' | 'fictional' | null; manualAmounts?: Record<string, string>; coefficientVersion?: string | null; evidenceRef?: string | null }
 export interface PayrollWorkCalendar { sourceVersion: string; evidenceRef: string; days: Array<{ workDate: string; units: string }> }
 export interface PayrollRuleConfig {
+  employeeScope?: { employeeIds: string[]; evidenceRef: string };
+  attendanceMappings?: Record<string, { type: 'paid_leave' | 'unpaid_leave' | 'sick_leave' | 'business_trip' | 'outing' | 'makeup' | 'overtime'; overtimeKind?: 'weekday' | 'restday' | 'holiday' }>;
   fixedSalaryBasis?: 'monthly_workdays' | null;
   workCalendars?: Record<string, PayrollWorkCalendar>;
   monthlyUnits: Record<string, string>;
@@ -51,6 +60,7 @@ export interface PayrollParameterRelease {
   standard?: { employee: { name: string; employeeNo: string | null } } | null;
   deduction?: { employee: { name: string; employeeNo: string | null } } | null;
   manualEmployees?: Array<{ id: string; name: string; employeeNo: string | null }>;
+  scopeEmployees?: Array<{ id: string; name: string; employeeNo: string | null }>;
   snapshot: { effectiveFrom: string; effectiveTo: string | null; fixedMonthly?: string | null; performanceBase?: string | null;
     performanceMode?: string | null; evidence?: string; config?: PayrollRuleConfig; payDate?: string; settings?: PayrollDeductionSettings };
   submittedAt: string; decidedAt: string | null; note: string;

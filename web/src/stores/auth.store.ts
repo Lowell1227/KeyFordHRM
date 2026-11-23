@@ -3,10 +3,18 @@ import { authApi } from '@/api/auth.api';
 import type { DingTalkLoginMode } from '@/api/auth.api';
 import { useNotificationStore } from '@/stores/notification.store';
 import type { CurrentUser } from '@/types/api.types';
+import { payrollApi } from '@/api/payroll.api';
 
 const TOKEN_KEY = 'token';
 const EXPIRES_AT_KEY = 'expiresAt';
 const PASSWORD_CHANGE_REQUIRED_KEY = 'passwordChangeRequired';
+
+export class PayrollAccessSupersededError extends Error {
+  constructor() {
+    super('薪酬授权读取已被新的请求或登录身份替代');
+    this.name = 'PayrollAccessSupersededError';
+  }
+}
 
 function readExpiresAt(): number | null {
   const raw = localStorage.getItem(EXPIRES_AT_KEY);
@@ -21,6 +29,7 @@ export const useAuthStore = defineStore('auth', {
     user: null as CurrentUser | null,
     expiresAt: readExpiresAt(),
     passwordChangeRequired: localStorage.getItem(PASSWORD_CHANGE_REQUIRED_KEY) === 'true',
+    payrollAccessSequence: 0,
   }),
   getters: {
     isLoggedIn: (s) => !!s.token,
@@ -35,6 +44,22 @@ export const useAuthStore = defineStore('auth', {
     canAccessAdmin: (s) => ['hr_user', 'hr', 'system_admin'].includes(s.user?.sysRole ?? ''),
   },
   actions: {
+    async refreshPayrollAccess() {
+      const request = ++this.payrollAccessSequence;
+      const token = this.token, userId = this.user?.id;
+      if (!token || !userId) throw new Error('请先登录');
+      const current = () => request === this.payrollAccessSequence && this.token === token && this.user?.id === userId;
+      try {
+        const access = await payrollApi.access();
+        if (!current()) throw new PayrollAccessSupersededError();
+        this.user!.payrollAccess = access;
+        return access;
+      } catch (cause) {
+        if (!current()) throw new PayrollAccessSupersededError();
+        this.user!.payrollAccess = { enabled: false, subjects: [] };
+        throw cause;
+      }
+    },
     async loginWithDingTalk(authCode: string, loginMode: DingTalkLoginMode) {
       const res = await authApi.dingtalkLogin(authCode, loginMode);
       this.setSession(res.token, res.user, res.expiresIn, res.passwordChangeRequired);
@@ -49,6 +74,7 @@ export const useAuthStore = defineStore('auth', {
       this.setSession(res.token, res.user, res.expiresIn, res.passwordChangeRequired);
     },
     setSession(token: string, user: CurrentUser, expiresIn: number, passwordChangeRequired = false) {
+      this.payrollAccessSequence++;
       this.token = token;
       this.user = user;
       this.expiresAt = Date.now() + expiresIn * 1000;
@@ -84,6 +110,7 @@ export const useAuthStore = defineStore('auth', {
       }
     },
     logout() {
+      this.payrollAccessSequence++;
       useNotificationStore().setSession(null);
       this.token = null;
       this.user = null;

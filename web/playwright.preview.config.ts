@@ -1,4 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
+const baseURL = process.env.HRM_PREVIEW_URL ?? 'http://localhost:5173';
+if (!['http://localhost:5173', 'http://localhost:5174'].includes(baseURL)) throw new Error('Preview verification requires an explicitly supported local-only URL');
 
 // No normal global setup: that setup can prepare data in a different database.
 export default defineConfig({
@@ -6,7 +8,7 @@ export default defineConfig({
   timeout: 60000, expect: { timeout: 12000 },
   reporter: [['list']], outputDir: '../test-results/preview',
   use: {
-    baseURL: 'http://localhost:5173', trace: 'off', video: 'off',
+    baseURL, trace: 'off', video: 'off',
     screenshot: 'only-on-failure',
   },
   projects: [

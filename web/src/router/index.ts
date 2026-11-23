@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { useAuthStore } from '@/stores/auth.store';
+import { PayrollAccessSupersededError, useAuthStore } from '@/stores/auth.store';
 import { previewStorageKey } from '@/api/archive-assistant.api';
 import { routes } from './routes';
 import { canAccessRoute } from './navigation';
@@ -43,6 +43,15 @@ router.beforeEach(async (to) => {
   }
   if (!auth.passwordChangeRequired && to.name === 'ChangePassword' && !(isLocalPreview && to.query.purpose === 'export')) {
     return { name: 'Dashboard' };
+  }
+
+  if (to.meta.payrollOnly) {
+    try { await auth.refreshPayrollAccess(); }
+    catch (cause) {
+      if (cause instanceof PayrollAccessSupersededError) return false;
+      ElMessage.warning('薪酬授权暂不可用，请刷新后重试');
+      return { name: 'Dashboard' };
+    }
   }
 
   if (

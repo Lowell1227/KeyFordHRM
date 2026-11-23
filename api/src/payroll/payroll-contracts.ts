@@ -1,11 +1,14 @@
 import { Prisma } from '@prisma/client';
 import type { PayrollWorkCalendar } from './payroll-work-calendar';
+import type { PayrollAttendanceType, PayrollOvertimeKind } from './payroll-attendance-normalizer';
 
 export type PayrollDomain = 'validation' | 'formal';
 export type PayrollPurpose = 'trial' | 'reconciliation' | PayrollDomain;
 export const PAYROLL_ITEM_CODES = ['fixed', 'absence', 'overtime', 'performance', 'adjustment'] as const;
 export type PayrollItemCode = typeof PAYROLL_ITEM_CODES[number];
 export interface PayrollPolicyConfig {
+  employeeScope?: { employeeIds: string[]; evidenceRef: string };
+  attendanceMappings?: Record<string, { type: Exclude<PayrollAttendanceType, 'normal' | 'absence' | 'missing_punch' | 'not_required'>; overtimeKind?: PayrollOvertimeKind }>;
   fixedSalaryBasis?: 'monthly_workdays' | null;
   workCalendars?: Record<string, PayrollWorkCalendar>;
   rounding: 'item_half_up' | null;

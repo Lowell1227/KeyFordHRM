@@ -1,5 +1,5 @@
 import http from './http';
-import type { PayrollParameterRelease, PayrollDeductionProfile, PayrollDeductionProfileInput, PayrollNetPaymentInput, PayrollCancelNetRemainderInput } from '@/types/payroll.types';
+import type { PayrollParameterRelease, PayrollDeductionProfile, PayrollDeductionProfileInput, PayrollNetPaymentInput, PayrollCancelNetRemainderInput, PayrollAttendanceSyncJob } from '@/types/payroll.types';
 import type { AxiosResponse } from 'axios';
 import type { PayrollAccess, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollAttendance, PayrollSourceInput, PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollBatch, PayrollBatchInput, PayrollAdjustment, PayrollAdjustmentInput, PayrollOpening, PayrollOpeningInput, PayrollDeductionsPreviewInput, PayrollDeductionsPreviewResult } from '@/types/payroll.types';
 
@@ -11,6 +11,7 @@ const batchWrite = (id: string, action: string, expectedVersion: number, body: o
 
 export const payrollApi = {
   access: () => get<PayrollAccess>('/access'),
+  readiness: (subjectId: string) => get<{ ready: boolean; firstMonth?: string; reason?: string }>('/readiness', { subjectId }),
   parameterReleases: (subjectId: string) => get<PayrollParameterRelease[]>('/parameter-releases', { subjectId }),
   submitParameter: (kind: 'standard' | 'rule' | 'deduction', id: string, expectedVersion: number) => post<PayrollParameterRelease>(`/parameters/${kind}/${encodeURIComponent(id)}/submit`, { expectedVersion }),
   deductionProfiles: (subjectId: string) => get<PayrollDeductionProfile[]>('/deduction-profiles', { subjectId }),
@@ -18,11 +19,16 @@ export const payrollApi = {
   decideParameter: (id: string, expectedVersion: number, decision: 'approve' | 'return', note: string) => post<PayrollParameterRelease>(`/parameter-releases/${encodeURIComponent(id)}/decide`, { expectedVersion, decision, note }),
   withdrawParameter: (id: string, expectedVersion: number, note: string) => post<PayrollParameterRelease>(`/parameter-releases/${encodeURIComponent(id)}/withdraw`, { expectedVersion, note }),
   employees: (subjectId: string, month: string) => get<PayrollEmployee[]>('/employees', { subjectId, month }),
+  employeeScopeCandidates: (subjectId: string, month: string) => get<PayrollEmployee[]>('/employee-scope-candidates', { subjectId, month }),
   operators: (subjectId: string) => get<PayrollOperator[]>('/operators', { subjectId }),
   cycles: (subjectId: string) => get<PayrollCycle[]>('/performance-cycles', { subjectId }),
   attendance: (subjectId: string, month: string) => get<PayrollAttendance[]>('/attendance', { subjectId, month }),
   fixture: (subjectId: string, month: string, corrected: boolean) => get<PayrollSourceInput>('/attendance/fixture-response', { subjectId, month, corrected }),
   syncAttendance: (subjectId: string, month: string, source: PayrollSourceInput) => post<PayrollAttendance>('/attendance/sync', { subjectId, month, ...source }),
+  attendanceJobs: (subjectId: string, month: string) => get<PayrollAttendanceSyncJob[]>('/attendance/dingtalk/jobs', { subjectId, month }),
+  startAttendanceJob: (subjectId: string, month: string, requestId: string) => post<PayrollAttendanceSyncJob>('/attendance/dingtalk/jobs', { subjectId, month, requestId }),
+  cancelAttendanceJob: (id: string) => post<PayrollAttendanceSyncJob>(`/attendance/dingtalk/jobs/${encodeURIComponent(id)}/cancel`, {}),
+  retryAttendanceJob: (id: string, requestId: string) => post<PayrollAttendanceSyncJob>(`/attendance/dingtalk/jobs/${encodeURIComponent(id)}/retry`, { requestId }),
   reviewAttendance: (id: string, body: { note: string; employeeId?: string; workDate?: string }) => post<PayrollAttendance>(`/attendance/${encodeURIComponent(id)}/review`, body),
   sealAttendance: (id: string, expectedVersion: number) => post<PayrollAttendance>(`/attendance/${encodeURIComponent(id)}/seal`, { expectedVersion }),
   standards: (subjectId: string) => get<PayrollStandard[]>('/standards', { subjectId }),

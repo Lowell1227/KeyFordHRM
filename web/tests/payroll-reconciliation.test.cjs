@@ -61,15 +61,16 @@ function view(preview, t) {
   const options = [];
   const app = renderer.createApp({ setup() { return () => vue.h(component, { mode: 'batches' }); } });
   for (const name of ['el-dialog', 'el-form', 'el-form-item', 'el-select', 'el-button', 'el-alert', 'el-table', 'el-table-column', 'el-tag', 'el-empty']) app.component(name, pass);
-  app.component('el-option', { props: ['value', 'label'], setup(props) { options.push(props); return () => null; } });
+  app.component('el-option', { props: ['value', 'label', 'disabled'], setup(props) { options.push(props); return () => null; } });
   app.component('el-date-picker', { render: () => null });
   app.component('RouterView', { render: () => null });
   app.mount(node('root')); t.after(() => app.unmount());
-  return options.map(p => ({ value: p.value, label: p.label }));
+  return options.map(p => ({ value: p.value, label: p.label, disabled: p.disabled }));
 }
 test('non-preview creation separates real reconciliation and formal; preview keeps only fictional purposes', t => {
   const real = view(false, t), preview = view(true, t);
   assert.deepEqual(real.map(o => o.value).sort(), ['formal', 'reconciliation']);
   assert.equal(real.find(o => o.value === 'reconciliation').label, '真实资料对账');
+  assert.equal(real.find(o => o.value === 'formal').disabled, true);
   assert.deepEqual(preview.map(o => o.value).sort(), ['trial', 'validation']);
 });

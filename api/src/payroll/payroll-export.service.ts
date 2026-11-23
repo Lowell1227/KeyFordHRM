@@ -98,6 +98,7 @@ export class PayrollExportService {
     await this.access.assertDomain(tx, domain); await lockPayrollSubject(tx, header.subjectId, domain);
     const batch = await tx.payrollBatch.findUnique({ where: { id } });
     if (!batch || batch.subjectId !== header.subjectId || batch.purpose !== header.purpose) throw new ConflictException('批次归属已变化，请重新读取');
+    if (batch.purpose === 'formal') await this.access.assertFormalPayrollReady(tx, batch.subjectId, batch.month);
     await this.access.assert(tx, actor, batch.subjectId, 'payroll_export');
     await this.access.assertDomain(tx, domain); assertPayrollVersion(batch.version, expected);
     const version = await tx.payrollVersion.findFirst({ where: { batchId: id }, orderBy: { version: 'desc' },

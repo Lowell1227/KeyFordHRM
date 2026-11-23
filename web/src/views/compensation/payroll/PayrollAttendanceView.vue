@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { payrollApi, payrollError } from '@/api/payroll.api';
-import type { AttendanceDay, PayrollAttendance, PayrollEmployee } from '@/types/payroll.types';
+import type { AttendanceDay, PayrollAttendance, PayrollEmployee, PayrollAttendanceSyncJob } from '@/types/payroll.types';
 import { isLocalPreview } from '@/utils/preview-mode';
 import { attendanceIssueLabels } from './payroll-state';
 import PayrollScope from './PayrollScope.vue';
 import { usePayrollScope } from './usePayrollScope';
+import PayrollAttendanceSyncPanel from './PayrollAttendanceSyncPanel.vue';
 
 const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['attendance_edit', 'attendance_seal']);
 const snapshots = ref<PayrollAttendance[]>([]);
@@ -30,6 +31,9 @@ const note = ref('');
 const noteError = ref('');
 const busy = ref(false);
 const feedback = ref('');
+const syncOpen = ref(false), syncBusy = ref(false), syncError = ref(''), syncJobs = ref<PayrollAttendanceSyncJob[]>([]);
+const syncRequests = new Map<string, string>();
+let pollTimer: ReturnType<typeof setTimeout> | undefined, jobsSequence = 0, disposed = false;
 let sequence = 0;
 const employeeName = (id: string) => employees.value.find(person => person.id === id)?.name ?? id;
 function issueText(day: AttendanceDay) { return day.issues?.map(issue => typeof issue === 'string' ? attendanceIssueLabels[issue] || issue : attendanceIssueLabels[issue.code] || issue.message || issue.code).join('；'); }
@@ -48,8 +52,44 @@ async function load() {
   finally { if (request === sequence) loading.value = false; }
 }
 async function refresh() { const before = subjectId.value; await refreshAccess(); if (before === subjectId.value) await load(); }
-watch([subjectId, month], () => { sourceOpen.value = false; sourceText.value = ''; sourceKey.value = ''; employeeFilter.value = ''; void load(); });
+function stopPolling() { if (pollTimer) clearTimeout(pollTimer); pollTimer = undefined; }
+async function loadJobs() {
+  if (isLocalPreview || !subjectId.value || !month.value) return;
+  stopPolling();
+  const request = ++jobsSequence, subject = subjectId.value, period = month.value;
+  try {
+    const rows = await payrollApi.attendanceJobs(subject, period);
+    if (disposed || request !== jobsSequence || subject !== subjectId.value || period !== month.value) return;
+    const prior = syncJobs.value[0];
+    syncJobs.value = rows; syncError.value = '';
+    if (prior && ['queued', 'processing'].includes(prior.status) && rows[0] && !['queued', 'processing'].includes(rows[0].status)) await load();
+    if (rows.some(row => ['queued', 'processing'].includes(row.status))) pollTimer = setTimeout(() => { void loadJobs(); }, 3000);
+  } catch (cause) { if (!disposed && request === jobsSequence) syncError.value = await payrollError(cause); }
+}
+async function syncDingtalk(retry?: PayrollAttendanceSyncJob) {
+  if (isLocalPreview || syncBusy.value) return;
+  syncOpen.value = true; syncBusy.value = true; syncError.value = '';
+  const subject = subjectId.value, period = month.value, key = `${subject}:${period}:${retry?.id ?? 'start'}`;
+  const requestId = syncRequests.get(key) ?? crypto.randomUUID(); syncRequests.set(key, requestId);
+  try {
+    const job = retry ? await payrollApi.retryAttendanceJob(retry.id, requestId) : await payrollApi.startAttendanceJob(subject, period, requestId);
+    if (disposed || subject !== subjectId.value || period !== month.value) return;
+    syncJobs.value = [job, ...syncJobs.value.filter(row => row.id !== job.id)]; syncRequests.delete(key);
+    await loadJobs();
+  } catch (cause) { if (!disposed && subject === subjectId.value && period === month.value) syncError.value = await payrollError(cause); }
+  finally { syncBusy.value = false; }
+}
+async function cancelJob(job: PayrollAttendanceSyncJob) {
+  try { await ElMessageBox.confirm('停止本次同步？已接收的考勤版本保留。', '停止同步', { confirmButtonText: '停止同步', cancelButtonText: '继续同步' }); } catch { return; }
+  syncBusy.value = true; syncError.value = '';
+  try { await payrollApi.cancelAttendanceJob(job.id); await loadJobs(); }
+  catch (cause) { syncError.value = await payrollError(cause); }
+  finally { syncBusy.value = false; }
+}
+watch([subjectId, month], () => { sourceOpen.value = false; sourceText.value = ''; sourceKey.value = ''; employeeFilter.value = ''; syncJobs.value = []; syncOpen.value = false; syncError.value = ''; ++jobsSequence; stopPolling(); void load(); void loadJobs(); });
 onMounted(refresh);
+onMounted(() => { void loadJobs(); });
+onUnmounted(() => { disposed = true; ++jobsSequence; stopPolling(); });
 function openDay(day: unknown) { detail.value = day as AttendanceDay; note.value = ''; noteError.value = ''; }
 async function loadFixture(corrected: boolean) {
   sourceError.value = ''; busy.value = true;
@@ -112,7 +152,9 @@ async function seal() {
   <BusinessListPage variant="record" :loading="loading">
     <template #filters>
       <PayrollScope v-model:subject="subjectId" v-model:month="month" :subjects="subjects" :disabled="busy" @refresh="refresh">
-        <el-button v-if="has('attendance_edit')" :disabled="loading" @click="sourceOpen = true; sourceError = ''; sourceComplete = false; partial = false">接收考勤</el-button>
+        <el-button v-if="has('attendance_edit') && isLocalPreview" :disabled="loading" @click="sourceOpen = true; sourceError = ''; sourceComplete = false; partial = false">接收考勤</el-button>
+        <el-button v-if="has('attendance_edit') && !isLocalPreview" :loading="syncBusy" :disabled="loading || busy || syncJobs.some(job => ['queued', 'processing'].includes(job.status))" @click="syncDingtalk()">同步钉钉</el-button>
+        <el-button v-if="!isLocalPreview && (syncJobs.length || syncError)" :disabled="busy" @click="syncOpen = true; loadJobs()">同步记录</el-button>
         <el-button v-if="has('attendance_seal') && current && current.status !== 'sealed'" type="primary" :loading="busy" @click="seal">封账当前版本</el-button>
       </PayrollScope>
       <el-tabs v-model="tab"><el-tab-pane label="月度汇总" name="summary" /><el-tab-pane label="异常核对" name="issues" /><el-tab-pane label="封账记录" name="history" /></el-tabs>
@@ -136,7 +178,8 @@ async function seal() {
       <BusinessDetailDrawer :model-value="!!detail" :title="detail ? `${employeeName(detail.employeeId)} · ${detail.workDate}` : '日明细'" :saving="busy" @update:model-value="detail = undefined">
         <template v-if="detail"><pre>{{ JSON.stringify(detail, null, 2) }}</pre><h3>核对记录</h3><pre>{{ JSON.stringify(current?.review ?? [], null, 2) }}</pre><el-form v-if="has('attendance_edit') && current?.status !== 'sealed'" label-position="top"><el-form-item label="核对结论与依据" :error="noteError"><el-input v-model="note" type="textarea" :rows="3" maxlength="500" /></el-form-item><el-button type="primary" :loading="busy" @click="review">保存核对记录</el-button></el-form></template>
       </BusinessDetailDrawer>
-      <BusinessDetailDrawer v-model="sourceOpen" title="接收考勤" :saving="busy">
+      <BusinessDetailDrawer v-if="!isLocalPreview" v-model="syncOpen" title="钉钉考勤同步" :saving="syncBusy"><PayrollAttendanceSyncPanel :jobs="syncJobs" :busy="syncBusy" :error="syncError" @cancel="cancelJob" @retry="syncDingtalk" @refresh="loadJobs" /><template #footer><el-button :disabled="syncBusy" @click="syncOpen = false">关闭</el-button></template></BusinessDetailDrawer>
+      <BusinessDetailDrawer v-if="isLocalPreview" v-model="sourceOpen" title="接收考勤" :saving="busy">
         <el-form label-position="top"><el-form-item label="来源标识" :error="!sourceKey ? sourceError : ''"><el-input v-model="sourceKey" /></el-form-item><el-form-item label="考勤来源 JSON" :error="sourceKey ? sourceError : ''"><el-input v-model="sourceText" type="textarea" :rows="14" /></el-form-item></el-form>
         <el-form label-position="top">
           <el-form-item><el-checkbox v-model="partial">按人和日期补同步</el-checkbox></el-form-item>

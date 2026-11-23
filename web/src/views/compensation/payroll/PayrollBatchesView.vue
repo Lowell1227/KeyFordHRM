@@ -19,9 +19,11 @@ const route = useRoute(), router = useRouter();
 const required: Record<typeof props.mode, PayrollCapability[]> = { batches: ['payroll_edit', 'payroll_view'], approvals: ['payroll_review', 'payroll_approve'], results: ['payroll_view', 'payroll_export', 'payroll_settle'] };
 const { access, subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(computed(() => required[props.mode]));
 const batches = ref<PayrollBatch[]>([]), employees = ref<PayrollEmployee[]>([]);
+const readiness = ref<{ ready: boolean; firstMonth?: string; reason?: string }>({ ready: false });
+const formalReady = computed(() => readiness.value.ready && !!readiness.value.firstMonth && month.value >= readiness.value.firstMonth);
 const open = ref(false), busy = ref(false), detailBusy = ref(false), formError = ref('');
 const fields = reactive<Record<string, string>>({});
-const form = ref<PayrollBatchInput>({ subjectId: '', month: '', payMonth: '', purpose: previewMode ? 'trial' : 'formal' });
+const form = ref<PayrollBatchInput>({ subjectId: '', month: '', payMonth: '', purpose: previewMode ? 'trial' : 'reconciliation' });
 const additionalMonths = ref<string[]>([]);
 const status = ref('');
 let sequence = 0, openedFromList = false;
@@ -33,6 +35,7 @@ const rows = computed(() => batches.value.filter(row => (!month.value || row.mon
   && (props.mode !== 'results' || ['approved', 'closed', 'voided'].includes(row.status))));
 async function load() {
   const request = ++sequence; batches.value = []; employees.value = [];
+  readiness.value = { ready: false };
   if (!subjectId.value) return;
   error.value = '';
   loading.value = true;
@@ -40,6 +43,11 @@ async function load() {
     const data = await payrollApi.batches(subjectId.value, month.value);
     if (request !== sequence) return;
     batches.value = data;
+    if (!previewMode && props.mode === 'batches' && has('payroll_edit')) {
+      const receipt = await payrollApi.readiness(subjectId.value);
+      if (request !== sequence) return;
+      readiness.value = receipt;
+    }
     if ((props.mode === 'batches' && has('payroll_edit')) || (props.mode === 'results' && has('payroll_settle'))) {
       const people = await payrollApi.employees(subjectId.value, month.value);
       if (request === sequence) employees.value = people;
@@ -53,7 +61,7 @@ watch(() => props.mode, () => { status.value = ''; void refresh(); });
 onMounted(refresh);
 function create(correction?: PayrollBatch) {
   if (!subjectId.value || correction?.purpose === 'reconciliation') return;
-  form.value = { subjectId: correction?.subjectId ?? subjectId.value, month: correction?.month ?? month.value, payMonth: '', purpose: correction?.purpose ?? (previewMode ? 'trial' : 'formal'), ...(correction ? { correctionOfId: correction.id } : {}) };
+  form.value = { subjectId: correction?.subjectId ?? subjectId.value, month: correction?.month ?? month.value, payMonth: '', purpose: correction?.purpose ?? (previewMode ? 'trial' : formalReady.value ? 'formal' : 'reconciliation'), ...(correction ? { correctionOfId: correction.id } : {}) };
   additionalMonths.value = [...(correction?.additionalMonths ?? [])];
   formError.value = ''; Object.keys(fields).forEach(key => delete fields[key]); open.value = true;
 }
@@ -61,6 +69,7 @@ async function save() {
   Object.keys(fields).forEach(key => delete fields[key]); formError.value = '';
   if (!form.value.month) fields.month = '请选择工资归属月';
   if (!form.value.payMonth) fields.payMonth = '请选择发放月';
+  if (!previewMode && form.value.purpose === 'formal' && !formalReady.value) fields.purpose = readiness.value.reason ?? '正式发薪待首月签收';
   if (additionalMonths.value.some(value => !value || value >= form.value.month) || new Set(additionalMonths.value).size !== additionalMonths.value.length) fields.additionalMonths = '请选择不重复且早于本次工资月的归属月';
   if (Object.keys(fields).length) return;
   busy.value = true;
@@ -114,7 +123,7 @@ async function closeCreate(value: boolean) {
         <el-form label-position="top">
           <el-form-item label="工资归属月" :error="fields.month"><el-date-picker v-model="form.month" type="month" value-format="YYYY-MM" :disabled="!!form.correctionOfId || busy" /></el-form-item>
           <el-form-item label="发放月" :error="fields.payMonth"><el-date-picker v-model="form.payMonth" type="month" value-format="YYYY-MM" :disabled="busy" /></el-form-item>
-          <el-form-item label="用途"><el-select v-model="form.purpose" :disabled="busy || !!form.correctionOfId"><template v-if="previewMode"><el-option label="试算" value="trial" /><el-option label="测试环境验收" value="validation" /></template><template v-else><el-option label="真实资料对账" value="reconciliation" /><el-option label="正式" value="formal" /></template></el-select></el-form-item>
+          <el-form-item label="用途" :error="fields.purpose"><el-select v-model="form.purpose" :disabled="busy || !!form.correctionOfId"><template v-if="previewMode"><el-option label="试算" value="trial" /><el-option label="测试环境验收" value="validation" /></template><template v-else><el-option label="真实资料对账" value="reconciliation" /><el-option :label="formalReady ? '正式工资' : '正式工资（待首月签收）'" value="formal" :disabled="!formalReady" /></template></el-select></el-form-item>
           <el-form-item label="其他归属月" :error="fields.additionalMonths"><div class="additional-months"><div v-for="(_, index) in additionalMonths" :key="index" class="month-row"><el-date-picker v-model="additionalMonths[index]" type="month" value-format="YYYY-MM" :disabled="busy" /><el-button :icon="Delete" aria-label="删除其他归属月" :disabled="busy" @click="additionalMonths.splice(index, 1)" /></div><el-button :icon="Plus" :disabled="additionalMonths.length >= 11 || busy" @click="additionalMonths.push('')">添加归属月</el-button></div></el-form-item>
           <el-alert v-if="formError" :title="formError" type="error" :closable="false" />
         </el-form>
