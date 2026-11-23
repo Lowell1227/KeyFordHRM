@@ -28,6 +28,8 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import EmployeeArchiveIssues from '@/components/common/EmployeeArchiveIssues.vue';
+import { archiveMaintenanceHint } from '@/utils/employee-archive-maintenance';
+import type { EmployeeArchiveIssueExemption } from '@/api/employee-archives.api';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
@@ -481,6 +483,12 @@ async function loadUsers() {
     };
     const res = await usersApi.findAll(query);
     if (generation !== userLoadGeneration) return;
+    const lastPage = Math.max(1, Math.ceil(res.total / (query.pageSize ?? 20)));
+    if (res.items.length === 0 && res.total > 0 && (query.page ?? 1) > lastPage) {
+      userQuery.value.page = lastPage;
+      await loadUsers();
+      return;
+    }
     userList.value = res.items;
     userTotal.value = res.total;
     appliedUserQuery.value = query;
@@ -502,6 +510,7 @@ async function loadUsers() {
 async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
   if (route.query.tab === 'changes') await router.replace({ query: { ...route.query, tab: undefined, requestId: undefined, applicationId: undefined, assistantRequestId: undefined } });
   employeeCategory.value = category;
+  if (category === 'archived') userQuery.value.needsMaintenance = undefined;
   selectedUsers.value = [];
   userQuery.value.page = 1;
   await loadUsers();
@@ -708,7 +717,7 @@ const archiveContractOnly = ref(false);
 const archiveSection = ref('current');
 const expandedContractGroups = ref<string[]>([]);
 const expandedContractDetails = ref<string[]>([]);
-const archiveContractOverlaps = computed(() => overlappingContractIds(employeeArchiveDrawer.value.data?.employeeContracts ?? []));
+const archiveContractOverlaps = computed(() => new Set([...overlappingContractIds(employeeArchiveDrawer.value.data?.employeeContracts ?? [])].filter(id => !archiveExemptedContractIds.value.includes(id))));
 const contractGroups = computed(() => {
   const contracts = (employeeArchiveDrawer.value.data?.employeeContracts ?? [])
     .map(contract => ({ ...contract, dateStatus: employeeContractStatus(contract) }));
@@ -739,6 +748,16 @@ const archiveSaveBlocked = ref(false);
 const archiveEntryLoading = ref(false);
 const archivePendingRequest = ref<EmployeeDataReview | null>(null);
 const archiveIssueContext = ref<EmployeeArchiveIssue | null>(null);
+const archiveCurrentIssues = ref<EmployeeArchiveIssue[]>([]);
+const archiveExemptedContractIds = ref<string[]>([]);
+const archiveIssueRefresh = ref(0);
+function archiveIssuesLoaded(value: { employeeId?: string; items: EmployeeArchiveIssue[]; exemptions: EmployeeArchiveIssueExemption[] }) {
+  if (value.employeeId !== employeeArchiveDrawer.value.data?.id) return;
+  archiveCurrentIssues.value = value.items.filter(i => i.origin === 'current');
+  archiveExemptedContractIds.value = value.exemptions.filter(i => i.issueId === 'current:contract-overlap').flatMap(i => i.contractIds ?? []);
+  if (archiveIssueContext.value?.origin === 'current') archiveIssueContext.value = archiveCurrentIssues.value.find(i => i.id === archiveIssueContext.value?.id) ?? null;
+}
+const archiveHint = (field: string) => archiveMaintenanceHint(archiveCurrentIssues.value, field);
 const archiveNotice = ref('');
 const archiveSubmitError = ref('');
 const archiveLoadError = ref('');
@@ -831,6 +850,8 @@ async function openEmployeeArchive(row: ArchiveTarget, keepQueue = false) {
     archiveQueue.value = row.archiveIssueCount ? rows.filter(person => person.archiveIssueCount) : [...rows];
   }
   archiveIssueContext.value = null;
+  archiveCurrentIssues.value = [];
+  archiveExemptedContractIds.value = [];
   archiveNotice.value = '';
   archiveSubmitError.value = '';
   archiveLoadError.value = '';
@@ -876,6 +897,11 @@ async function maintainArchiveIssue(issue: EmployeeArchiveIssue, row?: ManagedUs
   }
   const employeeId = target.employeeId || row?.id;
   if (!employeeId) return;
+    if (archiveEditing.value && employeeArchiveDrawer.value.data?.id === employeeId) {
+      archiveIssueContext.value = issue;
+      await archiveEditorRef.value?.focusField(issue.field);
+      return;
+    }
   await openEmployeeArchive(row?.id === employeeId ? row : { id: employeeId } as ManagedUser);
   if (!employeeArchiveDrawer.value.visible || employeeArchiveDrawer.value.data?.id !== employeeId) return;
   archiveIssueContext.value = issue;
@@ -914,6 +940,7 @@ async function submitArchiveDraft(value: {
     } catch {
       // 详情刷新失败不阻断提交结果，用户重新打开详情即可看到最新数据。
     }
+    archiveIssueRefresh.value++;
     refreshCurrentView();
   } catch (error) {
     if (generation !== archiveLoadGeneration) return;
@@ -2361,6 +2388,7 @@ onBeforeUnmount(() => {
               @click="openRosterExport"
             >导出花名册</el-button>
           </div>
+          <el-checkbox v-if="activeView === 'users' && canViewArchive && !userArchiveView" v-model="userQuery.needsMaintenance" @change="onUserQueryChange">仅看待完善</el-checkbox>
         </QueryFilterPanel>
 
         <nav v-if="activeView === 'users'" class="employee-category-tabs" role="tablist" aria-label="员工档案分类">
@@ -2511,6 +2539,7 @@ onBeforeUnmount(() => {
             </el-table>
           </div>
           <div v-loading="userLoading" class="mobile-result-list roster-mobile-list">
+            <el-empty v-if="!userLoading && !userLoadError && !userList.length" description="暂无匹配员工" :image-size="64" />
             <MobileResultCard v-for="item in userList" :key="item.id">
               <template #title>
                 <el-checkbox v-if="canSelectEmployeeForArchive(item)" :model-value="selectedUsers.some((row) => row.id === item.id)" @change="selectedUsers = $event ? [...selectedUsers.filter((row) => row.id !== item.id), item] : selectedUsers.filter((row) => row.id !== item.id)">{{ item.name }} · {{ item.employeeNo }}</el-checkbox><span v-else>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</span><small v-if="item.matchedHistoricalEmployeeNo"> · 历史工号命中 {{ item.matchedHistoricalEmployeeNo }}</small>
@@ -2655,13 +2684,16 @@ onBeforeUnmount(() => {
                 · {{ employeeArchiveDrawer.data.position || '未设置岗位' }}
               </p>
             </div>
+            <EmployeeArchiveIssues v-if="canViewArchive" :employee-id="employeeArchiveDrawer.data.id" :count="archiveCurrentIssues.length" settings :refresh-key="archiveIssueRefresh"
+              @loaded="archiveIssuesLoaded" @maintain="maintainArchiveIssue($event)" @changed="loadUsers" />
             <div v-if="canEditArchive && !archiveReadOnly && !archiveEditing && !archivePendingRequest" class="employee-archive__global-actions">
               <el-button type="primary" :loading="archiveEntryLoading" :disabled="archiveEditSaving" @click="archiveContractOnly = false; startArchiveEdit()">编辑档案</el-button>
             </div>
           </div>
           <aside v-if="archiveIssueContext" class="archive-issue-context" role="note" aria-label="正在核实事项">
             <strong>{{ archiveIssueContext.message }}</strong><span>{{ archiveIssueContext.reason }}</span>
-            <span>原资料：{{ archiveIssueContext.source.value ?? '未提供' }} · 当前资料：{{ archiveIssueContext.current.value ?? '未提供' }}</span>
+            <span v-if="archiveIssueContext.origin === 'current'">当前记录：{{ archiveIssueContext.current.value ?? '未提供' }}</span>
+            <span v-else>原资料：{{ archiveIssueContext.source.value ?? '未提供' }} · 当前资料：{{ archiveIssueContext.current.value ?? '未提供' }}</span>
             <small>草稿暂存不生效，提交后更新档案。</small>
           </aside>
           <el-alert v-if="archiveNotice" :title="archiveNotice" type="success" :closable="false" />
@@ -2679,6 +2711,9 @@ onBeforeUnmount(() => {
             :departments="departments"
             :busy="archiveEditSaving || archiveEntryLoading"
             :focus-field="archiveIssueContext?.field"
+            :focus-contract-id="archiveIssueContext?.contractIds?.[0]"
+            :current-issues="archiveCurrentIssues"
+            :exempted-contract-ids="archiveExemptedContractIds"
             @saved="archiveDraftSaved"
             @busy="archiveDraftSaving = $event"
             @state="archiveSaveState = $event"
@@ -2699,7 +2734,7 @@ onBeforeUnmount(() => {
               <div><span>姓名</span><strong>{{ employeeArchiveDrawer.data.name }}</strong></div>
               <div><span>工号</span><strong>{{ employeeArchiveDrawer.data.employeeNo || '未填写' }}</strong></div>
               <div><span>所属公司</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.companyText, '待补充') }}</strong><small v-if="archiveCurrentEmployment?.contractSubjectId">已关联合同主体</small><small v-else-if="archiveCurrentEmployment?.companyText">历史名称，尚未关联主体</small></div>
-              <div><span>所属部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong></div>
+              <div><span>所属部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong><small v-if="archiveHint('employee.deptId')" class="maintenance-hint">{{ archiveHint('employee.deptId') }}</small></div>
               <div><span>岗位</span><strong>{{ employeeArchiveDrawer.data.position || '未设置' }}</strong></div>
               <div><span>本次司龄 <el-tooltip content="从本次入职日期计算，再入职重新起算。在职截至今天；离职截至最后工作日。" placement="top"><el-icon aria-label="本次司龄说明"><QuestionFilled /></el-icon></el-tooltip></span><strong>{{ employeeArchiveDrawer.data.companyTenure || '待完善' }}</strong></div>
               <div><span>职级</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.jobGrade) }}</strong></div>
@@ -2709,10 +2744,10 @@ onBeforeUnmount(() => {
               <div><span>工作地点</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.workLocation) }}</strong></div>
               <div><span>用工类型</span><strong>{{ employmentTypeLabels[archiveCurrentEmployment?.employmentType || ''] || '未填写' }}</strong></div>
               <div><span>当前状态</span><strong>{{ statusLabels[employeeArchiveDrawer.data.status] }}</strong></div>
-              <div><span>入职日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.entryDate) }}</strong></div>
+              <div><span>入职日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.entryDate) }}</strong><small v-if="archiveHint('employee.entryDate')" class="maintenance-hint">{{ archiveHint('employee.entryDate') }}</small></div>
               <div><span>试用期（月）</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.probationMonths) }}</strong></div>
               <div><span>预计转正日期</span><strong>{{ formatDate(archiveCurrentEmployment?.plannedRegularDate) }}</strong></div>
-              <div><span>实际转正日期</span><strong>{{ formatDate(archiveCurrentEmployment?.actualRegularDate) }}</strong></div>
+              <div><span>实际转正日期</span><strong>{{ formatDate(archiveCurrentEmployment?.actualRegularDate) }}</strong><small v-if="archiveHint('employee.actualRegularDate')" class="maintenance-hint">{{ archiveHint('employee.actualRegularDate') }}</small></div>
               <div><span>离职日期</span><strong>{{ formatDate(archiveCurrentEmployment?.leaveDate) }}</strong></div>
             </div>
           </section>
@@ -2761,9 +2796,9 @@ onBeforeUnmount(() => {
               <div><span>与联系人关系</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.emergencyContactRelation || '未填写' }}</strong></div>
               <div><span>紧急联系电话</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.emergencyContactPhone || '未填写' }}</strong></div>
               <div><span>社保状态</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.socialSecurityStatus || '未填写' }}</strong></div>
-              <div><span>社保起始日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.socialSecurityStartDate) }}</strong></div>
+              <div><span>社保起始日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.socialSecurityStartDate) }}</strong><small v-if="archiveHint('profile.socialSecurityStartDate')" class="maintenance-hint">{{ archiveHint('profile.socialSecurityStartDate') }}</small></div>
               <div><span>公积金状态</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.housingFundStatus || '未填写' }}</strong></div>
-              <div><span>公积金起始日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.housingFundStartDate) }}</strong></div>
+              <div><span>公积金起始日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.housingFundStartDate) }}</strong><small v-if="archiveHint('profile.housingFundStartDate')" class="maintenance-hint">{{ archiveHint('profile.housingFundStartDate') }}</small></div>
               <div><span>开户行</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.bankName || '未填写' }}</strong></div>
               <div><span>开户支行</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.bankBranch || '未填写' }}</strong></div>
               <div>
@@ -3211,6 +3246,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.maintenance-hint { display: block; width: 100%; color: var(--el-color-warning); font-size: 12px; font-weight: normal; line-height: 1.5; }
 .archive-query-error {
   display: flex;
   align-items: center;

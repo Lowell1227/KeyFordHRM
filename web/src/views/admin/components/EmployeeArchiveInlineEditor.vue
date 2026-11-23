@@ -4,7 +4,8 @@ import { isAxiosError } from 'axios';
 import { Delete, Plus, QuestionFilled, RefreshLeft, RefreshRight } from '@element-plus/icons-vue';
 import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
-import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
+import { employeeArchivesApi, type EmployeeArchive, type EmployeeArchiveIssue, type EmployeeDataReview } from '@/api/employee-archives.api';
+import { archiveMaintenanceHint } from '@/utils/employee-archive-maintenance';
 import UserSelect from '@/components/common/UserSelect.vue';
 import EmployeeContractFields from './EmployeeContractFields.vue';
 import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
@@ -23,8 +24,12 @@ const props = defineProps<{
   departments: Department[];
   busy?: boolean;
   focusField?: string;
+  focusContractId?: string;
+  currentIssues?: EmployeeArchiveIssue[];
+  exemptedContractIds?: string[];
   contractOnly?: boolean;
 }>();
+const maintenanceHint = (field: string, contractId?: string) => archiveMaintenanceHint(props.currentIssues ?? [], field, contractId);
 
 type ArchiveChangePayload = {
   draftId?: string;
@@ -551,6 +556,10 @@ function showReloadError() {
 }
 
 async function focusField(field?: string) {
+  if (field === 'contracts' && props.focusContractId) {
+    const index = form.contracts.findIndex(c => c.id === props.focusContractId);
+    if (index >= 0) field = `contracts.${index}`;
+  }
   const matched = /^contracts\.(\d+)/.exec(field || '');
   if (matched && form.contracts[Number(matched[1])]) {
     expandedContractKey.value = form.contracts[Number(matched[1])]!.__key;
@@ -607,7 +616,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
         <el-form-item label="姓名" data-archive-field="employee.name" :error="serverFieldErrors['employee.name']"><el-input v-model="form.employee.name" /></el-form-item>
         <el-form-item label="当前工号" data-archive-field="employee.employeeNo" :error="serverFieldErrors['employee.employeeNo']"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
         <el-form-item label="所属公司" data-archive-field="employee.companyText" :error="companyError || serverFieldErrors['employee.companyText']"><EmployeeCompanySelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" :company="form.employee.company" @update:model-value="companyError = ''" /></el-form-item>
-        <el-form-item label="所属部门" data-archive-field="employee.deptId" :error="serverFieldErrors['employee.deptId']"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
+        <el-form-item label="所属部门" data-archive-field="employee.deptId" :error="serverFieldErrors['employee.deptId']"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /><small v-if="maintenanceHint('employee.deptId')" class="maintenance-hint">{{ maintenanceHint('employee.deptId') }}</small></el-form-item>
         <el-form-item label="岗位" data-archive-field="employee.positionId" :error="serverFieldErrors['employee.positionId']"><el-select v-model="form.employee.positionId" filterable clearable @change="changePosition"><el-option v-for="position in positionOptions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" :disabled="!position.isActive" /></el-select></el-form-item>
         <el-form-item v-if="!form.employee.positionId" label="岗位名称" data-archive-field="employee.position" :error="serverFieldErrors['employee.position']"><el-input v-model="form.employee.position" readonly /></el-form-item>
         <el-form-item label="职级" data-archive-field="employee.jobGrade" :error="serverFieldErrors['employee.jobGrade']"><PersonnelReferenceSelect v-model="form.employee.jobGrade" v-model:reference-id="form.employee.jobGradeId" kind="job_grade" /></el-form-item>
@@ -620,10 +629,10 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
           <el-form-item label="工作地点" data-archive-field="employee.workLocation" :error="serverFieldErrors['employee.workLocation']"><PersonnelReferenceSelect v-model="form.employee.workLocation" v-model:reference-id="form.employee.workLocationId" kind="work_location" label="工作地点" /></el-form-item>
         <el-form-item label="用工类型" data-archive-field="employee.employmentType" :error="serverFieldErrors['employee.employmentType']"><el-select v-model="form.employee.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="实习" value="internship" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
         <el-form-item data-archive-field="employee.employeeStatus" :error="serverFieldErrors['employee.employeeStatus']"><template #label>当前状态 <el-tooltip content="入职、再入职和离职请在入离职页面办理；这里可调整在职与试用期状态。" placement="top"><el-icon aria-label="任职状态说明"><QuestionFilled /></el-icon></el-tooltip></template><el-select v-model="form.employee.employeeStatus" :disabled="!['active', 'probation'].includes(archive?.status ?? '')"><template v-if="['active', 'probation'].includes(archive?.status ?? '')"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /></template><el-option v-else-if="archive?.status === 'resigned'" label="已离职" value="resigned" /><el-option v-else label="待入职" value="pending_entry" /></el-select></el-form-item>
-        <el-form-item label="入职日期" data-archive-field="employee.entryDate" :error="serverFieldErrors['employee.entryDate']"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" :disabled="archive?.status === 'pending_entry'" /><small v-if="archive?.status === 'pending_entry'" class="field-help">待到岗员工请在入离职申请中修改到岗日期。</small></el-form-item>
+        <el-form-item label="入职日期" data-archive-field="employee.entryDate" :error="serverFieldErrors['employee.entryDate']"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" :disabled="archive?.status === 'pending_entry'" /><small v-if="archive?.status === 'pending_entry'" class="field-help">待到岗员工请在入离职申请中修改到岗日期。</small><small v-if="maintenanceHint('employee.entryDate')" class="maintenance-hint">{{ maintenanceHint('employee.entryDate') }}</small></el-form-item>
         <el-form-item label="试用期（月）" data-archive-field="employee.probationMonths" :error="serverFieldErrors['employee.probationMonths']"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /></el-form-item>
         <el-form-item label="预计转正日期" data-archive-field="employee.plannedRegularDate" :error="serverFieldErrors['employee.plannedRegularDate']"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="实际转正日期" data-archive-field="employee.actualRegularDate" :error="serverFieldErrors['employee.actualRegularDate']"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="实际转正日期" data-archive-field="employee.actualRegularDate" :error="serverFieldErrors['employee.actualRegularDate']"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /><small v-if="maintenanceHint('employee.actualRegularDate')" class="maintenance-hint">{{ maintenanceHint('employee.actualRegularDate') }}</small></el-form-item>
         <el-form-item label="离职日期" data-archive-field="employee.leaveDate" :error="serverFieldErrors['employee.leaveDate']"><el-date-picker v-model="form.employee.leaveDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
       </el-form>
     </section>
@@ -659,9 +668,9 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
         <el-form-item label="与联系人关系" data-archive-field="profile.emergencyContactRelation" :error="serverFieldErrors['profile.emergencyContactRelation']"><PersonnelReferenceSelect v-model="form.profile.emergencyContactRelation" v-model:reference-id="form.profile.emergencyContactRelationId" kind="contact_relation" /></el-form-item>
         <el-form-item label="紧急联系电话" data-archive-field="profile.emergencyContactPhone" :error="serverFieldErrors['profile.emergencyContactPhone']"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
         <el-form-item label="社保状态" data-archive-field="profile.socialSecurityStatus" :error="serverFieldErrors['profile.socialSecurityStatus']"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
-        <el-form-item label="社保起始日期" data-archive-field="profile.socialSecurityStartDate" :error="serverFieldErrors['profile.socialSecurityStartDate']"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="社保起始日期" data-archive-field="profile.socialSecurityStartDate" :error="serverFieldErrors['profile.socialSecurityStartDate']"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /><small v-if="maintenanceHint('profile.socialSecurityStartDate')" class="maintenance-hint">{{ maintenanceHint('profile.socialSecurityStartDate') }}</small></el-form-item>
         <el-form-item label="公积金状态" data-archive-field="profile.housingFundStatus" :error="serverFieldErrors['profile.housingFundStatus']"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
-        <el-form-item label="公积金起始日期" data-archive-field="profile.housingFundStartDate" :error="serverFieldErrors['profile.housingFundStartDate']"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="公积金起始日期" data-archive-field="profile.housingFundStartDate" :error="serverFieldErrors['profile.housingFundStartDate']"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /><small v-if="maintenanceHint('profile.housingFundStartDate')" class="maintenance-hint">{{ maintenanceHint('profile.housingFundStartDate') }}</small></el-form-item>
         <el-form-item label="开户行" data-archive-field="profile.bankName" :error="serverFieldErrors['profile.bankName']"><PersonnelReferenceSelect v-model="form.profile.bankName" kind="bank_name" /></el-form-item>
         <el-form-item label="开户支行" data-archive-field="profile.bankBranch" :error="serverFieldErrors['profile.bankBranch']"><el-input v-model="form.profile.bankBranch" /></el-form-item>
         <el-form-item data-archive-field="profile.bankAccount" :error="serverFieldErrors['profile.bankAccount']" :label="form.profile.bankAccountConfigured || archive?.employeeProfile?.bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
@@ -683,7 +692,8 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
         </div>
         <p v-if="contract.__removed" class="field-help">保存后从可用合同中移除，记录仍会保留；不代表解除劳动合同。</p>
         <p v-if="contractErrors[`contracts.${index}`]" :data-archive-field="`contracts.${index}`" class="contract-upload-error" role="alert">{{ contractErrors[`contracts.${index}`] }}</p>
-        <p v-if="expandedContractKey === contract.__key && overlappingContracts.has(contract.id || contract.__key) && !contract.__removed" class="contract-advisory" role="status">与其他合同的期限有重叠，请核对；不影响保存。</p>
+          <p v-if="maintenanceHint('contracts', contract.id || contract.__key) && !contract.__removed" class="maintenance-hint" role="note">{{ maintenanceHint('contracts', contract.id || contract.__key) }}</p>
+          <p v-else-if="expandedContractKey === contract.__key && overlappingContracts.has(contract.id || contract.__key) && !contract.__removed && !exemptedContractIds?.includes(contract.id)" class="contract-advisory" role="status">与其他合同的期限有重叠，请核对；不影响保存。</p>
         <EmployeeContractFields v-if="!contract.__removed && expandedContractKey === contract.__key"
           :contract="contract" :index="index" :errors="contractErrors" :materials-only="contractOnly && contractAction === 'materials'"
           :image-count="contractUploads.count(contract, 'images')" :attachment-count="contractUploads.count(contract, 'attachments')"
@@ -702,6 +712,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
 </template>
 
 <style scoped>
+.maintenance-hint { display: block; width: 100%; color: var(--el-color-warning); font-size: 12px; font-weight: normal; line-height: 1.5; }
 .archive-save-error { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; color: var(--el-color-danger); font-size: 13px; line-height: 1.6; }
 .archive-save-error--conflict { color: var(--el-text-color-regular); }
 .archive-editor-nav { display: flex; gap: 16px; flex-wrap: wrap; padding: 6px 0; }

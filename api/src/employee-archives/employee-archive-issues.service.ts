@@ -5,6 +5,7 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { approvedEmploymentSourceWhere } from './employment-timeline';
 import { archiveIssueSourceSystems, archiveIssueStates } from './employee-archive-issues';
+import { currentArchiveIssues, CURRENT_ARCHIVE_ISSUE_ACTION, safeArchiveIssueText } from './employee-archive-current-issues';
 
 type Reader = Pick<PrismaService, 'user' | 'employeeDataChangeRequest'>;
 
@@ -28,7 +29,7 @@ export class EmployeeArchiveIssuesService {
     if (!userId) return null;
     const user = await client.user.findUnique({
       where: { id: userId, deletedAt: null, accountType: AccountType.employee },
-      select: { id: true, name: true, employeeNo: true, phone: true, status: true, deptId: true, position: true, entryDate: true, employmentType: true,
+      select: { id: true, accountType: true, archivedAt: true, deletedAt: true, name: true, employeeNo: true, phone: true, status: true, deptId: true, position: true, entryDate: true, leaveDate: true, actualRegularDate: true, employmentType: true,
         employeeProfile: true, employeeContracts: true,
         employmentHistory: { where: approvedEmploymentSourceWhere, orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }] } },
     });
@@ -40,10 +41,64 @@ export class EmployeeArchiveIssuesService {
     this.assertAccess(operator);
     const user = await this.userFacts(this.prisma, userId);
     const requests = await this.prisma.employeeDataChangeRequest.findMany({
-      where: { userId, sourceSystem: { in: archiveIssueSourceSystems }, profileReviewStatus: 'approved', appliedAt: { not: null }, archivedAt: null, cancelledAt: null },
+      where: { userId, profileReviewStatus: 'approved', appliedAt: { not: null }, cancelledAt: null },
       orderBy: { createdAt: 'desc' },
     });
-    return { items: requests.flatMap(request => this.visibleIssues(request, user, operator)) };
+    const proposals = requests.map(r => r.proposedValue);
+    const preliminary = currentArchiveIssues(user!, { proposals });
+    const exemptions = user?.accountType === 'employee' ? await this.prisma.employeeArchiveIssueExemption.findMany({ where: { userId }, orderBy: { updatedAt: 'desc' } }) : [];
+    const current = currentArchiveIssues(user!, { proposals, exemptions }).map(issue => ({ ...issue, canExplain: hasHrCapability(operator, 'employee_archive_edit') }));
+    return { items: [...current, ...requests.filter(request => !request.archivedAt && archiveIssueSourceSystems.includes(request.sourceSystem ?? '')).flatMap(request => this.visibleIssues(request, user, operator))],
+      exemptions: exemptions.filter(e => e.isExempt).map(e => ({ issueId: e.issueId, fingerprint: e.fingerprint, version: e.version,
+        message: e.message, field: e.field, currentValue: e.currentValue, reason: e.reason, isExempt: true,
+        contractIds: preliminary.find(i => i.id === e.issueId && i.fingerprint === e.fingerprint)?.contractIds ?? [],
+        noLongerApplies: !preliminary.some(i => i.id === e.issueId && i.fingerprint === e.fingerprint) })) };
+  }
+
+  async setExemption(userId: string, issueId: string, fingerprint: string, isExempt: boolean, expectedVersion: number, reason: string | undefined, operator: AuthUser) {
+    this.assertAccess(operator, true);
+    if (!/^current:[a-z-]{1,80}$/.test(issueId) || !/^[a-f0-9]{64}$/.test(fingerprint)
+      || typeof isExempt !== 'boolean' || !Number.isInteger(expectedVersion) || expectedVersion < 0
+      || (reason !== undefined && (typeof reason !== 'string' || reason.length > 500))) {
+      throw new BadRequestException('豁免设置无效，请刷新当前事项后重试');
+    }
+    return this.prisma.$transaction(async tx => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`SELECT "id" FROM "users" WHERE "id" = ${userId}::uuid FOR UPDATE`;
+      if (!locked.length) throw new NotFoundException('员工不存在');
+      await tx.$queryRaw`SELECT "id" FROM "employee_profiles" WHERE "user_id" = ${userId}::uuid FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "employee_contracts" WHERE "user_id" = ${userId}::uuid FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "employee_data_change_requests" WHERE "user_id" = ${userId}::uuid FOR UPDATE`;
+      const user = await this.userFacts(tx as unknown as Reader, userId);
+      const requests = await tx.employeeDataChangeRequest.findMany({ where: { userId, profileReviewStatus: 'approved', appliedAt: { not: null }, cancelledAt: null }, select: { proposedValue: true } });
+      const item = currentArchiveIssues(user!, { proposals: requests.map(r => r.proposedValue) }).find(i => i.id === issueId);
+      const existing = await tx.employeeArchiveIssueExemption.findUnique({ where: { userId_issueId_fingerprint: { userId, issueId, fingerprint } } });
+      // Fixing the actual dossier never needs a checkbox to be cleared first.
+      if (isExempt && !item) return { isExempt: false, noLongerApplies: true, issueId, version: existing?.version ?? 0 };
+      if (isExempt && item!.fingerprint !== fingerprint) throw new ConflictException('资料已更新，请重新查看当前事项后再设置豁免');
+      if ((existing?.isExempt ?? false) === isExempt) return { isExempt, alreadySet: true, issueId, version: existing?.version ?? 0 };
+      if ((existing?.version ?? 0) !== expectedVersion) throw new ConflictException('豁免设置已更新，请刷新后重试');
+      const explanation = safeArchiveIssueText(reason?.trim() ?? '');
+      let version: number;
+      if (existing) {
+        const updated = await tx.employeeArchiveIssueExemption.updateMany({ where: { id: existing.id, version: expectedVersion },
+          data: { isExempt, reason: explanation || existing.reason, version: { increment: 1 }, updatedById: operator.id, updatedAt: new Date() } });
+        if (updated.count !== 1) throw new ConflictException('豁免设置已更新，请刷新后重试');
+        version = existing.version + 1;
+      } else {
+        const created = await tx.employeeArchiveIssueExemption.create({ data: { userId, issueId, fingerprint, isExempt,
+          message: item!.message, currentValue: item!.current.value, field: item!.field, reason: explanation || null, updatedById: operator.id } });
+        version = created.version;
+      }
+      await tx.auditLog.create({ data: { userId: operator.id, action: CURRENT_ARCHIVE_ISSUE_ACTION, entityType: 'user', entityId: userId,
+        oldValue: { issueId, isExempt: existing?.isExempt ?? false }, newValue: { issueId, fingerprint, isExempt, version,
+          message: isExempt ? item!.message : existing!.message, field: isExempt ? item!.field : existing!.field,
+          currentValue: isExempt ? item!.current.value : existing!.currentValue,
+          reason: explanation || (isExempt ? 'HR选择保留现状，豁免此提醒' : 'HR取消豁免，恢复按当前资料检查') } } });
+      return { isExempt, alreadySet: false, issueId, version };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).catch(error => {
+      if (['P2034', 'P2002'].includes(error?.code)) throw new ConflictException('资料正在更新，请刷新当前事项后重试');
+      throw error;
+    });
   }
 
   async listForRequest(requestId: string, operator: AuthUser) {

@@ -245,6 +245,7 @@ export interface DirectReport {
 }
 
 export interface UserQuery {
+  needsMaintenance?: boolean;
   eligibleFor?: 'cycle_owner' | 'direct_manager';
   page?: number;
   pageSize?: number;

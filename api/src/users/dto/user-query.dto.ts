@@ -5,6 +5,11 @@ import { BooleanQuery } from '../../common/dto/boolean-query';
 
 export class UserQueryDto extends PaginationDto {
   @IsOptional()
+  @IsBoolean()
+  @BooleanQuery()
+  needsMaintenance?: boolean;
+
+  @IsOptional()
   @IsString()
   columns?: string;
 
