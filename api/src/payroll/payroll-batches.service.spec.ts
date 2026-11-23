@@ -367,7 +367,7 @@ describe('PayrollBatchesService isolated obligations and workflow', () => {
   it('filters the optional HTTP month before loading wages and preserves the old subject-only array caller', async () => {
     const october = await service.create({ ...createInput(), month: '2026-10', purpose: 'trial' }, editor);
     const november = await service.create({ ...createInput(), purpose: 'trial' }, editor);
-    const controller = new PayrollController(access, {} as any, service, {} as any);
+    const controller = new PayrollController(access, {} as any, service, {} as any, {} as any);
     clearPrivateReads();
     const rows = await controller.list({ subjectId: subject, month: '2026-10' } as any, editor as any);
     expect(rows.map(row => row.id)).toEqual([october.id]);

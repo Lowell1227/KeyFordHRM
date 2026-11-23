@@ -7,6 +7,8 @@ import { isPayrollEmployment, payrollAttendanceConflicts, payrollDays, payrollEm
 import { selectEmploymentAt } from '@/employee-archives/employment-timeline';
 import { payrollDate, payrollHash, payrollMonth } from './payroll-transaction';
 import { normalizePayrollWorkCalendar, PayrollWorkCalendar } from './payroll-work-calendar';
+import { effectivePayrollParameters } from './payroll-parameter-timeline';
+import { payrollParameterDefinition } from './payroll-parameter-definition';
 
 type AttendanceDay = { employeeId: string; workDate: string; units: string | null; required: boolean | null;
   records: Array<{ type: string; state: string; hours: string; effectiveHours: string | null; resolution: string; unit: string; overtimeKind?: string }>; issues: string[] };
@@ -15,10 +17,6 @@ function quantity(value: unknown, nonzero = false): string | null {
   if (typeof value !== 'string' || !/^\d{1,12}(\.\d{1,4})?$/.test(value)) return null;
   const amount = new D(value); return amount.isFinite() && (nonzero ? amount.gt(0) : amount.gte(0)) ? value : null;
 }
-function covering<T extends { effectiveFrom: Date; effectiveTo: Date | null }>(rows: T[], day: string): T[] {
-  const at = payrollDate(day); return rows.filter(row => row.effectiveFrom <= at && (!row.effectiveTo || row.effectiveTo >= at));
-}
-
 @Injectable()
 export class PayrollSourcesService implements PayrollSourceReader {
   async capture(tx: Prisma.TransactionClient, subjectId: string, month: string, domain: PayrollDomain): Promise<PayrollCapture> {
@@ -26,10 +24,21 @@ export class PayrollSourcesService implements PayrollSourceReader {
     const attendance = await tx.payrollAttendanceSnapshot.findFirst({ where: { subjectId, month, domain }, orderBy: { version: 'desc' } });
     const attendanceConflicts = await payrollAttendanceConflicts(tx, subjectId, domain, month, attendance?.payload);
     if (attendanceConflicts.length) issues.push('考勤来源存在跨月归属冲突，请先核对原月、更正及已入薪差异');
-    const policies = await tx.payrollPolicy.findMany({ where: { subjectId, domain, status: 'active', effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] }, orderBy: { id: 'asc' } });
+    const policies = await tx.payrollPolicy.findMany({ where: { subjectId, domain, status: 'active', effectiveFrom: { lte: end } }, orderBy: { id: 'asc' } });
     const employments = await payrollEmployments(tx, subjectId, month);
     const employees = [...new Set(employments.filter(row => row.contractSubjectId === subjectId).map(row => row.userId))].sort();
-    const standards = await tx.payrollStandard.findMany({ where: { subjectId, domain, employeeId: { in: employees }, status: 'active', effectiveFrom: { lte: end }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }] }, orderBy: { id: 'asc' } });
+    const standards = await tx.payrollStandard.findMany({ where: { subjectId, domain, employeeId: { in: employees }, status: 'active', effectiveFrom: { lte: end } }, orderBy: { id: 'asc' } });
+    const releases = await tx.payrollParameterRelease.findMany({ where: { subjectId, domain, status: 'approved', OR: [
+      { rule: { is: { effectiveFrom: { lte: end } } } },
+      { standard: { is: { employeeId: { in: employees }, effectiveFrom: { lte: end } } } },
+    ] }, select: { id: true, standardId: true, ruleId: true, previousParameterId: true, snapshotHash: true }, orderBy: { id: 'asc' } });
+    const ruleLinks = releases.filter(row => row.ruleId).map(row => ({ parameterId: row.ruleId!, previousParameterId: row.previousParameterId }));
+    const standardLinks = releases.filter(row => row.standardId).map(row => ({ parameterId: row.standardId!, previousParameterId: row.previousParameterId }));
+    for (const release of releases) {
+      const kind = release.standardId ? 'standard' : 'rule';
+      const row = release.standardId ? standards.find(value => value.id === release.standardId) : policies.find(value => value.id === release.ruleId);
+      if (!row || payrollHash(payrollParameterDefinition(kind, row)) !== release.snapshotHash) issues.push('已发布参数的状态或内容与审核快照不一致，请核对版本');
+    }
     const openings = await tx.payrollOpeningBalance.findMany({ where: { subjectId, domain, attributionMonth: month, employeeId: { in: employees } }, orderBy: { id: 'asc' } });
     const settlements = await tx.payrollSettlement.findMany({ where: { line: { employeeId: { in: employees }, attributionMonth: month, version: { batch: { subjectId, purpose: domain } } } },
       include: { line: { select: { employeeId: true, itemCode: true } } }, orderBy: { id: 'asc' } });
@@ -39,7 +48,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
     if (!attendance || attendance.status !== 'sealed' || !attendance.sealedHash || payload?.sync?.complete !== true
       || !Array.isArray(payload?.days) || !Array.isArray(payload?.issues) || payload.issues.length) issues.push('考勤尚未完成核对封账');
     if (!employees.length) issues.push('当月没有已生效的本主体任职范围');
-    const configs = policies.map(row => row.config as unknown as PayrollPolicyConfig);
+    const effectivePolicyIds = new Set(payrollDays(month).flatMap(date => effectivePayrollParameters(policies, ruleLinks, payrollDate(date)).map(row => row.id)));
+    const configs = policies.filter(row => effectivePolicyIds.has(row.id)).map(row => row.config as unknown as PayrollPolicyConfig);
     const paths = configs.map(config => ({ reviewers: Array.isArray(config?.reviewers) ? config.reviewers : [], approvers: Array.isArray(config?.approvers) ? config.approvers : [] }));
     const first = paths[0];
     if (!first || !first.reviewers.length || !first.approvers.length || paths.some(path => JSON.stringify(path) !== JSON.stringify(first))) issues.push('复核与审批路径未配置或存在冲突');
@@ -66,7 +76,8 @@ export class PayrollSourcesService implements PayrollSourceReader {
         if (dayMatches.length !== 1) { personal.push('自然月考勤覆盖缺失或重复'); continue; }
         const day = dayMatches[0];
         if (day.issues?.length) personal.push('考勤仍有待核对项目');
-        const matches = covering(standards.filter(row => row.employeeId === employeeId), date), ruleMatches = covering(policies, date);
+        const matches = effectivePayrollParameters(standards.filter(row => row.employeeId === employeeId), standardLinks, payrollDate(date));
+        const ruleMatches = effectivePayrollParameters(policies, ruleLinks, payrollDate(date));
         if (matches.length !== 1 || ruleMatches.length !== 1) { personal.push('工资标准或规则缺失/生效区间冲突'); continue; }
         const standard = matches[0], policy = ruleMatches[0], config = policy.config as unknown as PayrollPolicyConfig;
         const strict = domain === 'formal' || config?.fixedSalaryBasis === 'monthly_workdays';
@@ -190,6 +201,7 @@ export class PayrollSourcesService implements PayrollSourceReader {
     }
     if (issues.length) for (const line of lines) if (line.status === 'ready' || line.status === 'not_applicable') { line.status = 'blocked_batch'; line.amount = null; }
     const sources = payrollJson({ subjectId, month, domain, attendance, ...(attendanceConflicts.length ? { attendanceConflicts } : {}), policies, standards,
+      ...(releases.length ? { parameterReleases: releases } : {}),
       employments: employments.filter(row => row.contractSubjectId === subjectId).map(row => ({ ...row,
         user: { id: row.user.id, name: row.user.name } })), scopeIssues: [...new Set(issues)], openings,
       settlements, adjustments, performance: performanceFacts.sort((a, b) => `${a.employeeId}:${a.cycleId}`.localeCompare(`${b.employeeId}:${b.cycleId}`)) });

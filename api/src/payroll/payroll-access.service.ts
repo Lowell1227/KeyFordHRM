@@ -5,6 +5,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { assertPayrollGrant, payrollAccess, PayrollActor, PayrollCapability } from './payroll-access';
 import { PayrollDomain, PayrollPurpose } from './payroll-contracts';
 import { resolve } from 'node:path';
+import { payrollParameterReviewerWhere } from './payroll-parameter-access';
 
 @Injectable()
 export class PayrollAccessService {
@@ -17,7 +18,19 @@ export class PayrollAccessService {
     if (!this.enabled() || actor.isAssessorOnly) return payrollAccess(actor, [], false);
     const grants = await this.prisma.payrollGrant.findMany({ where: { userId: actor.id, revokedAt: null,
       user: { status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null, isAssessorOnly: false } }, include: { subject: { select: { name: true } } } });
-    return payrollAccess(actor, grants, true);
+    const result = payrollAccess(actor, grants, true);
+    const reviews = await this.prisma.payrollParameterRelease.findMany({
+      where: { ...payrollParameterReviewerWhere(actor.id), domain: this.config.get<string>('HRM_PREVIEW') === 'true' ? 'validation' : 'formal' },
+      select: { subjectId: true, subject: { select: { name: true } }, submittedBy: { select: {
+        payrollGrants: { where: { revokedAt: null }, select: { subjectId: true, capabilities: true } } } } }, distinct: ['subjectId', 'submittedById'],
+    });
+    for (const review of reviews) {
+      if (!review.submittedBy.payrollGrants.some(grant => grant.subjectId === review.subjectId && grant.capabilities.includes('payroll_edit'))) continue;
+      let subject = result.subjects.find(row => row.id === review.subjectId);
+      if (!subject) { subject = { id: review.subjectId, name: review.subject.name, capabilities: [] }; result.subjects.push(subject); }
+      if (!subject.capabilities.includes('payroll_parameter_review')) subject.capabilities.push('payroll_parameter_review');
+    }
+    return result;
   }
   async assert(tx: Prisma.TransactionClient | PrismaService, actor: PayrollActor, subjectId: string, capability: PayrollCapability) {
     if (!this.enabled()) throw new ForbiddenException('薪酬功能尚未启用');

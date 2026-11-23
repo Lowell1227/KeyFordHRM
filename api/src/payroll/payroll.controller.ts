@@ -5,6 +5,7 @@ import { PayrollAccessService } from './payroll-access.service';
 import { PayrollDataService } from './payroll-data.service';
 import { PayrollBatchesService } from './payroll-batches.service';
 import { PayrollExportService } from './payroll-export.service';
+import { PayrollParameterReleasesService } from './payroll-parameter-releases.service';
 import { PayrollExceptionFilter } from './payroll-exception.filter';
 import { PayrollResponseInterceptor } from './payroll-response.interceptor';
 import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSyncDto, PayrollBatchQueryDto, PayrollCreateDto, PayrollDecisionDto, PayrollExportDto,
@@ -16,7 +17,8 @@ import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSync
 @UseInterceptors(PayrollResponseInterceptor)
 export class PayrollController {
   constructor(private readonly access: PayrollAccessService, private readonly data: PayrollDataService,
-    private readonly batches: PayrollBatchesService, private readonly files: PayrollExportService) {}
+    private readonly batches: PayrollBatchesService, private readonly files: PayrollExportService,
+    private readonly parameters: PayrollParameterReleasesService) {}
   @Get('access') @Header('Cache-Control', 'no-store, private')
   accessForUser(@CurrentUser() actor: AuthUser) { return this.access.getAccess(actor); }
   @Get('employees') @Header('Cache-Control', 'no-store, private')
@@ -34,6 +36,16 @@ export class PayrollController {
   @Post('attendance/:id/seal') seal(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollVersionDto, @CurrentUser() actor: AuthUser) { return this.data.seal(id, input.expectedVersion, actor); }
   @Get('standards') @Header('Cache-Control', 'no-store, private')
   standards(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.data.standards(query.subjectId, actor); }
+  @Get('parameter-releases') @Header('Cache-Control', 'no-store, private')
+  parameterReleases(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.parameters.list(query.subjectId, actor); }
+  @Post('parameters/:kind/:id/submit')
+  submitParameter(@Param('kind') kind: string, @Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollVersionDto, @CurrentUser() actor: AuthUser) {
+    return this.parameters.submit(kind, id, input.expectedVersion, actor);
+  }
+  @Post('parameter-releases/:id/decide')
+  decideParameter(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollDecisionDto, @CurrentUser() actor: AuthUser) { return this.parameters.decide(id, input, actor); }
+  @Post('parameter-releases/:id/withdraw')
+  withdrawParameter(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: PayrollNoteDto, @CurrentUser() actor: AuthUser) { return this.parameters.withdraw(id, input, actor); }
   @Post('standards') standard(@Body() input: PayrollStandardDto, @CurrentUser() actor: AuthUser) { return this.data.saveStandard(input, actor); }
   @Post('standards/:id/activate') activateStandard(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthUser) { return this.data.activate('standard', id, actor); }
   @Post('standards/:id/clone') cloneStandard(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthUser) { return this.data.clone('standard', id, actor); }

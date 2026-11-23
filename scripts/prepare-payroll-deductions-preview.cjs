@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawnSync } = require('node:child_process');
+const { ensureFictionalPayrollManager } = require('./payroll-preview-manager.cjs');
 
 async function prepare() {
   const { PrismaClient } = require('@prisma/client');
@@ -56,6 +57,7 @@ async function prepare() {
       check(await db.payrollBatch.count({ where: { id: { in: [...value.batchIds, value.approvedBatchId] }, subjectId: { in: value.subjectIds } } }) === 3, 'existing_batches');
       return receipt(value, true);
     }
+    await ensureFictionalPayrollManager(db, base.actors, ['HR001', 'EMP003']);
     const baseline = await baseState(base), runId = randomUUID();
     const subjectIds = [randomUUID(), randomUUID()], employeeIds = [randomUUID(), randomUUID(), randomUUID()];
     const value = { fictional: true, state: 'preparing', runId, month, payMonth, subjectIds, employeeIds, batchIds: [], approvedBatchId: null, actors: base.actors };
@@ -77,6 +79,10 @@ async function prepare() {
       await tx.systemConfig.create({ data: { key, value } });
     }, { timeout: 20000 });
     for (const actor of ['HR001', 'MGR001', 'VP001', 'EMP002', 'EMP003']) tokens[actor] = (await http('', 'POST', '/auth/test-login', { employeeNo: actor })).token;
+    async function publish(actor, kind, row) {
+      const release = await http(actor, 'POST', `/payroll/parameters/${kind}/${row.id}/submit`, { expectedVersion: row.version });
+      await http('MGR001', 'POST', `/payroll/parameter-releases/${release.id}/decide`, { expectedVersion: release.attempt, decision: 'approve', note: '虚构主管确认' });
+    }
     const itemCodes = ['fixed', 'absence', 'overtime', 'performance', 'adjustment'];
     for (const [index, subjectId] of subjectIds.entries()) {
       stage = `prepare_subject_${index + 1}`; const editor = index === 0 ? 'HR001' : 'EMP003';
@@ -85,13 +91,16 @@ async function prepare() {
         const fixed = ['10000', '8000', '3000'][employeeIds.indexOf(employeeId)];
         const standard = await http(editor, 'POST', '/payroll/standards', { subjectId, employeeId, effectiveFrom: '2035-01-01', fixedMonthly: fixed,
           performanceBase: '0', performanceMode: 'none', evidence: '扣缴预览虚构标准，非正式工资' });
-        await http(editor, 'POST', `/payroll/standards/${standard.id}/activate`);
+        await publish(editor, 'standard', standard);
         for (const itemCode of itemCodes) await http('VP001', 'POST', '/payroll/opening-balances', { subjectId, employeeId, month, itemCode, amount: '0', reference: '虚构期初：该样例无历史入薪' });
       }
-      const rule = await http(editor, 'POST', '/payroll/rules', { subjectId, effectiveFrom: '2035-01-01', config: { rounding: 'item_half_up', monthlyUnits: { [month]: '20' }, normalHourly: '100',
+      const rule = await http(editor, 'POST', '/payroll/rules', { subjectId, effectiveFrom: '2035-01-01', config: { fixedSalaryBasis: 'monthly_workdays',
+        workCalendars: { [month]: { sourceVersion: 'fictional-calendar-v1', evidenceRef: '虚构日历确认，非实际排班',
+          days: Array.from({ length: 30 }, (_, i) => ({ workDate: `${month}-${String(i + 1).padStart(2, '0')}`, units: i < 20 ? '1' : '0' })) } },
+        rounding: 'item_half_up', monthlyUnits: { [month]: '20' }, normalHourly: '100',
         paidHourly: { unpaid_leave: '0', sick_leave: null, absence: '0' }, overtime: { hourlyBase: '100', weekday: '1.5', restday: '2', holiday: '3' },
         reviewers: [base.actors.MGR001], approvers: [base.actors.VP001], cutoverMonth: month, performance: {} } });
-      await http(editor, 'POST', `/payroll/rules/${rule.id}/activate`);
+      await publish(editor, 'rule', rule);
       const expected = [], records = [];
       for (const employeeId of ids) for (let day = 1; day <= 30; day++) {
         const workDate = `${month}-${String(day).padStart(2, '0')}`, required = day <= 20;
@@ -128,7 +137,7 @@ if (require.main === module) {
   try {
     const inspection = spawnSync('docker', ['inspect', '--format', '{{index .Config.Labels "com.docker.compose.project"}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Running}}', 'hrm-api-1'], { encoding: 'utf8', timeout: 10000 });
     if (inspection.status !== 0 || inspection.stdout.trim() !== 'hrm api true') throw new Error('preview_container_guard');
-    const result = spawnSync('docker', ['exec', '-i', '-w', '/app', 'hrm-api-1', 'node'], { input: `(${prepare.toString()})().then(r=>console.log(JSON.stringify(r))).catch(e=>{console.error(e.message);process.exitCode=1;});`,
+    const result = spawnSync('docker', ['exec', '-i', '-w', '/app', 'hrm-api-1', 'node'], { input: `const ensureFictionalPayrollManager=${ensureFictionalPayrollManager.toString()};(${prepare.toString()})().then(r=>console.log(JSON.stringify(r))).catch(e=>{console.error(e.message);process.exitCode=1;});`,
       encoding: 'utf8', timeout: 240000, maxBuffer: 1024 * 1024 });
     if (result.status !== 0) { process.stderr.write(result.stderr || 'Guarded fixture preparation failed'); process.exitCode = 1; }
     else process.stdout.write(result.stdout);

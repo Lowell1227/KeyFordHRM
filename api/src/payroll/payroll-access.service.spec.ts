@@ -4,7 +4,7 @@ import { PayrollAccessService } from './payroll-access.service';
 describe('live payroll access', () => {
   function fixture(values: Record<string, string> = { PAYROLL_ENABLED: 'true', HRM_PREVIEW: 'true' }) {
     const findMany = jest.fn(async () => []);
-    const prisma = { payrollGrant: { findMany } } as any;
+    const prisma = { payrollGrant: { findMany }, payrollParameterRelease: { findMany: jest.fn(async () => []) } } as any;
     return { findMany, prisma, service: new PayrollAccessService(prisma, { get: (key: string) => values[key] } as any) };
   }
   it('disabled payroll leaves existing authentication independent of salary tables', async () => {
@@ -38,5 +38,18 @@ describe('live payroll access', () => {
     await expect(service.assert(prisma, { id: 'operator' }, 'subject', 'payroll_view')).resolves.toBeUndefined();
     await expect(service.assert(prisma, { id: 'operator' }, 'subject', 'payroll_view')).rejects.toThrow(ForbiddenException);
     expect(findMany).toHaveBeenCalledTimes(2);
+  });
+  it('assigned parameter review exposes only that task capability and never salary view or export', async () => {
+    const { service, prisma } = fixture();
+    prisma.payrollParameterRelease.findMany.mockResolvedValue([{ subjectId: 'subject', subject: { name: 'Fictional subject' },
+      submittedBy: { payrollGrants: [{ subjectId: 'subject', capabilities: ['payroll_edit'] }] } }]);
+    expect(await service.getAccess({ id: 'manager' })).toEqual({ enabled: true, subjects: [{ id: 'subject', name: 'Fictional subject', capabilities: ['payroll_parameter_review'] }] });
+    const query = prisma.payrollParameterRelease.findMany.mock.calls[0][0];
+    expect(query.where).toMatchObject({ reviewerId: 'manager', submittedBy: { is: { directManagerId: 'manager' } } });
+    expect(query.select).not.toHaveProperty('snapshot');
+    await expect(service.assert(prisma, { id: 'manager' }, 'subject', 'payroll_view')).rejects.toThrow(ForbiddenException);
+    await expect(service.assert(prisma, { id: 'manager' }, 'subject', 'payroll_export')).rejects.toThrow(ForbiddenException);
+    prisma.payrollParameterRelease.findMany.mockResolvedValue([{ subjectId: 'subject', subject: { name: 'Fictional subject' }, submittedBy: { payrollGrants: [] } }]);
+    expect((await service.getAccess({ id: 'manager' })).subjects).toEqual([]);
   });
 });

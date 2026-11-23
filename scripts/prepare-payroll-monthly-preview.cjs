@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawnSync } = require('node:child_process');
+const { ensureFictionalPayrollManager } = require('./payroll-preview-manager.cjs');
 
 async function prepare(inspectOnly, finishPreparing) {
   require('./prisma/preview-guard.cjs').assertPreviewEnvironment(process.env);
@@ -48,6 +49,7 @@ async function prepare(inspectOnly, finishPreparing) {
       return receipt(prior);
     }
     check(!inspectOnly, 'fixture_not_prepared');
+    await ensureFictionalPayrollManager(db, base.actors);
     const runId = randomUUID(), subjectId = randomUUID(), employeeIds = [randomUUID(), randomUUID()], cycleId = randomUUID();
     const value = { fictional: true, state: 'preparing', month, payMonth, runId, subjectId, subjectIds: [subjectId], employeeIds, cycleIds: [cycleId], actors: base.actors, batchId: null };
     const publishedAt = new Date();
@@ -73,12 +75,16 @@ async function prepare(inspectOnly, finishPreparing) {
       }
       await tx.systemConfig.create({ data: { key, value } });
     }, { timeout: 20000 });
-    for (const actor of ['HR001', 'VP001']) tokens[actor] = (await http('', 'POST', '/auth/test-login', { employeeNo: actor })).token;
+    for (const actor of ['HR001', 'MGR001', 'VP001']) tokens[actor] = (await http('', 'POST', '/auth/test-login', { employeeNo: actor })).token;
+    async function publish(kind, row) {
+      const release = await http('HR001', 'POST', `/payroll/parameters/${kind}/${row.id}/submit`, { expectedVersion: row.version });
+      await http('MGR001', 'POST', `/payroll/parameter-releases/${release.id}/decide`, { expectedVersion: release.attempt, decision: 'approve', note: '虚构主管确认' });
+    }
     stage = 'standards_and_calendar';
     for (const [i, employeeId] of employeeIds.entries()) {
       const standard = await http('HR001', 'POST', '/payroll/standards', { subjectId, employeeId, effectiveFrom: '2036-11-01',
         fixedMonthly: i ? '8000' : '10000', performanceBase: i ? '0' : '2000', performanceMode: i ? 'none' : 'additional', evidence: '虚构已审批标准来源，仅验证数学和流程' });
-      await http('HR001', 'POST', `/payroll/standards/${standard.id}/activate`);
+      await publish('standard', standard);
       for (const itemCode of ['fixed', 'absence', 'overtime', 'performance', 'adjustment']) await http('VP001', 'POST', '/payroll/opening-balances',
         { subjectId, employeeId, month, itemCode, amount: '0', reference: '虚构确认：无历史入薪' });
     }
@@ -87,7 +93,7 @@ async function prepare(inspectOnly, finishPreparing) {
       fixedSalaryBasis: 'monthly_workdays', workCalendars: { [month]: { sourceVersion: 'fictional-calendar-v1', evidenceRef: '虚构确认日历，非真实法定排班', days } },
       rounding: 'item_half_up', monthlyUnits: { [month]: '20' }, cutoverMonth: month, reviewers: [base.actors.MGR001], approvers: [base.actors.VP001],
       performance: { [month]: { cycleIds: [cycleId], sourceKind: 'fictional', coefficientVersion: 'fictional-table-v1', evidenceRef: '虚构系数表批准依据', coefficients: { A: '1.2' } } } } });
-    await http('HR001', 'POST', `/payroll/rules/${rule.id}/activate`);
+    await publish('rule', rule);
     const expected = [], records = [];
     for (const [i, employeeId] of employeeIds.entries()) for (const day of days.filter(day => !i || day.workDate >= '2036-11-11')) {
       expected.push({ employeeId, ...day, required: day.units === '1' });
@@ -112,7 +118,7 @@ function run(inspectOnly, finishPreparing = false) {
   const inspection = spawnSync('docker', ['inspect', '--format', '{{index .Config.Labels "com.docker.compose.project"}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Running}}', 'hrm-api-1'], { encoding: 'utf8', timeout: 10000 });
   if (inspection.status !== 0 || inspection.stdout.trim() !== 'hrm api true') throw new Error('preview_container_guard');
   const result = spawnSync('docker', ['exec', '-i', '-w', '/app', 'hrm-api-1', 'node'], {
-    input: `(${prepare.toString()})(${inspectOnly === true},${finishPreparing === true}).then(r=>console.log(JSON.stringify(r))).catch(e=>{console.error(e.message);process.exitCode=1;});`, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024 });
+    input: `const ensureFictionalPayrollManager=${ensureFictionalPayrollManager.toString()};(${prepare.toString()})(${inspectOnly === true},${finishPreparing === true}).then(r=>console.log(JSON.stringify(r))).catch(e=>{console.error(e.message);process.exitCode=1;});`, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024 });
   if (result.status !== 0) throw new Error(result.stderr?.trim() || 'monthly_fixture_refused');
   return JSON.parse(result.stdout);
 }

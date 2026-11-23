@@ -560,6 +560,8 @@ model User {
   payrollLines PayrollLine[]
   payrollOpenings PayrollOpeningBalance[]
   payrollAdjustments PayrollAdjustment[]
+  payrollParameterSubmissions PayrollParameterRelease[] @relation("PayrollParameterSubmitter")
+  payrollParameterReviews PayrollParameterRelease[] @relation("PayrollParameterReviewer")
   id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   dingtalkId         String?        @unique @map("dingtalk_id") @db.VarChar(64)
   dingtalkUnionId    String?        @unique @map("dingtalk_union_id") @db.VarChar(64)
@@ -777,6 +779,7 @@ model ContractSubject {
   payrollOpenings PayrollOpeningBalance[]
   payrollEvents PayrollEvent[]
   payrollAdjustments PayrollAdjustment[]
+  payrollParameterReleases PayrollParameterRelease[]
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name String @unique @db.VarChar(150)
   isActive Boolean @default(true) @map("is_active")
@@ -2479,6 +2482,7 @@ model PayrollPolicy {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   activatedAt DateTime? @map("activated_at") @db.Timestamptz(6)
   subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  releases PayrollParameterRelease[]
   @@unique([subjectId, domain, version])
   @@index([subjectId, domain, status, effectiveFrom])
   @@map("payroll_policies")
@@ -2502,9 +2506,41 @@ model PayrollStandard {
   activatedAt DateTime? @map("activated_at") @db.Timestamptz(6)
   employee User @relation(fields: [employeeId], references: [id], onDelete: Restrict)
   subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  releases PayrollParameterRelease[]
   @@unique([subjectId, employeeId, domain, version])
   @@index([subjectId, employeeId, domain, status, effectiveFrom])
   @@map("payroll_standards")
+}
+
+model PayrollParameterRelease {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  domain String @db.VarChar(20)
+  kind String @db.VarChar(20)
+  standardId String? @map("standard_id") @db.Uuid
+  ruleId String? @map("rule_id") @db.Uuid
+  attempt Int
+  parameterVersion Int @map("parameter_version")
+  previousParameterId String? @map("previous_parameter_id") @db.Uuid
+  previousHash String? @map("previous_hash") @db.VarChar(64)
+  status String @default("pending") @db.VarChar(20)
+  submittedById String @map("submitted_by_id") @db.Uuid
+  reviewerId String @map("reviewer_id") @db.Uuid
+  snapshot Json @db.JsonB
+  snapshotHash String @map("snapshot_hash") @db.VarChar(64)
+  submittedAt DateTime @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  decidedAt DateTime? @map("decided_at") @db.Timestamptz(6)
+  note String @default("") @db.VarChar(500)
+  subject ContractSubject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  standard PayrollStandard? @relation(fields: [standardId], references: [id], onDelete: Restrict)
+  rule PayrollPolicy? @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  submittedBy User @relation("PayrollParameterSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  reviewer User @relation("PayrollParameterReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
+  @@unique([standardId, attempt])
+  @@unique([ruleId, attempt])
+  @@index([reviewerId, subjectId, status])
+  @@index([submittedById, subjectId, status])
+  @@map("payroll_parameter_releases")
 }
 
 model PayrollAttendanceSnapshot {

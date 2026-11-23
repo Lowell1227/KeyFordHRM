@@ -33,6 +33,7 @@ describe('payroll source capture', () => {
       payrollOpeningBalance: { findMany: jest.fn(async () => data.openings) },
       payrollSettlement: { findMany: jest.fn(async () => data.settlements) },
       payrollAdjustment: { findMany: jest.fn(async () => data.adjustments) },
+      payrollParameterRelease: { findMany: jest.fn(async () => []) },
     };
     return { data, tx, capture: (domain: 'validation' | 'formal' = 'validation') => new PayrollSourcesService().capture(tx as any, subjectId, month, domain) };
   }

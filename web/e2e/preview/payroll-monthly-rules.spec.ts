@@ -61,7 +61,9 @@ test('monthly calendar, independent salary, return/resubmit and in-review source
   await calendar.screenshot({ path: `${root}/test-results/payroll-monthly-20261123/calendar-${info.project.name}.png` });
   const saved = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/payroll/rules');
   await drawer.getByRole('button', { name: '保存草稿', exact: true }).click();
-  expect((await saved).status()).toBe(201); await expect(drawer).toBeHidden();
+  const savedResponse = await saved; expect(savedResponse.status()).toBe(201);
+  const ruleDraft = (await savedResponse.json()).data;
+  await expect(drawer).toBeHidden();
   expect(saves).toBe(1);
 
   await page.goto('/payroll/batches' + query(data));
@@ -95,16 +97,25 @@ test('monthly calendar, independent salary, return/resubmit and in-review source
   await perform(page, '自动核算', '/calculate');
   await perform(page, '提交复核', '/submit');
 
-  // Change the active source through the maintenance UI while the batch is pending.
+  // A reviewed new parameter version must invalidate an in-review salary snapshot.
   await page.goto('/payroll/standards' + query(data));
   await page.getByRole('tab', { name: '工资规则', exact: true }).click();
-  await page.getByRole('button', { name: '停用', exact: true }).click();
-  await page.getByRole('dialog', { name: '停用版本' }).getByRole('button', { name: '停用', exact: true }).click();
-  await expect(page.getByRole('button', { name: '停用', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '启用', exact: true }).first().click();
-  await page.getByRole('dialog', { name: '启用版本' }).getByRole('button', { name: '启用版本', exact: true }).click();
-  await expect(page.getByRole('button', { name: '停用', exact: true })).toHaveCount(1);
+  const row = info.project.name === 'mobile' ? page.locator('.mobile-result-card').filter({ hasText: `工资规则 · V${ruleDraft.version}` })
+    : page.getByRole('row').filter({ has: page.getByRole('cell', { name: String(ruleDraft.version), exact: true }) });
+  const submitted = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/rule/${ruleDraft.id}/submit`));
+  await row.getByRole('button', { name: '提交主管审核', exact: true }).click();
+  const submittedResponse = await submitted; expect(submittedResponse.status()).toBe(201);
+  const release = (await submittedResponse.json()).data;
+  await expect(page).toHaveURL(/\/payroll\/parameter-reviews/);
+  await expect(page.getByRole('button', { name: '启用', exact: true })).toHaveCount(0);
   await login(page, 'MGR001');
+  await page.goto('/payroll/parameter-reviews' + query(data));
+  const reviewRow = info.project.name === 'mobile' ? page.locator('.mobile-result-card').filter({ hasText: `工资规则 · V${ruleDraft.version}` })
+    : page.getByRole('row').filter({ hasText: `工资规则 · V${ruleDraft.version}` });
+  await reviewRow.getByRole('button', { name: '审核', exact: true }).click();
+  const reviewed = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/${release.id}/decide`));
+  await page.getByRole('dialog', { name: '参数审核' }).getByRole('button', { name: '审核并发布', exact: true }).click();
+  expect((await reviewed).status()).toBe(201);
   await page.goto(`/payroll/approvals/${id}` + query(data));
   await expect(page.getByRole('alert').filter({ hasText: '来源已更新' })).toBeVisible();
   await expect(page.getByRole('button', { name: '通过当前环节', exact: true })).toHaveCount(0);

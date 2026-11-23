@@ -70,6 +70,7 @@ function setup() {
     update: jest.fn(async ({ where, data }) => { const row = state[name].find(row => matches(row, where)); Object.assign(row, clone(data)); return clone(row); }),
   });
   const tx = { $queryRaw: jest.fn().mockResolvedValue([]), payrollAttendanceSnapshot: model('snapshots'), payrollStandard: model('standards'), payrollPolicy: model('policies'),
+    payrollParameterRelease: { findFirst: jest.fn(async () => null) },
     systemConfig: { findUnique: jest.fn(async () => ({ value: { subjectIds: [subject], employeeIds: ['employee-a', 'employee-b'] } })) },
     employmentRecord: { findMany: jest.fn(async ({ where, select }) => state.employments.filter(row => matches(row, where)).map(row => project(row, select))) },
     payrollEvent: { create: jest.fn(async ({ data }) => { state.events.push(clone(data)); return clone(data); }) },
@@ -333,5 +334,20 @@ describe('PayrollDataService focused regressions', () => {
     tx.payrollStandard.findUnique.mockClear(); state.standards[0].domain = 'formal';
     await expect((service as any)[method]('standard', 'secret', actor)).rejects.toBeInstanceOf(ForbiddenException);
     expect(tx.payrollStandard.findUnique.mock.calls).toEqual([[{ where: { id: 'secret' }, select: { id: true, subjectId: true, domain: true } }]]);
+  });
+
+  it.each(['standard', 'rule'] as const)('cannot bypass the manager by activating a %s directly', async kind => {
+    const { service, state } = setup(); const rows = kind === 'standard' ? state.standards : state.policies;
+    rows.push({ id: 'draft', subjectId: subject, domain: 'validation', status: 'draft' });
+    await expect((service as any).activate(kind, 'draft', actor)).rejects.toThrow('主管审核');
+    expect(rows[0].status).toBe('draft'); expect(state.events).toEqual([]);
+  });
+
+  it('cannot disable a published parameter to revive its predecessor', async () => {
+    const { service, state, tx } = setup();
+    state.standards.push({ id: 'published', subjectId: subject, domain: 'validation', status: 'active' });
+    tx.payrollParameterRelease.findFirst.mockResolvedValue({ id: 'approved' } as never);
+    await expect((service as any).disable('standard', 'published', actor)).rejects.toThrow('新版本');
+    expect(state.standards[0].status).toBe('active');
   });
 });

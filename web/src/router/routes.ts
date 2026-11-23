@@ -293,6 +293,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: '工资标准与规则', payrollOnly: true, payrollCapabilities: ['payroll_edit'], navigation: { module: 'compensation', label: '工资标准与规则', order: 20 } },
   },
   {
+    path: '/payroll/parameter-reviews',
+    name: 'PayrollParameterReviews',
+    component: () => import('@/views/compensation/payroll/PayrollParameterReviewsView.vue'),
+    meta: { requiresAuth: true, title: '参数审核', payrollOnly: true, payrollCapabilities: ['payroll_edit', 'payroll_parameter_review'], navigation: { module: 'compensation', label: '参数审核', order: 25 } },
+  },
+  {
     path: '/payroll/batches',
     name: 'PayrollBatches',
     component: () => import('@/views/compensation/payroll/PayrollBatchesView.vue'),

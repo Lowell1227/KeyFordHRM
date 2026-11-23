@@ -9,6 +9,7 @@ import { PayrollBatchesService } from './payroll-batches.service';
 import { PayrollDataService } from './payroll-data.service';
 import { PayrollExportService } from './payroll-export.service';
 import { PayrollController } from './payroll.controller';
+import { PayrollParameterReleasesService } from './payroll-parameter-releases.service';
 import { PAYROLL_ITEM_CODES, PayrollCapture } from './payroll-contracts';
 import { payrollHash } from './payroll-transaction';
 
@@ -325,6 +326,7 @@ describe('deductions preview HTTP contract', () => {
     const module = await Test.createTestingModule({ controllers: [PayrollController], providers: [
       { provide: PayrollAccessService, useValue: s.access }, { provide: PayrollDataService, useValue: {} },
       { provide: PayrollBatchesService, useValue: s.service }, { provide: PayrollExportService, useValue: {} },
+      { provide: PayrollParameterReleasesService, useValue: {} },
     ] }).compile();
     const app = module.createNestApplication();
     app.use((req, _res, next) => { req.user = editor; next(); });

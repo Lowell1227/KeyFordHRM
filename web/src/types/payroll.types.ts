@@ -1,4 +1,4 @@
-export type PayrollCapability = 'attendance_edit' | 'attendance_seal' | 'payroll_view' | 'payroll_edit' | 'payroll_review' | 'payroll_approve' | 'payroll_export' | 'payroll_settle';
+export type PayrollCapability = 'attendance_edit' | 'attendance_seal' | 'payroll_view' | 'payroll_edit' | 'payroll_review' | 'payroll_approve' | 'payroll_export' | 'payroll_settle' | 'payroll_parameter_review';
 export interface PayrollSubject { id: string; name: string; capabilities: string[] }
 export interface PayrollAccess { enabled: boolean; subjects: PayrollSubject[] }
 export interface PayrollEmployee { id: string; name: string; employeeNo: string }
@@ -25,6 +25,16 @@ export interface PayrollRuleConfig {
 }
 export interface PayrollRuleInput { subjectId: string; effectiveFrom: string; effectiveTo?: string; config: PayrollRuleConfig }
 export interface PayrollRule extends PayrollRuleInput { id: string; version: number; status: string }
+export interface PayrollParameterRelease {
+  id: string; subjectId: string; kind: 'standard' | 'rule'; standardId: string | null; ruleId: string | null;
+  attempt: number; parameterVersion: number; previousParameterId: string | null;
+  status: 'pending' | 'approved' | 'returned' | 'withdrawn'; submittedById: string; reviewerId: string;
+  submittedBy: { id: string; name: string }; reviewer: { id: string; name: string };
+  standard?: { employee: { name: string; employeeNo: string | null } } | null;
+  snapshot: { effectiveFrom: string; effectiveTo: string | null; fixedMonthly?: string | null; performanceBase?: string | null;
+    performanceMode?: string | null; evidence?: string; config?: PayrollRuleConfig };
+  submittedAt: string; decidedAt: string | null; note: string;
+}
 export type PayrollPurpose = 'trial' | 'validation' | 'formal';
 export type PayrollStatus = 'draft' | 'calculated' | 'blocked' | 'pending' | 'approved' | 'returned' | 'withdrawn' | 'voided' | 'closed';
 export type PayrollItemCode = 'fixed' | 'absence' | 'overtime' | 'performance' | 'adjustment';

@@ -305,15 +305,8 @@ export class PayrollDataService {
   }
   async activate(kind: 'standard' | 'rule', id: string, actor: AuthUser) {
     return this.prisma.$transaction(async tx => {
-      const row = await this.configurationForWrite(tx, kind, id, actor);
-      if (row.status !== 'draft') throw new ConflictException('该版本不是草稿');
-      const overlap = { subjectId: row.subjectId, domain: row.domain, status: 'active', effectiveFrom: { lte: row.effectiveTo ?? new Date('9999-12-31') },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gte: row.effectiveFrom } }] };
-      const existing = kind === 'standard' ? await tx.payrollStandard.findFirst({ where: { ...overlap, employeeId: (row as { employeeId: string }).employeeId } }) : await tx.payrollPolicy.findFirst({ where: overlap });
-      if (existing) throw new ConflictException('存在覆盖相同生效区间的有效版本，请先核对生效范围');
-      const result = kind === 'standard' ? await tx.payrollStandard.update({ where: { id }, data: { status: 'active', activatedAt: new Date() } })
-        : await tx.payrollPolicy.update({ where: { id }, data: { status: 'active', activatedAt: new Date() } });
-      await this.event(tx, row.subjectId, actor.id, `${kind}_activate`, { id }); return result;
+      await this.configurationForWrite(tx, kind, id, actor);
+      throw new ConflictException('工资参数须提交直属主管审核，通过后发布，不能直接启用');
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
   async clone(kind: 'standard' | 'rule', id: string, actor: AuthUser) {
@@ -341,6 +334,9 @@ export class PayrollDataService {
       const row = await this.configurationForWrite(tx, kind, id, actor);
       if (row.status === 'disabled') return row;
       if (row.status !== 'active') throw new ConflictException('只能停用已启用的工资标准或规则');
+      const released = await tx.payrollParameterRelease.findFirst({ where: { subjectId: row.subjectId, domain: row.domain, status: 'approved',
+        OR: [kind === 'standard' ? { standardId: id } : { ruleId: id }, { previousParameterId: id }] }, select: { id: true } });
+      if (row.domain === 'formal' || released) throw new ConflictException('已发布版本须通过新版本调整，不能直接停用或恢复旧值');
       const result = kind === 'standard' ? await tx.payrollStandard.update({ where: { id }, data: { status: 'disabled' } })
         : await tx.payrollPolicy.update({ where: { id }, data: { status: 'disabled' } });
       await this.event(tx, row.subjectId, actor.id, `${kind}_disable`, { id });

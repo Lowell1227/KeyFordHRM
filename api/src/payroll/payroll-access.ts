@@ -1,7 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 
 export const PAYROLL_CAPABILITIES = ['attendance_edit', 'attendance_seal', 'payroll_view', 'payroll_edit',
-  'payroll_review', 'payroll_approve', 'payroll_export', 'payroll_settle'] as const;
+  'payroll_review', 'payroll_approve', 'payroll_export', 'payroll_settle', 'payroll_parameter_review'] as const;
 export type PayrollCapability = typeof PAYROLL_CAPABILITIES[number];
 export interface PayrollActor { id: string; sysRole?: string; isAssessorOnly?: boolean; canViewAll?: boolean }
 export interface PayrollGrantFact {

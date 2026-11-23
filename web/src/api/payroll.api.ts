@@ -1,4 +1,5 @@
 import http from './http';
+import type { PayrollParameterRelease } from '@/types/payroll.types';
 import type { AxiosResponse } from 'axios';
 import type { PayrollAccess, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollAttendance, PayrollSourceInput, PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollBatch, PayrollBatchInput, PayrollAdjustment, PayrollAdjustmentInput, PayrollOpening, PayrollOpeningInput, PayrollDeductionsPreviewInput, PayrollDeductionsPreviewResult } from '@/types/payroll.types';
 
@@ -10,6 +11,10 @@ const batchWrite = (id: string, action: string, expectedVersion: number, body: o
 
 export const payrollApi = {
   access: () => get<PayrollAccess>('/access'),
+  parameterReleases: (subjectId: string) => get<PayrollParameterRelease[]>('/parameter-releases', { subjectId }),
+  submitParameter: (kind: 'standard' | 'rule', id: string, expectedVersion: number) => post<PayrollParameterRelease>(`/parameters/${kind}/${encodeURIComponent(id)}/submit`, { expectedVersion }),
+  decideParameter: (id: string, expectedVersion: number, decision: 'approve' | 'return', note: string) => post<PayrollParameterRelease>(`/parameter-releases/${encodeURIComponent(id)}/decide`, { expectedVersion, decision, note }),
+  withdrawParameter: (id: string, expectedVersion: number, note: string) => post<PayrollParameterRelease>(`/parameter-releases/${encodeURIComponent(id)}/withdraw`, { expectedVersion, note }),
   employees: (subjectId: string, month: string) => get<PayrollEmployee[]>('/employees', { subjectId, month }),
   operators: (subjectId: string) => get<PayrollOperator[]>('/operators', { subjectId }),
   cycles: (subjectId: string) => get<PayrollCycle[]>('/performance-cycles', { subjectId }),
