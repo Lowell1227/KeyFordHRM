@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { PayrollAccessService } from './payroll-access.service';
 
 describe('live payroll access', () => {
@@ -74,5 +74,161 @@ describe('live payroll access', () => {
     await expect(service.assert(prisma, { id: 'manager' }, 'subject', 'payroll_export')).rejects.toThrow(ForbiddenException);
     prisma.payrollParameterRelease.findMany.mockResolvedValue([{ subjectId: 'subject', subject: { name: 'Fictional subject' }, submittedBy: { payrollGrants: [] } }]);
     expect((await service.getAccess({ id: 'manager' })).subjects).toEqual([]);
+  });
+});
+
+describe('formal payroll first-month acceptance', () => {
+  const subjectId = '11111111-1111-4111-8111-111111111111';
+  const otherSubject = '22222222-2222-4222-8222-222222222222';
+  const signerId = '33333333-3333-4333-8333-333333333333';
+  const actor = { id: 'operator', sysRole: 'employee' };
+  const pending = { ready: false, reason: '正式发薪待首月签收' };
+  const receipt = () => ({ subjectId, state: 'approved', firstMonth: '2026-11',
+    reference: 'Fictional first-month acceptance', approvedAt: '2020-01-01T08:00:00+08:00', approvedById: signerId });
+
+  function fixture(values: Record<string, string | undefined> = { PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'true' }) {
+    const prisma = {
+      systemConfig: { findUnique: jest.fn().mockResolvedValue({ value: receipt() }) },
+      user: { findFirst: jest.fn().mockResolvedValue({ id: signerId }) },
+      payrollGrant: { findMany: jest.fn().mockResolvedValue([
+        { userId: actor.id, subjectId, capabilities: ['payroll_view'], revokedAt: null },
+      ]) },
+    } as any;
+    const config = { get: jest.fn((key: string) => values[key]) };
+    return { prisma, config, service: new PayrollAccessService(prisma, config as any) };
+  }
+
+  it('accepts only a subject receipt and the two existing server flags without a new global switch', async () => {
+    const { service, prisma, config } = fixture();
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).resolves.toBeUndefined();
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2027-01')).resolves.toBeUndefined();
+    expect(prisma.systemConfig.findUnique).toHaveBeenCalledWith({ where: { key: `payroll_formal_readiness:${subjectId}` }, select: { value: true } });
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({ where: { id: signerId }, select: { id: true } });
+    expect(config.get.mock.calls.every(([key]) => ['PAYROLL_ENABLED', 'PAYROLL_FORMAL_ENABLED', 'HRM_PREVIEW'].includes(key))).toBe(true);
+  });
+
+  it('uses the caller transaction rather than the service connection', async () => {
+    const { service, prisma } = fixture();
+    const { prisma: tx } = fixture();
+    prisma.systemConfig.findUnique.mockRejectedValue(new Error('must use transaction'));
+    await expect(service.assertFormalPayrollReady(tx, subjectId, '2026-11')).resolves.toBeUndefined();
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+    expect(tx.systemConfig.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {}, { PAYROLL_ENABLED: 'true' }, { PAYROLL_ENABLED: 'false', PAYROLL_FORMAL_ENABLED: 'true' },
+    { PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'false' },
+    { PAYROLL_ENABLED: 'true', PAYROLL_FORMAL_ENABLED: 'true', HRM_PREVIEW: 'true' },
+  ])('does not let a receipt bypass disabled flags or preview (%j)', async values => {
+    const { service, prisma } = fixture(values);
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).rejects.toThrow(ForbiddenException);
+    await expect(service.readiness(subjectId, actor)).rejects.toThrow(ForbiddenException);
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('keeps preparation access and formal-domain reconciliation independent of missing acceptance', async () => {
+    const { service, prisma } = fixture();
+    prisma.systemConfig.findUnique.mockResolvedValue(null);
+    await expect(service.assert(prisma, actor, subjectId, 'payroll_view')).resolves.toBeUndefined();
+    await expect(service.assertDomain(prisma, 'formal')).resolves.toBe('formal');
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).rejects.toThrow(ConflictException);
+    expect(await service.readiness(subjectId, actor)).toEqual(pending);
+  });
+
+  it.each([
+    null, [], 'approved', {}, { ...receipt(), subjectId: otherSubject }, { ...receipt(), state: 'withdrawn' },
+    { ...receipt(), firstMonth: '2026-13' }, { ...receipt(), firstMonth: '1999-12' },
+    { ...receipt(), firstMonth: null }, { ...receipt(), reference: '' }, { ...receipt(), reference: '   ' },
+    { ...receipt(), reference: 123 }, { ...receipt(), approvedById: 'not-a-user-id' },
+    { ...receipt(), approvedAt: 'not-a-date' }, { ...receipt(), approvedAt: '2020-02-30T00:00:00Z' },
+    { ...receipt(), approvedAt: '2099-01-01T00:00:00Z' }, { ...receipt(), approvedAt: null },
+  ])('fails closed on an incomplete or invalid acceptance (%j)', async value => {
+    const { service, prisma } = fixture();
+    prisma.systemConfig.findUnique.mockResolvedValue({ value });
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).rejects.toThrow(ConflictException);
+    expect(await service.readiness(subjectId, actor)).toEqual(pending);
+  });
+
+  it.each(['2026-10', '2026-00', '2026-13', '26-11', '', undefined])('rejects an earlier or invalid requested month (%s)', async month => {
+    const { service, prisma } = fixture();
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, month as string)).rejects.toThrow(ConflictException);
+  });
+
+  it('does not reuse another subject receipt or query configuration for an invalid subject', async () => {
+    const { service, prisma } = fixture();
+    await expect(service.assertFormalPayrollReady(prisma, otherSubject, '2026-11')).rejects.toThrow(ConflictException);
+    expect(prisma.systemConfig.findUnique).toHaveBeenLastCalledWith({ where: { key: `payroll_formal_readiness:${otherSubject}` }, select: { value: true } });
+    prisma.systemConfig.findUnique.mockClear();
+    await expect(service.assertFormalPayrollReady(prisma, 'not-a-subject', '2026-11')).rejects.toThrow(ConflictException);
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('preserves historical acceptance after the signer leaves or changes eligibility', async () => {
+    const { service, prisma } = fixture();
+    prisma.user.findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      Object.keys(where).some(key => key !== 'id') ? null : { id: signerId });
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).resolves.toBeUndefined();
+    expect(await service.readiness(subjectId, actor)).toEqual({ ready: true, firstMonth: '2026-11' });
+  });
+
+  it('rechecks explicit receipt withdrawal and signer existence without caching', async () => {
+    const { service, prisma } = fixture();
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).resolves.toBeUndefined();
+    prisma.systemConfig.findUnique.mockResolvedValue({ value: { ...receipt(), state: 'withdrawn' } });
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).rejects.toThrow(ConflictException);
+    prisma.systemConfig.findUnique.mockResolvedValue({ value: receipt() });
+    prisma.user.findFirst.mockResolvedValue(null);
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).rejects.toThrow(ConflictException);
+    expect(await service.readiness(subjectId, actor)).toEqual(pending);
+  });
+
+  it.each(['payroll_edit', 'payroll_view', 'payroll_review', 'payroll_approve'])('allows only minimal metadata to a live %s subject grantee', async capability => {
+    const { service, prisma } = fixture();
+    prisma.payrollGrant.findMany.mockResolvedValue([{ userId: actor.id, subjectId, capabilities: [capability], revokedAt: null }]);
+    expect(await service.readiness(subjectId, actor)).toEqual({ ready: true, firstMonth: '2026-11' });
+    expect(prisma.payrollGrant.findMany).toHaveBeenCalledWith({ where: { userId: actor.id, subjectId, revokedAt: null,
+      user: { status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null, isAssessorOnly: false } } });
+  });
+
+  it.each(['payroll_export', 'payroll_settle', 'payroll_parameter_review', 'attendance_edit'])('does not disclose readiness to %s alone', async capability => {
+    const { service, prisma } = fixture();
+    prisma.payrollGrant.findMany.mockResolvedValue([{ userId: actor.id, subjectId, capabilities: [capability], revokedAt: null }]);
+    await expect(service.readiness(subjectId, actor)).rejects.toThrow(ForbiddenException);
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  it.each(['system_admin', 'hr'])('does not treat %s or parameter approval as acceptance authority', async sysRole => {
+    const { service, prisma } = fixture();
+    prisma.payrollGrant.findMany.mockResolvedValue([]);
+    await expect(service.readiness(subjectId, { ...actor, sysRole })).rejects.toThrow(ForbiddenException);
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { subjectId: otherSubject }, { userId: 'someone-else' }, { revokedAt: new Date() },
+  ])('does not accept a foreign or revoked grant (%j)', async change => {
+    const { service, prisma } = fixture();
+    prisma.payrollGrant.findMany.mockResolvedValue([{ userId: actor.id, subjectId, capabilities: ['payroll_view'], revokedAt: null, ...change }]);
+    await expect(service.readiness(subjectId, actor)).rejects.toThrow(ForbiddenException);
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('rejects assessor-only callers and rereads revoked metadata grants', async () => {
+    const { service, prisma } = fixture();
+    await expect(service.readiness(subjectId, { ...actor, isAssessorOnly: true })).rejects.toThrow(ForbiddenException);
+    expect(await service.readiness(subjectId, actor)).toEqual({ ready: true, firstMonth: '2026-11' });
+    prisma.payrollGrant.findMany.mockResolvedValue([]);
+    prisma.systemConfig.findUnique.mockClear();
+    await expect(service.readiness(subjectId, actor)).rejects.toThrow(ForbiddenException);
+    expect(prisma.systemConfig.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('does not swallow database failures as an accepted receipt', async () => {
+    const { service, prisma } = fixture();
+    prisma.systemConfig.findUnique.mockRejectedValue(new Error('unavailable'));
+    await expect(service.assertFormalPayrollReady(prisma, subjectId, '2026-11')).rejects.toThrow('unavailable');
+    await expect(service.readiness(subjectId, actor)).rejects.toThrow('unavailable');
   });
 });

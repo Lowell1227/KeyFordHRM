@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -6,6 +6,10 @@ import { assertPayrollGrant, payrollAccess, PayrollActor, PayrollCapability } fr
 import { PayrollDomain, PayrollPurpose } from './payroll-contracts';
 import { resolve } from 'node:path';
 import { payrollParameterReviewerWhere } from './payroll-parameter-access';
+import { isISO8601, isUUID } from 'class-validator';
+
+const FORMAL_PENDING = '正式发薪待首月签收';
+const PAYROLL_MONTH = /^[2-9]\d{3}-(0[1-9]|1[0-2])$/;
 
 @Injectable()
 export class PayrollAccessService {
@@ -38,6 +42,41 @@ export class PayrollAccessService {
     const grants = await tx.payrollGrant.findMany({ where: { userId: actor.id, subjectId, revokedAt: null,
       user: { status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null, isAssessorOnly: false } } });
     assertPayrollGrant(actor, grants, subjectId, capability, true);
+  }
+  async assertFormalPayrollReady(tx: Prisma.TransactionClient | PrismaService, subjectId: string, month: string): Promise<void> {
+    await this.assertDomain(tx, 'formal');
+    if (typeof month !== 'string' || !PAYROLL_MONTH.test(month)) throw new ConflictException(FORMAL_PENDING);
+    const receipt = await this.formalPayrollReceipt(tx, subjectId);
+    if (!receipt || month < receipt.firstMonth) throw new ConflictException(FORMAL_PENDING);
+  }
+  async readiness(subjectId: string, actor: PayrollActor): Promise<
+    { ready: true; firstMonth: string } | { ready: false; reason: string }
+  > {
+    await this.assertDomain(this.prisma, 'formal');
+    const grants = await this.prisma.payrollGrant.findMany({ where: { userId: actor.id, subjectId, revokedAt: null,
+      user: { status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null, isAssessorOnly: false } } });
+    const allowed = ['payroll_edit', 'payroll_view', 'payroll_review', 'payroll_approve'];
+    if (!payrollAccess(actor, grants, true).subjects.some(subject => subject.id === subjectId
+      && subject.capabilities.some(capability => allowed.includes(capability)))) {
+      throw new ForbiddenException('没有该公司主体的薪酬操作权限');
+    }
+    const receipt = await this.formalPayrollReceipt(this.prisma, subjectId);
+    return receipt ? { ready: true, firstMonth: receipt.firstMonth } : { ready: false, reason: FORMAL_PENDING };
+  }
+  private async formalPayrollReceipt(tx: Prisma.TransactionClient | PrismaService, subjectId: string): Promise<{ firstMonth: string } | null> {
+    if (typeof subjectId !== 'string' || !isUUID(subjectId)) return null;
+    const row = await tx.systemConfig.findUnique({ where: { key: `payroll_formal_readiness:${subjectId}` }, select: { value: true } });
+    const value = row?.value;
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || value.subjectId !== subjectId || value.state !== 'approved'
+      || typeof value.firstMonth !== 'string' || !PAYROLL_MONTH.test(value.firstMonth)
+      || typeof value.reference !== 'string' || !value.reference.trim()
+      || typeof value.approvedAt !== 'string' || !isISO8601(value.approvedAt, { strict: true, strictSeparator: true })
+      || !Number.isFinite(Date.parse(value.approvedAt)) || Date.parse(value.approvedAt) > Date.now()
+      || typeof value.approvedById !== 'string' || !isUUID(value.approvedById)) return null;
+    // Later employment or role changes do not revoke historical acceptance.
+    const signer = await tx.user.findFirst({ where: { id: value.approvedById }, select: { id: true } });
+    return signer ? { firstMonth: value.firstMonth } : null;
   }
   async assertDomain(tx: Prisma.TransactionClient | PrismaService, purpose: PayrollPurpose): Promise<PayrollDomain> {
     if (!this.enabled()) throw new ForbiddenException('薪酬功能尚未启用');
