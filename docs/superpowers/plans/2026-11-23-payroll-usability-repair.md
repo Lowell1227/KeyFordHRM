@@ -75,8 +75,8 @@ Files: payroll data service/controller/DTO, attendance view, ledger and API/type
 
 - [x] Run full API integration plus affected payroll regressions, targeted real PostgreSQL flows, Web type check and PC/compact/mobile Playwright. Final production-image build remains a release gate.
 - [x] Independent review of final money, authority, recovery and UI changes; fix confirmed findings without weakening assertions.
-- [ ] Commit only task files, push and confirm remote main; freeze final source and changed services.
-- [ ] Verify recoverable backup and rollback images, deploy affected API/Web only, perform read-only public role smoke and record implementation/commit/release/business acceptance separately.
+- [x] Commit only task files, push and confirm remote main; freeze final source and changed services.
+- [x] Verify recoverable backup and rollback images, deploy affected API/Web only, perform read-only public role smoke and record implementation/commit/release/business acceptance separately.
 
 ## Integration Evidence
 
@@ -86,3 +86,4 @@ Files: payroll data service/controller/DTO, attendance view, ledger and API/type
 - No schema, dependency, production configuration, permission or real-wage change is planned. Existing approved public deduction rules are reused; a separate company deduction-template catalog is not introduced.
 - Real PostgreSQL found JSONB key reordering breaks a plain serialized-payload comparison. A failing recursive-order regression now passes with attendance-only versioned canonical digests; the global hash and approved wage/parameter history remain unchanged. Legacy attendance remains readable with an explicit hold, and recovery writes require fresh verified synchronization. Production had zero attendance snapshots at verification; recheck before cutover.
 - Final payroll module: 41 suites / 1469 tests passed, then the legacy-read compatibility increment: 5 suites / 164 tests passed. These overlap and are not added. Real HTTP/PG and three viewport UI evidence cover 20 unique grouped cases, including one-success/one-stale concurrent opening correction; fictional fixtures removed, original demo unchanged and external calls zero.
+- Fixed function commit 618ef6a3 was pushed to main, built once per service and verified in Linux (11 suites / 455 tests). API/Web deployed at 2026-11-23 20:15:07 Asia/Shanghai, without migration/configuration/grant changes; 91 production table digests and 87 migrations unchanged. Public actual-role and original-performance read-only smoke passed; actual HR/finance business signoff remains pending.
