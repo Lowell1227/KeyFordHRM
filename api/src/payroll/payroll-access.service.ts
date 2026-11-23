@@ -7,6 +7,7 @@ import { PayrollDomain, PayrollPurpose } from './payroll-contracts';
 import { resolve } from 'node:path';
 import { payrollParameterReviewerWhere } from './payroll-parameter-access';
 import { isISO8601, isUUID } from 'class-validator';
+import { parsePayrollReadinessRecord } from './dto/payroll-readiness.dto';
 
 const FORMAL_PENDING = '正式发薪待首月签收';
 const PAYROLL_MONTH = /^[2-9]\d{3}-(0[1-9]|1[0-2])$/;
@@ -46,7 +47,7 @@ export class PayrollAccessService {
   async assertFormalPayrollReady(tx: Prisma.TransactionClient | PrismaService, subjectId: string, month: string): Promise<void> {
     await this.assertDomain(tx, 'formal');
     if (typeof month !== 'string' || !PAYROLL_MONTH.test(month)) throw new ConflictException(FORMAL_PENDING);
-    const receipt = await this.formalPayrollReceipt(tx, subjectId);
+    const receipt = await this.formalPayrollReceipt(tx, subjectId, typeof (tx as PrismaService).$transaction !== 'function');
     if (!receipt || month < receipt.firstMonth) throw new ConflictException(FORMAL_PENDING);
   }
   async readiness(subjectId: string, actor: PayrollActor): Promise<
@@ -63,9 +64,9 @@ export class PayrollAccessService {
     const receipt = await this.formalPayrollReceipt(this.prisma, subjectId);
     return receipt ? { ready: true, firstMonth: receipt.firstMonth } : { ready: false, reason: FORMAL_PENDING };
   }
-  private async formalPayrollReceipt(tx: Prisma.TransactionClient | PrismaService, subjectId: string): Promise<{ firstMonth: string } | null> {
+  private async formalPayrollReceipt(tx: Prisma.TransactionClient | PrismaService, subjectId: string, lock = false): Promise<{ firstMonth: string } | null> {
     if (typeof subjectId !== 'string' || !isUUID(subjectId)) return null;
-    const row = await tx.systemConfig.findUnique({ where: { key: `payroll_formal_readiness:${subjectId}` }, select: { value: true } });
+    const row = await this.readinessConfig(tx, `payroll_formal_readiness:${subjectId}`, lock);
     const value = row?.value;
     if (!value || typeof value !== 'object' || Array.isArray(value)
       || value.subjectId !== subjectId || value.state !== 'approved'
@@ -73,10 +74,33 @@ export class PayrollAccessService {
       || typeof value.reference !== 'string' || !value.reference.trim()
       || typeof value.approvedAt !== 'string' || !isISO8601(value.approvedAt, { strict: true, strictSeparator: true })
       || !Number.isFinite(Date.parse(value.approvedAt)) || Date.parse(value.approvedAt) > Date.now()
-      || typeof value.approvedById !== 'string' || !isUUID(value.approvedById)) return null;
+      || typeof value.approvedById !== 'string' || !isUUID(value.approvedById)
+      || typeof value.requestId !== 'string' || !isUUID(value.requestId)) return null;
+    const source = await this.readinessConfig(tx, `payroll_readiness_request:${value.requestId}`, lock);
+    let request;
+    try { request = parsePayrollReadinessRecord(source?.value, value.requestId); }
+    catch (error) { if (error instanceof ConflictException) return null; throw error; }
+    if (request.status !== 'approved' || request.subjectId !== subjectId || request.firstMonth !== value.firstMonth
+      || request.reference !== value.reference || request.approvedAt !== value.approvedAt
+      || request.approvalPath.at(-1) !== value.approvedById) return null;
     // Later employment or role changes do not revoke historical acceptance.
     const signer = await tx.user.findFirst({ where: { id: value.approvedById }, select: { id: true } });
     return signer ? { firstMonth: value.firstMonth } : null;
+  }
+  private async readinessConfig(tx: Prisma.TransactionClient | PrismaService, key: string, lock: boolean) {
+    if (lock) {
+      try {
+        // A locking read forces stale Serializable snapshots to conflict after a concurrent revocation.
+        await tx.$queryRaw`SELECT "key" FROM "system_configs" WHERE "key" = ${key} FOR SHARE`;
+      } catch (error) {
+        const failure = error as { code?: string; meta?: { code?: string } } | null;
+        if (failure?.code === 'P2034' || failure?.code === '40001' || failure?.code === 'P2010' && failure.meta?.code === '40001') {
+          throw new ConflictException('首月签收状态已变更，请刷新核对后重试');
+        }
+        throw error;
+      }
+    }
+    return tx.systemConfig.findUnique({ where: { key }, select: { value: true } });
   }
   async assertDomain(tx: Prisma.TransactionClient | PrismaService, purpose: PayrollPurpose): Promise<PayrollDomain> {
     if (!this.enabled()) throw new ForbiddenException('薪酬功能尚未启用');

@@ -13,8 +13,10 @@ import { PayrollGrantsService } from './payroll-grants.service';
 import { DingtalkModule } from '@/dingtalk/dingtalk.module';
 import { PayrollAttendanceSyncService } from './payroll-attendance-sync.service';
 import { PayrollAttendanceSyncController } from './payroll-attendance-sync.controller';
+import { PayrollReadinessController } from './payroll-readiness.controller';
+import { PayrollReadinessService } from './payroll-readiness.service';
 
-@Module({ imports: [PrismaModule, PayrollAccessModule, DingtalkModule], controllers: [PayrollController, PayrollGrantsController, PayrollAttendanceSyncController], providers: [PayrollDataService, PayrollGrantsService, PayrollAttendanceSyncService,
+@Module({ imports: [PrismaModule, PayrollAccessModule, DingtalkModule], controllers: [PayrollController, PayrollGrantsController, PayrollAttendanceSyncController, PayrollReadinessController], providers: [PayrollDataService, PayrollGrantsService, PayrollAttendanceSyncService, PayrollReadinessService,
   PayrollSourcesService, { provide: 'PAYROLL_SOURCE_READER', useExisting: PayrollSourcesService }, PayrollBatchesService,
   RosterSensitiveExportService, PayrollExportService, PayrollParameterReleasesService] })
 export class PayrollModule {}
