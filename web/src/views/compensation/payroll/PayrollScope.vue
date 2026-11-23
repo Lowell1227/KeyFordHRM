@@ -8,7 +8,7 @@ defineEmits<{ refresh: [] }>();
 </script>
 <template>
   <div class="payroll-scope">
-    <el-select v-model="subject" aria-label="用工主体" placeholder="选择用工主体" :disabled="disabled" class="subject-select">
+    <el-select v-model="subject" aria-label="发薪公司" placeholder="选择发薪公司" :disabled="disabled" class="subject-select">
       <el-option v-for="item in subjects" :key="item.id" :label="item.name" :value="item.id" />
     </el-select>
     <el-date-picker v-if="!hideMonth" v-model="month" type="month" value-format="YYYY-MM" format="YYYY年MM月" aria-label="工资归属月" :clearable="false" :disabled="disabled" />

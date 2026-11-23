@@ -18,7 +18,7 @@ const props = defineProps<{ mode: 'batches' | 'approvals' | 'results' }>();
 const previewMode = import.meta.env.VITE_PREVIEW_MODE === 'true';
 const route = useRoute(), router = useRouter();
 const required: Record<typeof props.mode, PayrollCapability[]> = { batches: ['payroll_edit', 'payroll_view'], approvals: ['payroll_review', 'payroll_approve'], results: ['payroll_view', 'payroll_export', 'payroll_settle'] };
-const { access, subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(computed(() => required[props.mode]), { syncQuery: true });
+const { access, subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(computed(() => required[props.mode]), { syncQuery: true, persistQuery: true });
 const batches = ref<PayrollBatch[]>([]), employees = ref<PayrollEmployee[]>([]);
 const readiness = ref<{ ready: boolean; firstMonth?: string; reason?: string }>({ ready: false });
 const formalReady = computed(() => readiness.value.ready && !!readiness.value.firstMonth && month.value >= readiness.value.firstMonth);
@@ -113,7 +113,11 @@ async function closeCreate(value: boolean) {
       <PayrollLedger v-if="mode === 'batches' && has('payroll_edit')" :key="`adjustment-${subjectId}-${month}`" :subject-id="subjectId" :month="month" :employees="employees" kind="adjustment" @changed="load" @busy="busy = $event" />
       <PayrollLedger v-if="mode === 'results' && has('payroll_settle')" :key="`opening-${subjectId}-${month}`" :subject-id="subjectId" :month="month" :employees="employees" kind="opening" @changed="load" @busy="busy = $event" />
     </template>
-    <template #feedback><el-alert v-if="error" :title="error" type="error" :closable="false" /></template>
+    <template #feedback>
+      <el-alert v-if="error" :title="error" type="error" :closable="false" />
+      <el-alert v-else-if="!previewMode && subjectId && !loading && mode === 'batches' && !formalReady" title="正式工资待首月签收" type="info" :closable="false" description="先用已审核资料核对税后实发，再提交首月签收，由指定工资复核人、审批人依次办理。资料本身由经办人的直属主管审核。" />
+      <el-alert v-else-if="!previewMode && subjectId && !loading && mode === 'results' && !rows.length" title="暂无已审批的工资结果" type="info" :closable="false" description="工资全部审批通过后，才能下载最终结果和登记实际发放。" />
+    </template>
     <template #desktop-list>
       <el-table :data="rows" height="100%" empty-text="暂无工资批次"><el-table-column label="批次" min-width="150"><template #default="{ row }">{{ row.month }} · V{{ row.version }}</template></el-table-column><el-table-column prop="payMonth" label="发放月" width="110" /><el-table-column label="用途" width="110"><template #default="{ row }">{{ purposeLabels[row.purpose as keyof typeof purposeLabels] }}</template></el-table-column><el-table-column label="状态" min-width="180"><template #default="{ row }">{{ batchStatus(row as PayrollBatch) }}<el-tag v-if="needsUpdate(row as PayrollBatch)" type="warning" size="small">来源待更新</el-tag></template></el-table-column><el-table-column label="税前应发" min-width="130"><template #default="{ row }">{{ gross(row) }}</template></el-table-column><el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDetail(row)">查看办理</el-button></template></el-table-column></el-table>
     </template>

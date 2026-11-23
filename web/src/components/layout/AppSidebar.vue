@@ -3,7 +3,7 @@ import { computed, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ArrowDown, Briefcase, Coin, HomeFilled, Search, Tools, UserFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
-import { buildNavigation } from '@/router/navigation';
+import { buildNavigation, navigationTarget } from '@/router/navigation';
 import { routes } from '@/router/routes';
 import type { NavigationGroup, NavigationModule, NavigationModuleKey } from '@/router/navigation.types';
 
@@ -89,7 +89,7 @@ function toggleGroup(group: NavigationGroup) {
 }
 
 function navigate(path: string) {
-  router.push(path);
+  router.push(navigationTarget(path, route));
 }
 
 function isMenuActive(path: string): boolean {

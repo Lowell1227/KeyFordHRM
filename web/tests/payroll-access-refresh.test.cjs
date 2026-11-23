@@ -87,12 +87,13 @@ test('logout without a new session rejects a late authorization without recreati
   assert.equal(context.user, null); assert.equal(context.token, null);
 });
 
-function payrollScope(auth, error = async cause => cause.message) {
+function payrollScope(auth, error = async cause => cause.message, options = {}) {
   const file = path.resolve(__dirname, '../src/views/compensation/payroll/usePayrollScope.ts'), m = new Module(file, module);
+  const route = vue.reactive({ path: '/payroll/standards', query: { subjectId: 'subject', month: '2037-01' } }), replaced = [];
   m.paths = Module._nodeModulePaths(path.dirname(file));
   const original = m.require.bind(m);
   m.require = name => {
-    if (name === 'vue-router') return { useRoute: () => ({ query: { subjectId: 'subject', month: '2037-01' } }) };
+    if (name === 'vue-router') return { useRoute: () => route, useRouter: () => ({ replace: async target => { replaced.push(target); route.query = target.query; } }) };
     if (name === '@/api/payroll.api') return { payrollError: error };
     if (name === '@/stores/auth.store') return { useAuthStore: () => auth };
     if (name === './payroll-state') {
@@ -104,8 +105,18 @@ function payrollScope(auth, error = async cause => cause.message) {
   };
   m._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, file);
   const scope = vue.effectScope();
-  return { scope, state: scope.run(() => m.exports.usePayrollScope(['payroll_view'])) };
+  return { scope, route, replaced, state: scope.run(() => m.exports.usePayrollScope(['payroll_view'], options)) };
 }
+
+test('explicit context persistence keeps selected month for menu navigation but never writes an ungranted company or another module', async t => {
+  const auth = vue.reactive({ token: 'session', user: { id: 'person' }, refreshPayrollAccess: async () => allowed });
+  const f = payrollScope(auth, undefined, { persistQuery: true }); t.after(() => f.scope.stop());
+  await f.state.refreshAccess(); f.state.month.value = '2026-10'; await flush();
+  assert.deepEqual(f.route.query, { subjectId: 'subject', month: '2026-10' }); assert.equal(f.replaced.length, 1);
+  f.state.subjectId.value = 'not-granted'; await flush(); assert.equal(f.replaced.length, 1);
+  f.state.subjectId.value = 'subject'; f.route.path = '/dashboard'; f.state.month.value = '2026-09'; await flush();
+  assert.equal(f.replaced.length, 1);
+});
 
 for (const outcome of ['success', 'failure']) test(`scope ignores old ${outcome} after the latest local refresh`, async t => {
   const old = deferred(), latest = deferred(); let reads = 0;

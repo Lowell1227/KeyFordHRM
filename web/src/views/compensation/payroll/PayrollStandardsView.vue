@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { ElMessageBox } from 'element-plus';
-import { onBeforeRouteLeave, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { Plus, Delete } from '@element-plus/icons-vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { payrollApi, payrollError } from '@/api/payroll.api';
-import type { PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollPerformanceMapping } from '@/types/payroll.types';
+import type { PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollEmployee, PayrollScopeCandidate, PayrollOperator, PayrollCycle, PayrollPerformanceMapping } from '@/types/payroll.types';
 import PayrollScope from './PayrollScope.vue';
 import PayrollWorkCalendarEditor from './PayrollWorkCalendarEditor.vue';
 import PayrollManualPerformanceEditor from './PayrollManualPerformanceEditor.vue';
@@ -20,8 +20,8 @@ import { newPerformanceMapping, manualPerformanceErrors, performanceMappingsPayl
 import { usePayrollScope } from './usePayrollScope';
 import { isDecimal } from './payroll-state';
 
-const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['payroll_edit']);
-const tab = ref('standards');
+const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['payroll_edit'], { persistQuery: true });
+const tab = ref(useRoute().query.tab === 'rules' ? 'rules' : 'standards');
 const router = useRouter();
 const parameterStatus = (value: string) => ({ active: '已发布', draft: '草稿', pending: '待主管审核', returned: '已退回', disabled: '历史' }[value] ?? value);
 const standards = ref<PayrollStandard[]>([]), rules = ref<PayrollRule[]>([]);
@@ -35,10 +35,11 @@ const history = ref<PayrollStandard | PayrollRule>();
 const rows = computed<Array<PayrollStandard | PayrollRule>>(() => tab.value === 'standards' ? standards.value : rules.value);
 const mappings = ref<Array<PayrollPerformanceMapping & { month: string }>>([]);
 const manualPeople = reactive<Record<string, { employees: PayrollEmployee[]; loading: boolean; error: string }>>({});
-const scopePeople = ref<PayrollEmployee[]>([]), scopeLoading = ref(false), scopeError = ref('');
+const scopePeople = ref<PayrollScopeCandidate[]>([]), scopeLoading = ref(false), scopeError = ref('');
 const attendanceMappings = ref<AttendanceMappingDraft[]>([]);
 const attendanceMappingErrors = computed(() => Object.fromEntries(Object.entries(fields).filter(([key]) => key.startsWith('attendanceMappings.')).map(([key, value]) => [key.slice('attendanceMappings.'.length), value])));
-let baseline = '', sequence = 0;
+let baseline = '', sequence = 0, scopeSequence = 0;
+onScopeDispose(() => { ++scopeSequence; });
 const reviewerOptions = computed(() => operators.value.filter(person => person.capabilities.includes('payroll_review')));
 const approverOptions = computed(() => operators.value.filter(person => person.capabilities.includes('payroll_approve')));
 const employeeName = (id: string) => employees.value.find(person => person.id === id)?.name ?? id;
@@ -50,7 +51,7 @@ async function mayClose() {
   if (!open.value || serialized() === baseline) return true;
   try { await ElMessageBox.confirm('放弃尚未保存的修改？', '离开编辑', { confirmButtonText: '放弃修改', cancelButtonText: '继续编辑' }); return true; } catch { return false; }
 }
-async function closeForm(value: boolean) { if (value || await mayClose()) open.value = value; }
+async function closeForm(value: boolean) { if (value || await mayClose()) { open.value = value; if (!value) { ++scopeSequence; scopeLoading.value = false; } } }
 function beforeCloseForm() { void closeForm(false); }
 onBeforeRouteLeave(mayClose);
 async function load() {
@@ -77,6 +78,7 @@ onMounted(refresh);
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)); }
 function showHistory(row: unknown) { history.value = row as PayrollStandard | PayrollRule; }
 function edit(type: 'standard' | 'rule', row?: unknown) {
+  ++scopeSequence;
   kind.value = type; formError.value = ''; Object.keys(fields).forEach(key => delete fields[key]);
   standard.value = type === 'standard' && row ? clone(row as PayrollStandard) : emptyStandard();
   rule.value = type === 'rule' && row ? clone(row as PayrollRule) : emptyRule();
@@ -91,16 +93,20 @@ function edit(type: 'standard' | 'rule', row?: unknown) {
   attendanceMappings.value = Object.entries(rule.value.config.attendanceMappings ?? {}).map(([key, value]) => ({ key, type: value.type, overtimeKind: value.overtimeKind ?? '' }));
   Object.keys(manualPeople).forEach(key => delete manualPeople[key]);
   baseline = serialized(); open.value = true;
-  if (type === 'rule' && !isLocalPreview) void loadScopePeople();
 }
+watch([open, kind, () => rule.value.effectiveFrom, () => rule.value.effectiveTo], () => {
+  if (open.value && kind.value === 'rule' && !isLocalPreview) void loadScopePeople();
+});
 async function loadScopePeople() {
   scopeLoading.value = true; scopeError.value = ''; scopePeople.value = [];
-  const subject = subjectId.value, period = month.value;
+  const request = ++scopeSequence, subject = subjectId.value, period = month.value;
+  const from = rule.value.effectiveFrom, to = rule.value.effectiveTo;
+  const current = () => request === scopeSequence && open.value && kind.value === 'rule' && subject === subjectId.value && period === month.value && from === rule.value.effectiveFrom && to === rule.value.effectiveTo;
   try {
-    const people = await payrollApi.employeeScopeCandidates(subject, period);
-    if (subject === subjectId.value && period === month.value) scopePeople.value = people;
-  } catch (cause) { scopeError.value = await payrollError(cause); }
-  finally { scopeLoading.value = false; }
+    const people = await payrollApi.employeeScopeCandidates(subject, period, { effectiveFrom: from || undefined, effectiveTo: to || undefined });
+    if (current()) scopePeople.value = people;
+  } catch (cause) { const message = await payrollError(cause); if (current()) scopeError.value = message; }
+  finally { if (current()) scopeLoading.value = false; }
 }
 function updateEmployeeScope(value: NonNullable<PayrollRuleInput['config']['employeeScope']>) {
   rule.value.config.employeeScope = value;
@@ -156,7 +162,7 @@ async function save() {
     config.attendanceMappings = classification.value;
     if (!isLocalPreview) {
       if (scopeLoading.value || scopeError.value) fields['employeeScope.employeeIds'] = '请先完成发薪人员读取与核对';
-      else for (const [key, message] of Object.entries(employeeScopeErrors(config.employeeScope, scopePeople.value.map(person => person.id)))) fields[`employeeScope.${key}`] = message;
+      else for (const [key, message] of Object.entries(employeeScopeErrors(config.employeeScope, scopePeople.value.filter(person => !person.unavailableReason).map(person => person.id)))) fields[`employeeScope.${key}`] = message;
     }
     if (config.fixedSalaryBasis === 'monthly_workdays') {
       const calendar = config.workCalendars?.[month.value];
@@ -229,7 +235,13 @@ async function submit(type: 'standard' | 'rule', value: unknown) {
       </PayrollScope>
       <el-tabs v-model="tab"><el-tab-pane label="工资标准" name="standards" /><el-tab-pane label="工资规则" name="rules" /></el-tabs>
     </template>
-    <template #feedback><el-alert v-if="error" :title="error" type="error" :closable="false" /></template>
+    <template #feedback>
+      <el-alert v-if="error" :title="error" type="error" :closable="false" />
+      <el-alert v-else-if="!isLocalPreview && subjectId && !loading && !rules.length" title="尚未配置工资规则" type="info" :closable="false">
+        <p>先维护发薪人员、工作日日历及计薪规则，提交经办人的直属主管审核。</p>
+        <el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy || open" @click="tab = 'rules'; edit('rule')">新建工资规则</el-button>
+      </el-alert>
+    </template>
     <template #desktop-list>
       <el-table :data="rows" height="100%" empty-text="尚未配置">
         <el-table-column v-if="tab === 'standards'" label="员工" min-width="140"><template #default="{ row }">{{ employeeName(row.employeeId) }}</template></el-table-column>

@@ -284,25 +284,25 @@ export const routes: RouteRecordRaw[] = [
     path: '/payroll/attendance',
     name: 'PayrollAttendance',
     component: () => import('@/views/compensation/payroll/PayrollAttendanceView.vue'),
-    meta: { requiresAuth: true, title: '考勤打卡', payrollOnly: true, payrollCapabilities: ['attendance_edit', 'attendance_seal'], navigation: { module: 'compensation', label: '考勤打卡', order: 10 } },
+    meta: { requiresAuth: true, title: '考勤与封账', payrollOnly: true, payrollCapabilities: ['attendance_edit', 'attendance_seal'], navigation: { module: 'compensation', label: '考勤与封账', order: 40 } },
   },
   {
     path: '/payroll/standards',
     name: 'PayrollStandards',
     component: () => import('@/views/compensation/payroll/PayrollStandardsView.vue'),
-    meta: { requiresAuth: true, title: '工资标准与规则', payrollOnly: true, payrollCapabilities: ['payroll_edit'], navigation: { module: 'compensation', label: '工资标准与规则', order: 20 } },
+    meta: { requiresAuth: true, title: '工资资料', payrollOnly: true, payrollCapabilities: ['payroll_edit'], navigation: { module: 'compensation', label: '工资资料', order: 10 } },
   },
   {
       path: '/payroll/deductions',
       name: 'PayrollDeductions',
       component: () => import('@/views/compensation/payroll/PayrollDeductionProfilesView.vue'),
-      meta: {requiresAuth:true,title:'扣缴资料',payrollOnly:true,payrollCapabilities:['payroll_edit'],navigation:{module:'compensation',label:'扣缴资料',order:22}},
+      meta: {requiresAuth:true,title:'扣缴资料',payrollOnly:true,payrollCapabilities:['payroll_edit'],navigation:{module:'compensation',label:'扣缴资料',order:20}},
     },
     {
     path: '/payroll/parameter-reviews',
     name: 'PayrollParameterReviews',
     component: () => import('@/views/compensation/payroll/PayrollParameterReviewsView.vue'),
-    meta: { requiresAuth: true, title: '参数审核', payrollOnly: true, payrollCapabilities: ['payroll_edit', 'payroll_parameter_review'], navigation: { module: 'compensation', label: '参数审核', order: 25 } },
+    meta: { requiresAuth: true, title: '资料审核', payrollOnly: true, payrollCapabilities: ['payroll_edit', 'payroll_parameter_review'], navigation: { module: 'compensation', label: '资料审核', order: 30 } },
   },
   {
     path: '/payroll/batches',
@@ -310,7 +310,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/compensation/payroll/PayrollBatchesView.vue'),
     props: { mode: 'batches' },
     children: [{ path: ':id', name: 'PayrollBatchDetail', component: () => import('@/views/compensation/payroll/PayrollBatchDetail.vue'), meta: { requiresAuth: true, title: '工资核算详情', payrollOnly: true, payrollCapabilities: ['payroll_edit', 'payroll_view'], activeNavigationPath: '/payroll/batches' } }],
-    meta: { requiresAuth: true, title: '月度工资核算', payrollOnly: true, payrollCapabilities: ['payroll_edit', 'payroll_view'], navigation: { module: 'compensation', label: '月度工资核算', order: 30 } },
+    meta: { requiresAuth: true, title: '试算与核算', payrollOnly: true, payrollCapabilities: ['payroll_edit', 'payroll_view'], navigation: { module: 'compensation', label: '试算与核算', order: 50 } },
   },
   {
     path: '/payroll/approvals',
@@ -318,7 +318,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/compensation/payroll/PayrollBatchesView.vue'),
     props: { mode: 'approvals' },
     children: [{ path: ':id', name: 'PayrollApprovalDetail', component: () => import('@/views/compensation/payroll/PayrollBatchDetail.vue'), meta: { requiresAuth: true, title: '工资审批详情', payrollOnly: true, payrollCapabilities: ['payroll_review', 'payroll_approve'], activeNavigationPath: '/payroll/approvals' } }],
-    meta: { requiresAuth: true, title: '工资审批', payrollOnly: true, payrollCapabilities: ['payroll_review', 'payroll_approve'], navigation: { module: 'compensation', label: '工资审批', order: 40 } },
+    meta: { requiresAuth: true, title: '复核与审批', payrollOnly: true, payrollCapabilities: ['payroll_review', 'payroll_approve'], navigation: { module: 'compensation', label: '复核与审批', order: 60 } },
   },
   {
     path: '/payroll/results',
@@ -326,7 +326,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/compensation/payroll/PayrollBatchesView.vue'),
     props: { mode: 'results' },
     children: [{ path: ':id', name: 'PayrollResultDetail', component: () => import('@/views/compensation/payroll/PayrollBatchDetail.vue'), meta: { requiresAuth: true, title: '最终结果详情', payrollOnly: true, payrollCapabilities: ['payroll_view', 'payroll_export', 'payroll_settle'], activeNavigationPath: '/payroll/results' } }],
-    meta: { requiresAuth: true, title: '最终结果与补差', payrollOnly: true, payrollCapabilities: ['payroll_view', 'payroll_export', 'payroll_settle'], navigation: { module: 'compensation', label: '最终结果与补差', order: 50 } },
+    meta: { requiresAuth: true, title: '结果与补差', payrollOnly: true, payrollCapabilities: ['payroll_view', 'payroll_export', 'payroll_settle'], navigation: { module: 'compensation', label: '结果与补差', order: 70 } },
   },
   {
     path: '/compensation',

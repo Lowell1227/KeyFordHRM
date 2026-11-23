@@ -7,6 +7,7 @@ import { PayrollBatchesService } from './payroll-batches.service';
 import { PayrollExportService } from './payroll-export.service';
 import { PayrollParameterReleasesService } from './payroll-parameter-releases.service';
 import { PayrollExceptionFilter } from './payroll-exception.filter';
+import { PayrollEmployeeScopeQueryDto } from './dto/payroll.dto';
 import { PayrollResponseInterceptor } from './payroll-response.interceptor';
 import { PayrollAdjustmentDto, PayrollAttendanceReviewDto, PayrollAttendanceSyncDto, PayrollBatchQueryDto, PayrollCreateDto, PayrollDecisionDto, PayrollExportDto,
   PayrollDeductionProfileDto, PayrollDeductionsPreviewDto, PayrollFixtureDto, PayrollMonthDto, PayrollNoteDto, PayrollOpeningDto, PayrollRemainderDto, PayrollRuleDto,
@@ -26,7 +27,7 @@ export class PayrollController {
   @Get('employees') @Header('Cache-Control', 'no-store, private')
   employees(@Query() query: PayrollMonthDto, @CurrentUser() actor: AuthUser) { return this.data.employees(query.subjectId, query.month, actor); }
   @Get('employee-scope-candidates') @Header('Cache-Control', 'no-store, private')
-  employeeScopeCandidates(@Query() query: PayrollMonthDto, @CurrentUser() actor: AuthUser) { return this.data.employeeScopeCandidates(query.subjectId, query.month, actor); }
+  employeeScopeCandidates(@Query() query: PayrollEmployeeScopeQueryDto, @CurrentUser() actor: AuthUser) { return this.data.employeeScopeCandidates(query.subjectId, query.month, actor, query); }
   @Get('operators') @Header('Cache-Control', 'no-store, private')
   operators(@Query() query: PayrollSubjectDto, @CurrentUser() actor: AuthUser) { return this.data.operators(query.subjectId, actor); }
   @Get('performance-cycles') @Header('Cache-Control', 'no-store, private')

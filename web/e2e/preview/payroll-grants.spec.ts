@@ -58,7 +58,7 @@ test('administrator maintains grants and audit; revocation removes salary access
     await expect(employee.locator('.subject-select')).not.toContainText(fixture.subjectName);
     if (/\/payroll\//.test(employee.url())) {
       await employee.locator('.subject-select').click();
-      await expect(employee.getByRole('combobox', { name: '用工主体', exact: true })).toHaveAttribute('aria-expanded', 'true');
+      await expect(employee.getByRole('combobox', { name: '发薪公司', exact: true })).toHaveAttribute('aria-expanded', 'true');
       await expect(employee.getByRole('option', { name: fixture.subjectName, exact: true })).toHaveCount(0);
       await employee.keyboard.press('Escape');
     }

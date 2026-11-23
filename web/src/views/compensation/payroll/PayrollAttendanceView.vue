@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessageBox } from 'element-plus';
+import { useRouter } from 'vue-router';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
@@ -12,9 +13,12 @@ import PayrollScope from './PayrollScope.vue';
 import { usePayrollScope } from './usePayrollScope';
 import PayrollAttendanceSyncPanel from './PayrollAttendanceSyncPanel.vue';
 
-const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['attendance_edit', 'attendance_seal']);
+const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['attendance_edit', 'attendance_seal'], { persistQuery: true });
+const router = useRouter();
 const snapshots = ref<PayrollAttendance[]>([]);
 const employees = ref<PayrollEmployee[]>([]);
+const scopePending = computed(() => !isLocalPreview && !!subjectId.value && !loading.value && !error.value && !employees.value.length);
+function maintainRule() { void router.push({ path: '/payroll/standards', query: { subjectId: subjectId.value, month: month.value, tab: 'rules' } }); }
 const tab = ref('summary');
 const selectedId = ref('');
 const current = computed(() => snapshots.value.find(row => row.id === selectedId.value) ?? snapshots.value[0]);
@@ -153,7 +157,7 @@ async function seal() {
     <template #filters>
       <PayrollScope v-model:subject="subjectId" v-model:month="month" :subjects="subjects" :disabled="busy" @refresh="refresh">
         <el-button v-if="has('attendance_edit') && isLocalPreview" :disabled="loading" @click="sourceOpen = true; sourceError = ''; sourceComplete = false; partial = false">接收考勤</el-button>
-        <el-button v-if="has('attendance_edit') && !isLocalPreview" :loading="syncBusy" :disabled="loading || busy || syncJobs.some(job => ['queued', 'processing'].includes(job.status))" @click="syncDingtalk()">同步钉钉</el-button>
+        <el-button v-if="has('attendance_edit') && !isLocalPreview" :loading="syncBusy" :disabled="loading || busy || !!error || !employees.length || syncJobs.some(job => ['queued', 'processing'].includes(job.status))" @click="syncDingtalk()">同步钉钉考勤</el-button>
         <el-button v-if="!isLocalPreview && (syncJobs.length || syncError)" :disabled="busy" @click="syncOpen = true; loadJobs()">同步记录</el-button>
         <el-button v-if="has('attendance_seal') && current && current.status !== 'sealed'" type="primary" :loading="busy" @click="seal">封账当前版本</el-button>
       </PayrollScope>
@@ -164,7 +168,15 @@ async function seal() {
         <span v-if="current">{{ current.payload.days.length }} 人日 · {{ current.payload.issues.length }} 项异常</span>
       </div>
     </template>
-    <template #feedback><el-alert v-if="error" :title="error" type="error" :closable="false" /><el-alert v-if="feedback" :title="feedback" type="success" :closable="false" /></template>
+    <template #feedback>
+      <el-alert v-if="error" :title="error" type="error" :closable="false" />
+      <el-alert v-else-if="scopePending" title="本月暂无已审核的发薪人员" type="info" :closable="false">
+        <p>请在工资资料中核对人员范围、生效日期和任职记录，提交经办人的直属主管审核后再同步考勤。</p>
+        <el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy" @click="maintainRule">维护工资规则</el-button>
+      </el-alert>
+      <el-alert v-else-if="!isLocalPreview && subjectId && !loading && !snapshots.length" title="本月尚未同步考勤" type="info" :closable="false" />
+      <el-alert v-if="feedback" :title="feedback" type="success" :closable="false" />
+    </template>
     <template #desktop-list>
       <el-table v-if="tab === 'history'" :data="snapshots" height="100%"><el-table-column prop="month" label="考勤月" /><el-table-column prop="version" label="版本" /><el-table-column label="状态"><template #default="{ row }">{{ row.status === 'sealed' ? '已封账' : '待核对' }}</template></el-table-column><el-table-column prop="sealedAt" label="封账时间" min-width="180" /></el-table>
       <el-table v-else :data="days" height="100%" empty-text="暂无考勤记录"><el-table-column label="员工" min-width="140"><template #default="{ row }">{{ employeeName(row.employeeId) }}</template></el-table-column><el-table-column prop="workDate" label="工作日" width="120" /><el-table-column label="计薪单位" min-width="120"><template #default="{ row }">{{ row.units ?? '待核对' }}</template></el-table-column><el-table-column label="异常" min-width="240"><template #default="{ row }">{{ issueText(row as AttendanceDay) || '无' }}</template></el-table-column><el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDay(row)">日明细</el-button></template></el-table-column></el-table>

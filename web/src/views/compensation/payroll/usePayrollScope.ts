@@ -1,13 +1,14 @@
 import { computed, onScopeDispose, ref, toValue, watch, type MaybeRefOrGetter } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { payrollError } from '@/api/payroll.api';
 import { useAuthStore } from '@/stores/auth.store';
 import type { PayrollAccess, PayrollCapability } from '@/types/payroll.types';
 import { payrollBusinessMonth, subjectCapabilities } from './payroll-state';
 
-export function usePayrollScope(required: MaybeRefOrGetter<PayrollCapability[]>, options: { syncQuery?: boolean } = {}) {
+export function usePayrollScope(required: MaybeRefOrGetter<PayrollCapability[]>, options: { syncQuery?: boolean; persistQuery?: boolean } = {}) {
   const auth = useAuthStore();
   const route = useRoute();
+  const router = options.persistQuery ? useRouter() : undefined;
   const access = ref<PayrollAccess>();
   const subjectId = ref(typeof route.query.subjectId === 'string' ? route.query.subjectId : '');
   const month = ref(typeof route.query.month === 'string' && /^\d{4}-\d{2}$/.test(route.query.month) ? route.query.month : payrollBusinessMonth());
@@ -21,6 +22,11 @@ export function usePayrollScope(required: MaybeRefOrGetter<PayrollCapability[]>,
   const subjects = computed(() => access.value?.enabled ? access.value.subjects.filter(subject => toValue(required).some(cap => subject.capabilities.includes(cap))) : []);
   const capabilities = computed(() => subjectCapabilities(access.value, subjectId.value));
   const has = (capability: PayrollCapability) => capabilities.value.includes(capability);
+  watch([subjectId, month], ([subject, period]) => {
+    if (!router || !route.path.startsWith('/payroll/') || !subjects.value.some(row => row.id === subject)
+      || !/^[2-9]\d{3}-(0[1-9]|1[0-2])$/.test(period) || route.query.subjectId === subject && route.query.month === period) return;
+    void router.replace({ path: route.path, query: { ...route.query, subjectId: subject, month: period } });
+  });
   watch([() => route.query.subjectId, () => route.query.month], ([subject, period]) => {
     if (!options.syncQuery) return;
     if (typeof subject === 'string') {

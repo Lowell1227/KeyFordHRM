@@ -14,6 +14,10 @@ type Reader = Prisma.TransactionClient | PrismaService;
 type Policy = Prisma.PayrollPolicyGetPayload<{}>;
 type Link = { ruleId: string | null; previousParameterId: string | null; parameterVersion: number; snapshotHash: string };
 
+export class PayrollEmploymentOverlapException extends ConflictException {
+  constructor() { super('存在重叠任职，请先核对员工档案'); }
+}
+
 export function normalizePayrollEmployeeScope(value: unknown): PayrollEmployeeScope {
   const scope = value as PayrollEmployeeScope | null;
   if (!scope || typeof scope !== 'object' || Array.isArray(scope) || Object.keys(scope).some(key => !['employeeIds', 'evidenceRef'].includes(key))
@@ -75,11 +79,12 @@ export async function readPayrollScopeEmployments(tx: Reader, month: string, emp
     select: employmentSelect, orderBy: [{ userId: 'asc' }, { effectiveFrom: 'asc' }, { id: 'asc' }] });
 }
 
-export function payrollScopeEmploymentDays(records: Awaited<ReturnType<typeof readPayrollScopeEmployments>>, month: string) {
+export function payrollScopeEmploymentDays(records: Awaited<ReturnType<typeof readPayrollScopeEmployments>>, month: string, interval?: { from: Date; to: Date | null }) {
   const { start, end } = payrollMonth(month), result: Array<{ employeeId: string; workDate: string; employment: typeof records[number] }> = [];
-  for (const id of [...new Set(records.map(row => row.userId))].sort()) for (let day = +start; day <= +end; day += 86400000) {
+  const from = Math.max(+start, interval ? +interval.from : +start), to = Math.min(+end, interval?.to ? +interval.to : +end);
+  for (const id of [...new Set(records.map(row => row.userId))].sort()) for (let day = from; day <= to; day += 86400000) {
     const selected = selectEmploymentAt(records.filter(row => row.userId === id), new Date(day));
-    if (selected.matches.length > 1) throw new ConflictException('存在重叠任职，请先核对员工档案');
+    if (selected.matches.length > 1) throw new PayrollEmploymentOverlapException();
     const row = selected.current;
     if (row && ['active', 'probation', 'resigned'].includes(row.employeeStatus)
       && (!row.entryDate || +row.entryDate <= day) && (!row.leaveDate || +row.leaveDate >= day)) {
@@ -87,6 +92,18 @@ export function payrollScopeEmploymentDays(records: Awaited<ReturnType<typeof re
     }
   }
   return result;
+}
+
+export async function assertFormalPayrollRuleEmployments(tx: Reader, rule: Policy): Promise<void> {
+  const config = rule.config as unknown as PayrollPolicyWithScope;
+  const scope = normalizePayrollEmployeeScope(config.employeeScope), eligible = new Set<string>();
+  for (const month of Object.keys(config.workCalendars ?? {})) {
+    const { start, end } = payrollMonth(month);
+    if (end < rule.effectiveFrom || rule.effectiveTo && start > rule.effectiveTo) continue;
+    const records = await readPayrollScopeEmployments(tx, month, scope.employeeIds);
+    for (const row of payrollScopeEmploymentDays(records, month, { from: rule.effectiveFrom, to: rule.effectiveTo })) eligible.add(row.employeeId);
+  }
+  if (scope.employeeIds.some(id => !eligible.has(id))) throw new ConflictException('已选发薪人员在规则日历有效期内没有有效任职，请核对人员和日期');
 }
 
 export async function readFormalPayrollEmployments(tx: Reader, subjectId: string, month: string) {

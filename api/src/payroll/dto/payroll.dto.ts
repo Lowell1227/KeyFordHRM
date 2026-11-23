@@ -8,6 +8,10 @@ export class PayrollBatchQueryDto extends PayrollSubjectDto {
   @IsOptional() @Matches(/^[2-9]\d{3}-(0[1-9]|1[0-2])$/) month?: string;
 }
 export class PayrollMonthDto extends PayrollSubjectDto { @Matches(/^\d{4}-(0[1-9]|1[0-2])$/) month!: string; }
+export class PayrollEmployeeScopeQueryDto extends PayrollMonthDto {
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) effectiveFrom?: string;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) effectiveTo?: string;
+}
 export class PayrollFixtureDto extends PayrollMonthDto { @IsOptional() @BooleanQuery() @IsBoolean() corrected = false; }
 export class PayrollVersionDto { @IsInt() @Min(0) expectedVersion!: number; }
 export class PayrollCalculateDto extends PayrollVersionDto {

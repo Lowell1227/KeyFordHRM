@@ -60,7 +60,9 @@ function formalRuleSetup() {
   s.rows.push(row); s.access.assertDomain.mockResolvedValue('formal');
   s.model.findFirst.mockImplementation(async ({ where }: any) => s.rows.find(row => row.status === 'active' && row.subjectId === where.subjectId && row.domain === where.domain) ?? null);
   Object.assign(s.model, { findMany: jest.fn(async ({ where }: any) => s.rows.filter(row => row.status === 'active' && row.domain === where.domain && (!where.subjectId || row.subjectId === where.subjectId))) });
-  return { ...s, row, person, submitRule: () => s.service.submit('rule', row.id, 1, hr) };
+  const employments: any[] = [{ id: 'employment', userId: person, effectiveFrom: date('2036-11-01'), effectiveTo: null, entryDate: date('2036-11-01'), leaveDate: null, employeeStatus: 'active', user: { id: person, name: 'Fictional', employeeNo: 'FICT' } }];
+  s.tx.employmentRecord = { findMany: jest.fn(async () => employments) };
+  return { ...s, row, person, employments, submitRule: () => s.service.submit('rule', row.id, 1, hr) };
 }
 
 describe('payroll parameters require the submitting HR direct manager', () => {
@@ -82,6 +84,27 @@ describe('payroll parameters require the submitting HR direct manager', () => {
   it('requires an explicit formal payer scope at submission rather than approving a contract-derived default', async () => {
     const s = formalRuleSetup(); delete s.row.config.employeeScope;
     await expect(s.submitRule()).rejects.toThrow(ConflictException); expect(s.requests).toHaveLength(0);
+  });
+  it('does not submit a selected conflicting employment even when the caller bypasses the disabled candidate', async () => {
+    const s = formalRuleSetup(); s.employments.push({ ...s.employments[0], id: 'overlap' });
+    await expect(s.submitRule()).rejects.toThrow(ConflictException);
+    expect(s.requests).toHaveLength(0); expect(s.events).toHaveLength(0); expect(s.row.status).toBe('draft');
+  });
+  it('rechecks selected employment conflicts at approval without publishing or silently dropping the person', async () => {
+    const s = formalRuleSetup(), request = await s.submitRule(); s.employments.push({ ...s.employments[0], id: 'overlap' });
+    await expect(s.decide(request.id)).rejects.toThrow(ConflictException);
+    expect(s.row.status).toBe('pending'); expect(s.requests[0].status).toBe('pending');
+    expect(s.events.some(row => row.action === 'parameter_published')).toBe(false);
+  });
+  it('rejects selected people without an employment in the effective calendar rather than publishing an empty payer scope', async () => {
+    const s = formalRuleSetup(); s.employments[0].effectiveFrom = date('2037-01-01');
+    await expect(s.submitRule()).rejects.toThrow(ConflictException); expect(s.requests).toHaveLength(0);
+  });
+  it('checks the rule effective interval without letting an earlier overlap block a later valid assignment', async () => {
+    const s = formalRuleSetup(); s.row.effectiveFrom = date('2036-11-15');
+    s.employments.push({ ...s.employments[0], id: 'earlier-overlap', effectiveTo: date('2036-11-14') });
+    const request = await s.submitRule();
+    expect((await s.decide(request.id)).status).toBe('approved');
   });
   it('rejects a cross-subject employee overlap at publication under a shared lock and Serializable transaction', async () => {
     const s = formalRuleSetup(), request = await s.submitRule();

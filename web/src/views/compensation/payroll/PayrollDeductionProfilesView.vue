@@ -13,7 +13,7 @@ import { emptyDeductionSettings, deductionFormErrors } from './payroll-deduction
 import { payrollApi, payrollError } from '@/api/payroll.api';
 import type { PayrollDeductionProfile, PayrollDeductionProfileInput, PayrollEmployee } from '@/types/payroll.types';
 
-const {subjects,subjectId,month,error,loading,refreshAccess} = usePayrollScope(['payroll_edit']);
+const {subjects,subjectId,month,error,loading,refreshAccess} = usePayrollScope(['payroll_edit'], { persistQuery: true });
 const router = useRouter(), rows = ref<PayrollDeductionProfile[]>([]), employees = ref<PayrollEmployee[]>([]);
 const open = ref(false), readonly = ref(false), busy = ref(false), formError = ref(''), fields = ref<Record<string,string>>({});
 const blank = (): PayrollDeductionProfileInput => ({subjectId:subjectId.value,employeeId:'',payDate:'',settings:emptyDeductionSettings()});

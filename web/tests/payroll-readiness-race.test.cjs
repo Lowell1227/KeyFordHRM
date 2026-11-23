@@ -162,6 +162,19 @@ test('default scope does not follow query changes or move an open maintenance dr
   assert.equal(writes[0].body.effectiveFrom, '2037-01-01');
 });
 
+test('a failed candidate read from a closed draft cannot clear the next company spinner or poison its options', async t => {
+  const f = fixture(t, 'standards'), old = deferred(), latest = deferred(); await flush();
+  f.api.employeeScopeCandidates = subjectId => subjectId === A ? old.promise : latest.promise;
+  f.parent.edit('rule'); const first = f.parent.loadScopePeople();
+  await f.parent.closeForm(false); f.parent.subjectId.value = B; f.parent.edit('rule');
+  const second = f.parent.loadScopePeople();
+  old.reject(new Error('Old candidate failure')); await first;
+  assert.equal(f.parent.scopeLoading.value, true); assert.equal(f.parent.scopeError.value, '');
+  latest.resolve([{ id: 'current', name: 'Fictional current person', employeeNo: 'F002' }]); await second;
+  assert.deepEqual(f.parent.scopePeople.value.map(row => row.id), ['current']);
+  assert.equal(f.parent.scopeLoading.value, false); assert.equal(f.parent.scopeError.value, '');
+});
+
 test('reopening a signoff starts a new discard confirmation even when the opinion text is identical', async t => {
   const f = fixture(t, true); await flush();
   const opinion = 'Repeated fictional return evidence';

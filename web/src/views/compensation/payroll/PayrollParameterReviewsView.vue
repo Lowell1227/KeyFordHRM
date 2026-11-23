@@ -15,7 +15,7 @@ import { attendanceTypeLabels } from './payroll-attendance-mappings';
 
 const auth = useAuthStore();
 const route = useRoute(), router = useRouter();
-const { subjects, subjectId, month, error, loading, refreshAccess } = usePayrollScope(['payroll_edit', 'payroll_parameter_review']);
+const { subjects, subjectId, month, error, loading, refreshAccess } = usePayrollScope(['payroll_edit', 'payroll_parameter_review'], { persistQuery: true });
 const entries = ref<PayrollParameterRelease[]>([]), selected = ref<PayrollParameterRelease>();
 const mode = ref('pending'), note = ref(''), fieldError = ref(''), actionError = ref(''), busy = ref(false);
 const labels = { pending: '待主管审核', approved: '已发布', returned: '已退回', withdrawn: '已撤回' };
@@ -77,7 +77,10 @@ const time = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN',
         <el-segmented v-model="mode" :options="[{label:'待处理',value:'pending'},{label:'近期记录',value:'all'}]" />
       </PayrollScope>
     </template>
-    <template #feedback><el-alert v-if="error" :title="error" type="error" :closable="false" /></template>
+    <template #feedback>
+      <el-alert v-if="error" :title="error" type="error" :closable="false" />
+      <el-alert v-else-if="subjectId && !loading && !entries.length" title="暂无工资资料审核申请" type="info" :closable="false" description="工资标准、规则和扣缴资料提交后，由经办人的直属主管审核；工资批次另走指定复核、审批。" />
+    </template>
     <template #desktop-list>
       <el-table :data="rows" height="100%" empty-text="暂无参数审核记录">
         <el-table-column label="参数版本" min-width="180"><template #default="{row}">{{ title(row) }}</template></el-table-column>

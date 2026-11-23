@@ -198,6 +198,32 @@ describe('PayrollDataService focused regressions', () => {
     expect(s.state.employments[0].contractSubjectId).toBe(other);
     expect(JSON.stringify(s.state.employments.slice(1))).toBe(JSON.stringify(JSON.parse(before).slice(1)));
   });
+  it('isolates an overlapping candidate without hiding the conflict or blocking unrelated candidates', async () => {
+    const s = setup(), hr = { ...actor, sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] } as AuthUser;
+    s.state.employments.push(employment('employee-a', { id: 'overlapping-employment', contractSubjectId: other }));
+    const before = clone(s.state);
+    const result = await s.service.employeeScopeCandidates(subject, month, hr);
+    expect(result).toHaveLength(2);
+    expect(result.find(row => row.id === 'employee-a')).toMatchObject({ unavailableReason: '任职记录冲突，请先核对员工档案' });
+    expect(result.find(row => row.id === 'employee-b')).toEqual({ id: 'employee-b', name: 'employee-b', employeeNo: 'employee-b' });
+    expect(s.state).toEqual(before); expect(JSON.stringify(result)).not.toContain('privateWage');
+  });
+  it('does not turn an unexpected candidate database failure into an empty or partial success', async () => {
+    const s = setup(), hr = { ...actor, sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] } as AuthUser;
+    s.tx.employmentRecord.findMany.mockRejectedValueOnce(new Error('Fictional query failure'));
+    await expect(s.service.employeeScopeCandidates(subject, month, hr)).rejects.toThrow('Fictional query failure');
+  });
+  it('narrows candidate conflicts to the explicit rule dates without widening the requested month', async () => {
+    const s = setup(), hr = { ...actor, sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] } as AuthUser;
+    s.state.employments[0].effectiveFrom = date('2026-11-01');
+    s.state.employments.push(employment('employee-a', { id: 'earlier-overlap', effectiveFrom: date('2026-11-01'), effectiveTo: date('2026-11-14') }));
+    const candidates = s.service.employeeScopeCandidates.bind(s.service) as (...args: any[]) => Promise<any[]>;
+    const result = await candidates(subject, month, hr, { effectiveFrom: '2026-11-15' });
+    expect(result.find(row => row.id === 'employee-a')).not.toHaveProperty('unavailableReason');
+    await expect(candidates(subject, month, hr, { effectiveFrom: '2026-11-15', effectiveTo: '2026-11-14' })).rejects.toThrow(BadRequestException);
+    await expect(candidates(subject, month, hr, { effectiveFrom: '2026-02-31' })).rejects.toThrow(BadRequestException);
+    expect(await candidates(subject, month, hr, { effectiveFrom: '2026-12-01' })).toEqual([]);
+  });
   it('quarantines a cross-month source move without rewriting the sealed original month', async () => {
     const { service, state } = setup(), november = attendance();
     const overnight = { sourceId: 'cross-month-night', sourceVersion: 1, employeeId: 'employee-a',

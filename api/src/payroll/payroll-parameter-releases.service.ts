@@ -10,7 +10,7 @@ import { normalizePayrollPolicy } from './payroll-policy';
 import { payrollParameterEligibleUser, payrollParameterReviewerWhere } from './payroll-parameter-access';
 import { payrollParameterDefinition, PayrollParameter, PayrollParameterKind } from './payroll-parameter-definition';
 import { normalizeDeductionSettings } from './payroll-deduction-settings';
-import { assertFormalPayrollScopeAvailable, lockFormalPayrollScope } from './payroll-employment-scope';
+import { assertFormalPayrollRuleEmployments, assertFormalPayrollScopeAvailable, lockFormalPayrollScope } from './payroll-employment-scope';
 
 type Kind = PayrollParameterKind;
 type Parameter = PayrollParameter;
@@ -95,6 +95,7 @@ export class PayrollParameterReleasesService {
       if (row.createdById !== actor.id) throw new ForbiddenException('请复制为自己的草稿后提交主管审核');
       if (!['draft', 'returned'].includes(row.status)) throw new ConflictException('只有草稿或已退回版本可以提交审核');
       this.validate(kind, row);
+      if (kind === 'rule' && row.domain === 'formal') await assertFormalPayrollRuleEmployments(tx, row as Prisma.PayrollPolicyGetPayload<{}>);
       const reviewerId = await this.manager(tx, actor.id), head = await this.head(tx, kind, row);
       if (head && (row.version <= head.version || row.effectiveFrom < head.effectiveFrom)) throw new ConflictException('已有更新或更晚生效的发布版本，请核对生效日期并复制新草稿');
       const where = kind === 'standard' ? { standardId: id } : kind === 'rule' ? { ruleId: id } : { deductionId: id };
@@ -160,6 +161,7 @@ export class PayrollParameterReleasesService {
         || payrollHash(payrollParameterDefinition(kind, row)) !== release.snapshotHash) throw new ConflictException('待审参数已变化，请撤回后重新提交');
       if (input.decision === 'approve') {
         this.validate(kind, row);
+        if (kind === 'rule' && row.domain === 'formal') await assertFormalPayrollRuleEmployments(tx, row as Prisma.PayrollPolicyGetPayload<{}>);
         const head = await this.head(tx, kind, row);
         if ((head?.id ?? null) !== release.previousParameterId
           || (head ? payrollHash(payrollParameterDefinition(kind, head)) : null) !== release.previousHash) {

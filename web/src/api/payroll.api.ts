@@ -2,7 +2,7 @@ import http from './http';
 import type { PayrollReadinessDetail, PayrollReadinessInput, PayrollReadinessRequest } from '@/types/payroll-readiness.types';
 import type { PayrollParameterRelease, PayrollDeductionProfile, PayrollDeductionProfileInput, PayrollNetPaymentInput, PayrollCancelNetRemainderInput, PayrollAttendanceSyncJob } from '@/types/payroll.types';
 import type { AxiosResponse } from 'axios';
-import type { PayrollAccess, PayrollEmployee, PayrollOperator, PayrollCycle, PayrollAttendance, PayrollSourceInput, PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollBatch, PayrollBatchInput, PayrollAdjustment, PayrollAdjustmentInput, PayrollOpening, PayrollOpeningInput, PayrollDeductionsPreviewInput, PayrollDeductionsPreviewResult } from '@/types/payroll.types';
+import type { PayrollAccess, PayrollEmployee, PayrollScopeCandidate, PayrollOperator, PayrollCycle, PayrollAttendance, PayrollSourceInput, PayrollStandard, PayrollStandardInput, PayrollRule, PayrollRuleInput, PayrollBatch, PayrollBatchInput, PayrollAdjustment, PayrollAdjustmentInput, PayrollOpening, PayrollOpeningInput, PayrollDeductionsPreviewInput, PayrollDeductionsPreviewResult } from '@/types/payroll.types';
 
 const root = '/payroll';
 const localErrors = { skipErrorMessage: true };
@@ -26,7 +26,7 @@ export const payrollApi = {
   decideParameter: (id: string, expectedVersion: number, decision: 'approve' | 'return', note: string) => post<PayrollParameterRelease>(`/parameter-releases/${encodeURIComponent(id)}/decide`, { expectedVersion, decision, note }),
   withdrawParameter: (id: string, expectedVersion: number, note: string) => post<PayrollParameterRelease>(`/parameter-releases/${encodeURIComponent(id)}/withdraw`, { expectedVersion, note }),
   employees: (subjectId: string, month: string) => get<PayrollEmployee[]>('/employees', { subjectId, month }),
-  employeeScopeCandidates: (subjectId: string, month: string) => get<PayrollEmployee[]>('/employee-scope-candidates', { subjectId, month }),
+  employeeScopeCandidates: (subjectId: string, month: string, interval: { effectiveFrom?: string; effectiveTo?: string } = {}) => get<PayrollScopeCandidate[]>('/employee-scope-candidates', { subjectId, month, ...interval }),
   operators: (subjectId: string) => get<PayrollOperator[]>('/operators', { subjectId }),
   cycles: (subjectId: string) => get<PayrollCycle[]>('/performance-cycles', { subjectId }),
   attendance: (subjectId: string, month: string) => get<PayrollAttendance[]>('/attendance', { subjectId, month }),

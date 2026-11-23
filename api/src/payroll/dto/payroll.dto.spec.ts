@@ -8,6 +8,14 @@ import * as payrollDto from './payroll.dto';
 describe('payroll HTTP validation', () => {
   const subjectId = '00000000-0000-4000-8000-000000000001';
   const batchQuery = Reflect.getMetadata('design:paramtypes', PayrollController.prototype, 'list')[0];
+  const candidateQuery = Reflect.getMetadata('design:paramtypes', PayrollController.prototype, 'employeeScopeCandidates')[0];
+  it('uses dedicated optional true-calendar bounds for employee candidates without accepting scope overrides', async () => {
+    const base = { subjectId, month: '2026-10' }, options = { whitelist: true, forbidNonWhitelisted: true };
+    expect(await validate(plainToInstance(candidateQuery, { ...base, effectiveFrom: '2026-10-15', effectiveTo: '2026-10-31' }) as object, options)).toEqual([]);
+    for (const patch of [{ effectiveFrom: '2026-02-31' }, { effectiveTo: '2026-2-01' }, { effectiveFrom: ['2026-10-15'] }, { employeeIds: [subjectId] }]) {
+      expect((await validate(plainToInstance(candidateQuery, { ...base, ...patch }) as object, options)).length).toBeGreaterThan(0);
+    }
+  });
   it('accepts a separate real reconciliation purpose, never an override on a formal batch', async () => {
     const input = { subjectId, month: '2026-10', payMonth: '2026-11', purpose: 'reconciliation' };
     const options = { whitelist: true, forbidNonWhitelisted: true };

@@ -10,7 +10,7 @@ import { normalizeAttendance, PayrollAttendanceInput, PayrollAttendanceResult } 
 import { normalizePayrollPolicy } from './payroll-policy';
 import { normalizeDeductionSettings } from './payroll-deduction-settings';
 import { hasHrCapability } from '@/auth/hr-capabilities';
-import { PayrollPolicyWithScope, payrollScopeEmploymentDays, readFormalPayrollEmployments, readPayrollScopeEmployments, readReviewedPayrollScopePolicies } from './payroll-employment-scope';
+import { PayrollEmploymentOverlapException, PayrollPolicyWithScope, payrollScopeEmploymentDays, readFormalPayrollEmployments, readPayrollScopeEmployments, readReviewedPayrollScopePolicies } from './payroll-employment-scope';
 
 export interface PayrollAttendanceScope { employeeIds: string[]; from: string; to: string }
 export interface PayrollAttendanceSync {
@@ -183,13 +183,28 @@ export class PayrollDataService {
     return [...new Map(employmentDays(records, subjectId, month).map(({ employeeId, employment: row }) => [employeeId,
       { id: row.user.id, name: row.user.name, employeeNo: row.employeeNo ?? row.user.employeeNo }])).values()];
   }
-  async employeeScopeCandidates(subjectId: string, month: string, actor: AuthUser) {
+  async employeeScopeCandidates(subjectId: string, month: string, actor: AuthUser, interval: { effectiveFrom?: string; effectiveTo?: string } = {}) {
     await this.access.assert(this.prisma, actor, subjectId, 'payroll_edit');
     if (!hasHrCapability(actor, 'employee_archive_edit')) throw new ForbiddenException('配置发薪人员范围还需员工档案维护权限');
     await this.domain(this.prisma);
+    const { start, end } = payrollMonth(month);
+    const from = interval.effectiveFrom ? payrollDate(interval.effectiveFrom) : start, to = interval.effectiveTo ? payrollDate(interval.effectiveTo) : end;
+    if (interval.effectiveFrom && interval.effectiveTo && to < from) throw new BadRequestException('生效结束日期不能早于开始日期');
     const records = await readPayrollScopeEmployments(this.prisma, month);
-    return [...new Map(payrollScopeEmploymentDays(records, month).map(({ employeeId, employment }) => [employeeId,
-      { id: employeeId, name: employment.user.name, employeeNo: employment.employeeNo ?? employment.user.employeeNo }])).values()];
+    const groups = new Map<string, typeof records>();
+    for (const row of records) groups.set(row.userId, [...(groups.get(row.userId) ?? []), row]);
+    const candidates: Array<{ id: string; name: string; employeeNo: string | null; unavailableReason?: string }> = [];
+    for (const [id, employments] of groups) {
+      try {
+        const employment = payrollScopeEmploymentDays(employments, month, { from, to })[0]?.employment;
+        if (employment) candidates.push({ id, name: employment.user.name, employeeNo: employment.employeeNo ?? employment.user.employeeNo });
+      } catch (error) {
+        if (!(error instanceof PayrollEmploymentOverlapException)) throw error;
+        const user = employments[0].user;
+        candidates.push({ id, name: user.name, employeeNo: user.employeeNo, unavailableReason: '任职记录冲突，请先核对员工档案' });
+      }
+    }
+    return candidates;
   }
   private async employeeForWrite(tx: Prisma.TransactionClient, subjectId: string, employeeId: string, domain: PayrollDomain) {
     if (domain === 'formal') {

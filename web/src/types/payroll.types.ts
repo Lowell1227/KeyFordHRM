@@ -2,6 +2,7 @@ export type PayrollCapability = 'attendance_edit' | 'attendance_seal' | 'payroll
 export interface PayrollSubject { id: string; name: string; capabilities: string[] }
 export interface PayrollAccess { enabled: boolean; subjects: PayrollSubject[] }
 export interface PayrollEmployee { id: string; name: string; employeeNo: string }
+export interface PayrollScopeCandidate extends PayrollEmployee { unavailableReason?: string }
 export interface PayrollOperator { id: string; name: string; capabilities: string[] }
 export interface PayrollCycle { id: string; name: string; type?: string; startDate?: string; endDate?: string }
 export interface AttendanceIssue { employeeId?: string; workDate?: string; code: string; message: string }

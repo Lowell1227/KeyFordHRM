@@ -19,6 +19,14 @@ export type NavigationUser = {
   payrollAccess?: PayrollAccess;
 };
 
+export function navigationTarget(path: string, current: { path: string; query: Record<string, unknown> }): string | { path: string; query: Record<string, string> } {
+  if (!path.startsWith('/payroll/') || !current.path.startsWith('/payroll/')) return path;
+  const query: Record<string, string> = {};
+  if (typeof current.query.subjectId === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(current.query.subjectId)) query.subjectId = current.query.subjectId;
+  if (typeof current.query.month === 'string' && /^[2-9]\d{3}-(0[1-9]|1[0-2])$/.test(current.query.month)) query.month = current.query.month;
+  return { path, query };
+}
+
 export function canAccessAppealLedger(user: NavigationUser): boolean {
   return user.sysRole === 'hr' || (user.sysRole === 'hr_user'
     && Boolean(user.hrCapabilities?.includes('cycle_plan_edit') && user.hrCapabilities.includes('performance_publish')));
