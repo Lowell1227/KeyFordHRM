@@ -1,5 +1,7 @@
 # 招聘办理体验修复验证
 
+后续用户已确认删除7人测试批次并授权上线，最终结果见[发布与清理记录](2026-11-23-recruitment-usability-release.md)。下述未发布/待确认描述保留为实施时证据。
+
 ## 范围与状态
 
 按用户确认的[实用性评审](2026-11-23-recruitment-usability-review.md)整改。源码基线49ad68ce，任务分支codex/recruitment-usability，产品仍0.9.2。代码实现、提交、生产发布和真人业务验收分别记录；本轮未发布生产代码。
