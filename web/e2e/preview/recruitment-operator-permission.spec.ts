@@ -10,6 +10,7 @@ const origin = 'http://localhost:5173';
 type Actor = { id: string; name: string; token: string };
 type Fixture = { prefix: string; departmentId: string; departmentName: string;
   education: { id: string; name: string; owned: boolean };
+  demand: { id: string; revision: number; instanceId: string; positionId: string };
   actors: Record<'operator' | 'confirmer' | 'personnel' | 'participant', Actor> };
 type Application = { id: string; revision: number; stage: string; ownerId: string; deptId: string | null };
 
@@ -35,12 +36,22 @@ function createFixture(project: string): Fixture {
   return previewNode<Fixture>(`
     if (!require('fs').readFileSync('dist/src/auth/hr-capabilities.js','utf8').includes('recruitment_edit')) throw Error('Refresh preview API before this test');
     const { JwtService } = require('@nestjs/jwt');
+    const { fixtureNamespace, scope } = require('./test/talent-core/recruitment-demand-preview.cjs');
     const result = await db.$transaction(async tx => {
       const department = await tx.department.create({data:{name:'虚构招聘经办_${prefix}'}});
-      const existingEducation = await tx.personnelReferenceData.findFirst({where:{kind:'education',isActive:true},
-        orderBy:{createdAt:'asc'},select:{id:true,name:true}});
-      const education = existingEducation || await tx.personnelReferenceData.create({
+      const education = await tx.personnelReferenceData.create({
         data:{kind:'education',name:'虚构学历_${prefix}'},select:{id:true,name:true}});
+      const position = await tx.position.create({data:{code:'${prefix}',name:'虚构招聘岗位_${prefix}'}});
+      const normalized = {...scope,instanceId:'${prefix}_approved',sourceState:'approved',
+        rawDepartment:department.name,rawPosition:position.name,rawHeadcount:'1',approvedAt:new Date('2026-01-01T01:00:00Z'),
+        sourceCreatedAt:new Date('2026-01-01T00:00:00Z'),sourceUpdatedAt:null,sourceLink:null,
+        mainInstanceId:null,bizAction:null,supersedesInstanceId:null};
+      const fingerprint = require('crypto').createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
+      const {sourceState,...sourceFields} = normalized;
+      await tx.systemConfig.create({data:{key:fixtureNamespace+'${prefix}',value:{fictional:true,prefix:'${prefix}',
+        sources:[JSON.parse(JSON.stringify({...sourceFields,status:sourceState}))]}}});
+      const demand = await tx.recruitmentDemand.create({data:{...normalized,sourceFingerprint:fingerprint,
+        deptId:department.id,positionId:position.id,approvedHeadcount:1,mappedFingerprint:fingerprint,lastSyncedAt:new Date()}});
       const actors = {};
       for (const [kind,sysRole,hrCapabilities] of [
         ['operator','hr_user',['recruitment_edit','recruitment_view']],
@@ -57,7 +68,7 @@ function createFixture(project: string): Fixture {
         actors[kind] = {id:user.id,name:user.name,token};
       }
       return {prefix:'${prefix}',departmentId:department.id,departmentName:department.name,actors,
-        education:{...education,owned:!existingEducation}};
+        education:{...education,owned:true},demand:{id:demand.id,revision:demand.revision,instanceId:demand.instanceId,positionId:position.id}};
     });
     console.log(JSON.stringify(result));`);
 }
@@ -79,8 +90,8 @@ function ownedState(f: Fixture) {
 
 function archiveFixture(f: Fixture) {
   const safe = { prefix: f.prefix, departmentId: f.departmentId, departmentName: f.departmentName,
-    education: f.education, actorIds: Object.values(f.actors).map(actor => actor.id) };
-  return previewNode<{ actors: number; candidates: number; activeActors: number; activeCandidates: number; educationActive: boolean }>(`
+    education: f.education, demand: f.demand, actorIds: Object.values(f.actors).map(actor => actor.id) };
+  return previewNode<{ actors: number; candidates: number; activeActors: number; activeCandidates: number; educationActive: boolean; demandDisabled: boolean; positionActive: boolean }>(`
     const f = ${JSON.stringify(safe)};
     if (!/^ROP_[dm]_[a-f0-9]{8}$/.test(f.prefix)) throw Error('Invalid ownership prefix');
     const actors = await db.user.findMany({where:{id:{in:f.actorIds},employeeNo:{startsWith:f.prefix+'_'}},select:{id:true}});
@@ -88,6 +99,8 @@ function archiveFixture(f: Fixture) {
     const where = {createdById:{in:f.actorIds},name:{startsWith:'虚构'+f.prefix}};
     const candidates = await db.talentCandidate.findMany({where,select:{id:true}}), ids = candidates.map(row=>row.id);
     if (f.education.owned && f.education.name !== '虚构学历_'+f.prefix) throw Error('Education fixture ownership mismatch');
+    const demand = await db.recruitmentDemand.findUniqueOrThrow({where:{id:f.demand.id}});
+    if (demand.instanceId !== f.prefix+'_approved' || demand.organizationKey !== 'fictional-recruitment-demands') throw Error('Demand fixture ownership mismatch');
     await db.$transaction(async tx => {
       await tx.talentShare.updateMany({where:{candidateId:{in:ids}},data:{revokedAt:new Date()}});
       await tx.employeeDataChangeRequest.updateMany({where:{createdById:{in:f.actorIds},talentCandidateId:{in:ids},
@@ -95,12 +108,17 @@ function archiveFixture(f: Fixture) {
       await tx.talentCandidate.updateMany({where,data:{deletedAt:new Date()}});
       await tx.user.updateMany({where:{id:{in:f.actorIds},employeeNo:{startsWith:f.prefix+'_'}},data:{archivedAt:new Date(),deletedAt:new Date()}});
       await tx.department.updateMany({where:{id:f.departmentId,name:f.departmentName},data:{isActive:false}});
+      await tx.position.updateMany({where:{id:f.demand.positionId,code:f.prefix},data:{isActive:false}});
+      await tx.recruitmentDemand.updateMany({where:{id:f.demand.id,instanceId:f.prefix+'_approved'},data:{sourceState:'withdrawn',mappedFingerprint:null}});
+      await tx.systemConfig.deleteMany({where:{key:'recruitment_demand_sidecar_v1:'+f.prefix}});
       if (f.education.owned) await tx.personnelReferenceData.updateMany({where:{id:f.education.id,kind:'education',name:'虚构学历_'+f.prefix},data:{isActive:false}});
     });
     console.log(JSON.stringify({actors:actors.length,candidates:ids.length,
       activeActors:await db.user.count({where:{id:{in:f.actorIds},archivedAt:null}}),
       activeCandidates:await db.talentCandidate.count({where:{...where,deletedAt:null}}),
-      educationActive:(await db.personnelReferenceData.findUniqueOrThrow({where:{id:f.education.id}})).isActive}));`);
+      educationActive:(await db.personnelReferenceData.findUniqueOrThrow({where:{id:f.education.id}})).isActive,
+      demandDisabled:(await db.recruitmentDemand.findUniqueOrThrow({where:{id:f.demand.id}})).sourceState==='withdrawn',
+      positionActive:(await db.position.findUniqueOrThrow({where:{id:f.demand.positionId}})).isActive}));`);
 }
 
 async function as(page: Page, actor: Actor, path: string) {
@@ -158,11 +176,23 @@ async function openTalent(page: Page, name: string, mobile: boolean) {
   await expect(page.locator('.talent-detail-drawer')).toBeVisible();
 }
 
-async function command(page: Page, panel: Locator, applicationId: string, label: string, action: string, note = '') {
+async function command(page: Page, panel: Locator, applicationId: string, label: string, action: string, note = '', demandInstanceId?: string) {
+  const optionsRead = action === 'submit_hiring' ? response(page, 'GET', '/recruitment-demands/options') : null;
   await panel.getByRole('button', { name: label, exact: true }).click();
   const form = panel.locator('.application-panel__command');
   await expect(form).toBeVisible();
   if (note) await form.locator('textarea').fill(note);
+  if (action === 'submit_hiring') {
+    expect(demandInstanceId).toBeTruthy();
+    const options = await json<{ items: Array<{ instanceId: string; usable: boolean }> }>(await optionsRead!, 200);
+    expect(options.items).toEqual(expect.arrayContaining([expect.objectContaining({ instanceId: demandInstanceId, usable: true })]));
+    await expect(form.getByRole('combobox', { name: '招聘需求单', exact: true })).toBeEnabled();
+    await form.locator('.el-select').filter({ has: page.getByRole('combobox', { name: '招聘需求单', exact: true }) })
+      .locator('.el-select__wrapper').click();
+    const option = page.getByRole('option').filter({ hasText: demandInstanceId! });
+    await expect(option).toBeVisible();
+    await option.click();
+  }
   const result = response(page, 'POST', `/talent-recruitment/applications/${applicationId}/actions`, action);
   await form.getByRole('button', { name: label, exact: true }).click();
   if (action === 'submit_hiring') {
@@ -278,7 +308,7 @@ test('independent recruitment operator creates and submits through UI for separa
     expect(invitation.syncStatus).toBe('unconfigured');
     proof.interview = { id: invitation.id, participantId: participant.id, picker: '/talent-interviews/participants', syncStatus: invitation.syncStatus };
     await panel.getByRole('button', { name: '刷新应聘记录', exact: true }).click();
-    application = await command(page, panel, application.id, '提交录用', 'submit_hiring', `虚构${f.prefix}录用意见；测试安排不发送通知。`);
+    application = await command(page, panel, application.id, '提交录用', 'submit_hiring', `虚构${f.prefix}录用意见；测试安排不发送通知。`, f.demand.instanceId);
     expect(application.stage).toBe('hiring_review');
     await expect(panel.locator('.application-panel__stage')).toHaveText('待录用确认');
     await noManagementEntries(page, detail);
@@ -326,12 +356,17 @@ test('independent recruitment operator creates and submits through UI for separa
     proof.final = final;
     expect(errors).toEqual([]);
     expect(prohibitedCalls).toEqual([]);
+    proof.passed = true;
+  } catch (cause) {
+    proof.passed = false;
+    throw cause;
   } finally {
-    proof.assertionFailures = info.errors.length;
+    proof.assertionFailures = proof.passed === true ? 0 : 1;
     proof.pageErrors = errors; proof.prohibitedCalls = prohibitedCalls;
     try {
       proof.cleanup = archiveFixture(f);
-      expect(proof.cleanup).toMatchObject({ actors: 4, activeActors: 0, activeCandidates: 0, educationActive: !f.education.owned });
+      expect(proof.cleanup).toMatchObject({ actors: 4, activeActors: 0, activeCandidates: 0, educationActive: !f.education.owned,
+        demandDisabled: true, positionActive: false });
     } finally {
       await writeFile(info.outputPath('proof.json'), JSON.stringify(proof, null, 2));
       await info.attach('recruitment-operator-proof', { path: info.outputPath('proof.json'), contentType: 'application/json' });

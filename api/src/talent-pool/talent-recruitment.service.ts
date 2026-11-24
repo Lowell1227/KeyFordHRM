@@ -1,10 +1,12 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
+import { RecruitmentDemandsService } from './recruitment-demands.service';
+import type { RecruitmentDemandSubmissionProof } from './recruitment-demands.types';
 import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, TalentApplicationQueueQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
-import { allowedApplicationActions, canConfirmTalentHiring, canEditRecruitment, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, TALENT_RESERVE_REASONS, type RecruitmentActor, type TalentReserveReason } from './talent-recruitment-policy';
+import { allowedApplicationActions, canConfirmTalentHiring, canEditRecruitment, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasActiveTalentAcceptance, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, TALENT_RESERVE_REASONS, type RecruitmentActor, type TalentReserveReason } from './talent-recruitment-policy';
 
 const actorSelect = { id: true, name: true, sysRole: true, hrCapabilities: true, status: true, deletedAt: true, archivedAt: true, isAssessorOnly: true } satisfies Prisma.UserSelect;
 const applicationInclude = {
@@ -19,7 +21,7 @@ const activeOnboardingStatuses = ['draft', 'submitted', 'pending_entry'] as cons
 
 @Injectable()
 export class TalentRecruitmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly demands?: RecruitmentDemandsService) {}
 
   private async actor(tx: Prisma.TransactionClient, user: AuthUser) {
     const actor = await tx.user.findUnique({ where: { id: user.id }, select: actorSelect });
@@ -124,7 +126,11 @@ export class TalentRecruitmentService {
       select: { status: true, participants: { select: { userId: true } }, feedback: { where: { status: 'submitted' }, select: { userId: true } } } }) : [];
     const activitySummary = { scheduledCount: activity.filter(i => i.status === 'scheduled').length,
       unsubmittedFeedbackCount: activity.reduce((n, i) => n + i.participants.filter(p => !i.feedback.some(f => f.userId === p.userId)).length, 0) };
-    return { ...fields, ...(canReadRecruitment(actor) ? { activitySummary } : {}), candidateName: candidate.name, ownerName: names.get(row.ownerId) ?? null, creatorName: names.get(row.createdById) ?? null,
+    const recruitmentDemandCurrent = this.demands && canReadTalentApplication(actor, row) ? await this.demands.currentForApplication(tx, row, actor) : null;
+    return { ...fields, recruitmentDemandId: row.recruitmentDemandId ?? null, recruitmentDemandRevision: row.recruitmentDemandRevision ?? null,
+      recruitmentDemandSnapshot: row.recruitmentDemandSnapshot ?? null, recruitmentDemandCurrent,
+      offerTerminated: row.stage === 'withdrawn' && !hasActiveTalentAcceptance(events) && events.some(event => event.action === 'terminate_offer'),
+      ...(canReadRecruitment(actor) ? { activitySummary } : {}), candidateName: candidate.name, ownerName: names.get(row.ownerId) ?? null, creatorName: names.get(row.createdById) ?? null,
       allowedActions: allowedApplicationActions(actor, row, activeOnboarding ?? await this.hasActiveOnboarding(tx, row.candidateId)),
       events: visibleEvents.map(event => ({ ...event, actorName: names.get(event.actorId) ?? null })),
       onboardingRequest: request ? { id: request.id, onboardingStatus: request.onboardingStatus, recordStatus: request.recordStatus, cancelledAt: request.cancelledAt } : null };
@@ -244,8 +250,24 @@ export class TalentRecruitmentService {
   }
 
   async act(id: string, input: TalentApplicationActionDto, user: AuthUser) {
+    let demandProof: RecruitmentDemandSubmissionProof | undefined;
+    if (input.action === 'submit_hiring') {
+      const actor = await this.actor(this.prisma, user); this.assertWrite(actor);
+      const row = await this.prisma.talentApplication.findUnique({ where: { id }, include: applicationInclude });
+      if (!row) throw new NotFoundException('应聘记录不存在');
+      const candidate = await this.prisma.talentCandidate.findUnique({ where: { id: row.candidateId }, select: { deletedAt: true } });
+      if (!candidate || candidate.deletedAt) throw new NotFoundException('候选人已失效，不能提交录用');
+      this.revision(row.revision, input.expectedRevision);
+      if (!allowedApplicationActions(actor, row, await this.hasActiveOnboarding(this.prisma, row.candidateId)).includes('submit_hiring')) throw new BadRequestException('当前阶段不支持提交录用');
+      this.text(input.note, '操作说明', 4000, true);
+      const seatEvent = row.events.filter(event => ['accept_offer', 'terminate_offer'].includes(event.action)).sort((a, b) => b.version - a.version)[0];
+      if (row.recruitmentDemandId !== input.recruitmentDemandId && seatEvent?.action === 'accept_offer') throw new BadRequestException('本次录用已接受且尚未明确终止，不能更换招聘需求');
+      if (!this.demands) throw new ServiceUnavailableException('招聘需求校验尚未就绪，不能提交录用');
+      demandProof = await this.demands.prepareSubmission(input.recruitmentDemandId, input.expectedDemandRevision, user);
+    }
     return this.prisma.$transaction(async tx => {
       const row = await this.applicationForUpdate(tx, id);
+      if (input.action === 'terminate_offer') await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR SHARE`;
       const actor = await this.actor(tx, user);
       if (!canReadTalentApplication(actor, row)) throw new ForbiddenException('无权限查看此应聘记录');
       this.revision(row.revision, input.expectedRevision);
@@ -254,8 +276,17 @@ export class TalentRecruitmentService {
         if (!canConfirmTalentHiring(actor, row.hiringRequestedById)) throw new ForbiddenException('需由独立的录用确认人办理，不能确认本人提交的申请');
       } else this.assertWrite(actor);
       const activeOnboarding = await this.hasActiveOnboarding(tx, row.candidateId);
+      if (input.action === 'submit_hiring' || input.action === 'terminate_offer') {
+        const candidate = await tx.talentCandidate.findUnique({ where: { id: row.candidateId }, select: { deletedAt: true } });
+        if (!candidate || candidate.deletedAt) throw new NotFoundException('候选人已失效，不能办理本次操作');
+      }
+      if (input.action === 'terminate_offer') {
+        if (activeOnboarding) throw new BadRequestException('仍有在办入职，请先由有入职权限的人员撤回该次入职；撤回入职不会释放录用名额。');
+        if (row.stage === 'hired' || row.onboardingRequests.some(request => request.onboardingStatus === 'effective' && !request.cancelledAt)
+          || !hasActiveTalentAcceptance(row.events)) throw new BadRequestException('本次录用没有可释放的有效占用，或已经到岗，不能终止释放。');
+      }
       if (!allowedApplicationActions(actor, row, activeOnboarding).includes(input.action)) throw new BadRequestException('当前阶段不支持此操作，或候选人仍有进行中的入职申请');
-      const note = this.text(input.note, '操作说明', 4000, ['submit_hiring', 'return_hiring', 'reject'].includes(input.action));
+      const note = this.text(input.note, '操作说明', 4000, ['submit_hiring', 'return_hiring', 'reject', 'terminate_offer'].includes(input.action));
       const reserveReasons = input.reserveReasons ?? [];
       if (!Array.isArray(reserveReasons) || reserveReasons.length > 4 || new Set(reserveReasons).size !== reserveReasons.length
         || reserveReasons.some(reason => !TALENT_RESERVE_REASONS.includes(reason)) || (input.action !== 'reserve' && reserveReasons.length > 0)) {
@@ -263,21 +294,36 @@ export class TalentRecruitmentService {
       }
       const destinations = {
         start_interview: 'interviewing', submit_hiring: 'hiring_review', approve_hiring: 'offered', return_hiring: row.reviewReturnStage,
-        accept_offer: 'accepted', decline_offer: 'declined', reject: 'rejected', reserve: 'reserve', withdraw: 'withdrawn', reopen: 'screening',
+        accept_offer: 'accepted', decline_offer: 'declined', reject: 'rejected', reserve: 'reserve', withdraw: 'withdrawn', terminate_offer: 'withdrawn', reopen: 'screening',
       };
       const stage = destinations[input.action];
       if (!stage || (input.action === 'return_hiring' && !['screening', 'interviewing'].includes(stage))) throw new BadRequestException('录用申请的退回阶段无效');
       const fields: Prisma.TalentApplicationUncheckedUpdateManyInput = { stage };
       if (input.expectedEntryDate !== undefined) fields.expectedEntryDate = this.date(input.expectedEntryDate);
+      if (input.action === 'submit_hiring') {
+        if (!input.recruitmentDemandId || input.expectedDemandRevision === undefined) throw new BadRequestException('提交录用前请选择已批准并核对的招聘需求');
+        const seatEvent = row.events.filter(event => ['accept_offer', 'terminate_offer'].includes(event.action))
+          .sort((a, b) => b.version - a.version)[0];
+        if (row.recruitmentDemandId !== input.recruitmentDemandId && seatEvent?.action === 'accept_offer') {
+          throw new BadRequestException('本次录用已接受且尚未明确终止，不能更换招聘需求');
+        }
+        if (!this.demands) throw new ServiceUnavailableException('招聘需求校验尚未就绪，不能提交录用');
+        const selected = await this.demands.assertSubmission(tx, row, input.recruitmentDemandId, input.expectedDemandRevision, user, demandProof);
+        Object.assign(fields, { recruitmentDemandId: selected.id, recruitmentDemandRevision: selected.revision, recruitmentDemandSnapshot: { ...selected.snapshot } });
+      }
       if (input.action === 'submit_hiring') Object.assign(fields, { hiringReason: note, hiringRequestedById: actor.id,
         hiringRequestedAt: new Date(), reviewReturnStage: row.stage, hiringReviewedById: null, hiringReviewedAt: null });
       if (confirmation) Object.assign(fields, { hiringReviewedById: actor.id, hiringReviewedAt: new Date() });
       await this.changeApplication(tx, row, fields);
       const updated = { ...row, stage, revision: row.revision + 1 };
       await this.event(tx, updated, actor.id, input.action, row.stage, note, reserveReasons);
-      await this.audit(tx, actor.id, input.action, 'talent_application', id, { stage: row.stage, revision: row.revision }, { stage, revision: updated.revision });
+      await this.audit(tx, actor.id, input.action, 'talent_application', id,
+        { stage: row.stage, revision: row.revision, ...(input.action === 'submit_hiring' ? { recruitmentDemandSnapshot: row.recruitmentDemandSnapshot ?? null } : {}),
+          ...(input.action === 'terminate_offer' ? { recruitmentDemandId: row.recruitmentDemandId ?? null, seatOccupied: true } : {}) },
+        { stage, revision: updated.revision, ...(input.action === 'submit_hiring' ? { recruitmentDemandSnapshot: fields.recruitmentDemandSnapshot as Prisma.InputJsonValue } : {}),
+          ...(input.action === 'terminate_offer' ? { recruitmentDemandId: row.recruitmentDemandId ?? null, seatReleased: Boolean(row.recruitmentDemandId), offerTerminated: true } : {}) });
       return this.reloadView(tx, id, actor);
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000, maxWait: 10000 });
   }
 
   private async changeApplication(tx: Prisma.TransactionClient, row: Application, fields: Prisma.TalentApplicationUncheckedUpdateManyInput) {

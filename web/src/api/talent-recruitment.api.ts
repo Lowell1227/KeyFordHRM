@@ -33,8 +33,9 @@ export const talentRecruitmentApi = {
   update(id: string, body: Partial<TalentApplicationInput> & { expectedRevision: number }): Promise<TalentApplicationView> {
     return http.patch(`${base}/applications/${id}`, body, localError) as unknown as Promise<TalentApplicationView>;
   },
-  action(id: string, body: { expectedRevision: number; action: TalentApplicationAction; note?: string; expectedEntryDate?: string | null; reserveReasons?: TalentReserveReason[] }): Promise<TalentApplicationView> {
-    return http.post(`${base}/applications/${id}/actions`, body, localError) as unknown as Promise<TalentApplicationView>;
+  action(id: string, body: { expectedRevision: number; action: TalentApplicationAction; note?: string; expectedEntryDate?: string | null; reserveReasons?: TalentReserveReason[]; recruitmentDemandId?: string; expectedDemandRevision?: number }): Promise<TalentApplicationView> {
+    const config = ['submit_hiring', 'terminate_offer'].includes(body.action) ? { ...localError, timeout: 60000 } : localError;
+    return http.post(`${base}/applications/${id}/actions`, body, config) as unknown as Promise<TalentApplicationView>;
   },
   feedback(interviewId: string): Promise<TalentFeedbackResponse> {
     return http.get(`${base}/interviews/${interviewId}/feedback`) as unknown as Promise<TalentFeedbackResponse>;

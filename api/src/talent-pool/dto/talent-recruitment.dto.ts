@@ -34,6 +34,8 @@ export class UpdateTalentApplicationDto extends PartialType(TalentApplicationFie
 export class TalentApplicationActionDto {
   @IsInt() @Min(0) @Max(2147483646) expectedRevision!: number;
   @IsIn(TALENT_APPLICATION_ACTIONS) action!: TalentApplicationAction;
+  @IsOptional() @IsUUID() recruitmentDemandId?: string;
+  @IsOptional() @IsInt() @Min(1) @Max(2147483646) expectedDemandRevision?: number;
   @IsOptional() @IsString() @MaxLength(4000) note?: string | null;
   @IsOptional() @IsArray() @ArrayMaxSize(4) @ArrayUnique() @IsIn(TALENT_RESERVE_REASONS, { each: true })
   reserveReasons?: TalentReserveReason[];

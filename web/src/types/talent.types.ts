@@ -397,7 +397,7 @@ export const APPLICATION_STAGE_LABELS: Record<TalentApplicationStage, string> = 
   screening: '初筛', interviewing: '面试中', hiring_review: '待录用确认', offered: '已确认录用', accepted: '已接受录用',
   declined: '已拒绝录用', rejected: '已淘汰', reserve: '人才储备', withdrawn: '已撤回', onboarding: '入职办理中', hired: '已入职',
 };
-export type TalentApplicationAction = 'start_interview' | 'submit_hiring' | 'approve_hiring' | 'return_hiring' | 'accept_offer' | 'decline_offer' | 'reject' | 'reserve' | 'withdraw' | 'reopen';
+export type TalentApplicationAction = 'start_interview' | 'submit_hiring' | 'approve_hiring' | 'return_hiring' | 'accept_offer' | 'decline_offer' | 'terminate_offer' | 'reject' | 'reserve' | 'withdraw' | 'reopen';
 export type TalentReserveReason = 'commute_distance' | 'salary_expectation' | 'work_schedule' | 'other';
 export const TALENT_RESERVE_REASON_LABELS: Record<TalentReserveReason, string> = {
   commute_distance: '通勤距离', salary_expectation: '薪资期望', work_schedule: '工作制偏好', other: '其他',
@@ -405,6 +405,7 @@ export const TALENT_RESERVE_REASON_LABELS: Record<TalentReserveReason, string> =
 export const APPLICATION_ACTION_LABELS: Record<TalentApplicationAction, string> = {
   start_interview: '进入面试', submit_hiring: '提交录用', approve_hiring: '确认录用', return_hiring: '退回经办',
   accept_offer: '候选人接受', decline_offer: '候选人拒绝', reject: '淘汰', reserve: '转储备', withdraw: '撤回应聘', reopen: '重开应聘',
+  terminate_offer: '终止录用',
 };
 export interface TalentOnboardingRequest {
   id: string;
@@ -427,6 +428,11 @@ export interface TalentApplicationEvent {
   createdAt: string;
 }
 export interface TalentApplicationView {
+  offerTerminated?: boolean;
+  recruitmentDemandId?: string | null;
+  recruitmentDemandRevision?: number | null;
+  recruitmentDemandSnapshot?: import('./recruitment-demand.types').RecruitmentDemandSnapshot | null;
+  recruitmentDemandCurrent?: import('./recruitment-demand.types').RecruitmentDemandView | null;
   activitySummary?: { scheduledCount: number; unsubmittedFeedbackCount: number };
   id: string;
   candidateId: string;

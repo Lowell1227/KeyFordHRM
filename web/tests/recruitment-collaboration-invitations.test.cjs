@@ -25,6 +25,7 @@ function mount(t, relative, { query = {}, canRead = true, canEdit = false, user,
     '@/router/navigation': { canAccessRoute: () => false },
     '@/api/users.api': { usersApi: { findOne: async () => null, findAll: async () => ({ items: [], total: 0 }) } },
     '@/api/talent-recruitment.api': { recruitmentError: e => e.message, talentRecruitmentApi: { applications: async () => [], queue: async query => { requests.push({ work: 'applications', ...query }); return { items: [], total: 0 }; }, workbench: async () => ({ groups: [] }), ...recruitmentApi } },
+    '@/api/recruitment-demands.api': { recruitmentDemandsApi: {} },
   };
   function load(filename, source = fs.readFileSync(filename, 'utf8')) {
     const loaded = new Module(filename, module); loaded.paths = Module._nodeModulePaths(path.dirname(filename));

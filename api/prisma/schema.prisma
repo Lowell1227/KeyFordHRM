@@ -472,6 +472,7 @@ model Department {
   indicatorVisibilityDepartments IndicatorVisibilityDepartment[]
   employmentRecords              EmploymentRecord[]
   changeRequests                 DepartmentChangeRequest[]
+  recruitmentDemands             RecruitmentDemand[]
 
   @@index([parentId])
   @@index([approverId])
@@ -518,6 +519,7 @@ model Position {
   users             User[]                  @relation("UserPosition")
   employmentRecords EmploymentRecord[]
   changeRequests    PositionChangeRequest[]
+  recruitmentDemands RecruitmentDemand[]
 
   @@index([name, isActive])
   @@index([jobFamily, isActive])
@@ -2383,6 +2385,9 @@ model TalentApplication {
   hiringReviewedById     String?   @map("hiring_reviewed_by_id") @db.Uuid
   hiringReviewedAt       DateTime? @map("hiring_reviewed_at") @db.Timestamptz(6)
   reviewReturnStage      String?   @map("review_return_stage") @db.VarChar(30)
+  recruitmentDemandId       String? @map("recruitment_demand_id") @db.Uuid
+  recruitmentDemandRevision Int?    @map("recruitment_demand_revision")
+  recruitmentDemandSnapshot Json?   @map("recruitment_demand_snapshot") @db.JsonB
   createdById            String    @map("created_by_id") @db.Uuid
   createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt              DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -2391,10 +2396,101 @@ model TalentApplication {
   events            TalentApplicationEvent[]
   interviews        TalentInterview[]
   onboardingRequests EmployeeDataChangeRequest[]
+  recruitmentDemand RecruitmentDemand? @relation(fields: [recruitmentDemandId], references: [id], onDelete: Restrict)
 
   @@index([candidateId, updatedAt(sort: Desc)])
   @@index([ownerId, stage])
+  @@index([recruitmentDemandId])
   @@map("talent_applications")
+}
+
+model RecruitmentDemand {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationKey       String    @map("organization_key") @db.VarChar(200)
+  processCode           String    @map("process_code") @db.VarChar(200)
+  instanceId            String    @map("instance_id") @db.VarChar(200)
+  sourceFingerprint     String    @map("source_fingerprint") @db.Char(64)
+  sourceState           String    @map("source_state") @db.VarChar(20)
+  rawDepartment         String?   @map("raw_department") @db.Text
+  rawPosition           String?   @map("raw_position") @db.Text
+  rawHeadcount          String?   @map("raw_headcount") @db.Text
+  approvedAt            DateTime? @map("approved_at") @db.Timestamptz(6)
+  sourceCreatedAt       DateTime? @map("source_created_at") @db.Timestamptz(6)
+  sourceUpdatedAt       DateTime? @map("source_updated_at") @db.Timestamptz(6)
+  sourceLink            String?   @map("source_link") @db.Text
+  mainInstanceId        String?   @map("main_instance_id") @db.VarChar(200)
+  bizAction             String?   @map("biz_action") @db.VarChar(50)
+  supersedesInstanceId  String?   @map("supersedes_instance_id") @db.VarChar(200)
+  supersededByInstanceId String?   @map("superseded_by_instance_id") @db.VarChar(200)
+  revision              Int       @default(1)
+  deptId                String?   @map("dept_id") @db.Uuid
+  positionId            String?   @map("position_id") @db.Uuid
+  approvedHeadcount     Int?      @map("approved_headcount")
+  mappedFingerprint     String?   @map("mapped_fingerprint") @db.Char(64)
+  syncIssue             String?   @map("sync_issue") @db.VarChar(40)
+  lastSyncedAt          DateTime  @map("last_synced_at") @db.Timestamptz(6)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  department Department? @relation(fields: [deptId], references: [id], onDelete: Restrict)
+  position Position? @relation(fields: [positionId], references: [id], onDelete: Restrict)
+  events RecruitmentDemandEvent[]
+  applications TalentApplication[]
+
+  @@unique([organizationKey, instanceId])
+  @@index([sourceState, updatedAt(sort: Desc)])
+  @@index([organizationKey, supersedesInstanceId])
+  @@map("recruitment_demands")
+}
+
+model RecruitmentDemandEvent {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  demandId  String   @map("demand_id") @db.Uuid
+  actorId   String   @map("actor_id") @db.Uuid
+  action    String   @db.VarChar(50)
+  revision  Int
+  snapshot  Json     @db.JsonB
+  reason    String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  demand RecruitmentDemand @relation(fields: [demandId], references: [id], onDelete: Restrict)
+
+  @@unique([demandId, revision])
+  @@map("recruitment_demand_events")
+}
+
+model RecruitmentDemandSyncRun {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requestId       String    @unique @map("request_id") @db.Uuid
+  actorId         String    @map("actor_id") @db.Uuid
+  organizationKey String    @map("organization_key") @db.VarChar(200)
+  processCode     String    @map("process_code") @db.VarChar(200)
+  from            String    @db.VarChar(40)
+  to              String    @db.VarChar(40)
+  state           String    @default("listing") @db.VarChar(30)
+  listSealedAt    DateTime? @map("list_sealed_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz(6)
+  items RecruitmentDemandSyncItem[]
+
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("recruitment_demand_sync_runs")
+}
+
+model RecruitmentDemandSyncItem {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId         String    @map("run_id") @db.Uuid
+  instanceId    String    @map("instance_id") @db.VarChar(200)
+  ordinal       Int
+  state         String    @default("pending") @db.VarChar(20)
+  attempts      Int       @default(0)
+  lastAttemptAt DateTime? @map("last_attempt_at") @db.Timestamptz(6)
+  run RecruitmentDemandSyncRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@unique([runId, instanceId])
+  @@unique([runId, ordinal])
+  @@index([runId, state, ordinal])
+  @@map("recruitment_demand_sync_items")
 }
 
 model TalentApplicationEvent {

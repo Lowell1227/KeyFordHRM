@@ -6,7 +6,7 @@ import type { AuthUser } from '@/common/types/auth.types';
 
 export const TALENT_APPLICATION_ACTIONS = [
   'start_interview', 'submit_hiring', 'approve_hiring', 'return_hiring', 'accept_offer',
-  'decline_offer', 'reject', 'reserve', 'withdraw', 'reopen',
+  'decline_offer', 'reject', 'reserve', 'withdraw', 'reopen', 'terminate_offer',
 ] as const;
 export type TalentApplicationAction = typeof TALENT_APPLICATION_ACTIONS[number];
 
@@ -94,6 +94,17 @@ export interface ApplicationPolicyState {
   stage: string;
   hiringRequestedById: string | null;
   reviewReturnStage?: string | null;
+  events?: ReadonlyArray<{ action: string; version: number }>;
+  onboardingRequests?: ReadonlyArray<{ recordStatus: string }>;
+}
+
+export function hasActiveTalentAcceptance(events: ReadonlyArray<{ action: string; version: number }>): boolean {
+  let latest: { action: string; version: number } | undefined;
+  for (const event of events) {
+    if (!['accept_offer', 'terminate_offer'].includes(event.action)) continue;
+    if (!latest || event.version > latest.version) latest = event;
+  }
+  return latest?.action === 'accept_offer';
 }
 
 export function canReadTalentApplication(actor: RecruitmentActor, application: ApplicationPolicyState): boolean {
@@ -114,8 +125,10 @@ export function allowedApplicationActions(actor: RecruitmentActor, application: 
       case 'accept_offer': case 'decline_offer': return stage === 'offered';
       case 'reject': return ['screening', 'interviewing', 'reserve'].includes(stage);
       case 'reserve': return ['screening', 'interviewing'].includes(stage);
-      case 'withdraw': return !['hired', 'withdrawn'].includes(stage) && !activeOnboarding;
+      case 'withdraw': return !['hired', 'withdrawn'].includes(stage) && !activeOnboarding && !hasActiveTalentAcceptance(application.events ?? []);
       case 'reopen': return ['rejected', 'reserve', 'declined', 'withdrawn'].includes(stage);
+      case 'terminate_offer': return stage !== 'hired' && !activeOnboarding && !application.onboardingRequests?.some(request => request.recordStatus === 'effective')
+        && hasActiveTalentAcceptance(application.events ?? []);
     }
   });
 }

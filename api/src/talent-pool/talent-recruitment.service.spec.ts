@@ -1,14 +1,18 @@
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { AuthUser } from '@/common/types/auth.types';
 import { TalentRecruitmentService } from './talent-recruitment.service';
+import { RecruitmentDemandsService } from './recruitment-demands.service';
+import { createHash } from 'node:crypto';
+import type { RecruitmentDemandSource } from './recruitment-demands.types';
 
 const hr = { id: 'hr', name: 'Synthetic HR', sysRole: 'hr', deptId: null, isAssessorOnly: false, canViewAll: false, hrCapabilities: [] } as AuthUser;
 const participant = { ...hr, id: 'participant', sysRole: 'employee' } as AuthUser;
-const applicationInput = { positionName: 'Synthetic engineer' };
+const applicationInput = { positionName: 'Synthetic engineer', deptId: 'dept' };
+const demandSelection = { recruitmentDemandId: 'ef10a762-94bd-4ca9-803f-93fc5c426b68', expectedDemandRevision: 1 };
 
 function setup(applicationChanges = {}, interviewChanges = {}) {
   const actors = [hr, participant, { ...hr, id: 'submitter' }].map(user => ({ ...user, status: 'active', deletedAt: null, archivedAt: null }));
-  const app = { id: 'app', candidateId: 'candidate', positionName: 'Synthetic engineer', recruitmentBatch: null, deptId: null, departmentNameSnapshot: null,
+  const app = { id: 'app', candidateId: 'candidate', positionName: 'Synthetic engineer', recruitmentBatch: null, deptId: 'dept', departmentNameSnapshot: null,
     ownerId: hr.id, stage: 'interviewing', revision: 1, expectedEntryDate: null, hiringReason: null, hiringRequestedById: null, hiringRequestedAt: null,
     hiringReviewedById: null, hiringReviewedAt: null, reviewReturnStage: null, createdById: hr.id, createdAt: new Date(), updatedAt: new Date(),
     events: [], onboardingRequests: [], candidate: { name: 'Synthetic candidate' }, ...applicationChanges };
@@ -16,10 +20,22 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
     participants: [{ userId: participant.id, userNameSnapshot: 'Synthetic participant' }], ...interviewChanges };
   const feedbacks: any[] = [];
   const feedbackEvents: any[] = [];
+  const demand = { id: demandSelection.recruitmentDemandId, revision: 1, instanceId: 'fictional-instance', sourceState: 'approved', organizationKey: 'fictional-org', processCode: 'fictional-form',
+    sourceFingerprint: 'f'.repeat(64), mappedFingerprint: 'f'.repeat(64), syncIssue: null, supersededByInstanceId: null,
+    deptId: 'dept', department: { id: 'dept', name: 'Synthetic department', isActive: true }, positionId: 'position',
+    position: { id: 'position', name: 'Synthetic engineer', isActive: true }, approvedHeadcount: 2, approvedAt: null, sourceLink: null,
+    rawDepartment: 'Synthetic department', rawPosition: 'Synthetic engineer', rawHeadcount: '2', lastSyncedAt: new Date() };
+  const normalizedSource = { organizationKey: demand.organizationKey, processCode: demand.processCode, instanceId: demand.instanceId,
+    sourceState: demand.sourceState, rawDepartment: demand.rawDepartment, rawPosition: demand.rawPosition, rawHeadcount: demand.rawHeadcount,
+    approvedAt: null, sourceCreatedAt: null, sourceUpdatedAt: null, sourceLink: null, mainInstanceId: null, bizAction: null, supersedesInstanceId: null };
+  demand.sourceFingerprint = demand.mappedFingerprint = createHash('sha256').update(JSON.stringify(normalizedSource)).digest('hex');
   const tx = {
     user: { findUnique: jest.fn(({ where }) => Promise.resolve(actors.find(actor => actor.id === where.id) ?? null)),
       findMany: jest.fn().mockResolvedValue(actors), count: jest.fn().mockResolvedValue(1) },
     department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept', name: 'Synthetic department', isActive: true }) },
+    recruitmentDemand: { findUnique: jest.fn(async ({ where }) => where.id === demand.id || where.organizationKey_instanceId?.instanceId === demand.instanceId ? { ...demand } : null),
+      findFirst: jest.fn(async () => null), update: jest.fn(async ({ data }) => { Object.assign(demand, data); return { ...demand }; }) },
+    recruitmentDemandEvent: { create: jest.fn(async () => ({})) },
     talentCandidate: { findUnique: jest.fn().mockImplementation(({ where }) => Promise.resolve({ id: where.id, deletedAt: null })) },
     talentApplication: { findUnique: jest.fn().mockImplementation(({ where }) => Promise.resolve(where.requestId && where.requestId !== Reflect.get(app, 'requestId')
       ? null : { ...app, events: [...app.events], onboardingRequests: [...app.onboardingRequests] })), findMany: jest.fn().mockResolvedValue([app]),
@@ -43,7 +59,12 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'candidate' }]),
   };
   const prisma = { ...tx, $transaction: jest.fn().mockImplementation(fn => fn(tx)) };
-  return { sut: new TalentRecruitmentService(prisma as never), prisma, tx, app, interview, actors, feedbacks, feedbackEvents };
+  const { sourceState, ...sourceFields } = normalizedSource;
+  const readInstance = jest.fn(async (_id: string): Promise<RecruitmentDemandSource> => ({ ...sourceFields, status: sourceState as RecruitmentDemandSource['status'] }));
+  const gateway = { status: () => ({ configured: true, missing: [], readOnly: true as const, scope: { organizationKey: 'fictional-org', processCode: 'fictional-form' } }), listIds: jest.fn(), readInstance,
+    verifyForSubmission: jest.fn(async (id: string) => ({ source: await readInstance(id), relatedSources: [], replacementCoverage: 'complete' as const, checkedAt: new Date().toISOString() })) };
+  const demands = new RecruitmentDemandsService(prisma as never, gateway);
+  return { sut: new TalentRecruitmentService(prisma as never, demands), demands, demand, gateway, prisma, tx, app, interview, actors, feedbacks, feedbackEvents };
 }
 
 describe('application creation replay', () => {
@@ -59,6 +80,126 @@ describe('application creation replay', () => {
     expect(replay.events.filter(event => event.action === 'create')).toHaveLength(1);
     await expect(sut.create('candidate', { ...intent, recruitmentBatch: 'Round 2' }, hr)).rejects.toThrow(ConflictException);
     await expect(sut.create('other-candidate', intent, hr)).rejects.toThrow(ConflictException);
+  });
+});
+
+describe('recruitment demand submission prerequisite', () => {
+  it('rejects a freshly withdrawn upstream approval even when the local demand revision was unchanged', async () => {
+    const { sut, tx, gateway } = setup();
+    gateway.readInstance.mockImplementation(async () => ({ ...await Promise.resolve({ organizationKey: 'fictional-org', processCode: 'fictional-form',
+      instanceId: 'fictional-instance', rawDepartment: 'Synthetic department', rawPosition: 'Synthetic engineer', rawHeadcount: '2',
+      approvedAt: null, sourceCreatedAt: null, sourceUpdatedAt: null, sourceLink: null, mainInstanceId: null, bizAction: null, supersedesInstanceId: null }), status: 'withdrawn' }));
+    await expect(sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic reason', ...demandSelection }, hr)).rejects.toThrow();
+    expect(gateway.verifyForSubmission).toHaveBeenCalledTimes(1);
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    expect(tx.talentApplicationEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('waits for upstream verification outside any database transaction', async () => {
+    const { sut, prisma, tx, gateway } = setup();
+    let inside = false;
+    prisma.$transaction.mockImplementation(async fn => { inside = true; try { return await fn(tx); } finally { inside = false; } });
+    const original = gateway.verifyForSubmission.getMockImplementation()!;
+    gateway.verifyForSubmission.mockImplementation(async id => { expect(inside).toBe(false); return original(id); });
+    await sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic reason', ...demandSelection }, hr);
+    expect(gateway.verifyForSubmission).toHaveBeenCalledTimes(1);
+  });
+  it.each(['original-demand', null])('does not reassign an accepted or historical seat after reopening: %s', async recruitmentDemandId => {
+    const { sut, tx } = setup({ stage: 'screening', revision: 5, recruitmentDemandId, events: [
+      { action: 'accept_offer', version: 3 }, { action: 'withdraw', version: 4 }, { action: 'reopen', version: 5 },
+    ] });
+    await expect(sut.act('app', { expectedRevision: 5, action: 'submit_hiring', note: 'Synthetic reason', ...demandSelection }, hr))
+      .rejects.toThrow('本次录用已接受且尚未明确终止，不能更换招聘需求');
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('permits re-selection only after explicit termination, not ordinary withdrawal', async () => {
+    const { sut } = setup({ stage: 'screening', recruitmentDemandId: 'original-demand', events: [
+      { action: 'terminate_offer', version: 5 }, { action: 'accept_offer', version: 3 },
+    ] });
+    await expect(sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic reason', ...demandSelection }, hr))
+      .resolves.toMatchObject({ stage: 'hiring_review', recruitmentDemandId: demandSelection.recruitmentDemandId });
+  });
+
+  it('keeps an occupied seat when resubmitting the same demand', async () => {
+    const { sut } = setup({ stage: 'screening', recruitmentDemandId: demandSelection.recruitmentDemandId,
+      events: [{ action: 'accept_offer', version: 3 }, { action: 'withdraw', version: 4 }] });
+    await expect(sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic reason', ...demandSelection }, hr))
+      .resolves.toMatchObject({ stage: 'hiring_review', recruitmentDemandId: demandSelection.recruitmentDemandId });
+  });
+
+  it('rejects a new submission without an explicit demand before changing the application', async () => {
+    const { sut, tx } = setup();
+    await expect(sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic reason' }, hr)).rejects.toThrow(BadRequestException);
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the source/ledger service is absent, even with a selected demand', async () => {
+    const { prisma, tx } = setup();
+    const sut = new TalentRecruitmentService(prisma as never);
+    await expect(sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic reason',
+      recruitmentDemandId: 'ef10a762-94bd-4ca9-803f-93fc5c426b68', expectedDemandRevision: 1 } as never, hr)).rejects.toThrow();
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves an already submitted historical null-link application through independent confirmation', async () => {
+    const { sut } = setup({ stage: 'hiring_review', hiringRequestedById: 'submitter', recruitmentDemandId: null, recruitmentDemandSnapshot: null });
+    await expect(sut.act('app', { expectedRevision: 1, action: 'approve_hiring' }, hr)).resolves.toMatchObject({ stage: 'offered', recruitmentDemandId: null });
+    await expect(sut.act('app', { expectedRevision: 2, action: 'accept_offer' }, hr)).resolves.toMatchObject({ stage: 'accepted', recruitmentDemandSnapshot: null });
+  });
+});
+
+describe('explicit accepted offer termination', () => {
+  const accepted = { stage: 'accepted', revision: 3, recruitmentDemandId: demandSelection.recruitmentDemandId,
+    events: [{ action: 'accept_offer', version: 3 }], hiringRequestedById: 'submitter' };
+  const command = { expectedRevision: 3, action: 'terminate_offer', note: 'Fictional candidate explicitly declined arrival' } as never;
+
+  it.each(['accepted', 'withdrawn'])('allows an editor to explicitly terminate an occupied %s offer once', async stage => {
+    const { sut, tx } = setup({ ...accepted, stage, events: accepted.events.map(event => ({ ...event })) });
+    await expect(sut.act('app', command, hr)).resolves.toMatchObject({ stage: 'withdrawn', revision: 4, offerTerminated: true });
+    expect(tx.talentApplicationEvent.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'terminate_offer',
+      note: 'Fictional candidate explicitly declined arrival', version: 4 }) });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'terminate_offer',
+      newValue: expect.objectContaining({ seatReleased: true, recruitmentDemandId: demandSelection.recruitmentDemandId }) }) });
+    await expect(sut.act('app', command, hr)).rejects.toThrow(ConflictException);
+    expect(tx.talentApplicationEvent.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires a reason and actual acceptance, not just an accepted stage string', async () => {
+    const f = setup(accepted);
+    await expect(f.sut.act('app', { expectedRevision: 3, action: 'terminate_offer', note: ' ' } as never, hr)).rejects.toThrow(BadRequestException);
+    expect(f.tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    const forged = setup({ ...accepted, events: [] });
+    await expect(forged.sut.act('app', command, hr)).rejects.toThrow(BadRequestException);
+    expect(forged.tx.talentApplicationEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('does not label ordinary withdrawal or a reopened application as a terminated current offer', async () => {
+    const withdrawn = setup({ ...accepted, stage: 'withdrawn', events: accepted.events.map(event => ({ ...event })) });
+    await expect(withdrawn.sut.detail('app', hr)).resolves.toMatchObject({ offerTerminated: false });
+    const reopened = setup({ ...accepted, stage: 'screening', events: [...accepted.events, { action: 'terminate_offer', version: 4 }] });
+    await expect(reopened.sut.detail('app', hr)).resolves.toMatchObject({ offerTerminated: false });
+  });
+
+  it('blocks active onboarding, effective arrival and an already released seat', async () => {
+    const active = setup(accepted); active.tx.employeeDataChangeRequest.findFirst.mockResolvedValue({ id: 'ongoing' } as never);
+    await expect(active.sut.act('app', command, hr)).rejects.toThrow(/入职.*撤回/);
+    const effective = setup({ ...accepted, onboardingRequests: [{ id: 'effective', onboardingStatus: 'effective', cancelledAt: null }] });
+    await expect(effective.sut.act('app', command, hr)).rejects.toThrow(BadRequestException);
+    const hired = setup({ ...accepted, stage: 'hired' });
+    await expect(hired.sut.act('app', command, hr)).rejects.toThrow(BadRequestException);
+    const ended = setup({ ...accepted, stage: 'withdrawn', events: [...accepted.events, { action: 'terminate_offer', version: 4 }] });
+    await expect(ended.sut.act('app', command, hr)).rejects.toThrow(BadRequestException);
+    for (const f of [active, effective, hired, ended]) expect(f.tx.talentApplication.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each([['recruitment_view'], ['talent_hiring_confirm']])('does not grant termination to a non-editor: %j', async (...capabilities) => {
+    const { sut, actors, tx } = setup(accepted);
+    Object.assign(actors[1], { sysRole: 'employee', hrCapabilities: capabilities });
+    await expect(sut.act('app', command, participant)).rejects.toThrow(ForbiddenException);
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -100,7 +241,7 @@ describe('talent recruitment transactions and boundaries', () => {
     const created = await sut.create('candidate', applicationInput, participant);
     expect(created).toMatchObject({ ownerId: participant.id, stage: 'screening' });
     const edited = await sut.update(created.id, { expectedRevision: created.revision, recruitmentBatch: 'Synthetic operator batch' }, participant);
-    const submitted = await sut.act(created.id, { expectedRevision: edited.revision, action: 'submit_hiring', note: 'Synthetic reason' }, participant);
+    const submitted = await sut.act(created.id, { expectedRevision: edited.revision, action: 'submit_hiring', note: 'Synthetic reason', ...demandSelection }, participant);
     expect(submitted).toMatchObject({ stage: 'hiring_review', hiringRequestedById: participant.id });
     await expect(sut.act(created.id, { expectedRevision: submitted.revision, action: 'approve_hiring' }, participant)).rejects.toThrow(ForbiddenException);
     const approved = await sut.act(created.id, { expectedRevision: submitted.revision, action: 'approve_hiring' }, hr);
@@ -188,14 +329,15 @@ describe('talent recruitment transactions and boundaries', () => {
   it('submission needs a reason but not feedback from every coordinator; event and audit stay in the transaction', async () => {
     const { sut, tx } = setup();
     await expect(sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: '  ' }, hr)).rejects.toThrow(BadRequestException);
-    const view = await sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic hiring reason' }, hr);
+    const view = await sut.act('app', { expectedRevision: 1, action: 'submit_hiring', note: 'Synthetic hiring reason', ...demandSelection }, hr);
     expect(view).toMatchObject({ stage: 'hiring_review', revision: 2, reviewReturnStage: 'interviewing', ownerName: hr.name,
       events: [expect.objectContaining({ actorName: hr.name, note: 'Synthetic hiring reason' })] });
     expect(tx.talentInterviewFeedback.findMany).not.toHaveBeenCalled();
     expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('Synthetic hiring reason');
     expect(tx.$queryRaw.mock.calls.map(([sql]) => sql.join('?'))).toEqual([
+      expect.stringContaining('pg_advisory_xact_lock'), expect.stringContaining('users'),
       expect.stringContaining('talent_candidates'), expect.stringContaining('talent_applications'),
-      expect.stringContaining('talent_candidates'), expect.stringContaining('talent_applications'),
+      expect.stringContaining('pg_advisory_xact_lock'), expect.stringContaining('users'), expect.stringContaining('departments'), expect.stringContaining('positions'),
     ]);
   });
   it('rejects stale revision and CAS loss before writing events or audit', async () => {
@@ -253,7 +395,7 @@ describe('talent recruitment transactions and boundaries', () => {
   it('returns hiring to the frozen submitting stage, without rejecting the candidate, and allows resubmission', async () => {
     const { sut } = setup({ stage: 'hiring_review', reviewReturnStage: 'screening', hiringRequestedById: 'submitter' });
     await expect(sut.act('app', { expectedRevision: 1, action: 'return_hiring', note: 'Synthetic correction' }, hr)).resolves.toMatchObject({ stage: 'screening', hiringReviewedById: hr.id });
-    await expect(sut.act('app', { expectedRevision: 2, action: 'submit_hiring', note: 'Synthetic corrected submission' }, hr)).resolves.toMatchObject({ stage: 'hiring_review', hiringRequestedById: hr.id, hiringReviewedById: null });
+    await expect(sut.act('app', { expectedRevision: 2, action: 'submit_hiring', note: 'Synthetic corrected submission', ...demandSelection }, hr)).resolves.toMatchObject({ stage: 'hiring_review', hiringRequestedById: hr.id, hiringReviewedById: null });
     await expect(sut.act('app', { expectedRevision: 3, action: 'approve_hiring' }, hr)).rejects.toThrow(ForbiddenException);
   });
   it.each(['onboarding', 'hired', 'unknown'])('does not accept manual action %s', async action => {

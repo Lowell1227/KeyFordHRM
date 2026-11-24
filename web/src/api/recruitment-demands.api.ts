@@ -1,0 +1,35 @@
+import http from './http';
+import type { Paginated } from '@/types/api.types';
+import type { RecruitmentDemandApplication, RecruitmentDemandApplicationQuery, RecruitmentDemandDirectories, RecruitmentDemandMapping, RecruitmentDemandQuery, RecruitmentDemandStatus, RecruitmentDemandSyncInput, RecruitmentDemandSyncResult, RecruitmentDemandView } from '@/types/recruitment-demand.types';
+
+const base = '/recruitment-demands';
+const localError = { skipErrorMessage: true };
+export const recruitmentDemandsApi = {
+  list(query: RecruitmentDemandQuery): Promise<Paginated<RecruitmentDemandView>> {
+    return http.get(base, { params: query, ...localError }) as unknown as Promise<Paginated<RecruitmentDemandView>>;
+  },
+  status(): Promise<RecruitmentDemandStatus> {
+    return http.get(`${base}/status`, localError) as unknown as Promise<RecruitmentDemandStatus>;
+  },
+  directories(): Promise<RecruitmentDemandDirectories> {
+    return http.get(`${base}/directories`, localError) as unknown as Promise<RecruitmentDemandDirectories>;
+  },
+  options(query: { applicationId: string; keyword?: string; page?: number; pageSize?: number }): Promise<Paginated<RecruitmentDemandView>> {
+    return http.get(`${base}/options`, { params: query, ...localError }) as unknown as Promise<Paginated<RecruitmentDemandView>>;
+  },
+  detail(id: string): Promise<RecruitmentDemandView> {
+    return http.get(`${base}/${encodeURIComponent(id)}`, localError) as unknown as Promise<RecruitmentDemandView>;
+  },
+  applications(id: string, query: RecruitmentDemandApplicationQuery): Promise<Paginated<RecruitmentDemandApplication>> {
+    return http.get(`${base}/${encodeURIComponent(id)}/applications`, { params: query, ...localError }) as unknown as Promise<Paginated<RecruitmentDemandApplication>>;
+  },
+  sync(body: RecruitmentDemandSyncInput): Promise<RecruitmentDemandSyncResult> {
+    return http.post(`${base}/sync`, body, { ...localError, timeout: 60000 }) as unknown as Promise<RecruitmentDemandSyncResult>;
+  },
+  refresh(id: string): Promise<RecruitmentDemandView> {
+    return http.post(`${base}/${encodeURIComponent(id)}/refresh`, {}, { ...localError, timeout: 60000 }) as unknown as Promise<RecruitmentDemandView>;
+  },
+  mapping(id: string, body: RecruitmentDemandMapping): Promise<RecruitmentDemandView> {
+    return http.patch(`${base}/${encodeURIComponent(id)}/mapping`, body, localError) as unknown as Promise<RecruitmentDemandView>;
+  },
+};

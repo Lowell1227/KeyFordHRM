@@ -88,6 +88,8 @@ function talentComponent(t, relative, props, query, api = {}) {
     '@/api/departments.api': { departmentsApi: {} },
     '@/api/talent-pool.api': { talentPoolApi: { list: async query => { requests.push(query); return { items: [], total: 0 }; }, applicationPositions: async () => [] } },
     '@/api/talent-recruitment.api': { recruitmentError: e => e.message, talentRecruitmentApi: { applications: async () => [row('first'), row('second')], ...api } },
+    '@/api/recruitment-demands.api': { recruitmentDemandsApi: { options: async () => ({ items: [], total: 0 }),
+      status: async () => ({ configured: false, missing: [], readOnly: true }), directories: async () => ({ departments: [], positions: [] }) } },
     '@/router/navigation': { canAccessRoute: () => true },
   };
   const filename = path.join(root, relative), { descriptor } = parse(fs.readFileSync(filename, 'utf8'));

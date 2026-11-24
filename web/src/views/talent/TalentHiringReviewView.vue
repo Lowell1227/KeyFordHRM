@@ -6,6 +6,7 @@ import { recruitmentError, talentRecruitmentApi } from '@/api/talent-recruitment
 import { APPLICATION_ACTION_LABELS, APPLICATION_STAGE_LABELS, type TalentApplicationView } from '@/types/talent.types';
 import { useRecruitmentLeaveGuard } from './useRecruitmentLeaveGuard';
 import { formatDate } from '@/utils/date';
+import RecruitmentDemandSummary from '@/views/recruitment/components/RecruitmentDemandSummary.vue';
 
 const rows = ref<TalentApplicationView[]>([]), current = ref<TalentApplicationView | null>(null);
 const loading = ref(false), detailLoading = ref(false), busy = ref(false);
@@ -109,6 +110,7 @@ onBeforeUnmount(() => { ++queueSession; ++detailSession; });
           <header class="hiring-review__heading"><h3>{{ current.candidateName || '录用申请' }}</h3><el-tag size="small">{{ APPLICATION_STAGE_LABELS[current.stage] }}</el-tag></header>
           <dl><dt>岗位</dt><dd>{{ current.positionName }}</dd><dt>批次</dt><dd>{{ current.recruitmentBatch || '未填写' }}</dd><dt>部门</dt><dd>{{ current.departmentNameSnapshot || '未指定' }}</dd><dt>经办</dt><dd>{{ current.ownerName || '未指定' }}</dd><dt>提交时间</dt><dd>{{ current.hiringRequestedAt ? formatDate(current.hiringRequestedAt) : '未记录' }}</dd><dt>预计到岗</dt><dd>{{ current.expectedEntryDate ? formatDate(current.expectedEntryDate) : '未填写' }}</dd></dl>
           <h4>录用意见</h4><p class="hiring-review__note">{{ current.hiringReason || '未填写' }}</p>
+          <RecruitmentDemandSummary v-if="current.recruitmentDemandSnapshot" :snapshot="current.recruitmentDemandSnapshot" :current="current.recruitmentDemandCurrent || null" />
           <div v-if="!command" class="hiring-review__actions"><el-button v-for="action in actions" :key="action" :type="action === 'approve_hiring' ? 'primary' : 'default'" :disabled="busy" @click="begin(action)">{{ APPLICATION_ACTION_LABELS[action] }}</el-button><el-button v-if="!actions.length && rows.length" @click="select(rows[0]!.id)">下一条申请</el-button></div>
           <el-form v-if="command" label-position="top" :disabled="busy" class="hiring-review__form">
             <el-form-item :label="command === 'return_hiring' ? '退回原因' : '确认意见（选填）'" :required="command === 'return_hiring'" :error="noteError"><el-input v-model="note" type="textarea" :rows="4" maxlength="4000" show-word-limit /></el-form-item>

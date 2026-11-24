@@ -6,6 +6,46 @@ const hr = { id: 'hr', sysRole: 'hr', status: 'active', archivedAt: null, delete
 const application = { stage: 'hiring_review', hiringRequestedById: 'submitter', reviewReturnStage: 'interviewing' };
 
 describe('recruitment policy', () => {
+  it.each(['accepted', 'withdrawn', 'screening', 'offered'])('keeps explicit termination available for an unreleased acceptance in %s without generic withdrawal', stage => {
+    const state = { ...application, stage, events: [{ action: 'accept_offer', version: 3 }, { action: 'withdraw', version: 4 }] };
+    const actions = allowedApplicationActions(hr, state, false);
+    expect(actions).toContain('terminate_offer');
+    expect(actions).not.toContain('withdraw');
+    if (stage === 'withdrawn') expect(actions).toContain('reopen');
+  });
+  it('preserves ordinary withdrawal for a new offer after the previous acceptance was explicitly terminated', () => {
+    const state = { ...application, stage: 'offered', events: [{ action: 'accept_offer', version: 1 }, { action: 'terminate_offer', version: 2 }] };
+    expect(allowedApplicationActions(hr, state, false)).toContain('withdraw');
+    expect(allowedApplicationActions(hr, state, false)).not.toContain('terminate_offer');
+  });
+  it('uses the latest acceptance or termination event, never unrelated newer events or array order', () => {
+    expect(typeof (policy as any).hasActiveTalentAcceptance).toBe('function');
+    const events = [{ action: 'accept_offer', version: 8 }, { action: 'terminate_offer', version: 5 }, { action: 'withdraw', version: 10 }];
+    expect((policy as any).hasActiveTalentAcceptance(events)).toBe(true);
+    expect((policy as any).hasActiveTalentAcceptance([...events, { action: 'terminate_offer', version: 11 }])).toBe(false);
+    expect((policy as any).hasActiveTalentAcceptance([])).toBe(false);
+    expect(events.map(event => event.version)).toEqual([8, 5, 10]);
+  });
+  it('does not allow repeated termination, arrival termination, or termination while onboarding is active', () => {
+    const accepted = { ...application, stage: 'accepted', events: [{ action: 'accept_offer', version: 1 }] };
+    expect(allowedApplicationActions(hr, accepted, true)).not.toContain('terminate_offer');
+    expect(allowedApplicationActions(hr, { ...accepted, stage: 'hired' }, false)).toEqual([]);
+    const terminated = { ...accepted, stage: 'withdrawn', events: [...accepted.events, { action: 'terminate_offer', version: 2 }] };
+    expect(allowedApplicationActions(hr, terminated, false)).not.toContain('terminate_offer');
+    expect(allowedApplicationActions(hr, { ...application, stage: 'accepted' }, false)).toEqual(['withdraw']);
+  });
+  it('does not offer termination when this application has an effective personnel request, even if its stage is legacy withdrawn', () => {
+    const state = { ...application, stage: 'withdrawn', events: [{ action: 'accept_offer', version: 2 }], onboardingRequests: [{ recordStatus: 'effective' }] };
+    expect(allowedApplicationActions(hr, state, false)).not.toContain('terminate_offer');
+  });
+  it('keeps termination restricted to current recruitment editors rather than readers or narrow confirmers', () => {
+    const accepted = { ...application, stage: 'withdrawn', events: [{ action: 'accept_offer', version: 1 }] };
+    for (const actor of [
+      { ...hr, status: 'resigned' }, { ...hr, isAssessorOnly: true },
+      { ...hr, sysRole: 'employee', hrCapabilities: ['recruitment_view'] },
+      { ...hr, sysRole: 'employee', hrCapabilities: ['talent_hiring_confirm'] },
+    ]) expect(allowedApplicationActions(actor, accepted, false)).not.toContain('terminate_offer');
+  });
   it.each(['employee', 'hr_user', 'manager'])('gives an explicit %s operator daily actions, not archive management or hiring confirmation', sysRole => {
     const actor = { ...hr, sysRole, hrCapabilities: ['recruitment_edit'] };
     expect(canReadRecruitment(actor)).toBe(true);

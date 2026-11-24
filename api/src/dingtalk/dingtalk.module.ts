@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { MESSAGE_PUSH_PROVIDER } from '@/notifications/message-push.provider';
 import { DingtalkService } from './dingtalk.service';
 import { DingtalkAttendanceService } from './dingtalk-attendance.service';
+import { DingtalkRecruitmentService } from './dingtalk-recruitment.service';
 import { DingtalkBotCredentialsService } from './dingtalk-bot-credentials.service';
 import { DingtalkPushProvider } from './dingtalk-push.provider';
 import { InterviewCalendarService } from './interview-calendar.service';
@@ -15,6 +16,7 @@ import { InterviewCalendarReconciliationService } from './interview-calendar-rec
   providers: [
     DingtalkService,
     DingtalkAttendanceService,
+    DingtalkRecruitmentService,
     DingtalkBotCredentialsService,
     DingtalkPushProvider,
     InterviewCalendarService,
@@ -25,6 +27,6 @@ import { InterviewCalendarReconciliationService } from './interview-calendar-rec
       useClass: DingtalkPushProvider,
     },
   ],
-  exports: [DingtalkService, DingtalkAttendanceService, DingtalkBotCredentialsService, DingtalkPushProvider, MESSAGE_PUSH_PROVIDER],
+  exports: [DingtalkService, DingtalkAttendanceService, DingtalkRecruitmentService, DingtalkBotCredentialsService, DingtalkPushProvider, MESSAGE_PUSH_PROVIDER],
 })
 export class DingtalkModule {}
