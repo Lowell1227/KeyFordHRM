@@ -12,6 +12,7 @@ const invalidDates = [
 
 function setup() {
   const tx = {
+    user: { findUnique: jest.fn().mockResolvedValue({ ...operator, sysRole: 'hr', status: 'active' }) },
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'fictional-candidate' }]), auditLog: { create: jest.fn() },
     talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockImplementation(({ data }) => Promise.resolve(data)) },
     talentCandidate: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },

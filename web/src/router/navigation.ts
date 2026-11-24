@@ -83,6 +83,7 @@ function canConfirmHiring(user: NavigationUser): boolean {
 function canReadTalent(user: NavigationUser): boolean {
   return !user.isAssessorOnly && (['hr', 'system_admin'].includes(user.sysRole)
     || Boolean(user.hrCapabilities?.includes('recruitment_view'))
+    || Boolean(user.hrCapabilities?.includes('recruitment_edit'))
     || (user.sysRole === 'hr_user' && Boolean(user.hrCapabilities?.some(capability =>
       capability === 'employee_archive_edit' || capability === 'employee_archive_review'))));
 }

@@ -10,6 +10,7 @@ import { hasHrCapability } from '@/auth/hr-capabilities';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { TalentResumeService, validateResumeFile } from './talent-resume.service';
+import { assertRecruitmentEditor } from './talent-recruitment-policy';
 
 export const RESUME_TASK_WAIT_MS = 150_000;
 export const RESUME_TASK_TTL_MS = 30 * 60_000;
@@ -29,7 +30,7 @@ export class TalentResumeTasksService implements OnModuleDestroy {
     private readonly resumes: TalentResumeService) {}
 
   private authorize(user: AuthUser) {
-    if (!user?.id || !hasHrCapability(user, 'employee_archive_edit')) throw new ForbiddenException('无权限解析人才简历');
+    if (!user?.id || user.isAssessorOnly || (!hasHrCapability(user, 'recruitment_edit') && !hasHrCapability(user, 'employee_archive_edit'))) throw new ForbiddenException('无权限解析人才简历');
   }
 
   private context(value: unknown): string {
@@ -124,6 +125,7 @@ export class TalentResumeTasksService implements OnModuleDestroy {
     const outcome = await this.db.$transaction(async tx => {
       // Serialize admission across API processes; do not hold this lock during AI requests.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(126012, 19019)`;
+      await assertRecruitmentEditor(tx, user);
       await this.expire(tx as PrismaService);
       if (retrySourceId && !await tx.talentResumeTask.findFirst({ where: {
         id: retrySourceId, ownerId: user.id, context, expiresAt: { gt: now },
@@ -181,6 +183,7 @@ export class TalentResumeTasksService implements OnModuleDestroy {
     const row = await this.owned(id, user);
     const cleared = await this.db.$transaction(async tx => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(126012, 19019)`;
+      await assertRecruitmentEditor(tx, user);
       const current = await tx.talentResumeTask.findFirst({ where: { ownerId: user.id, context: row.context,
         expiresAt: { gt: new Date(Date.now()) } }, orderBy: [{ selectedAt: 'desc' }, { id: 'desc' }], select: { id: true } });
       if (current?.id !== id) throw new ConflictException('解析任务已更新，请重新连接后再清除');

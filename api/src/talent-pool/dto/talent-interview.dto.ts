@@ -35,6 +35,11 @@ export class TalentInterviewQueryDto {
 // Mapped types retain validated page fields, not PaginationDto's skip/take getters.
 export class TalentInterviewQueueQueryDto extends IntersectionType(TalentInterviewQueryDto, PaginationDto) {}
 
+export class TalentInterviewParticipantQueryDto extends PaginationDto {
+  @IsOptional() @IsString() @MaxLength(100) keyword?: string;
+  @IsOptional() @IsUUID() id?: string;
+}
+
 export class DeleteTalentDto {
   @IsOptional() @IsString() @MaxLength(64) impactVersion?: string;
   @IsOptional() @IsBoolean() force?: boolean;

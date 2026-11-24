@@ -1,6 +1,17 @@
 import { hasHrCapability } from './hr-capabilities';
 
 describe('hasHrCapability', () => {
+  it.each(['employee', 'hr_user', 'manager', 'hr', 'system_admin'])('keeps %s recruitment editing an explicit grant without mapping it to archive permissions', sysRole => {
+    expect(hasHrCapability({ sysRole, hrCapabilities: [] }, 'recruitment_edit' as never)).toBe(false);
+    const actor = { sysRole, hrCapabilities: ['recruitment_edit'] };
+    expect(hasHrCapability(actor, 'recruitment_edit' as never)).toBe(true);
+    expect(hasHrCapability(actor, 'recruitment_view')).toBe(true);
+    if (!['hr', 'system_admin'].includes(sysRole)) {
+      expect(hasHrCapability(actor, 'employee_archive_edit')).toBe(false);
+      expect(hasHrCapability(actor, 'organization_edit')).toBe(false);
+      expect(hasHrCapability(actor, 'talent_hiring_confirm')).toBe(false);
+    }
+  });
   it.each(['employee', 'manager', 'dept_head', 'vp', 'hr_user'])('allows %s an explicit recruitment-only read grant', sysRole => {
     const actor = { sysRole, hrCapabilities: ['recruitment_view'] };
     expect(hasHrCapability(actor, 'recruitment_view')).toBe(true);

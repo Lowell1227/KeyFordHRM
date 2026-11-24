@@ -16,6 +16,8 @@ export function assertPersonnelReferenceDataAccess(
     canEdit ||
     (user &&
       (hasHrCapability(user, 'employee_archive_review') ||
+        (kind === PersonnelReferenceDataKind.education &&
+          hasHrCapability(user, 'recruitment_edit')) ||
         (kind === PersonnelReferenceDataKind.job_family &&
           hasHrCapability(user, 'organization_edit'))));
   if (!(write ? canEdit : canRead))

@@ -41,6 +41,15 @@ function pauseLock(prisma: ReturnType<typeof setup>['prisma'], table: string) {
 }
 
 describe('talent interview safety and access', () => {
+  it('lets an explicitly granted employee maintain invitations with current database eligibility, not request status', async () => {
+    const { sut, actor } = setup();
+    Object.assign(actor, { sysRole: 'employee', hrCapabilities: ['recruitment_edit'] });
+    const operator = { ...employee, hrCapabilities: ['recruitment_edit'] };
+    await expect(sut.create(draft, operator)).resolves.toMatchObject({ candidateId: 'candidate' });
+    await expect(sut.update('invite', { version: 1, note: 'Operator edit' }, operator)).resolves.toMatchObject({ version: 2 });
+    Object.assign(actor, { hrCapabilities: ['recruitment_view'] });
+    await expect(sut.cancel('invite', { version: 1 }, operator)).rejects.toThrow(ForbiddenException);
+  });
   it('allows an explicit employee recruitment reader to see an unassigned invitation without writing', async () => {
     const { sut } = setup();
     const reader = { ...employee, id: 'reader', hrCapabilities: ['recruitment_view'] };
@@ -121,7 +130,7 @@ describe('talent interview safety and access', () => {
     } finally { lock.unlock(); }
     await expect(pending).rejects.toThrow(BadRequestException);
     expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
-      id: { in: ['participant'] }, status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null,
+      id: { in: ['participant'] }, status: { in: ['active', 'probation'] }, archivedAt: null, deletedAt: null, accountType: 'employee', isAssessorOnly: false,
     } }));
     expect(prisma.talentInterview.create).not.toHaveBeenCalled();
     expect(prisma.talentInterview.updateMany).not.toHaveBeenCalled();

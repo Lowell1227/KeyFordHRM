@@ -18,7 +18,7 @@ import { hasHrCapability } from '@/auth/hr-capabilities';
 import { SysRole } from '@prisma/client';
 import { LegacyTaskAttachmentsService } from './legacy-task-attachments.service';
 import { PrismaService } from '@/prisma/prisma.service';
-import { assertRecruitmentReader, assertRecruitmentWriter } from '@/talent-pool/talent-recruitment-policy';
+import { assertRecruitmentReader, assertRecruitmentEditor } from '@/talent-pool/talent-recruitment-policy';
 
 @Controller('storage')
 export class StorageController {
@@ -42,7 +42,7 @@ export class StorageController {
     if (purpose.startsWith('employee-contract-') && !this.canAccessContractMaterials(operator)) {
       throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限管理合同材料' });
     }
-    if (purpose === 'talent-resume') await assertRecruitmentWriter(this.prisma, operator);
+    if (purpose === 'talent-resume') await assertRecruitmentEditor(this.prisma, operator);
     return this.storageService.uploadFile(file, purpose, operator.id);
   }
 

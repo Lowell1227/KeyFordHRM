@@ -12,7 +12,7 @@ import { TalentManagementGuard } from './talent-management.guard';
 
 @Controller('talent-resume/tasks')
 @Roles(SysRole.hr, SysRole.system_admin)
-@HrCapabilities('employee_archive_edit')
+@HrCapabilities('recruitment_edit', 'employee_archive_edit')
 @UseGuards(TalentManagementGuard)
 export class TalentResumeTasksController {
   constructor(private readonly tasks: TalentResumeTasksService) {}

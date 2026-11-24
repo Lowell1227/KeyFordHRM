@@ -63,7 +63,7 @@ describe('talent ownership and reference education', () => {
     });
     expect(prisma.user.findFirst.mock.calls[0][0].where).toMatchObject({ id: hr.id,
       deletedAt: null, archivedAt: null, status: { in: ['active', 'probation'] }, isAssessorOnly: false,
-      OR: [{ sysRole: { in: ['hr', 'system_admin'] } }, { sysRole: 'hr_user', hrCapabilities: { has: 'employee_archive_edit' } }],
+      OR: [{ sysRole: { in: ['hr', 'system_admin'] } }, { sysRole: 'hr_user', hrCapabilities: { has: 'employee_archive_edit' } }, { hrCapabilities: { has: 'recruitment_edit' } }],
     });
   });
 

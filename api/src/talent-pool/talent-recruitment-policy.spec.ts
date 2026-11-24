@@ -1,10 +1,29 @@
 import { ForbiddenException } from '@nestjs/common';
+import * as policy from './talent-recruitment-policy';
 import { allowedApplicationActions, assertRecruitmentReader, assertRecruitmentWriter, canConfirmTalentHiring, canReadRecruitment, canWriteRecruitment, isFeedbackOpen } from './talent-recruitment-policy';
 
 const hr = { id: 'hr', sysRole: 'hr', status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false, hrCapabilities: [] };
 const application = { stage: 'hiring_review', hiringRequestedById: 'submitter', reviewReturnStage: 'interviewing' };
 
 describe('recruitment policy', () => {
+  it.each(['employee', 'hr_user', 'manager'])('gives an explicit %s operator daily actions, not archive management or hiring confirmation', sysRole => {
+    const actor = { ...hr, sysRole, hrCapabilities: ['recruitment_edit'] };
+    expect(canReadRecruitment(actor)).toBe(true);
+    expect(typeof (policy as any).canEditRecruitment).toBe('function');
+    expect((policy as any).canEditRecruitment(actor)).toBe(true);
+    expect(canWriteRecruitment(actor)).toBe(false);
+    expect(canConfirmTalentHiring(actor, 'other')).toBe(false);
+    expect(allowedApplicationActions(actor, { ...application, stage: 'screening' }, false)).toEqual(['start_interview', 'submit_hiring', 'reject', 'reserve', 'withdraw']);
+    expect(allowedApplicationActions(actor, { ...application, stage: 'offered' }, false)).toEqual(['accept_offer', 'decline_offer', 'withdraw']);
+    expect(allowedApplicationActions(actor, application, false)).not.toContain('approve_hiring');
+  });
+  it('requires current eligibility for the new operator, even with explicit grants', () => {
+    expect(typeof (policy as any).canEditRecruitment).toBe('function');
+    for (const change of [{ status: 'resigned' }, { status: 'pending_entry' }, { deletedAt: new Date() }, { archivedAt: new Date() }, { isAssessorOnly: true }]) {
+      expect((policy as any).canEditRecruitment({ ...hr, sysRole: 'employee', hrCapabilities: ['recruitment_edit'], ...change })).toBe(false);
+    }
+    expect(policy.talentOwnerWhere()).toMatchObject({ isAssessorOnly: false, OR: expect.arrayContaining([{ hrCapabilities: { has: 'recruitment_edit' } }]) });
+  });
   it.each([undefined, null, {}])('rejects missing trusted identity before looking up any account: %j', async user => {
     const tx = { user: { findUnique: jest.fn() } };
     await expect(assertRecruitmentReader(tx as never, user as never)).rejects.toThrow(ForbiddenException);

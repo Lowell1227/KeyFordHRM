@@ -18,7 +18,7 @@ async function install(page: Page) {
     if (path.endsWith(`/applications/${app.id}`)) return route.fulfill(envelope(app));
     if (path.endsWith(`/applications/${second.id}`)) return route.fulfill(envelope(second));
     if (path.endsWith('/owners')) return route.fulfill(envelope({ items: [], total: 0 }));
-    if (path.endsWith('/users/person-one')) return route.fulfill(envelope({ id: 'person-one', name: '虚构面试官', employeeNo: 'MOCK', status: 'active' }));
+    if (path.endsWith('/talent-interviews/participants')) return route.fulfill(envelope({ items: [{ id: 'person-one', name: '虚构面试官', employeeNo: 'MOCK', status: 'active', archivedAt: null }], total: 1 }));
     if (path.endsWith('/feedback')) return route.fulfill(envelope({ interviewVersion: 2, own: null, items: [], canEdit: true, canReturn: false }));
     if (path.endsWith('/talent-interviews') && req.method() === 'GET') return route.fulfill(envelope([interview, { ...interview, id: 'interview-two', applicationId: second.id, application: second }, { ...interview, id: 'legacy-one', applicationId: null, application: null }]));
     if (path.endsWith(`/talent-interviews/${interview.id}`) && req.method() === 'GET') return route.fulfill(envelope({ ...interview, version: 3, invitationText: '另一位经办已保存的邀请' }));

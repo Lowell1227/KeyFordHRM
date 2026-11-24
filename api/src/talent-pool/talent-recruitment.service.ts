@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, TalentApplicationQueueQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
-import { allowedApplicationActions, canConfirmTalentHiring, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, TALENT_RESERVE_REASONS, type RecruitmentActor, type TalentReserveReason } from './talent-recruitment-policy';
+import { allowedApplicationActions, canConfirmTalentHiring, canEditRecruitment, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, TALENT_RESERVE_REASONS, type RecruitmentActor, type TalentReserveReason } from './talent-recruitment-policy';
 
 const actorSelect = { id: true, name: true, sysRole: true, hrCapabilities: true, status: true, deletedAt: true, archivedAt: true, isAssessorOnly: true } satisfies Prisma.UserSelect;
 const applicationInclude = {
@@ -32,7 +32,7 @@ export class TalentRecruitmentService {
   }
 
   private assertWrite(actor: RecruitmentActor) {
-    if (!canWriteRecruitment(actor)) throw new ForbiddenException('无权限维护应聘记录');
+    if (!canEditRecruitment(actor)) throw new ForbiddenException('无权限维护应聘记录');
   }
 
   async queue(query: TalentApplicationQueueQueryDto, user: AuthUser) {
@@ -75,7 +75,7 @@ export class TalentRecruitmentService {
 
   async assertOwner(tx: Prisma.TransactionClient, ownerId: string) {
     const owner = await tx.user.findUnique({ where: { id: ownerId }, select: actorSelect });
-    if (!owner || !canWriteRecruitment(owner)) throw new BadRequestException('请选择当前在职或试用、具备人事维护权限的负责人');
+    if (!owner || !canEditRecruitment(owner)) throw new BadRequestException('请选择当前在职或试用、具备招聘经办权限的负责人');
     return owner;
   }
 
@@ -383,7 +383,7 @@ export class TalentRecruitmentService {
     return this.prisma.$transaction(async tx => {
       const context = await this.feedbackContext(tx, id, user, true, userId);
       const { actor, interview, application } = context;
-      this.assertWrite(actor);
+      if (!canWriteRecruitment(actor)) throw new ForbiddenException('无权限退回面试反馈');
       this.revision(interview.version, input.interviewVersion);
       if (!isFeedbackOpen(application?.stage ?? null, interview.status)) throw new BadRequestException('录用送审或面试取消后不能退回反馈');
       const note = this.text(input.note, '退回说明', 4000, true);

@@ -4,7 +4,7 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 import { TALENT_APPLICATION_STAGES } from './talent-application-filter';
-import { canReadRecruitment, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen } from './talent-recruitment-policy';
+import { canEditRecruitment, canReadRecruitment, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen } from './talent-recruitment-policy';
 
 export interface TalentWorkbenchItem {
   id: string;
@@ -34,7 +34,7 @@ export class TalentWorkbenchService {
       if (!actor || !isCurrentRecruitmentActor(actor)) throw new ForbiddenException('当前账号不具备办理资格');
       const now = new Date();
       const groups: Array<Promise<TalentWorkbenchGroup>> = [];
-      if (canWriteRecruitment(actor)) groups.push(this.followUps(tx, actor.id));
+      if (canEditRecruitment(actor)) groups.push(this.followUps(tx, actor.id));
       const participation = { participants: { some: { userId: actor.id } } };
       const reader = canReadRecruitment(actor);
       groups.push(this.interviews(tx, 'interview', {

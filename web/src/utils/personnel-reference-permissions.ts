@@ -10,6 +10,7 @@ export function canWritePersonnelReferenceData(user: ReferenceUser): boolean {
 
 export function canReadPersonnelReferenceData(user: ReferenceUser, kind: PersonnelReferenceKind): boolean {
   return canWritePersonnelReferenceData(user)
+    || (kind === 'education' && Boolean(user?.hrCapabilities?.includes('recruitment_edit')))
     || (user?.sysRole === 'hr_user' && Boolean(user.hrCapabilities?.some(capability =>
       capability === 'employee_archive_review' || (kind === 'job_family' && capability === 'organization_edit'))));
 }

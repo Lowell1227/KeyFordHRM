@@ -24,6 +24,7 @@ function setup(count: number) {
     deleteFileRecord: jest.fn(),
   };
   const tx = {
+    user: { findUnique: jest.fn().mockResolvedValue({ ...HR, status: 'active' }) },
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'cand-1' }]),
     talentCandidate: { findFirst: jest.fn().mockResolvedValue({ id: 'cand-1' }) },
     talentResumeFile: {

@@ -38,6 +38,16 @@ describe('TalentResumeService (no persistence / external calls)', () => {
   });
   afterEach(() => jest.restoreAllMocks());
 
+  it('accepts an explicit employee operator but denies its assessor-only variant before provider access', async () => {
+    enabled = true;
+    const operator = { ...hr, sysRole: 'employee', hrCapabilities: ['recruitment_edit'] } as AuthUser;
+    await expect(service.parse(file(), operator)).resolves.toMatchObject({ fields: { name: '虚构候选人' } });
+    ai.getProviderRuntimeConfig.mockClear(); client.parse.mockClear();
+    await expect(service.parse(file(), { ...operator, isAssessorOnly: true })).rejects.toThrow('权限');
+    expect(client.parse).not.toHaveBeenCalled();
+    expect(ai.getProviderRuntimeConfig).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, false, 'false', '0', 'yes'])('reports disabled config accurately: %s', async (value) => {
     enabled = value;
     expect(await service.getStatus(hr)).toEqual({ configured: true, enabled: false, provider: 'deepseek', modelId: 'deepseek-flash' });

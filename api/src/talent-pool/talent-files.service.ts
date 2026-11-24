@@ -5,6 +5,7 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { TALENT_FILE_LIMIT } from './talent.constants';
 import { BindTalentFileDto } from './dto/bind-talent-file.dto';
 import { TalentsService } from './talents.service';
+import { assertRecruitmentEditor } from './talent-recruitment-policy';
 
 const ALLOWED_RESUME_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png']);
 
@@ -46,6 +47,7 @@ export class TalentFilesService {
     return this.prisma.$transaction(async (tx) => {
       // Serialize binding with other uploads and candidate soft deletion.
       await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${candidateId}::uuid FOR UPDATE`;
+      await assertRecruitmentEditor(tx, operator);
       const candidate = await tx.talentCandidate.findFirst({ where: { id: candidateId, deletedAt: null } });
       if (!candidate) throw new NotFoundException('候选人不存在或已删除');
       const existing = await tx.talentResumeFile.findFirst({ where: { candidateId, objectKey } });

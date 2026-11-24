@@ -3,16 +3,24 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  INestApplication,
   NotFoundException,
+  ValidationPipe,
 } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { RolesGuard } from '@/common/guards/roles.guard';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PersonnelReferenceDataService } from './personnel-reference-data.service';
 import { PersonnelReferenceDataGuard } from './personnel-reference-data.guard';
+import { PersonnelReferenceDataController } from './personnel-reference-data.controller';
 import {
   CreatePersonnelReferenceDataDto,
   PersonnelReferenceDataQueryDto,
+  PersonnelReferenceDataKind,
   UpdatePersonnelReferenceDataDto,
 } from './personnel-reference-data.dto';
 
@@ -21,6 +29,69 @@ const actor = (sysRole = 'hr', hrCapabilities: string[] = []) =>
   ({ id, sysRole, hrCapabilities }) as AuthUser;
 const transform = <T>(dto: new () => T, input: object) =>
   plainToInstance(dto, input, { enableImplicitConversion: true });
+
+describe('recruitment education read-only HTTP scope', () => {
+  let app: INestApplication;
+  const rows = [
+    { id, kind: 'education', name: 'Synthetic active degree', isActive: true },
+    { id: '22222222-2222-4222-8222-222222222222', kind: 'education', name: 'Synthetic old degree', isActive: false },
+  ];
+  const db = { personnelReferenceData: { findMany: jest.fn(async ({ where }) => rows.filter(row =>
+    row.kind === where.kind && (where.isActive === undefined || row.isActive === where.isActive))) },
+    $transaction: jest.fn() };
+  const users = {
+    operator: actor('employee', ['recruitment_edit']),
+    hrOperator: actor('hr_user', ['recruitment_edit']),
+    viewer: actor('employee', ['recruitment_view']),
+    reviewer: actor('hr_user', ['employee_archive_review', 'recruitment_edit']),
+    editor: actor('hr_user', ['employee_archive_edit', 'recruitment_edit']),
+    hr: actor('hr'), admin: actor('system_admin'),
+  };
+  beforeAll(async () => {
+    const module = await Test.createTestingModule({ controllers: [PersonnelReferenceDataController], providers: [
+      { provide: PersonnelReferenceDataService, useValue: new PersonnelReferenceDataService(db as never) },
+      { provide: APP_GUARD, useClass: RolesGuard },
+    ] }).compile();
+    app = module.createNestApplication();
+    app.use((req, _res, next) => { req.user = users[req.headers['x-test-actor'] as string]; next(); });
+    app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }));
+    await app.init();
+  });
+  beforeEach(() => jest.clearAllMocks());
+  afterAll(async () => { await app?.close(); });
+
+  it.each(['operator', 'hrOperator'])('%s can read only enabled education even when requesting inactive values', async user => {
+    for (const query of ['', '?includeInactive=false', '?includeInactive=true']) {
+      const result = await request(app.getHttpServer()).get('/personnel-reference-data/education' + query)
+        .set('x-test-actor', user).expect(200);
+      expect(result.body).toEqual([rows[0]]);
+      expect(db.personnelReferenceData.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+        where: { kind: 'education', isActive: true },
+      }));
+    }
+  });
+  it.each(['operator', 'hrOperator'])('%s cannot read other dictionaries or create/update education', async user => {
+    for (const kind of Object.values(PersonnelReferenceDataKind).filter(kind => kind !== 'education')) {
+      await request(app.getHttpServer()).get('/personnel-reference-data/' + kind).set('x-test-actor', user).expect(403);
+    }
+    await request(app.getHttpServer()).post('/personnel-reference-data/education')
+      .set('x-test-actor', user).send({ name: 'Synthetic new degree' }).expect(403);
+    await request(app.getHttpServer()).patch('/personnel-reference-data/education/' + id)
+      .set('x-test-actor', user).send({ isActive: false }).expect(403);
+    expect(db.personnelReferenceData.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+  it.each(['reviewer', 'editor', 'hr', 'admin'])('preserves %s access to inactive education', async user => {
+    const result = await request(app.getHttpServer()).get('/personnel-reference-data/education?includeInactive=true')
+      .set('x-test-actor', user).expect(200);
+    expect(result.body).toEqual(rows);
+    expect(db.personnelReferenceData.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { kind: 'education' } }));
+  });
+  it('does not grant education to recruitment viewing alone', async () => {
+    await request(app.getHttpServer()).get('/personnel-reference-data/education').set('x-test-actor', 'viewer').expect(403);
+    expect(db.personnelReferenceData.findMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('personnel reference data validation', () => {
   it.each(['', '  ', '甲'.repeat(101), null, 123, true])(

@@ -22,7 +22,7 @@ import { TalentManagementGuard } from './talent-management.guard';
 
 /**
  * 人才库（需求 v2）。候选人不是员工：不写 users、不产生工号、不触发绩效。
- * 读取支持独立招聘查看能力；维护仍由档案编辑能力与服务层当前资格约束。
+ * 查看与日常经办独立授权；删除、分享和导出保持原档案管理边界。
  */
 @Controller('talents')
 @Roles(SysRole.hr, SysRole.system_admin)
@@ -67,7 +67,7 @@ export class TalentsController {
   }
 
   @Post()
-  @HrCapabilities('employee_archive_edit')
+  @HrCapabilities('recruitment_edit', 'employee_archive_edit')
   create(@Body() input: CreateTalentDto, @CurrentUser() user: AuthUser) {
     return this.talents.create(input, user);
   }
@@ -79,7 +79,7 @@ export class TalentsController {
   }
 
   @Patch(':id')
-  @HrCapabilities('employee_archive_edit')
+  @HrCapabilities('recruitment_edit', 'employee_archive_edit')
   update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() input: UpdateTalentDto,
@@ -101,7 +101,7 @@ export class TalentsController {
   }
 
   @Post(':id/files')
-  @HrCapabilities('employee_archive_edit')
+  @HrCapabilities('recruitment_edit', 'employee_archive_edit')
   bindFile(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() input: BindTalentFileDto,
@@ -111,7 +111,7 @@ export class TalentsController {
   }
 
   @Delete(':id/files/:fileId')
-  @HrCapabilities('employee_archive_edit')
+  @HrCapabilities('recruitment_edit', 'employee_archive_edit')
   unbindFile(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('fileId', new ParseUUIDPipe()) fileId: string,
@@ -121,7 +121,7 @@ export class TalentsController {
   }
 
   @Post(':id/follow-ups')
-  @HrCapabilities('employee_archive_edit')
+  @HrCapabilities('recruitment_edit', 'employee_archive_edit')
   addFollowUp(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() input: CreateFollowUpDto,
@@ -131,7 +131,7 @@ export class TalentsController {
   }
 
   @Post(':id/follow-ups/:followUpId/cancel')
-  @HrCapabilities('employee_archive_edit')
+  @HrCapabilities('recruitment_edit', 'employee_archive_edit')
   cancelFollowUpPlan(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('followUpId', new ParseUUIDPipe()) followUpId: string,

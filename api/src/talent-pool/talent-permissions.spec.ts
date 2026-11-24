@@ -39,6 +39,21 @@ describe('人才库权限边界（RolesGuard + 真实路由元数据）', () => 
     services.talents as never, services.files as never,
     services.followUps as never, services.shares as never,
   );
+
+  it('grants only daily recruitment routes to an explicitly authorized employee operator', () => {
+    const actor = user(SysRole.employee, ['recruitment_edit']);
+    for (const handler of [controller.list, controller.detail, controller.applicationPositions, controller.checkPhone, controller.create,
+      controller.update, controller.bindFile, controller.unbindFile, controller.addFollowUp, controller.cancelFollowUpPlan, controller.listFollowUps]) {
+      expect(guard.canActivate(context(handler, TalentsController, actor))).toBe(true);
+    }
+    for (const handler of [controller.remove, controller.deleteImpact, controller.createShare, controller.revokeShare, controller.shareRecipients, controller.exportApplications, controller.convert]) {
+      expect(() => guard.canActivate(context(handler, TalentsController, actor))).toThrow(ForbiddenException);
+    }
+    const interviews = new TalentInterviewsController({} as never);
+    for (const handler of [interviews.create, interviews.update, interviews.cancel, interviews.complete, interviews.retrySync]) {
+      expect(guard.canActivate(context(handler, TalentInterviewsController, actor))).toBe(true);
+    }
+  });
   const sharesController = new TalentSharesController(services.shares as never, services.storage as never);
 
   const deniedRoles: SysRole[] = [SysRole.employee, SysRole.manager, SysRole.dept_head, SysRole.vp];

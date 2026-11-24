@@ -163,7 +163,7 @@ export const routes: RouteRecordRaw[] = [
       title: '人才库',
       talentPoolOnly: true,
       roles: ['hr', 'system_admin'],
-      hrCapabilities: ['recruitment_view', 'employee_archive_edit', 'employee_archive_review'],
+      hrCapabilities: ['recruitment_view', 'recruitment_edit', 'employee_archive_edit', 'employee_archive_review'],
       navigation: { module: 'recruitment', label: '人才库', order: 10, group: 'recruitment-candidates', groupLabel: '人才与应聘' },
     },
   },

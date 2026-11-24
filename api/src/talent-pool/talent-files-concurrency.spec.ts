@@ -44,6 +44,7 @@ function setup(initialCount = 0) {
     $transaction: jest.fn(async (run: (tx: any) => Promise<unknown>) => {
       let release: (() => void) | undefined;
       const tx = {
+        user: { findUnique: jest.fn().mockResolvedValue({ ...HR, status: 'active' }) },
         talentCandidate, talentResumeFile,
         $queryRaw: async (sql: TemplateStringsArray, id: string) => {
           expect(sql.join('?')).toBe('SELECT id FROM talent_candidates WHERE id = ?::uuid FOR UPDATE');

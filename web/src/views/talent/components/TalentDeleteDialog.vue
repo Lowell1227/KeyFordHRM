@@ -8,15 +8,15 @@ import { formatInterviewTime } from '../interview-time';
 
 const props = defineProps<{ modelValue: boolean; targets: Array<{ id: string; name: string }> }>();
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; removed: [ids: string[]] }>();
-const { canEdit } = useTalentPermissions();
+const { canDelete } = useTalentPermissions();
 const entries = ref<Array<{ id: string; name: string; impact: TalentDeleteImpact | null; error: string }>>([]);
 const loading = ref(false);
 const deleting = ref(false);
 const deletedCount = ref(0);
 let generation = 0;
-const ready = computed(() => props.modelValue && canEdit.value && !loading.value && !deleting.value
+const ready = computed(() => props.modelValue && canDelete.value && !loading.value && !deleting.value
   && entries.value.length > 0 && entries.value.every(item => item.impact));
-const visible = computed({ get: () => props.modelValue, set: value => { if (!deleting.value) emit('update:modelValue', value); } });
+const visible = computed({ get: () => props.modelValue && canDelete.value, set: value => { if (!deleting.value) emit('update:modelValue', value); } });
 
 watch(() => props.modelValue, open => {
   ++generation;
@@ -30,7 +30,7 @@ watch(() => props.modelValue, open => {
 onBeforeUnmount(() => { ++generation; });
 
 async function loadImpacts() {
-  if (!props.modelValue || !canEdit.value || deleting.value) return;
+  if (!props.modelValue || !canDelete.value || deleting.value) return;
   const token = ++generation;
   loading.value = true;
   await Promise.all(entries.value.map(async item => {
@@ -53,7 +53,7 @@ async function confirmDelete() {
   const token = generation, removed: string[] = [];
   deleting.value = true;
   for (const item of entries.value) {
-    if (token !== generation || !canEdit.value) break;
+    if (token !== generation || !canDelete.value) break;
     try {
       await talentPoolApi.remove(item.id, { impactVersion: item.impact!.version, force: item.impact!.requiresForce });
       removed.push(item.id);

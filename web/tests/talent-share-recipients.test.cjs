@@ -32,6 +32,7 @@ function drawer(t, api) {
     '@/api/talent-pool.api': { talentPoolApi: api },
     '@/api/users.api': { usersApi: { findAll: async (...args) => { sharedUserCalls.push(args); return { items: [] }; } } },
     '@/utils/date': { formatDate: value => value },
+    '../useTalentPermissions': { useTalentPermissions: () => ({ canShare: vue.ref(true) }) },
     'element-plus': { ElMessage: { success() {}, warning() {} }, ElMessageBox: { confirm: async () => {} } },
   }).default;
   const props = vue.reactive({ modelValue: true, candidateId: 'talent-1', candidateName: '虚构候选人', shares: [] });

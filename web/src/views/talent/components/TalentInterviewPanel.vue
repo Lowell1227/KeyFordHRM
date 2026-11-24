@@ -2,9 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
-import { talentInterviewsApi } from '@/api/talent-pool.api';
-import { usersApi } from '@/api/users.api';
-import type { User } from '@/types/api.types';
+import { talentInterviewsApi, type TalentInterviewParticipant } from '@/api/talent-pool.api';
 import { INTERVIEW_STATUS_LABELS, INTERVIEW_SYNC_LABELS, type TalentInterviewView } from '@/types/talent.types';
 import TalentInterviewContent from './TalentInterviewContent.vue';
 import { formatInterviewTime, interviewTimeToIso } from '../interview-time';
@@ -31,7 +29,7 @@ const canSaveEditor = computed(() => props.editable && !conflict.value && !refre
 const inviteMode = ref('现场面试'), inviteLocation = ref(''), generatedTemplate = ref('');
 
 const opened = ref<string[]>([]);
-type InterviewPerson = Pick<User, 'id' | 'name' | 'employeeNo' | 'status' | 'archivedAt'>;
+type InterviewPerson = TalentInterviewParticipant;
 const people = ref<InterviewPerson[]>([]), searching = ref(false), checkingParticipants = ref(false);
 const participantNames = ref<Record<string, string>>({}), participantIssues = ref<Record<string, string>>({});
 const form = reactive({ startsAt: '', endsAt: '', participantIds: [] as string[], invitationText: '', meetingUrl: '', note: '' });
@@ -153,12 +151,11 @@ async function searchPeople(keyword?: string): Promise<boolean> {
   const token = ++searchGeneration, selectedIds = [...form.participantIds];
   checkingParticipants.value = true; searching.value = keyword !== undefined;
   try {
-    const query = { keyword: keyword?.trim() || undefined, page: 1, pageSize: 30, archived: false, includeTestAccounts: false };
+    const query = { keyword: keyword?.trim() || undefined, page: 1, pageSize: 30 };
     const [selected, options] = await Promise.all([
-      Promise.all(selectedIds.map(async id => ({ id, person: await usersApi.findOne(id).catch(() => null) }))),
-      keyword === undefined ? Promise.resolve(people.value) : Promise.all([
-        usersApi.findAll({ ...query, status: 'active' }), usersApi.findAll({ ...query, status: 'probation' }),
-      ]).then(results => results.flatMap(result => result.items)),
+      Promise.all(selectedIds.map(async id => ({ id, person: await talentInterviewsApi.participants({ id, page: 1, pageSize: 1 })
+        .then(result => result.items[0] ?? null).catch(() => null) }))),
+      keyword === undefined ? Promise.resolve(people.value) : talentInterviewsApi.participants(query).then(result => result.items),
     ]);
     if (token !== searchGeneration || !editing.value) return false;
     participantIssues.value = {};
@@ -300,7 +297,7 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
         <el-form-item label="结束时间（北京时间）" prop="endsAt"><el-date-picker v-model="form.endsAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" /></el-form-item>
       </div>
       <el-form-item label="内部参与人" prop="participantIds">
-        <el-select v-model="selectableParticipantIds" multiple filterable remote :remote-method="searchPeople" :loading="searching || checkingParticipants" :multiple-limit="50 - blockedParticipantIds.length" placeholder="搜索姓名或工号" @focus="searchPeople('')">
+        <el-select v-model="selectableParticipantIds" popper-class="interview-participants-popper" multiple filterable remote :remote-method="searchPeople" :loading="searching || checkingParticipants" :multiple-limit="50 - blockedParticipantIds.length" placeholder="搜索姓名或工号" @focus="searchPeople('')">
           <el-option v-for="person in people" :key="person.id" :value="person.id" :label="[person.name, person.employeeNo].filter(Boolean).join(' · ')" />
         </el-select>
         <div v-if="blockedParticipantIds.length" role="region" aria-label="待处理参与人" class="interview-panel__participant-issues">
@@ -364,4 +361,5 @@ h4 { margin: 0; font-size: 14px; }
 .interview-panel__participant-issues li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; }
 .interview-panel__participant-issues span { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 768px) { .interview-panel__editor > .interview-panel__actions { position: sticky; bottom: -14px; background: var(--el-bg-color); padding: 10px 0; z-index: 2; }  .interview-panel__times { grid-template-columns: minmax(0, 1fr); gap: 0; } }
+@media (max-width: 768px) { :global(.interview-participants-popper) { max-width: calc(100vw - 24px); } }
 </style>

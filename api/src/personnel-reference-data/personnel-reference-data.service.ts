@@ -8,6 +8,7 @@ import { isUUID } from 'class-validator';
 import type { PersonnelReferenceData } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 import {
   CreatePersonnelReferenceDataDto,
   PersonnelReferenceDataQueryDto,
@@ -37,10 +38,12 @@ export class PersonnelReferenceDataService {
       typeof query.includeInactive !== 'boolean'
     )
       throw new BadRequestException('启用状态筛选无效');
+    const recruitmentOnly = kind === 'education' && hasHrCapability(operator, 'recruitment_edit')
+      && !hasHrCapability(operator, 'employee_archive_edit') && !hasHrCapability(operator, 'employee_archive_review');
     return this.prisma.personnelReferenceData.findMany({
       where: {
         kind,
-        ...(query.includeInactive === true ? {} : { isActive: true }),
+        ...(query.includeInactive === true && !recruitmentOnly ? {} : { isActive: true }),
       },
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
     });

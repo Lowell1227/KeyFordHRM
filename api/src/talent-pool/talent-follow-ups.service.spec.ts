@@ -5,7 +5,7 @@ import type { AuthUser } from '@/common/types/auth.types';
 /** 跟进规则（T4）：同事务回写 last_follow_up_at；列表倒序附记录人姓名。 */
 
 const HR: AuthUser = {
-  id: 'hr-1', name: '姚瑶', sysRole: 'hr' as never,
+  id: 'hr-1', name: 'Synthetic HR', sysRole: 'hr' as never,
   deptId: null, isAssessorOnly: false, canViewAll: false,
 };
 
@@ -13,7 +13,7 @@ function setup() {
   const prisma = {
     talentFollowUp: { create: jest.fn(), findMany: jest.fn() },
     talentCandidate: { updateMany: jest.fn() },
-    user: { findMany: jest.fn() },
+    user: { findMany: jest.fn(), findUnique: jest.fn().mockResolvedValue({ ...HR, status: 'active' }) },
     $transaction: jest.fn(),
   };
   const talents = { findActive: jest.fn().mockResolvedValue({ id: 'cand-1' }) };
@@ -28,6 +28,7 @@ describe('TalentFollowUpsService', () => {
     const { prisma, sut } = setup();
     const old = { id: 'prior', occurredAt: new Date('2026-11-10'), planStatus: 'pending' };
     const tx = {
+      user: prisma.user,
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'cand-1' }]),
       talentFollowUp: { findFirst: jest.fn().mockResolvedValue(old),
         create: jest.fn(async ({ data }) => ({ id: 'saved', ...data })),
@@ -81,6 +82,7 @@ describe('TalentFollowUpsService', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-11-12T17:00:00.000Z'));
     const { prisma, sut } = setup();
     const tx = {
+      user: prisma.user,
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'cand-1' }]),
       talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'fu-1' }) },
       talentCandidate: { updateMany: jest.fn() },
@@ -100,6 +102,7 @@ describe('TalentFollowUpsService', () => {
   it('显式日期与下次跟进日期按 YYYY-MM-DD 解析', async () => {
     const { prisma, sut } = setup();
     const tx = {
+      user: prisma.user,
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'cand-1' }]), auditLog: { create: jest.fn() },
       talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'fu-2' }) },
       talentCandidate: { updateMany: jest.fn() },

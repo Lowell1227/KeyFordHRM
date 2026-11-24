@@ -36,7 +36,7 @@ import TalentFormDrawer from './components/TalentFormDrawer.vue';
 import TalentDeleteDialog from './components/TalentDeleteDialog.vue';
 import { useTalentPermissions } from './useTalentPermissions';
 
-const { canEdit, canExport } = useTalentPermissions();
+const { canEdit, canExport, canDelete } = useTalentPermissions();
 const auth = useAuthStore();
 const route = useRoute();
 
@@ -173,15 +173,15 @@ function openEdit(id: string) {
 function onSaved() { void loadList(); }
 function onRemoved() { void loadList(); }
 function toggleSelected(id: string) {
-  if (!canEdit.value || loading.value) return;
+  if (!canDelete.value || loading.value) return;
   selectedIds.value = selectedIds.value.includes(id) ? selectedIds.value.filter(value => value !== id) : [...selectedIds.value, id];
 }
 function toggleAll() {
-  if (!canEdit.value || loading.value) return;
+  if (!canDelete.value || loading.value) return;
   selectedIds.value = allSelected.value ? [] : list.value.map(item => item.id);
 }
 function openDelete(rows: Array<{ id: string; name: string }>) {
-  if (!canEdit.value || loading.value || !rows.length) return;
+  if (!canDelete.value || loading.value || !rows.length) return;
   deleteTargets.value = rows.map(({ id, name }) => ({ id, name }));
   deleteVisible.value = true;
 }
@@ -266,7 +266,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
       <el-alert v-if="loadError" :title="loadError" type="error" :closable="false">
         <el-button link type="primary" @click="loadList">重试</el-button>
       </el-alert>
-      <div v-if="canEdit" class="talent-list__selection">
+      <div v-if="canDelete" class="talent-list__selection">
         <el-checkbox :model-value="allSelected" :indeterminate="selectedIds.length > 0 && !allSelected"
           :disabled="loading || !list.length" aria-label="全选本页" @change="toggleAll">全选本页</el-checkbox>
         <span v-if="selectedIds.length">已选 {{ selectedIds.length }} 项</span>
@@ -278,7 +278,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
     <template #desktop-list>
       <el-table v-loading="loading" class="app-table" :data="list" height="100%" :empty-text="EMPTY_TEXT"
         @row-click="(row: unknown) => openRow(asRow(row))">
-        <el-table-column v-if="canEdit" width="44" fixed>
+        <el-table-column v-if="canDelete" width="44" fixed>
           <template #default="{ row }">
             <el-checkbox :model-value="selectedIds.includes(row.id)" :aria-label="`选择${row.name}`"
               :disabled="loading" @click.stop @change="toggleSelected(row.id)" />
@@ -333,11 +333,11 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         <el-table-column label="更新时间" width="110">
           <template #default="{ row }">{{ formatDate(asRow(row).updatedAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" :width="canEdit ? 164 : 70" fixed="right">
+        <el-table-column label="操作" :width="canDelete ? 164 : canEdit ? 120 : 70" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click.stop="openRow(asRow(row))">打开</el-button>
             <el-button v-if="canEdit" link type="primary" @click.stop="openEdit(asRow(row).id)">编辑</el-button>
-            <el-button v-if="canEdit" link type="danger" :disabled="loading" @click.stop="openDelete([asRow(row)])">删除</el-button>
+            <el-button v-if="canDelete" link type="danger" :disabled="loading" @click.stop="openDelete([asRow(row)])">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -348,7 +348,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
       <MobileResultCard v-for="item in list" :key="item.id">
         <template #title>
           <div class="talent-list__mobile-name">
-            <el-checkbox v-if="canEdit" :model-value="selectedIds.includes(item.id)" :aria-label="`选择${item.name}`"
+          <el-checkbox v-if="canDelete" :model-value="selectedIds.includes(item.id)" :aria-label="`选择${item.name}`"
               :disabled="loading" @change="toggleSelected(item.id)" />
             <span>{{ item.name }}</span>
           </div>
@@ -371,7 +371,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         </div>
         <template #actions>
           <el-button link type="primary" @click="openRow(item)">打开详情</el-button>
-          <el-button v-if="canEdit" link type="danger" :disabled="loading" @click="openDelete([item])">删除</el-button>
+          <el-button v-if="canDelete" link type="danger" :disabled="loading" @click="openDelete([item])">删除</el-button>
         </template>
       </MobileResultCard>
     </template>
@@ -385,7 +385,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
         @edit="openEdit" @removed="onRemoved" @changed="loadList" />
       <TalentFormDrawer ref="formDrawer" v-model="formVisible" :candidate-id="activeCandidateId"
         @saved="onSaved" @open-existing="openDetail" />
-      <TalentDeleteDialog v-model="deleteVisible" :targets="deleteTargets" @removed="onRemoved" />
+      <TalentDeleteDialog v-if="canDelete" v-model="deleteVisible" :targets="deleteTargets" @removed="onRemoved" />
     </template>
   </BusinessListPage>
 </template>

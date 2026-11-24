@@ -10,13 +10,12 @@ import { UpdateTalentDto } from './dto/update-talent.dto';
 import { createHash } from 'crypto';
 import { DeleteTalentDto } from './dto/talent-interview.dto';
 import { talentEditVersion } from './talent-edit-version';
-import { currentWorkerWhere } from '@/common/personnel/current-worker';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { salaryWrite, serializeTalentSalary, talentSalaryWhere } from './talent-salary';
 import { talentApplicationFilter } from './talent-application-filter';
 import { buildTalentWorkbook, TALENT_EXPORT_MAX_ROWS } from './talents.excel';
 import { talentEmploymentStatus, type TalentEmploymentStatus } from './talent-employment';
-import { canReadRecruitment, canWriteRecruitment, isCurrentRecruitmentActor } from './talent-recruitment-policy';
+import { canEditRecruitment, canReadRecruitment, canWriteRecruitment, isCurrentRecruitmentActor, talentOwnerWhere } from './talent-recruitment-policy';
 import { talentDemographicsWrite } from './talent-demographics-write';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 
@@ -74,7 +73,7 @@ export class TalentsService {
     return actor;
   }
 
-  private async assertWriter(tx: Prisma.TransactionClient, operator: AuthUser) {
+  private async assertWriter(tx: Prisma.TransactionClient, operator: AuthUser, permission: 'edit' | 'manage' = 'manage') {
     if (!operator?.id) throw new ForbiddenException('无权限维护人才资料');
     // Hold the current actor while writing; permission revocation then has a defined order.
     await tx.$queryRaw`SELECT id FROM users WHERE id = ${operator.id}::uuid FOR SHARE`;
@@ -82,7 +81,7 @@ export class TalentsService {
       id: true, sysRole: true, hrCapabilities: true, status: true,
       archivedAt: true, deletedAt: true, isAssessorOnly: true,
     } });
-    if (!actor || !canWriteRecruitment(actor)) throw new ForbiddenException('当前无权限维护人才资料，请保留输入并联系管理员');
+    if (!actor || !(permission === 'edit' ? canEditRecruitment(actor) : canWriteRecruitment(actor))) throw new ForbiddenException('当前无权限维护人才资料，请保留输入并联系管理员');
   }
 
   async list(query: TalentQueryDto, operator?: AuthUser): Promise<Paginated<TalentListItem>> {
@@ -297,7 +296,7 @@ export class TalentsService {
     if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
     try {
       const candidate = await this.prisma.$transaction(async tx => {
-        await this.assertWriter(tx, operator);
+        await this.assertWriter(tx, operator, 'edit');
         const ownerId = input.ownerId ?? operator.id;
         await this.assertOwner(ownerId, tx);
         const education = await this.resolveEducation(input, tx);
@@ -343,7 +342,7 @@ export class TalentsService {
       return await this.prisma.$transaction(async (tx) => {
         // Share the arrival/deletion row lock before reading any validation inputs.
         await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${id}::uuid FOR UPDATE`;
-        await this.assertWriter(tx, operator);
+        await this.assertWriter(tx, operator, 'edit');
         const before = await tx.talentCandidate.findFirst({ where: { id, deletedAt: null },
           include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
             followUps: { orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] } } });
@@ -484,12 +483,9 @@ export class TalentsService {
 
   private async assertOwner(id: string, tx: Prisma.TransactionClient) {
     const owner = id && await tx.user.findFirst({
-      where: { ...currentWorkerWhere, id, isAssessorOnly: false, OR: [
-        { sysRole: { in: ['hr', 'system_admin'] } },
-        { sysRole: 'hr_user', hrCapabilities: { has: 'employee_archive_edit' } },
-      ] }, select: { id: true },
+      where: { ...talentOwnerWhere(), id }, select: { id: true },
     });
-    if (!owner) throw new BadRequestException('负责人须为当前在职或试用的 HR 维护人员');
+    if (!owner) throw new BadRequestException('负责人须为当前在职或试用、具备招聘经办权限的人员');
   }
 
   private async resolveEducation(input: Pick<CreateTalentDto, 'education' | 'educationReferenceDataId'>,
@@ -529,10 +525,17 @@ export class TalentsService {
   }
 
   async deleteFileRecord(fileId: string, operator: AuthUser) {
-    const file = await this.prisma.talentResumeFile.findUnique({ where: { id: fileId } });
-    await this.prisma.$transaction([
-      this.prisma.talentResumeFile.delete({ where: { id: fileId } }),
-      this.prisma.auditLog.create({
+    const reference = await this.prisma.talentResumeFile.findUnique({ where: { id: fileId }, select: { candidateId: true } });
+    if (!reference) throw new NotFoundException('简历文件不存在');
+    await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${reference.candidateId}::uuid FOR UPDATE`;
+      await this.assertWriter(tx, operator, 'edit');
+      const candidate = await tx.talentCandidate.findFirst({ where: { id: reference.candidateId, deletedAt: null }, select: { id: true } });
+      if (!candidate) throw new NotFoundException('候选人不存在或已删除');
+      const file = await tx.talentResumeFile.findUnique({ where: { id: fileId } });
+      if (!file || file.candidateId !== reference.candidateId) throw new NotFoundException('简历文件不存在');
+      await tx.talentResumeFile.delete({ where: { id: fileId } });
+      await tx.auditLog.create({
         data: {
           userId: operator.id,
           action: 'delete_talent_resume_file',
@@ -542,8 +545,8 @@ export class TalentsService {
             ? { candidateId: file.candidateId, objectKey: file.objectKey, fileName: file.fileName } as Prisma.InputJsonValue
             : undefined,
         },
-      }),
-    ]);
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
   private async findByPhone(phone: string, client: Prisma.TransactionClient = this.prisma) {

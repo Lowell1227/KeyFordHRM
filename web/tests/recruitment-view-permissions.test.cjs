@@ -25,6 +25,24 @@ const auth = { user: null };
 const { useTalentPermissions } = load('views/talent/useTalentPermissions.ts', { '@/stores/auth.store': { useAuthStore: () => auth } });
 
 for (const sysRole of ['employee', 'manager', 'dept_head', 'vp', 'hr_user']) {
+  test(`explicit ${sysRole} recruitment operator can work without legacy management capabilities`, () => {
+    const user = { sysRole, hrCapabilities: ['recruitment_edit'], isAssessorOnly: false };
+    auth.user = user;
+    const permissions = useTalentPermissions();
+    assert.equal(permissions.canEdit.value, true);
+    assert.equal(permissions.canRead.value, true);
+    for (const action of ['canDelete', 'canShare', 'canOnboard', 'canExport']) assert.equal(permissions[action]?.value, false, action);
+    assert.equal(canAccessRoute(route('TalentPool'), user), true);
+    assert.equal(route('TalentPool').meta.hrCapabilities.includes('recruitment_edit'), true);
+    assert.deepEqual(buildNavigation(routes, user).find(item => item.key === 'recruitment').groups.flatMap(group => group.items.map(item => item.name)), ['TalentPool', 'TalentInterviews']);
+    for (const name of ['Users', 'Organization', 'EntryExit', 'TalentHiringReview']) {
+      const target = route(name);
+      if (target) assert.equal(canAccessRoute(target, user), false, name);
+    }
+  });
+}
+
+for (const sysRole of ['employee', 'manager', 'dept_head', 'vp', 'hr_user']) {
   test(`explicit ${sysRole} recruitment reader has read-only navigation and hook`, () => {
     const user = { sysRole, hrCapabilities: ['recruitment_view'], isAssessorOnly: false };
     auth.user = user;
@@ -43,7 +61,7 @@ for (const sysRole of ['employee', 'manager', 'dept_head', 'vp', 'hr_user']) {
 
 for (const sysRole of ['hr', 'system_admin', 'hr_user', 'employee']) {
   test(`assessor-only mixed ${sysRole} never has recruitment read/edit`, () => {
-    const user = { sysRole, isAssessorOnly: true, hrCapabilities: ['recruitment_view', 'employee_archive_edit', 'employee_archive_review'] };
+    const user = { sysRole, isAssessorOnly: true, hrCapabilities: ['recruitment_view', 'recruitment_edit', 'employee_archive_edit', 'employee_archive_review'] };
     auth.user = user;
     const permissions = useTalentPermissions();
     assert.equal(permissions.canRead?.value, false);
@@ -64,6 +82,7 @@ test('existing archive read/edit and HR/admin permissions stay compatible', () =
     assert.equal(permissions.canRead?.value, true);
     assert.equal(permissions.canEdit.value, edit);
     assert.equal(permissions.canExport?.value, true);
+    for (const action of ['canDelete', 'canShare', 'canOnboard']) assert.equal(permissions[action]?.value, edit, action);
   }
   auth.user = null;
   assert.equal(useTalentPermissions().canRead?.value, false);
@@ -125,4 +144,12 @@ test('existing archive reviewer keeps list export without gaining editor actions
   assert.equal(view.buttons().includes('新增人才'), false);
   await view.state.exportApplications();
   assert.equal(view.downloads(), 1);
+});
+
+test('new recruitment operator sees creation but cannot see or invoke whole-list export', async t => {
+  const view = talentList(t, { sysRole: 'employee', hrCapabilities: ['recruitment_edit'], isAssessorOnly: false });
+  assert.equal(view.buttons().includes('新增人才'), true);
+  assert.equal(view.buttons().includes('导出应聘记录'), false);
+  await view.state.exportApplications();
+  assert.equal(view.downloads(), 0);
 });

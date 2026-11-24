@@ -11,6 +11,14 @@ describe('StorageController contract material access', () => {
     return { controller, storage, prisma };
   }
 
+  it('allows recruitment-only resume upload without giving contract-material access', async () => {
+    const actor = { id: 'actor', sysRole: SysRole.employee, hrCapabilities: ['recruitment_edit'] } as any;
+    const { controller, storage } = resumeSetup(actor);
+    await expect(controller.upload({ originalname: 'synthetic.pdf' } as any, 'talent-resume', actor)).resolves.toEqual({ name: 'synthetic.pdf' });
+    await expect(controller.upload({ originalname: 'synthetic.pdf' } as any, 'employee-contract-attachment', actor)).rejects.toThrow();
+    expect(storage.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
   it('lets explicitly granted employees download resumes, not contracts or upload resumes', async () => {
     const actor = { id: 'actor', sysRole: SysRole.employee, hrCapabilities: ['recruitment_view'], isAssessorOnly: false } as any;
     const { controller, storage } = resumeSetup(actor);

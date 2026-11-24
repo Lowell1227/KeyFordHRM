@@ -23,10 +23,26 @@ function fixture(revoked = false) {
     auditLog: { create: jest.fn() },
   };
   const prisma = { ...tx, $transaction: jest.fn(async callback => callback(tx)) };
-  return { row, trace, tx, prisma, service: new TalentsService(prisma as never) };
+  return { row, actor, trace, tx, prisma, service: new TalentsService(prisma as never) };
 }
 
 describe('talent writes use current eligibility under the business lock', () => {
+  it('lets a current explicit operator create and edit under fresh locks, never delete or export', async () => {
+    const f = fixture();
+    Object.assign(f.actor, { sysRole: 'employee', hrCapabilities: ['recruitment_edit'] });
+    await expect(f.service.update(f.row.id, { note: 'Operator edit', editVersion: talentEditVersion(f.row as never) }, operator)).resolves.toMatchObject({ note: 'Operator edit' });
+    expect(f.trace.slice(0, 3)).toEqual(['candidate-lock', 'actor-lock', 'actor-read']);
+    await expect(f.service.remove(f.row.id, operator)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(f.service.exportApplications({} as never, operator)).rejects.toBeInstanceOf(ForbiddenException);
+    f.tx.talentCandidate.findFirst.mockResolvedValueOnce(null as never);
+    await expect(f.service.create({ name: 'Synthetic operator candidate', phone: '17000000001', sourceChannel: 'other' }, operator)).resolves.toMatchObject({ name: 'Synthetic operator candidate' });
+  });
+  it('rejects an operator changed to view-only after the candidate lock', async () => {
+    const f = fixture(true);
+    const request = { ...operator, sysRole: 'employee', hrCapabilities: ['recruitment_edit'] } as AuthUser;
+    await expect(f.service.update(f.row.id, { note: 'Denied', editVersion: talentEditVersion(f.row as never) }, request)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.tx.talentCandidate.update).not.toHaveBeenCalled();
+  });
   it('rejects an editor revoked while its candidate lock was queued, despite old session claims', async () => {
     const f = fixture(true);
     await expect(f.service.update(f.row.id, { note: 'After', editVersion: talentEditVersion(f.row as never) }, operator))

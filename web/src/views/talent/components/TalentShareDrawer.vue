@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import type { TalentShareRecord } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
+import { useTalentPermissions } from '../useTalentPermissions';
 
 /**
  * 转发分享抽屉：生成免登录外链，
@@ -22,9 +23,10 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   changed: [];
 }>();
+const { canShare } = useTalentPermissions();
 
 const visible = computed({
-  get: () => props.modelValue,
+  get: () => props.modelValue && canShare.value,
   set: (value: boolean) => emit('update:modelValue', value),
 });
 
@@ -53,7 +55,7 @@ function resetForm() {
 }
 
 async function createShare() {
-  if (creating.value) return;
+  if (!canShare.value || creating.value) return;
   createError.value = '';
   creating.value = true;
   const session = submitSession;
@@ -82,7 +84,7 @@ async function createShare() {
 }
 
 async function copyLink() {
-  if (!createdUrl.value) return;
+  if (!canShare.value || !createdUrl.value) return;
   try {
     await navigator.clipboard.writeText(createdUrl.value);
     ElMessage.success('链接已复制，可粘贴给接收人');
@@ -92,11 +94,13 @@ async function copyLink() {
 }
 
 async function revoke(share: TalentShareRecord) {
+  if (!canShare.value) return;
   await ElMessageBox.confirm(
     '撤销后该链接立即失效，持有链接的人将无法继续查看。确定撤销？',
     '撤销分享',
     { confirmButtonText: '撤销分享', cancelButtonText: '取消', type: 'warning' },
   );
+  if (!canShare.value) return;
   await talentPoolApi.revokeShare(share.id);
   ElMessage.success('已撤销');
   emit('changed');
@@ -109,6 +113,7 @@ function shareState(share: TalentShareRecord): { label: string; type: 'info' | '
 }
 
 async function copyShareUrl(share: TalentShareRecord) {
+  if (!canShare.value) return;
   try {
     await navigator.clipboard.writeText(shareUrl(share));
     ElMessage.success('链接已复制');

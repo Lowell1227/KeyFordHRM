@@ -32,10 +32,10 @@ import { useTalentPermissions } from '../useTalentPermissions';
 import { useRecruitmentLeaveGuard } from '../useRecruitmentLeaveGuard';
 import { formatInterviewTime } from '../interview-time';
 
-const { canEdit } = useTalentPermissions();
+const { canEdit, canDelete, canShare, canOnboard } = useTalentPermissions();
 const auth = useAuthStore();
-const canViewEmployeeArchive = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
-  || (auth.user?.sysRole === 'hr_user' && auth.user.hrCapabilities?.some(cap => cap === 'employee_archive_edit' || cap === 'employee_archive_review')));
+const canViewEmployeeArchive = computed(() => !auth.user?.isAssessorOnly && (['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
+  || (auth.user?.sysRole === 'hr_user' && auth.user.hrCapabilities?.some(cap => cap === 'employee_archive_edit' || cap === 'employee_archive_review'))));
 
 /**
  * 候选人详情抽屉（需求 §5.3）。
@@ -148,19 +148,19 @@ async function markRejected() {
 }
 
 async function removeCandidate() {
-  if (!detail.value || !canEdit.value || impactLoading.value || !await leave.prepareToLeave()) return;
+  if (!detail.value || !canDelete.value || impactLoading.value || !await leave.prepareToLeave() || !canDelete.value) return;
   const id = detail.value.id, token = session;
   deleteError.value = ''; actionError.value = ''; impactLoading.value = true;
   try {
     const impact = await talentPoolApi.deleteImpact(id);
-    if (!active(id, token)) return;
+    if (!active(id, token) || !canDelete.value) return;
     deleteImpact.value = impact; deleteVisible.value = true;
   } catch { if (active(id, token)) actionError.value = '删除影响读取失败，请点击删除重试。'; }
   finally { if (active(id, token)) impactLoading.value = false; }
 }
 
 async function confirmDelete() {
-  if (!detail.value || !deleteImpact.value || !canEdit.value || deleting.value) return;
+  if (!detail.value || !deleteImpact.value || !canDelete.value || deleting.value) return;
   const id = detail.value.id, token = session;
   deleting.value = true; deleteError.value = '';
   try {
@@ -177,13 +177,13 @@ async function confirmDelete() {
 }
 
 function openEmployeeArchive() {
-  if (!detail.value?.convertedUserId) return;
+  if (!canViewEmployeeArchive.value || !detail.value?.convertedUserId) return;
   void router.push({ path: '/users', query: { employeeId: detail.value.convertedUserId } });
 }
 
 /** Only source ID is handed to onboarding; personal data never enters the URL. */
 function goOnboarding() {
-  if (!detail.value?.onboardingRequest) return;
+  if (!canOnboard.value || !detail.value?.onboardingRequest) return;
   void router.push({
     path: '/entry-exit',
     query: { applicationId: detail.value.onboardingRequest.id },
@@ -200,7 +200,7 @@ function onFollowUpChanged() {
 }
 
 /** 分享创建/撤销后刷新详情（历史分享列表与查看次数）。 */
-function openShare() { if (detail.value) { shareContext.value = { candidateId: detail.value.id, session }; shareVisible.value = true; } }
+function openShare() { if (canShare.value && detail.value) { shareContext.value = { candidateId: detail.value.id, session }; shareVisible.value = true; } }
 function onShareChanged(context: { candidateId: string; session: number }) {
   if (!active(context.candidateId, context.session) || shareContext.value !== context || !shareVisible.value) return;
   emit('changed');
@@ -227,12 +227,12 @@ function onShareChanged(context: { candidateId: string; session: number }) {
           <span class="talent-detail__updated">更新于 {{ formatDate(detail.updatedAt) }}</span>
         </div>
         <div v-if="canEdit" class="talent-detail__actions">
-          <el-button v-if="detail.onboardingRequest" size="small" type="primary" plain @click="goOnboarding">查看入职申请</el-button>
-          <el-button size="small" plain @click="openShare">转发</el-button>
+          <el-button v-if="canOnboard && detail.onboardingRequest" size="small" type="primary" plain @click="goOnboarding">查看入职申请</el-button>
+          <el-button v-if="canShare" size="small" plain @click="openShare">转发</el-button>
           <el-button size="small" @click="startEdit">编辑</el-button>
           <el-button v-if="detail.status !== 'rejected' && detail.status !== 'hired'" size="small" type="warning"
             plain :loading="rejecting" @click="markRejected">设置人才状态</el-button>
-          <el-button size="small" type="danger" plain :loading="impactLoading" @click="removeCandidate">删除</el-button>
+          <el-button v-if="canDelete" size="small" type="danger" plain :loading="impactLoading" @click="removeCandidate">删除</el-button>
         </div>
       </div>
       <el-alert v-if="actionError" :title="actionError" type="error" :closable="false" />
@@ -292,11 +292,11 @@ function onShareChanged(context: { candidateId: string; session: number }) {
       <slot name="extra" />
     </div>
     <template v-for="context in shareContext ? [shareContext] : []" :key="`${context.candidateId}:${context.session}`">
-      <TalentShareDrawer v-if="detail && canEdit && shareVisible" v-model="shareVisible" :candidate-id="context.candidateId" :candidate-name="detail.name"
+      <TalentShareDrawer v-if="detail && canShare && shareVisible" v-model="shareVisible" :candidate-id="context.candidateId" :candidate-name="detail.name"
         :shares="detail.shares" @changed="onShareChanged(context)" />
     </template>
   </BusinessDetailDrawer>
-  <el-dialog v-model="deleteVisible" title="删除人才记录" width="min(560px, 94vw)" append-to-body :close-on-click-modal="false">
+  <el-dialog v-if="canDelete" v-model="deleteVisible" title="删除人才记录" width="min(560px, 94vw)" append-to-body :close-on-click-modal="false">
     <template v-if="deleteImpact">
       <p>删除后候选人将不再出现在人才库。关联面试、钉钉日程和入职申请不会自动取消，需分别处理。</p>
       <p>未结束面试 {{ deleteImpact.interviews.length }} 条，未结束入职申请 {{ deleteImpact.requests.length }} 条。</p>

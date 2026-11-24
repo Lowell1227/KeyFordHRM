@@ -31,7 +31,7 @@ function dialog(t, api = {}, allowed = true) {
       deleteImpact: async id => impact(id),
       remove: async (id, body) => { writes.push({ id, body }); return { id, deleted: true }; }, ...api,
     } },
-    '../useTalentPermissions': { useTalentPermissions: () => ({ canEdit: vue.ref(allowed) }) },
+    '../useTalentPermissions': { useTalentPermissions: () => ({ canEdit: vue.ref(allowed), canDelete: vue.ref(allowed) }) },
   };
   loaded.require = id => {
     if (id in deps) return deps[id];

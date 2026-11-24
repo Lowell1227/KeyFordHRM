@@ -1,11 +1,11 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { hasHrCapability } from '@/auth/hr-capabilities';
-import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
+import { CURRENT_WORKER_STATUSES, currentWorkerWhere } from '@/common/personnel/current-worker';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
-import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewQueryDto, TalentInterviewQueueQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
-import { canReadRecruitment, canWriteRecruitment, isApplicationOpenForInterview } from './talent-recruitment-policy';
+import { CreateTalentInterviewDto, InterviewVersionDto, TalentInterviewParticipantQueryDto, TalentInterviewQueryDto, TalentInterviewQueueQueryDto, UpdateTalentInterviewDto } from './dto/talent-interview.dto';
+import { assertRecruitmentEditor, canEditRecruitment, canReadRecruitment, isApplicationOpenForInterview } from './talent-recruitment-policy';
 
 const include = { participants: { orderBy: { userId: 'asc' as const } }, candidate: { select: { deletedAt: true } },
   application: { select: { positionName: true, recruitmentBatch: true } } } satisfies Prisma.TalentInterviewInclude;
@@ -32,7 +32,7 @@ export class TalentInterviewsService {
   }
 
   private assertWrite(user: AuthUser) {
-    if (user.isAssessorOnly || !hasHrCapability(user, 'employee_archive_edit')) throw new ForbiddenException('无权限维护面试邀约');
+    if (user.isAssessorOnly || (!hasHrCapability(user, 'recruitment_edit') && !hasHrCapability(user, 'employee_archive_edit'))) throw new ForbiddenException('无权限维护面试邀约');
   }
 
   private async currentWriter(tx: Prisma.TransactionClient, user: AuthUser) {
@@ -41,7 +41,7 @@ export class TalentInterviewsService {
       id: true, name: true, sysRole: true, deptId: true, isAssessorOnly: true, canViewAll: true,
       hrCapabilities: true, status: true, deletedAt: true, archivedAt: true,
     } });
-    if (!actor || !canWriteRecruitment(actor)) throw new ForbiddenException('当前账号无权限维护面试邀约');
+    if (!actor || !canEditRecruitment(actor)) throw new ForbiddenException('当前账号无权限维护面试邀约');
     return actor;
   }
 
@@ -137,9 +137,25 @@ export class TalentInterviewsService {
     if (!Array.isArray(ids) || ids.length < 1 || ids.length > 50 || new Set(ids).size !== ids.length) {
       throw new BadRequestException('请选择1至50名不重复的内部参与人');
     }
-    const users = await tx.user.findMany({ where: { id: { in: ids }, status: { in: CURRENT_WORKER_STATUSES }, deletedAt: null, archivedAt: null }, select: { id: true, name: true } });
+    const users = await tx.user.findMany({ where: { id: { in: ids }, status: { in: CURRENT_WORKER_STATUSES }, deletedAt: null, archivedAt: null,
+      accountType: 'employee', isAssessorOnly: false }, select: { id: true, name: true } });
     if (users.length !== ids.length) throw new BadRequestException('部分参与人不在职或不可用，请重新选择');
     return users.map((user) => ({ userId: user.id, userNameSnapshot: user.name }));
+  }
+
+  async participantOptions(query: TalentInterviewParticipantQueryDto, user: AuthUser) {
+    await assertRecruitmentEditor(this.prisma, user);
+    const keyword = query.keyword?.trim();
+    const where: Prisma.UserWhereInput = { ...currentWorkerWhere, accountType: 'employee', isAssessorOnly: false,
+      ...(query.id ? { id: query.id } : {}),
+      ...(keyword ? { OR: [{ name: { contains: keyword, mode: 'insensitive' } }, { employeeNo: { contains: keyword, mode: 'insensitive' } }] } : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.user.findMany({ where, select: { id: true, name: true, employeeNo: true, status: true, archivedAt: true },
+        orderBy: [{ name: 'asc' }, { employeeNo: 'asc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
+      this.prisma.user.count({ where }),
+    ]);
+    return { items, total, page: query.page, pageSize: query.pageSize };
   }
 
   private syncStatus() {

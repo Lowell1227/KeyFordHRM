@@ -29,7 +29,8 @@ function setup() {
     updateMany: jest.fn(async ({ where, data }: any) => { let count = 0; for (const row of rows.values()) if (matches(row, where)) { Object.assign(row, data); count++; } return { count }; }),
     deleteMany: jest.fn(async ({ where }: any) => { let count = 0; for (const [id, row] of rows) if (matches(row, where)) { rows.delete(id); count++; } return { count }; }),
   };
-  const db = { talentResumeTask: table, $executeRaw: jest.fn(), $transaction: async (work: any) => work(db) };
+  const db = { user: { findUnique: jest.fn(async ({ where }) => ({ ...hr, id: where.id, status: 'active' })) },
+    talentResumeTask: table, $executeRaw: jest.fn(), $transaction: async (work: any) => work(db) };
   const parser = { getStatus: jest.fn(async () => ({ enabled: true, configured: true })), parse: jest.fn(async () => fields) };
   const config = new ConfigService({ AI_PROVIDER_ENCRYPTION_KEY: Buffer.alloc(32, 27).toString('base64') });
   const service = new TalentResumeTasksService(db as never, config, parser as never);

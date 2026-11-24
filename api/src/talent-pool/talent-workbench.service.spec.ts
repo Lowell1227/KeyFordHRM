@@ -19,6 +19,12 @@ function setup(actorOverrides: Record<string, unknown> = {}) {
 }
 
 describe('recruitment workbench read projection', () => {
+  it('gives explicit operators their follow-ups but no onboarding or hiring-confirmation queue', async () => {
+    const { sut, tx } = setup({ sysRole: 'employee', hrCapabilities: ['recruitment_edit'] });
+    const result = await sut.getWorkbench(user);
+    expect(result.groups.map(group => group.key)).toEqual(['follow_up', 'interview', 'feedback']);
+    expect(tx.talentApplication.findMany).not.toHaveBeenCalled();
+  });
   beforeEach(() => { jest.useFakeTimers(); jest.setSystemTime(now); });
   afterEach(() => jest.useRealTimers());
 

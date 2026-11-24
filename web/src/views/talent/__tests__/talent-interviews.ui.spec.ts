@@ -17,8 +17,14 @@ async function install(page: Page, role: 'hr' | 'hr_user' | 'employee', writes: 
     if (url.pathname.endsWith('/follow-ups')) return route.fulfill(envelope([]));
     if (url.pathname.includes('/talent-recruitment/') && url.pathname.endsWith('/applications')) return route.fulfill(envelope([]));
     if (url.pathname.includes('/talent-recruitment/') && url.pathname.endsWith('/feedback')) return route.fulfill(envelope({ own: null, items: [], canEdit: false, canReturn: false }));
-    if (url.pathname.endsWith('/users')) return route.fulfill(envelope({ items: [{ id: url.searchParams.get('status') === 'probation' ? 'probation-user' : 'synthetic-user', name: url.searchParams.get('status') === 'probation' ? '合成试用员工' : '合成参与人', employeeNo: 'SYN001', status: url.searchParams.get('status'), archivedAt: null }], total: 1 }));
-    if (url.pathname.includes('/users/')) return route.fulfill(envelope({ id: url.pathname.split('/').pop(), name: url.pathname.endsWith('/probation-user') ? '合成试用员工' : '合成参与人', employeeNo: 'SYN001', status: url.pathname.endsWith('/probation-user') ? 'probation' : 'active', archivedAt: null }));
+    if (url.pathname.endsWith('/talent-interviews/participants')) {
+      const people = [
+        { id: 'synthetic-user', name: '合成参与人', employeeNo: 'SYN001', status: 'active', archivedAt: null },
+        { id: 'probation-user', name: '合成试用员工', employeeNo: 'SYN002', status: 'probation', archivedAt: null },
+      ];
+      const items = url.searchParams.has('id') ? people.filter(person => person.id === url.searchParams.get('id')) : people;
+      return route.fulfill(envelope({ items, total: items.length }));
+    }
     if (url.pathname.endsWith('/talent-interviews')) {
       if (route.request().method() === 'POST') { writes.push(route.request().postDataJSON()); return route.fulfill(envelope({ ...invitation, ...route.request().postDataJSON() })); }
       return route.fulfill(envelope([{ ...invitation, sourceDeleted: false, candidateId: candidate.id, note: '内部备注', participants: [{ userId: 'synthetic-user', userNameSnapshot: '合成参与人' }], syncStatus: 'unconfigured', calendarSyncedVersion: 0 }]));
@@ -54,15 +60,16 @@ async function installParticipantEditor(page: Page, directory: Map<string, Direc
     }
     return route.fulfill(envelope(row));
   });
-  await page.route('**/api/v1/users**', async route => {
+  await page.route('**/api/v1/talent-interviews/participants?**', async route => {
     const url = new URL(route.request().url());
-    if (url.pathname === '/api/v1/users') {
+    if (!url.searchParams.has('id')) {
       const keyword = url.searchParams.get('keyword') ?? '';
-      const items = [...directory.values()].filter(p => p.status === url.searchParams.get('status') && !p.archivedAt && (p.name.includes(keyword) || p.employeeNo.includes(keyword)));
+      const items = [...directory.values()].filter(p => ['active', 'probation'].includes(p.status) && !p.archivedAt && (p.name.includes(keyword) || p.employeeNo.includes(keyword)));
       return route.fulfill(envelope({ items, total: items.length }));
     }
-    const value = directory.get(url.pathname.split('/').pop()!);
-    return route.fulfill(value ? envelope(value) : { status: 404, ...envelope(null) });
+    const value = directory.get(url.searchParams.get('id')!);
+    // Adversarial historical status remains in the fixture to prove client-side revalidation.
+    return route.fulfill(envelope({ items: value ? [value] : [], total: value ? 1 : 0 }));
   });
   await page.goto(`/talent-interviews/${invitation.id}`);
 }
@@ -159,10 +166,10 @@ test('F1 late status response cannot overwrite a reopened editor', async ({ page
   let release!: () => void, requested!: () => void, first = true;
   const held = new Promise<void>(resolve => { release = resolve; });
   const started = new Promise<void>(resolve => { requested = resolve; });
-  await page.route('**/api/v1/users/valid', async route => {
-    if (!first) return route.fallback();
+  await page.route('**/api/v1/talent-interviews/participants?**', async route => {
+    if (!first || new URL(route.request().url()).searchParams.get('id') !== 'valid') return route.fallback();
     first = false; requested(); await held;
-    return route.fulfill(envelope(person('valid', '过期离职响应', 'resigned')));
+    return route.fulfill(envelope({ items: [person('valid', '过期离职响应', 'resigned')], total: 1 }));
   });
   await page.getByRole('button', { name: '修改邀约', exact: true }).click();
   await started;
@@ -171,7 +178,7 @@ test('F1 late status response cannot overwrite a reopened editor', async ({ page
   await page.getByRole('button', { name: '修改邀约', exact: true }).click();
   const form = page.locator('.interview-panel__editor');
   await expect(form.locator('.el-select')).toContainText('重新打开有效姓名');
-  const oldResponse = page.waitForResponse(res => res.url().endsWith('/api/v1/users/valid'));
+  const oldResponse = page.waitForResponse(res => new URL(res.url()).pathname === '/api/v1/talent-interviews/participants' && new URL(res.url()).searchParams.get('id') === 'valid');
   release(); await oldResponse;
   await expect(form.getByRole('region', { name: '待处理参与人' })).toHaveCount(0);
   await expect(form.locator('.el-select')).toContainText('重新打开有效姓名');
@@ -187,9 +194,9 @@ test('F1 late search results cannot populate a reopened editor', async ({ page }
   let release!: () => void, requested!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   const started = new Promise<void>(resolve => { requested = resolve; });
-  await page.route('**/api/v1/users?**', async route => {
+  await page.route('**/api/v1/talent-interviews/participants?**', async route => {
     const url = new URL(route.request().url());
-    if (url.searchParams.get('keyword') !== '旧查询' || url.searchParams.get('status') !== 'active') return route.fallback();
+    if (url.searchParams.get('keyword') !== '旧查询') return route.fallback();
     requested(); await held;
     return route.fulfill(envelope({ items: [person('old', '过期搜索人员')], total: 1 }));
   });
@@ -200,7 +207,7 @@ test('F1 late search results cannot populate a reopened editor', async ({ page }
   await form.getByRole('button', { name: '取消编辑', exact: true }).click();
   await page.getByRole('button', { name: '修改邀约', exact: true }).click();
   await expect(form.locator('.el-select')).toContainText('原参与人');
-  const oldResponse = page.waitForResponse(res => res.url().includes('keyword=') && res.url().includes('status=active'));
+  const oldResponse = page.waitForResponse(res => new URL(res.url()).pathname === '/api/v1/talent-interviews/participants' && new URL(res.url()).searchParams.get('keyword') === '旧查询');
   release(); await oldResponse;
   await form.locator('.el-select').getByRole('combobox').press('ArrowDown');
   await expect(page.getByRole('option', { name: /原参与人/ })).toBeVisible();

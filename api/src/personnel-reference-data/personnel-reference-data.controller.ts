@@ -32,6 +32,7 @@ export class PersonnelReferenceDataController {
 
   @Get(':kind')
   @HrCapabilities(
+    'recruitment_edit',
     'employee_archive_edit',
     'employee_archive_review',
     'organization_edit',

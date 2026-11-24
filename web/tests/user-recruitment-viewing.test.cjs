@@ -10,7 +10,7 @@ const filename = path.resolve(__dirname, '../src/views/admin/UserManageView.vue'
 const { descriptor } = parse(fs.readFileSync(filename, 'utf8'));
 const ast = ts.createSourceFile(filename, descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node)
-  && ['setRecruitmentViewing', 'confirmPersonSettings'].includes(node.name.text));
+  && ['setRecruitmentViewing', 'setRecruitmentEditing', 'confirmPersonSettings'].includes(node.name.text));
 const options = ast.statements.find(node => ts.isVariableStatement(node)
   && node.declarationList.declarations.some(item => item.name.getText(ast) === 'hrCapabilityOptions'));
 
@@ -26,7 +26,8 @@ function fixture(overrides = {}) {
   const source = `const { ${Object.keys(context).join(',')} } = context;
     ${options.getText(ast)} ${functions.map(node => node.getText(ast)).join('\n')}
     return { options: hrCapabilityOptions, confirmPersonSettings,
-      setRecruitmentViewing: typeof setRecruitmentViewing === 'function' ? setRecruitmentViewing : undefined };`;
+      setRecruitmentViewing: typeof setRecruitmentViewing === 'function' ? setRecruitmentViewing : undefined,
+      setRecruitmentEditing: typeof setRecruitmentEditing === 'function' ? setRecruitmentEditing : undefined };`;
   const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return { ...new Function('context', js)(context), state, writes };
 }
@@ -69,4 +70,35 @@ test('unchanged independent recruitment capabilities do not trigger an unnecessa
     originalHrCapabilities: ['recruitment_view', 'talent_hiring_confirm'] });
   await f.confirmPersonSettings();
   assert.deepEqual(f.writes, []);
+});
+
+test('both HR options and standard-user checkbox expose recruitment operating', () => {
+  const f = fixture();
+  assert.deepEqual(f.options.find(item => item.value === 'recruitment_edit'), { value: 'recruitment_edit', label: '招聘经办' });
+  const block = descriptor.template.content.match(/<el-form-item[^>]*label="招聘职责">([\s\S]*?)<\/el-form-item>/)?.[1];
+  assert.match(block, /hrCapabilities\.includes\('recruitment_edit'\)/);
+  assert.match(block, /@change="setRecruitmentEditing"/);
+});
+
+test('operator checkbox preserves viewing and hiring confirmation without changing employee role', async () => {
+  const f = fixture({ hrCapabilities: ['recruitment_view', 'talent_hiring_confirm'], originalHrCapabilities: ['recruitment_view', 'talent_hiring_confirm'] });
+  assert.equal(typeof f.setRecruitmentEditing, 'function');
+  f.setRecruitmentEditing(true); f.setRecruitmentEditing(true);
+  await f.confirmPersonSettings();
+  assert.deepEqual(f.writes, [['fictional-employee', { sysRole: 'employee', hrCapabilities: ['recruitment_edit', 'recruitment_view', 'talent_hiring_confirm'] }]]);
+});
+
+test('revoking viewing preserves the existing operator and independent confirmer', async () => {
+  const f = fixture({ hrCapabilities: ['recruitment_edit', 'recruitment_view', 'talent_hiring_confirm'], originalHrCapabilities: ['recruitment_edit', 'recruitment_view', 'talent_hiring_confirm'] });
+  f.setRecruitmentViewing(false);
+  await f.confirmPersonSettings();
+  assert.deepEqual(f.writes, [['fictional-employee', { sysRole: 'employee', hrCapabilities: ['recruitment_edit', 'talent_hiring_confirm'] }]]);
+});
+
+test('HR operator checkbox keeps all other HR capabilities', async () => {
+  const f = fixture({ sysRole: 'hr_user', originalSysRole: 'hr_user', hrCapabilities: ['cycle_plan_edit', 'employee_archive_review'], originalHrCapabilities: ['cycle_plan_edit', 'employee_archive_review'] });
+  assert.equal(typeof f.setRecruitmentEditing, 'function');
+  f.setRecruitmentEditing(true);
+  await f.confirmPersonSettings();
+  assert.deepEqual(f.writes, [['fictional-employee', { sysRole: 'hr_user', hrCapabilities: ['cycle_plan_edit', 'employee_archive_review', 'recruitment_edit'] }]]);
 });

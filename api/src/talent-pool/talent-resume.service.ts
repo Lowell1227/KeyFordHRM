@@ -204,7 +204,7 @@ export class TalentResumeService {
   }
 
   private assertMaintainer(user: AuthUser) {
-    if (!user?.id || !hasHrCapability(user, 'employee_archive_edit')) throw new ForbiddenException('无权限解析人才简历');
+    if (!user?.id || user.isAssessorOnly || (!hasHrCapability(user, 'recruitment_edit') && !hasHrCapability(user, 'employee_archive_edit'))) throw new ForbiddenException('无权限解析人才简历');
   }
 
   private acquire(userId: string) {

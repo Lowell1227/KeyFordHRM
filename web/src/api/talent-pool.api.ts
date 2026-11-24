@@ -1,6 +1,6 @@
 import http from './http';
 import type { AxiosResponse } from 'axios';
-import type { Paginated } from '@/types/api.types';
+import type { Paginated, User } from '@/types/api.types';
 import type {
   BindTalentFileBody,
   CreateFollowUpBody,
@@ -135,7 +135,12 @@ export const talentPoolApi = {
   },
 };
 
+export type TalentInterviewParticipant = Pick<User, 'id' | 'name' | 'employeeNo' | 'status' | 'archivedAt'>;
+
 export const talentInterviewsApi = {
+  participants(query: { keyword?: string; id?: string; page?: number; pageSize?: number }): Promise<Paginated<TalentInterviewParticipant>> {
+    return http.get('/talent-interviews/participants', { params: query, skipErrorMessage: true }) as unknown as Promise<Paginated<TalentInterviewParticipant>>;
+  },
   list(query: TalentInterviewQueueQuery): Promise<TalentInterviewView[]> {
     return http.get('/talent-interviews', { params: query }) as unknown as Promise<TalentInterviewView[]>;
   },

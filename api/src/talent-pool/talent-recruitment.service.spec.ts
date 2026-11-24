@@ -94,6 +94,27 @@ describe('reserve reasons on application events', () => {
 });
 
 describe('talent recruitment transactions and boundaries', () => {
+  it('lets a recruitment-only operator create, edit, submit and record the answer after independent HR approval', async () => {
+    const { sut, actors, tx } = setup();
+    actors[1].hrCapabilities = ['recruitment_edit'];
+    const created = await sut.create('candidate', applicationInput, participant);
+    expect(created).toMatchObject({ ownerId: participant.id, stage: 'screening' });
+    const edited = await sut.update(created.id, { expectedRevision: created.revision, recruitmentBatch: 'Synthetic operator batch' }, participant);
+    const submitted = await sut.act(created.id, { expectedRevision: edited.revision, action: 'submit_hiring', note: 'Synthetic reason' }, participant);
+    expect(submitted).toMatchObject({ stage: 'hiring_review', hiringRequestedById: participant.id });
+    await expect(sut.act(created.id, { expectedRevision: submitted.revision, action: 'approve_hiring' }, participant)).rejects.toThrow(ForbiddenException);
+    const approved = await sut.act(created.id, { expectedRevision: submitted.revision, action: 'approve_hiring' }, hr);
+    const accepted = await sut.act(created.id, { expectedRevision: approved.revision, action: 'accept_offer' }, participant);
+    expect(accepted).toMatchObject({ stage: 'accepted', hiringRequestedById: participant.id, hiringReviewedById: hr.id });
+    expect(tx.talentApplication.create).toHaveBeenCalledTimes(1);
+  });
+  it('does not let the operator return someone else\'s submitted interview feedback', async () => {
+    const { sut, actors, feedbacks } = setup();
+    actors[1].hrCapabilities = ['recruitment_edit'];
+    feedbacks.push({ interviewId: 'interview', userId: 'other', status: 'submitted', revision: 1 });
+    await expect(sut.returnFeedback('interview', 'other', { interviewVersion: 1, expectedRevision: 1, note: 'Denied' }, participant)).rejects.toThrow(ForbiddenException);
+    expect((await sut.feedback('interview', participant)).canReturn).toBe(false);
+  });
   it('gives a current explicit employee reader shared applications and feedback, never maintenance or confirmation', async () => {
     const { sut, actors, feedbacks, tx } = setup();
     Object.assign(actors[1], { hrCapabilities: ['recruitment_view'] });
@@ -270,7 +291,7 @@ describe('talent recruitment transactions and boundaries', () => {
     const result = await sut.owners({ keyword: ' Synthetic ', page: 2, pageSize: 10 } as any, hr);
     expect(result).toEqual({ items: [{ id: hr.id, name: hr.name, employeeNo: 'SYNTHETIC-HR', deptName: 'Synthetic department' }], total: 1, page: 2, pageSize: 10 });
     expect(tx.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 10, take: 10, where: expect.objectContaining({ status: { in: ['active', 'probation'] }, archivedAt: null,
-      deletedAt: null, isAssessorOnly: false, OR: [{ sysRole: { in: ['hr', 'system_admin'] } }, { sysRole: 'hr_user', hrCapabilities: { has: 'employee_archive_edit' } }] }) }));
+      deletedAt: null, isAssessorOnly: false, OR: [{ sysRole: { in: ['hr', 'system_admin'] } }, { sysRole: 'hr_user', hrCapabilities: { has: 'employee_archive_edit' } }, { hrCapabilities: { has: 'recruitment_edit' } }] }) }));
     await expect(sut.owners({ page: 1, pageSize: 10 } as any, participant)).rejects.toThrow(ForbiddenException);
   });
   it.each(['event', 'audit'])('does not swallow transactional %s write failures', async part => {

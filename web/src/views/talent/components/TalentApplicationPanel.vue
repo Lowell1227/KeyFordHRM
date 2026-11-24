@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { useRecruitmentLeaveGuard } from '../useRecruitmentLeaveGuard';
+import { useTalentPermissions } from '../useTalentPermissions';
 import { departmentsApi } from '@/api/departments.api';
 import { recruitmentError, talentRecruitmentApi } from '@/api/talent-recruitment.api';
 import { canAccessRoute } from '@/router/navigation';
@@ -26,6 +27,9 @@ const props = defineProps<{
 const emit = defineEmits<{ changed: []; selected: [application: TalentApplicationView | null]; interview: [application: Pick<TalentApplicationView, 'id' | 'positionName' | 'recruitmentBatch'>] }>();
 const router = useRouter();
 const auth = useAuthStore();
+const { canOnboard: canMaintainArchive } = useTalentPermissions();
+const canViewArchive = computed(() => !auth.user?.isAssessorOnly && (canMaintainArchive.value
+  || (auth.user?.sysRole === 'hr_user' && auth.user.hrCapabilities?.includes('employee_archive_review'))));
 const rows = ref<TalentApplicationView[]>([]), selectedId = ref(''), current = ref<TalentApplicationView | null>(null);
 const loading = ref(false), busy = ref(false), error = ref(''), loadFailed = ref(false), conflict = ref(false);
 const selectionError = ref('');
@@ -47,7 +51,7 @@ const activeOnboarding = computed(() => {
   return request && !request.cancelledAt && !request.archivedAt && !['archived', 'cancelled'].includes(request.recordStatus)
     && ['draft', 'submitted', 'pending_entry'].includes(request.onboardingStatus ?? '') ? request : null;
 });
-const canOnboard = computed(() => props.editable && current.value?.stage === 'accepted' && !activeOnboarding.value);
+const canOnboard = computed(() => props.editable && canMaintainArchive.value && current.value?.stage === 'accepted' && !activeOnboarding.value);
 const canEditRecord = computed(() => props.editable && current.value && ['screening', 'interviewing', 'reserve'].includes(current.value.stage));
 const departmentOptions = computed(() => {
   const options = departments.value.filter(dept => dept.isActive).map(dept => ({ ...dept, disabled: false }));
@@ -224,7 +228,7 @@ function openOnboarding() {
   if (!row) return;
   if (canOnboard.value) void router.push({ path: '/entry-exit', query: { talentId: props.candidateId, talentApplicationId: row.id } });
 }
-function openOnboardingRequest() { if (current.value?.onboardingRequest) void router.push({ path: '/entry-exit', query: { applicationId: current.value.onboardingRequest.id } }); }
+function openOnboardingRequest() { if (canViewArchive.value && current.value?.onboardingRequest) void router.push({ path: '/entry-exit', query: { applicationId: current.value.onboardingRequest.id } }); }
 function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as TalentApplicationAction] ?? ({ create: '新增应聘', update: '修改应聘', start_onboarding: '办理入职', cancel_onboarding: '取消入职', activate_onboarding: '入职生效', submit_feedback: '提交面试反馈', return_feedback: '退回面试反馈', onboarding: '办理入职', hired: '入职生效' } as Record<string, string>)[action] ?? '应聘更新'; }
 </script>
 
@@ -257,15 +261,16 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
       <dl><dt>本次应聘阶段</dt><dd class="application-panel__stage">{{ APPLICATION_STAGE_LABELS[current.stage] }}</dd><dt>应聘负责人</dt><dd>{{ current.ownerName || '未指定' }}</dd><dt>部门</dt><dd>{{ current.departmentNameSnapshot || '未指定' }}</dd><dt>预计到岗</dt><dd>{{ current.expectedEntryDate ? formatDate(current.expectedEntryDate) : '未填写' }}</dd></dl>
       <p v-if="['screening', 'interviewing', 'reserve'].includes(current.stage)" class="application-panel__muted">下一步：安排本岗位面试，或按实际情况更新应聘阶段。进入面试阶段不会自动创建邀约。</p>
       <p v-if="current.stage === 'hiring_review'" class="application-panel__muted">待其他有录用确认权限的人员办理，提交人不能确认本人提交的申请。</p>
-      <p v-else-if="current.stage === 'offered'" class="application-panel__muted">下一步：由经办记录候选人接受或拒绝；候选人接受后，再办理入职。</p>
+      <p v-else-if="current.stage === 'offered'" class="application-panel__muted">下一步：由经办记录候选人接受或拒绝；候选人接受后，交人事办理入职。</p>
+      <p v-else-if="current.stage === 'accepted' && !canMaintainArchive" class="application-panel__muted">候选人已接受录用，下一步交人事办理入职。</p>
       <div v-if="!command" class="application-panel__actions">
         <el-button v-if="canOpenHiringReview" size="small" :disabled="busy" @click="router.push({ path: '/talent-hiring', query: { applicationId: current.id } })">录用确认</el-button>
         <el-button v-if="canEditRecord" size="small" :disabled="busy" @click="openEditor(false)">修改应聘</el-button>
         <el-button v-for="action in actions" :key="action" size="small" :disabled="busy" :type="['submit_hiring', 'approve_hiring', 'accept_offer'].includes(action) ? 'primary' : 'default'" @click="beginAction(action)">{{ actionLabel(action) }}</el-button>
         <el-button v-if="canArrange" size="small" type="primary" :disabled="busy" @click="emit('interview', current)">安排面试</el-button>
         <el-button v-if="canOnboard" size="small" type="primary" @click="openOnboarding">办理入职</el-button>
-        <el-button v-if="current.onboardingRequest" size="small" :type="activeOnboarding ? 'primary' : 'default'" @click="openOnboardingRequest">{{ activeOnboarding ? '查看入职申请' : '查看历史入职' }}</el-button>
-        <el-button v-if="current.stage === 'hired' && convertedUserId" size="small" type="primary" @click="router.push({ path: '/users', query: { employeeId: convertedUserId } })">查看员工档案</el-button>
+        <el-button v-if="canViewArchive && current.onboardingRequest" size="small" :type="activeOnboarding ? 'primary' : 'default'" @click="openOnboardingRequest">{{ activeOnboarding ? '查看入职申请' : '查看历史入职' }}</el-button>
+        <el-button v-if="canViewArchive && current.stage === 'hired' && convertedUserId" size="small" type="primary" @click="router.push({ path: '/users', query: { employeeId: convertedUserId } })">查看员工档案</el-button>
       </div>
       <el-form v-if="command" label-position="top" :disabled="busy" class="application-panel__command">
         <strong>{{ actionLabel(command) }}</strong>

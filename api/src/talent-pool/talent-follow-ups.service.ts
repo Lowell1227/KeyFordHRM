@@ -5,6 +5,7 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 import { CreateFollowUpDto, parseTalentDate } from './dto/create-follow-up.dto';
 import { TalentsService } from './talents.service';
+import { assertRecruitmentEditor } from './talent-recruitment-policy';
 
 @Injectable()
 export class TalentFollowUpsService {
@@ -39,6 +40,7 @@ export class TalentFollowUpsService {
     const nextFollowUpAt = parseTalentDate(input.nextFollowUpAt, '下次跟进日期');
     return this.prisma.$transaction(async (tx) => {
       const current = await this.lockedCurrentPlan(tx, candidateId);
+      await assertRecruitmentEditor(tx, operator);
       if (input.expectedPlanId !== undefined && input.expectedPlanId?.toLowerCase() !== current?.id) throw this.planConflict();
       if (input.completePlanId !== undefined && input.completePlanId.toLowerCase() !== current?.id) throw this.planConflict();
       const historical = !!current && occurredAt < current.occurredAt;
@@ -76,6 +78,7 @@ export class TalentFollowUpsService {
   async cancel(candidateId: string, followUpId: string, operator: AuthUser) {
     return this.prisma.$transaction(async tx => {
       const current = await this.lockedCurrentPlan(tx, candidateId);
+      await assertRecruitmentEditor(tx, operator);
       if (current?.id !== followUpId.toLowerCase()) throw this.planConflict();
       return this.closePlan(tx, current.id, 'cancelled', operator);
     });

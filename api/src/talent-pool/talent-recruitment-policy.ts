@@ -40,6 +40,10 @@ export function canWriteRecruitment(actor: RecruitmentActor): boolean {
   return isCurrentRecruitmentActor(actor) && hasHrCapability(actor, 'employee_archive_edit');
 }
 
+export function canEditRecruitment(actor: RecruitmentActor): boolean {
+  return isCurrentRecruitmentActor(actor) && (hasHrCapability(actor, 'recruitment_edit') || hasHrCapability(actor, 'employee_archive_edit'));
+}
+
 export const recruitmentActorSelect = {
   id: true, name: true, sysRole: true, deptId: true, canViewAll: true,
   hrCapabilities: true, status: true, archivedAt: true, deletedAt: true, isAssessorOnly: true,
@@ -64,10 +68,17 @@ export async function assertRecruitmentWriter(tx: Prisma.TransactionClient, user
   return actor;
 }
 
+export async function assertRecruitmentEditor(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id'>) {
+  const actor = await currentRecruitmentActor(tx, user);
+  if (!canEditRecruitment(actor)) throw new ForbiddenException('无权限经办招聘资料');
+  return actor;
+}
+
 export function talentOwnerWhere(): Prisma.UserWhereInput {
   return { ...currentWorkerWhere, isAssessorOnly: false, OR: [
     { sysRole: { in: ['hr', 'system_admin'] } },
     { sysRole: 'hr_user', hrCapabilities: { has: 'employee_archive_edit' } },
+    { hrCapabilities: { has: 'recruitment_edit' } },
   ] };
 }
 
@@ -96,7 +107,7 @@ export function allowedApplicationActions(actor: RecruitmentActor, application: 
     if (action === 'approve_hiring' || action === 'return_hiring') {
       return stage === 'hiring_review' && canConfirmTalentHiring(actor, application.hiringRequestedById);
     }
-    if (!canWriteRecruitment(actor)) return false;
+    if (!canEditRecruitment(actor)) return false;
     switch (action) {
       case 'start_interview': return ['screening', 'reserve'].includes(stage);
       case 'submit_hiring': return ['screening', 'interviewing'].includes(stage);
