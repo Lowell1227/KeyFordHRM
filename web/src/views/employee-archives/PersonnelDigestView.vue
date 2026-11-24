@@ -40,10 +40,7 @@ onMounted(load);
 
 <template>
   <main class="digest-page" :aria-busy="loading">
-    <header>
-      <h1>人事待办</h1>
-      <p v-if="digest && !error">{{ digest.day }} · 待办 {{ digest.items.length }} 项</p>
-    </header>
+    <p v-if="digest && !error" class="digest-date">{{ digest.day }} · 待办 {{ digest.items.length }} 项</p>
     <p v-if="loading" role="status">正在读取待办…</p>
     <p v-else-if="error" role="alert">暂时无法读取待办。<el-button link type="primary" @click="load">重试</el-button></p>
     <p v-else-if="digest && !digest.items.length">今日暂无待办</p>
@@ -74,8 +71,7 @@ onMounted(load);
 
 <style scoped>
 .digest-page { max-width: 960px; margin: 0 auto; padding: 20px; overflow-wrap: anywhere; }
-h1 { font-size: 22px; margin: 0; }
-header p { color: var(--el-text-color-secondary); }
+.digest-date { margin: 0 0 12px; color: var(--el-text-color-secondary); }
 details { border: 1px solid var(--el-border-color); border-radius: 6px; margin-top: 10px; background: var(--el-bg-color); }
 summary { cursor: pointer; padding: 12px 14px; }
 summary strong { font-size: 13px; margin-inline-start: 8px; }
