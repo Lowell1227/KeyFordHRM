@@ -210,8 +210,9 @@ function historicalInput(f: Manifest) {
 }
 
 async function approve(request: APIRequestContext, fixture: Fixture, id: string) {
+  const seen = await api<Application>(request, fixture, 'reviewer', 'GET', `/employee-archives/applications/${id}`, 200);
   const result = await api<{ failed: unknown[] }>(request, fixture, 'reviewer', 'POST', '/employee-archives/reviews/approve', 201,
-    { requestIds: [id], scopes: ['profile'] });
+    { requestIds: [id], requestVersions: { [id]: seen.requestVersion }, scopes: ['profile'] });
   expect(result.failed).toEqual([]);
 }
 

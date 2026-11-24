@@ -1,5 +1,5 @@
 import * as ExcelJS from 'exceljs';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { TalentsService } from './talents.service';
 import type { AuthUser } from '@/common/types/auth.types';
 
@@ -14,7 +14,8 @@ function fixture() {
   const prisma: any = {
     talentCandidate: { findMany: jest.fn(async () => rows), count: jest.fn(async () => 0) },
     talentApplication: { count: jest.fn(async () => 2), findMany: jest.fn(async () => [{ positionName: '财务' }, { positionName: '运营' }]) },
-    user: { findMany: jest.fn(async () => [{ id: actor.id, name: '虚构经办' }]) },
+    user: { findMany: jest.fn(async () => [{ id: actor.id, name: '虚构经办' }]),
+      findUnique: jest.fn(async () => ({ ...actor, status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false })) },
     $queryRaw: jest.fn(async () => []), auditLog: { create: jest.fn(async () => ({})) },
   };
   prisma.$transaction = jest.fn(async ops => typeof ops === 'function' ? ops(prisma) : Promise.all(ops));
@@ -22,6 +23,35 @@ function fixture() {
 }
 
 describe('talent export uses the list scope and all matching applications', () => {
+  it('denies a recruitment-only current actor even if the request still carries old HR permissions', async () => {
+    const { service, prisma } = fixture();
+    prisma.user.findUnique.mockResolvedValue({ ...actor, sysRole: 'employee', hrCapabilities: ['recruitment_view'],
+      status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false });
+    await expect(service.exportApplications({} as never, actor)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.talentCandidate.findMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['employee_archive_edit', 'employee_archive_review'])('retains existing hr_user export with %s', async capability => {
+    const { service, prisma } = fixture();
+    const current = { ...actor, sysRole: 'hr_user' as const, hrCapabilities: [capability, 'recruitment_view'],
+      status: 'probation', archivedAt: null, deletedAt: null, isAssessorOnly: false };
+    prisma.user.findUnique.mockResolvedValue(current);
+    const file = await service.exportApplications({} as never, current);
+    expect(file.getHeaders().type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a mixed assessor before loading any export rows', async () => {
+    const { service, prisma } = fixture();
+    prisma.user.findUnique.mockResolvedValue({ ...actor, status: 'active', isAssessorOnly: true });
+    await expect(service.exportApplications({} as never, actor)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.talentCandidate.findMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
   it('ignores pagination, writes a binary workbook and audits only counts and safe filter summaries', async () => {
     const { service, prisma } = fixture();
     const query = { keyword: 'private-keyword', salaryMinYuan: 5501, mineOnly: true, page: 3, pageSize: 20, skip: 40, take: 20 } as never;

@@ -117,7 +117,7 @@ function fixture(talentCandidateId: string | null = null, currentFrom = '2024-01
   const service = new EmployeeDataReviewsService(db);
   return {
     service, state: () => state, trace,
-    approve: (scope: 'profile' | 'performance') => service.approveBatch({ requestIds: ['r1'], scopes: [scope] }, operator),
+    approve: (scope: 'profile' | 'performance') => service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: state.request.requestVersion }, scopes: [scope] }, operator),
     changeManager: (id: string) => service.setPendingPerformanceManager('r1', id, operator),
     failProposalWrite: () => { failProposalWrite = true; },
     failTransaction: (error: unknown) => { transactionError = error; },

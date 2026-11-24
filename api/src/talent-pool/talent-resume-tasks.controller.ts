@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Header, Headers, HttpCode, Param, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Controller, Delete, Get, Header, Headers, HttpCode, Param, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import type { Response } from 'express';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -8,10 +8,12 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { UploadFileInterceptor } from '@/common/upload-file.interceptor';
 import { RESUME_LIMITS } from './talent-resume-client';
 import { TalentResumeTasksService } from './talent-resume-tasks.service';
+import { TalentManagementGuard } from './talent-management.guard';
 
 @Controller('talent-resume/tasks')
 @Roles(SysRole.hr, SysRole.system_admin)
 @HrCapabilities('employee_archive_edit')
+@UseGuards(TalentManagementGuard)
 export class TalentResumeTasksController {
   constructor(private readonly tasks: TalentResumeTasksService) {}
 

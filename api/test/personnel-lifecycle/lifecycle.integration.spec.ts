@@ -68,7 +68,8 @@ describe('Personnel lifecycle: isolated real database and HTTP', () => {
     return app.prisma.employeeDataChangeRequest.findFirstOrThrow({ where: { talentCandidateId: candidateId } });
   }
   async function approve(id: string) {
-    const result = await app.http.post(`${root}/reviews/approve`).set(headers(reviewer)).send({ requestIds: [id], scopes: ['profile'] }).expect(201);
+    const seen = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id } });
+    const result = await app.http.post(`${root}/reviews/approve`).set(headers(reviewer)).send({ requestIds: [id], requestVersions: { [id]: seen.requestVersion }, scopes: ['profile'] }).expect(201);
     expect(result.body.data.failed).toEqual([]);
   }
   const currentRequest = (id: string) => app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id } });
@@ -204,7 +205,7 @@ describe('Personnel lifecycle: isolated real database and HTTP', () => {
       await app.http.patch(`${root}/applications/${reentry.id}/arrival-date`).set(headers())
         .send({ arrivalDate: '2035-03-22', requestVersion: (await currentRequest(reentry.id)).requestVersion }).expect(200);
       const rejected = await app.http.post(`${root}/reviews/reject`).set(headers(reviewer))
-        .send({ requestIds: [reentry.id], reason: '虚拟退回，修订到岗部门及日期' }).expect(201);
+        .send({ requestIds: [reentry.id], requestVersions: { [reentry.id]: (await currentRequest(reentry.id)).requestVersion }, reason: '虚拟退回，修订到岗部门及日期' }).expect(201);
       expect(rejected.body.data.failed).toEqual([]);
       const revisedDepartment = await app.prisma.department.create({ data: { name: `虚拟新任职部门-${randomUUID().slice(0, 6)}` } });
       await app.http.patch(`${root}/reentry/${reentry.id}`).set(headers()).send({ company: 'fuede', deptId: revisedDepartment.id,
@@ -690,7 +691,7 @@ describe('Personnel lifecycle: isolated real database and HTTP', () => {
         await app.http.patch(`${root}/applications/${returnedRequest.id}/arrival-date`).set(headers())
           .send({ arrivalDate: '2035-03-19', requestVersion: (await currentRequest(returnedRequest.id)).requestVersion }).expect(200);
         await app.http.post(`${root}/reviews/reject`).set(headers(reviewer))
-          .send({ requestIds: [returnedRequest.id], reason: '虚拟日期退回验收' }).expect(201);
+          .send({ requestIds: [returnedRequest.id], requestVersions: { [returnedRequest.id]: (await currentRequest(returnedRequest.id)).requestVersion }, reason: '虚拟日期退回验收' }).expect(201);
         const recoveryContext = await browser.newContext({ viewport: { width, height: 900 } });
         await recoveryContext.addInitScript((token: string) => localStorage.setItem('token', token), editor.token);
         const recoveryPage = await recoveryContext.newPage();

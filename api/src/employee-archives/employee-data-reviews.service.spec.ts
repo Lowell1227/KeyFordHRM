@@ -14,6 +14,7 @@ const operator = {
 describe('EmployeeDataReviewsService', () => {
   it('HR管理员可以通过自己提交的员工绩效关系变更并保留审核记录', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-self',
       userId: 'employee-1',
       createdById: operator.id,
@@ -42,7 +43,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['performance'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['performance'] }, operator);
 
     expect(result).toEqual({
       succeeded: [{ requestId: request.id, scopes: ['performance'] }],
@@ -63,6 +64,7 @@ describe('EmployeeDataReviewsService', () => {
 
   it('HR管理员可以退回自己提交的员工变更并保留审核记录', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-self-reject',
       userId: 'employee-1',
       createdById: operator.id,
@@ -72,6 +74,7 @@ describe('EmployeeDataReviewsService', () => {
     const tx = {
       employeeDataChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue(request),
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-self-reject' }) },
@@ -79,12 +82,13 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.rejectBatch([request.id], '信息需调整', operator);
+    const result = await service.rejectBatch([request.id], '信息需调整', operator, { [request.id]: request.requestVersion });
 
     expect(result.failed).toEqual([]);
     expect(result.succeeded).toEqual([{ requestId: request.id, scopes: ['profile', 'performance'] }]);
-    expect(tx.employeeDataChangeRequest.update).toHaveBeenCalledWith({
-      where: { id: request.id },
+    expect(tx.employeeDataChangeRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: request.id, requestVersion: request.requestVersion, recordStatus: 'submitted', archivedAt: null,
+        profileReviewStatus: 'pending', performanceReviewStatus: 'not_required' },
       data: expect.objectContaining({
         profileReviewStatus: 'rejected',
         profileReviewedById: operator.id,
@@ -130,6 +134,7 @@ describe('EmployeeDataReviewsService', () => {
 
   it('草稿不能绕过提交动作直接审核', async () => {
     const request = {
+      requestVersion: 1,
       id: 'draft-review',
       userId: 'employee-1',
       recordStatus: 'draft',
@@ -151,7 +156,7 @@ describe('EmployeeDataReviewsService', () => {
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     } as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result).toEqual({ succeeded: [], failed: [{ requestId: request.id, reason: '草稿尚未提交审核' }] });
     expect(tx.employeeDataChangeRequest.updateMany).not.toHaveBeenCalled();
@@ -160,7 +165,7 @@ describe('EmployeeDataReviewsService', () => {
   it('批量审核隔离异常员工，合法绩效关系仍然生效', async () => {
     const requests = new Map<string, any>([
       ['review-valid', {
-        id: 'review-valid',
+        id: 'review-valid', requestVersion: 1,
         userId: 'employee-1',
         employeeName: '员工一',
         profileReviewStatus: 'not_required',
@@ -169,7 +174,7 @@ describe('EmployeeDataReviewsService', () => {
         proposedValue: { performance: { managerId: 'manager-1', managerName: '主管一' } },
       }],
       ['review-invalid', {
-        id: 'review-invalid',
+        id: 'review-invalid', requestVersion: 1,
         userId: 'employee-2',
         employeeName: '员工二',
         profileReviewStatus: 'not_required',
@@ -204,7 +209,7 @@ describe('EmployeeDataReviewsService', () => {
     const service = new EmployeeDataReviewsService(prisma as any);
 
     const result = await service.approveBatch(
-      { requestIds: ['review-valid', 'review-invalid'], scopes: ['performance'] },
+      { requestIds: ['review-valid', 'review-invalid'], requestVersions: { 'review-valid': 1, 'review-invalid': 1 }, scopes: ['performance'] },
       operator,
     );
 
@@ -231,6 +236,7 @@ describe('EmployeeDataReviewsService', () => {
 
   it('重复提交同一审核时只允许一个请求实际写入正式数据', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-already-claimed', userId: 'employee-1', profileReviewStatus: 'not_required',
       performanceReviewStatus: 'pending', validationErrors: [],
       proposedValue: { performance: { managerId: 'manager-1' } },
@@ -248,17 +254,16 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['performance'] }, operator);
-
-    expect(result).toEqual({
-      succeeded: [],
-      failed: [{ requestId: request.id, reason: '该记录已处理' }],
-    });
+    await expect(service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['performance'] }, operator))
+      .rejects.toThrow('请刷新后重新核对再审核');
     expect(userUpdate).not.toHaveBeenCalled();
+    expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('旧审核单不能覆盖后来已经生效的绩效直属上级', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-stale-manager', userId: 'employee-1', profileReviewStatus: 'not_required',
       performanceReviewStatus: 'pending', validationErrors: [],
       baseValue: { performance: { managerId: null } },
@@ -280,7 +285,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['performance'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['performance'] }, operator);
 
     expect(result.failed).toEqual([{
       requestId: request.id,
@@ -298,6 +303,7 @@ describe('EmployeeDataReviewsService', () => {
       probationMonths: null, employmentType: 'full_time', employeeStatus: 'active',
     };
     const request = {
+      requestVersion: 1,
       id: 'review-stale-profile', userId: 'employee-1', sourceType: 'manual_profile_change',
       sourceBatchId: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       validationErrors: [],
@@ -330,7 +336,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([{
       requestId: request.id,
@@ -346,6 +352,7 @@ describe('EmployeeDataReviewsService', () => {
       employeeStatus: 'active',
     };
     const request = {
+      requestVersion: 1,
       id: 'review-profile-created-later', userId: 'employee-1', sourceType: 'manual_profile_change',
       sourceBatchId: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       validationErrors: [],
@@ -377,7 +384,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([{
       requestId: request.id,
@@ -434,6 +441,7 @@ describe('EmployeeDataReviewsService', () => {
 
   it('同一次审核先建立新员工档案，再启用该员工的绩效直属上级', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-new',
       userId: null,
       employeeNo: 'N-001',
@@ -531,7 +539,7 @@ describe('EmployeeDataReviewsService', () => {
     const service = new EmployeeDataReviewsService(prisma as any);
 
     const result = await service.approveBatch(
-      { requestIds: ['review-new'], scopes: ['profile', 'performance'] },
+      { requestIds: ['review-new'], requestVersions: { 'review-new': request.requestVersion }, scopes: ['profile', 'performance'] },
       operator,
     );
 
@@ -734,6 +742,7 @@ describe('EmployeeDataReviewsService', () => {
 
   it('审核通过后允许组织最高负责人的绩效直属上级保持为空', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-clear-top-leader', userId: 'top-leader', profileReviewStatus: 'not_required',
       performanceReviewStatus: 'pending', validationErrors: [],
       proposedValue: { performance: { managerId: null } },
@@ -754,7 +763,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['performance'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['performance'] }, operator);
 
     expect(result.failed).toEqual([]);
     expect(userUpdate).toHaveBeenCalledWith({ where: { id: 'top-leader' }, data: { directManagerId: null } });
@@ -853,7 +862,7 @@ describe('EmployeeDataReviewsService', () => {
   it('旧导入批次不会按同批次新建员工姓名猜测主管身份', async () => {
     const requests = new Map<string, any>([
       ['review-employee', {
-        id: 'review-employee', userId: null, employeeNo: '002', employeeName: '新员工',
+        id: 'review-employee', requestVersion: 1, userId: null, employeeNo: '002', employeeName: '新员工',
         sourceBatchId: 'batch-1', profileReviewStatus: 'pending', performanceReviewStatus: 'pending',
         validationErrors: [],
         proposedValue: {
@@ -866,7 +875,7 @@ describe('EmployeeDataReviewsService', () => {
         },
       }],
       ['review-manager', {
-        id: 'review-manager', userId: null, employeeNo: '001', employeeName: '新主管',
+        id: 'review-manager', requestVersion: 1, userId: null, employeeNo: '001', employeeName: '新主管',
         sourceBatchId: 'batch-1', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
         validationErrors: [],
         proposedValue: {
@@ -925,6 +934,7 @@ describe('EmployeeDataReviewsService', () => {
 
     const result = await service.approveBatch({
       requestIds: ['review-employee', 'review-manager'],
+      requestVersions: { 'review-employee': 1, 'review-manager': 1 },
       scopes: ['profile', 'performance'],
     }, operator);
 
@@ -936,6 +946,7 @@ describe('EmployeeDataReviewsService', () => {
 
   it('审核通过离职变更时停用员工和钉钉登录，但不删除员工档案', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-resigned', userId: 'employee-resigned', employeeNo: '009', employeeName: '离职员工',
       sourceBatchId: 'batch-2', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       validationErrors: [],
@@ -974,7 +985,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([]);
     expect(userUpdate).toHaveBeenCalledWith({
@@ -994,6 +1005,7 @@ describe('EmployeeDataReviewsService', () => {
 
   it('审核通过手工离职时结束上一条在职任职记录', async () => {
     const request = {
+      requestVersion: 1,
       id: 'review-manual-resignation', userId: 'employee-resigned', employeeNo: '009', employeeName: '离职员工',
       sourceType: 'manual_employment_change', sourceBatchId: null,
       profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
@@ -1033,7 +1045,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([]);
     expect(employmentUpdate).toHaveBeenCalledWith({
@@ -1067,6 +1079,7 @@ describe('EmployeeDataReviewsService', () => {
       createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-02-01'),
     };
     const request = {
+      requestVersion: 1,
       id: 'review-profile-only', userId: 'employee-1', employeeNo: '001', employeeName: '员工一',
       sourceType, sourceBatchId: null,
       profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
@@ -1115,7 +1128,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([]);
     expect(tx.employeeProfile.upsert).toHaveBeenCalled();
@@ -1128,6 +1141,7 @@ describe('EmployeeDataReviewsService', () => {
   it('同一天再次审核任职变化时更新当天记录而不制造无效日期区间', async () => {
     const today = shanghaiBusinessDate();
     const request = {
+      requestVersion: 1,
       id: 'review-same-day-employment', userId: 'employee-1', sourceType: 'employee_roster_import',
       sourceBatchId: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       validationErrors: [], baseValue: {},
@@ -1173,7 +1187,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([]);
     expect(employmentUpdate).toHaveBeenCalledWith({
@@ -1202,6 +1216,7 @@ describe('EmployeeDataReviewsService', () => {
     };
     const removedContract = { ...keptContract, contractType: 'confidentiality', name: '保密协议' };
     const request = {
+      requestVersion: 1,
       id: 'review-contract-removal', userId: 'employee-1', sourceType: 'employee_roster_import',
       sourceBatchId: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       validationErrors: [], baseValue: { employee, profile: {}, contracts: [keptContract, removedContract] },
@@ -1250,7 +1265,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([]);
     expect(contractUpdate).toHaveBeenCalledWith({
@@ -1265,6 +1280,7 @@ describe('EmployeeDataReviewsService', () => {
       entryDate: '2024-01-01T00:00:00.000Z', employmentType: 'full_time', employeeStatus: 'active',
     };
     const request = {
+      requestVersion: 1,
       id: 'review-stale-contract', userId: 'employee-1', sourceType: 'employee_roster_import',
       sourceBatchId: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       validationErrors: [],
@@ -1296,7 +1312,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([{
       requestId: request.id,
@@ -1311,6 +1327,7 @@ describe('EmployeeDataReviewsService', () => {
       entryDate: '2024-01-01T00:00:00.000Z', employmentType: 'full_time', employeeStatus: 'active',
     };
     const request = {
+      requestVersion: 1,
       id: 'review-contract-returned', userId: 'employee-1', sourceType: 'employee_roster_import',
       sourceBatchId: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       validationErrors: [], baseValue: { employee, profile: {}, contracts: [] },
@@ -1354,7 +1371,7 @@ describe('EmployeeDataReviewsService', () => {
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([]);
     expect(inactiveLookup).not.toHaveBeenCalled();

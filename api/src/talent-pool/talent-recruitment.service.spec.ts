@@ -94,6 +94,60 @@ describe('reserve reasons on application events', () => {
 });
 
 describe('talent recruitment transactions and boundaries', () => {
+  it('gives a current explicit employee reader shared applications and feedback, never maintenance or confirmation', async () => {
+    const { sut, actors, feedbacks, tx } = setup();
+    Object.assign(actors[1], { hrCapabilities: ['recruitment_view'] });
+    feedbacks.push({ interviewId: 'interview', userId: 'other', status: 'submitted', revision: 1, summary: 'Synthetic shared feedback' });
+    await expect(sut.list('candidate', participant)).resolves.toEqual([expect.objectContaining({ id: 'app', allowedActions: [] })]);
+    await expect(sut.detail('app', participant)).resolves.toMatchObject({ id: 'app', allowedActions: [] });
+    await expect(sut.feedback('interview', participant)).resolves.toMatchObject({ items: [expect.objectContaining({ userId: 'other' })], canReturn: false });
+    await expect(sut.create('candidate', applicationInput, participant)).rejects.toThrow(ForbiddenException);
+    await expect(sut.update('app', { expectedRevision: 1, positionName: 'Other role' }, participant)).rejects.toThrow(ForbiddenException);
+    await expect(sut.hiringReviews(participant)).rejects.toThrow(ForbiddenException);
+    await expect(sut.returnFeedback('interview', 'other', { interviewVersion: 1, expectedRevision: 1, note: 'Unused' }, participant)).rejects.toThrow(ForbiddenException);
+    expect(tx.talentApplication.create).not.toHaveBeenCalled();
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    expect(tx.talentInterviewFeedback.updateMany).not.toHaveBeenCalled();
+  });
+  it.each(['hr', 'system_admin', 'hr_user', 'employee'])('denies mixed assessor-only %s application and feedback reads', async sysRole => {
+    const { sut, actors, tx } = setup();
+    Object.assign(actors[0], { sysRole, isAssessorOnly: true, hrCapabilities: ['employee_archive_edit', 'employee_archive_review', 'recruitment_view'] });
+    await expect(sut.list('candidate', hr)).rejects.toThrow(ForbiddenException);
+    await expect(sut.detail('app', hr)).rejects.toThrow(ForbiddenException);
+    await expect(sut.feedback('interview', hr)).rejects.toThrow(ForbiddenException);
+    expect(tx.talentApplication.findMany).not.toHaveBeenCalled();
+    expect(tx.talentInterviewFeedback.findMany).not.toHaveBeenCalled();
+  });
+  it.each(['create', 'update', 'act', 'saveFeedback', 'returnFeedback'] as const)('%s rechecks qualification after its last business lock', async action => {
+    const { sut, actors, tx, interview, feedbacks } = setup();
+    interview.participants.push({ userId: hr.id, userNameSnapshot: 'Synthetic HR participant' });
+    feedbacks.push({ interviewId: 'interview', userId: participant.id, status: 'submitted', revision: 1 });
+    let unlock!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const released = new Promise<void>(resolve => { unlock = resolve; });
+    const lastTable = action === 'create' ? 'talent_candidates' : ['saveFeedback', 'returnFeedback'].includes(action) ? 'talent_interview_feedback' : 'talent_applications';
+    tx.$queryRaw.mockImplementation(async sql => {
+      if (sql.join('?').includes(`FROM ${lastTable} WHERE`)) { entered(); await released; }
+      return [{ id: 'candidate' }];
+    });
+    const pending = action === 'create' ? sut.create('candidate', applicationInput, hr)
+      : action === 'update' ? sut.update('app', { expectedRevision: 1, positionName: 'Unused' }, hr)
+      : action === 'act' ? sut.act('app', { expectedRevision: 1, action: 'reserve' }, hr)
+      : action === 'saveFeedback' ? sut.saveFeedback('interview', { interviewVersion: 1, expectedRevision: 0, submit: false }, hr)
+      : sut.returnFeedback('interview', participant.id, { interviewVersion: 1, expectedRevision: 1, note: 'Unused' }, hr);
+    try {
+      await waiting;
+      expect(tx.user.findUnique).not.toHaveBeenCalled();
+      Object.assign(actors[0], { isAssessorOnly: true });
+    } finally { unlock(); }
+    await expect(pending).rejects.toThrow(ForbiddenException);
+    expect(tx.talentApplication.create).not.toHaveBeenCalled();
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    expect(tx.talentInterviewFeedback.create).not.toHaveBeenCalled();
+    expect(tx.talentInterviewFeedback.updateMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
   it('requires fresh independent approval and does not infer system-admin approval', async () => {
     const { sut, app, actors, tx } = setup({ stage: 'hiring_review', hiringRequestedById: hr.id });
     await expect(sut.act('app', { expectedRevision: 1, action: 'approve_hiring' }, hr)).rejects.toThrow(ForbiddenException);

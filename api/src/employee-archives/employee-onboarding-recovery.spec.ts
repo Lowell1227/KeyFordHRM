@@ -119,7 +119,7 @@ function setup(intakeType: 'new_hire' | 'reentry' = 'new_hire') {
   const effective = new EmployeeEffectiveDateService(db);
   const onboarding = new EmployeeOnboardingService(db, new EmployeeNumberService(), {} as any, effective);
   const reviews = new EmployeeDataReviewsService(db, onboarding);
-  const approve = () => reviews.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, reviewer);
+  const approve = () => reviews.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, reviewer);
   const reopen = (version = request.requestVersion) => onboarding.reviseArrivalDate(request.id,
     { arrivalDate: '2026-11-11', requestVersion: version }, editor);
   const cancel = () => onboarding.cancelReentry(request.id, { reason: 'Synthetic no-show' }, editor.id);
@@ -137,10 +137,10 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
       effectiveDate: new Date('2026-11-11'), employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
     const firstVersion = f.request.requestVersion;
     const firstBase = structuredClone(f.request.baseValue);
-    await f.reviews.rejectBatch(['r1'], 'First correction', reviewer);
+    await f.reviews.rejectBatch(['r1'], 'First correction', reviewer, { r1: firstVersion });
     await f.onboarding.reviseReentry('r1', input, editor.id);
     const secondVersion = f.request.requestVersion;
-    await f.reviews.rejectBatch(['r1'], 'Second correction', reviewer);
+    await f.reviews.rejectBatch(['r1'], 'Second correction', reviewer, { r1: secondVersion });
     await f.onboarding.reviseReentry('r1', { ...input, positionId: 'p2', position: 'New position' }, editor.id);
     expect(f.request.revisionHistory.find((item: any) => item.version === firstVersion)).toMatchObject({
       rejectedReason: 'First correction', baseValue: firstBase,
@@ -166,7 +166,7 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
       employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
     expect((await f.onboarding.reviseReentry('r1', input, editor.id)).proposedValue.employee).toMatchObject(frozen);
     expect(f.records).toEqual([]);
-    await f.reviews.rejectBatch(['r1'], 'Synthetic correction', reviewer);
+    await f.reviews.rejectBatch(['r1'], 'Synthetic correction', reviewer, { r1: f.request.requestVersion });
     expect((await f.onboarding.reviseReentry('r1', { ...input, contractSubjectId: undefined, positionId: 'p2', position: 'New position' }, editor.id))
       .proposedValue.employee).toMatchObject(frozen);
     expect((await f.approve()).failed).toEqual([]);
@@ -193,7 +193,7 @@ describe('onboarding revision and cancelled-arrival recovery', () => {
   it('applies all reviewed reentry fields after date revision and return, without replacing the employment identity', async () => {
     const f = setup('reentry');
     await f.reopen();
-    await f.reviews.rejectBatch(['r1'], 'Synthetic correction', reviewer);
+    await f.reviews.rejectBatch(['r1'], 'Synthetic correction', reviewer, { r1: f.request.requestVersion });
     await f.onboarding.reviseReentry('r1', { company: CompanyCode.beijing_fuede, contractSubjectId: subjectId,
       deptId: 'd2', positionId: 'p2', position: 'New position', rosterManagerId: 'm2',
       effectiveDate: new Date('2026-11-11'), employmentType: EmploymentType.part_time,

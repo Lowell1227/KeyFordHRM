@@ -5,10 +5,12 @@ import { RolesGuard } from '@/common/guards/roles.guard';
 import { TalentsController } from './talents.controller';
 import { TalentSharesController } from './talent-shares.controller';
 import { TalentInterviewsController } from './talent-interviews.controller';
+import { TalentManagementGuard } from './talent-management.guard';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
 import type { AuthUser } from '@/common/types/auth.types';
 
 /**
- * 权限边界（需求 §5.4 / §8）：/talents* 只允许 HR 或具备档案能力的账号；
+ * 全量读取支持独立招聘查看能力，维护仍需原档案编辑资格；
  * /talents/shares/:token 只要求登录（被分享人是部门负责人，不能被 HR 角色挡住）。
  * 用真实 Reflector + 真实守卫，读控制器上真实的装饰器元数据。
  */
@@ -70,6 +72,41 @@ describe('人才库权限边界（RolesGuard + 真实路由元数据）', () => 
         expect(guard.canActivate(context(handler, TalentsController, user(role)))).toBe(true);
       }
     }
+  });
+
+  it.each([SysRole.employee, SysRole.manager, SysRole.dept_head, SysRole.vp, SysRole.hr_user])('explicit recruitment reader %s can only access talent read routes', role => {
+    const actor = user(role, ['recruitment_view']);
+    for (const handler of [controller.list, controller.detail, controller.applicationPositions, controller.checkPhone, controller.listFollowUps]) {
+      expect(guard.canActivate(context(handler, TalentsController, actor))).toBe(true);
+    }
+    for (const handler of [controller.create, controller.update, controller.remove, controller.bindFile, controller.unbindFile,
+      controller.addFollowUp, controller.cancelFollowUpPlan, controller.convert, controller.createShare, controller.revokeShare, controller.shareRecipients, controller.exportApplications]) {
+      expect(() => guard.canActivate(context(handler, TalentsController, actor))).toThrow(ForbiddenException);
+    }
+  });
+
+  it('blocks mixed assessor-only identities at talent management without blocking token shares', () => {
+    expect(Reflect.getMetadata(GUARDS_METADATA, TalentsController)).toContain(TalentManagementGuard);
+    expect(Reflect.getMetadata(GUARDS_METADATA, TalentSharesController) ?? []).not.toContain(TalentManagementGuard);
+    const management = new TalentManagementGuard();
+    for (const role of [SysRole.hr, SysRole.system_admin, SysRole.hr_user, SysRole.employee]) {
+      const actor = { ...user(role, ['recruitment_view', 'employee_archive_edit']), isAssessorOnly: true };
+      for (const [, handler] of hrOnlyHandlers) {
+        expect(() => management.canActivate(context(handler, TalentsController, actor))).toThrow(ForbiddenException);
+      }
+    }
+  });
+
+  it('checks fresh talent-read eligibility before returning follow-up history', async () => {
+    const actor = user(SysRole.employee, ['recruitment_view']);
+    const talents = { assertRead: jest.fn().mockRejectedValue(new ForbiddenException()) };
+    const followUps = { list: jest.fn().mockResolvedValue([{ content: 'Synthetic follow-up' }]) };
+    const sut = new TalentsController(talents as never, {} as never, followUps as never, {} as never);
+    await expect(sut.listFollowUps('candidate', actor)).rejects.toThrow(ForbiddenException);
+    expect(followUps.list).not.toHaveBeenCalled();
+    talents.assertRead.mockResolvedValue(undefined);
+    await expect(sut.listFollowUps('candidate', actor)).resolves.toEqual([{ content: 'Synthetic follow-up' }]);
+    expect(talents.assertRead).toHaveBeenLastCalledWith(actor);
   });
 
   it('具备档案能力的 hr_user 可以访问，无能力的 hr_user 被 403', () => {

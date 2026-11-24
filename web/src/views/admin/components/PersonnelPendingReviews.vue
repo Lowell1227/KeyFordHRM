@@ -46,6 +46,7 @@ const employeePage = ref(1);
 const employeePageSize = ref(10);
 const employeeLoading = ref(false);
 const selectedEmployees = ref<EmployeeDataReview[]>([]);
+const employeeRejectReasons = new Map<string, string>();
 const departmentItems = ref<DepartmentChangeRequest[]>([]);
 const departmentTotal = ref(0);
 const departmentPage = ref(1);
@@ -275,6 +276,7 @@ async function approveEmployeeReviews(rows: EmployeeDataReview[]) {
     const result = await employeeArchivesApi.approveReviews(
       rows.map((row) => row.id),
       ['profile', 'performance'],
+      Object.fromEntries(rows.map(row => [row.id, row.requestVersion])),
     );
     if (result.failed.length > 0) {
       const failedIds = new Set(result.failed.map((item) => item.requestId));
@@ -296,6 +298,8 @@ async function approveEmployeeReviews(rows: EmployeeDataReview[]) {
     }
     await loadEmployeeReviews();
     notifyPersonnelChanged();
+  } catch (error) {
+    if ((error as { response?: { status?: number } })?.response?.status !== 409) throw error;
   } finally {
     employeeLoading.value = false;
   }
@@ -303,16 +307,29 @@ async function approveEmployeeReviews(rows: EmployeeDataReview[]) {
 
 async function rejectEmployeeReviews(rows: EmployeeDataReview[]) {
   if (!rows.length) return;
+  const requestIds = rows.map(row => row.id);
+  const requestVersions = Object.fromEntries(rows.map(row => [row.id, row.requestVersion]));
+  const draftKey = JSON.stringify(requestVersions);
   try {
     const result = await ElMessageBox.prompt('请填写退回原因。', '退回员工变更', {
       confirmButtonText: '确认退回', cancelButtonText: '取消', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写 2 个字',
+      inputValue: employeeRejectReasons.get(draftKey) ?? '',
     });
+    employeeRejectReasons.set(draftKey, result.value);
     employeeLoading.value = true;
-    await employeeArchivesApi.rejectReviews(rows.map((row) => row.id), result.value);
-    ElMessage.success(`已退回 ${rows.length} 项`);
+    const review = await employeeArchivesApi.rejectReviews(requestIds, result.value, requestVersions);
+    if (review.failed.length) {
+      const names = new Map(rows.map(row => [row.id, row.employeeName || '未命名员工']));
+      ElMessage.warning(`已退回 ${review.succeeded.length} 项；未退回 ${review.failed.length} 项：${review.failed
+        .map(item => `${names.get(item.requestId) ?? '员工'}—${item.reason}`).join('；')}`);
+    } else {
+      employeeRejectReasons.delete(draftKey);
+      ElMessage.success(`已退回 ${review.succeeded.length} 项`);
+    }
     await loadEmployeeReviews();
     notifyPersonnelChanged();
   } catch (error) {
+    if ((error as { response?: { status?: number } })?.response?.status === 409) return;
     if (error !== 'cancel' && error !== 'close') throw error;
   } finally { employeeLoading.value = false; }
 }

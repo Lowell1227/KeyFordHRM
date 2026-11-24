@@ -1,6 +1,8 @@
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { Prisma } from '@prisma/client';
 import { currentWorkerWhere } from '@/common/personnel/current-worker';
+import { ForbiddenException } from '@nestjs/common';
+import type { AuthUser } from '@/common/types/auth.types';
 
 export const TALENT_APPLICATION_ACTIONS = [
   'start_interview', 'submit_hiring', 'approve_hiring', 'return_hiring', 'accept_offer',
@@ -30,11 +32,36 @@ export function isCurrentRecruitmentActor(actor: RecruitmentActor): boolean {
 }
 
 export function canReadRecruitment(actor: RecruitmentActor): boolean {
-  return !actor.isAssessorOnly && (hasHrCapability(actor, 'employee_archive_edit') || hasHrCapability(actor, 'employee_archive_review'));
+  return !actor.isAssessorOnly && (hasHrCapability(actor, 'recruitment_view')
+    || hasHrCapability(actor, 'employee_archive_edit') || hasHrCapability(actor, 'employee_archive_review'));
 }
 
 export function canWriteRecruitment(actor: RecruitmentActor): boolean {
   return isCurrentRecruitmentActor(actor) && hasHrCapability(actor, 'employee_archive_edit');
+}
+
+export const recruitmentActorSelect = {
+  id: true, name: true, sysRole: true, deptId: true, canViewAll: true,
+  hrCapabilities: true, status: true, archivedAt: true, deletedAt: true, isAssessorOnly: true,
+} satisfies Prisma.UserSelect;
+
+async function currentRecruitmentActor(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id'>) {
+  if (!user?.id) throw new ForbiddenException('当前账号不具备招聘办理资格');
+  const actor = await tx.user.findUnique({ where: { id: user.id }, select: recruitmentActorSelect });
+  if (!actor || !isCurrentRecruitmentActor(actor)) throw new ForbiddenException('当前账号不具备招聘办理资格');
+  return actor;
+}
+
+export async function assertRecruitmentReader(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id'>) {
+  const actor = await currentRecruitmentActor(tx, user);
+  if (!canReadRecruitment(actor)) throw new ForbiddenException('无权限查看招聘资料');
+  return actor;
+}
+
+export async function assertRecruitmentWriter(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id'>) {
+  const actor = await currentRecruitmentActor(tx, user);
+  if (!canWriteRecruitment(actor)) throw new ForbiddenException('无权限维护招聘资料');
+  return actor;
 }
 
 export function talentOwnerWhere(): Prisma.UserWhereInput {

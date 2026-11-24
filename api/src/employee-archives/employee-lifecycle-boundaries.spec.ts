@@ -6,7 +6,7 @@ import { selectEmploymentAt } from './employment-timeline';
 
 const operator = { id: 'hr1', sysRole: SysRole.hr } as any;
 const resignationRequest = () => ({
-  id: 'r1', userId: 'u1', employeeNo: '123', sourceType: 'manual_employment_change', recordStatus: 'submitted',
+  id: 'r1', requestVersion: 1, userId: 'u1', employeeNo: '123', sourceType: 'manual_employment_change', recordStatus: 'submitted',
   profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [], baseValue: {},
   proposedValue: { employee: { name: '员工', employeeNo: '123', company: 'fuede', deptId: 'd1',
     entryDate: '2020-01-01', leaveDate: '2026-10-08', effectiveFrom: '2026-10-08',
@@ -60,7 +60,7 @@ describe('employee lifecycle business boundaries', () => {
     request.proposedValue.employee.changeType = changeType;
     request.proposedValue.employee.leaveDate = null;
     const fixture = reviewFixture(request);
-    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: 1 }, scopes: ['profile'] }, operator);
     expect(result.succeeded).toEqual([]);
     expect(result.failed[0]?.reason).toMatch(/离职|最后工作日/);
     expect(fixture.state().user.status).toBe('active');
@@ -75,7 +75,7 @@ describe('employee lifecycle business boundaries', () => {
       changeType: 'data_correction', leaveDate: null, effectiveFrom: '2020-01-01', effectiveTo: '2020-12-31',
     });
     const fixture = reviewFixture(request);
-    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: 1 }, scopes: ['profile'] }, operator);
     expect(result.failed).toEqual([]);
     expect(fixture.state().employments).toHaveLength(1);
     expect(fixture.state().user.status).toBe('active');
@@ -89,7 +89,7 @@ describe('employee lifecycle business boundaries', () => {
     });
     const fixture = reviewFixture(request);
     fixture.state().user.status = status;
-    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: 1 }, scopes: ['profile'] }, operator);
     expect(result.succeeded).toEqual([]);
     expect(result.failed[0]?.reason).toMatch(/到岗|再入职/);
     expect(fixture.state().employments).toHaveLength(0);
@@ -111,7 +111,7 @@ describe('employee lifecycle business boundaries', () => {
     request.proposedValue.employee.effectiveFrom = '2020-01-01';
     const fixture = reviewFixture(request);
     fixture.state().user.status = 'resigned';
-    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: 1 }, scopes: ['profile'] }, operator);
     expect(result.failed[0]?.reason).toContain('再入职');
     expect(fixture.state().user.status).toBe('resigned');
   });
@@ -119,7 +119,7 @@ describe('employee lifecycle business boundaries', () => {
   it.each(['2026-10-07T16:00:00Z', '2026-10-08T15:59:59Z'])('keeps access through the entire last working day at %s', async (now) => {
     jest.useFakeTimers().setSystemTime(new Date(now));
     const fixture = reviewFixture(resignationRequest());
-    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: 1 }, scopes: ['profile'] }, operator);
     expect(result.failed).toEqual([]);
     expect(fixture.state().user.status).toBe('active');
     expect(fixture.state().disabled).toBe(false);
@@ -130,7 +130,7 @@ describe('employee lifecycle business boundaries', () => {
   it('a late resignation approval disables access at approval while retaining the last working date', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-10-08T16:00:00Z'));
     const fixture = reviewFixture(resignationRequest());
-    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: 1 }, scopes: ['profile'] }, operator);
     expect(result.failed).toEqual([]);
     expect(fixture.state().user.status).toBe('resigned');
     expect(fixture.state().user.leaveDate).toEqual(new Date('2026-10-08'));
@@ -144,7 +144,7 @@ describe('employee lifecycle business boundaries', () => {
     request.performanceReviewStatus = 'pending';
     (request.proposedValue as any).performance = { managerId: 'missing-manager' };
     const fixture = reviewFixture(request);
-    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile', 'performance'] }, operator);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], requestVersions: { r1: 1 }, scopes: ['profile', 'performance'] }, operator);
     expect(result.succeeded).toEqual([]);
     expect(result.failed).toHaveLength(1);
     expect(fixture.state().request.profileReviewStatus).toBe('pending');

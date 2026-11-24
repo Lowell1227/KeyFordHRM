@@ -102,7 +102,8 @@ describe('TalentsService yuan salary wiring', () => {
       create: jest.fn(async ({ data }) => { row = { ...row, ...data }; return row; }),
       update: jest.fn(async ({ data }) => { row = { ...row, ...data }; return row; }),
       findMany: jest.fn(async () => [row]), count: jest.fn(async () => 1),
-    }, user: { findFirst: jest.fn(async () => ({ id: 'hr-one' })), findMany: jest.fn(async () => []) },
+    }, user: { findFirst: jest.fn(async () => ({ id: 'hr-one' })), findMany: jest.fn(async () => []),
+      findUnique: jest.fn(async () => ({ id: 'hr-one', sysRole: 'hr', status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false })) },
       $queryRaw: jest.fn(async () => []), auditLog: { create: jest.fn() } };
     prisma.$transaction = jest.fn(async ops => typeof ops === 'function' ? ops(prisma) : Promise.all(ops));
     return { prisma, service: new TalentsService(prisma), row: () => row };

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
@@ -16,6 +16,9 @@ import { salaryWrite, serializeTalentSalary, talentSalaryWhere } from './talent-
 import { talentApplicationFilter } from './talent-application-filter';
 import { buildTalentWorkbook, TALENT_EXPORT_MAX_ROWS } from './talents.excel';
 import { talentEmploymentStatus, type TalentEmploymentStatus } from './talent-employment';
+import { canReadRecruitment, canWriteRecruitment, isCurrentRecruitmentActor } from './talent-recruitment-policy';
+import { talentDemographicsWrite } from './talent-demographics-write';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 
 const onboardingSummary = {
   orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1,
@@ -61,7 +64,29 @@ const listOrder = [{ updatedAt: 'desc' }, { id: 'desc' }] satisfies Prisma.Talen
 export class TalentsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async assertRead(operator: AuthUser) {
+    if (!operator?.id) throw new ForbiddenException('无权限查看招聘资料');
+    const actor = await this.prisma.user.findUnique({ where: { id: operator.id }, select: {
+      id: true, sysRole: true, hrCapabilities: true, status: true,
+      archivedAt: true, deletedAt: true, isAssessorOnly: true,
+    } });
+    if (!actor || !isCurrentRecruitmentActor(actor) || !canReadRecruitment(actor)) throw new ForbiddenException('无权限查看招聘资料');
+    return actor;
+  }
+
+  private async assertWriter(tx: Prisma.TransactionClient, operator: AuthUser) {
+    if (!operator?.id) throw new ForbiddenException('无权限维护人才资料');
+    // Hold the current actor while writing; permission revocation then has a defined order.
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${operator.id}::uuid FOR SHARE`;
+    const actor = await tx.user.findUnique({ where: { id: operator.id }, select: {
+      id: true, sysRole: true, hrCapabilities: true, status: true,
+      archivedAt: true, deletedAt: true, isAssessorOnly: true,
+    } });
+    if (!actor || !canWriteRecruitment(actor)) throw new ForbiddenException('当前无权限维护人才资料，请保留输入并联系管理员');
+  }
+
   async list(query: TalentQueryDto, operator?: AuthUser): Promise<Paginated<TalentListItem>> {
+    if (operator) await this.assertRead(operator);
     const { where, applicationWhere } = this.buildFilters(query, operator);
     const { total, items } = await this.prisma.$transaction(async tx => {
       const total = await tx.talentCandidate.count({ where });
@@ -83,7 +108,8 @@ export class TalentsService {
     return paginated(rows as TalentListItem[], total, query);
   }
 
-  async applicationPositions(): Promise<string[]> {
+  async applicationPositions(operator?: AuthUser): Promise<string[]> {
+    if (operator) await this.assertRead(operator);
     const rows = await this.prisma.talentApplication.findMany({ where: { candidate: { deletedAt: null } },
       select: { positionName: true }, distinct: ['positionName'], orderBy: { positionName: 'asc' } });
     return rows.map(row => row.positionName);
@@ -91,6 +117,10 @@ export class TalentsService {
 
   /** One row per matching application; candidates without applications retain one row without application filters. */
   async exportApplications(query: TalentQueryDto, operator: AuthUser): Promise<StreamableFile> {
+    const actor = await this.assertRead(operator);
+    if (!hasHrCapability(actor, 'employee_archive_edit') && !hasHrCapability(actor, 'employee_archive_review')) {
+      throw new ForbiddenException('无权限导出人才应聘记录');
+    }
     const { where, applicationWhere, responsibilityScope } = this.buildFilters(query, operator);
     const items = await this.prisma.$transaction(async tx => {
       const applicationCount = await tx.talentApplication.count({ where: { candidate: where, ...applicationWhere } });
@@ -184,7 +214,8 @@ export class TalentsService {
     return items.map((item) => ({ ...item, nextFollowUpAt: byId.get(item.id) ?? null }));
   }
 
-  async detail(id: string) {
+  async detail(id: string, operator?: AuthUser) {
+    const actor = operator ? await this.assertRead(operator) : undefined;
     const candidate = await this.prisma.talentCandidate.findFirst({
       where: { id, deletedAt: null },
       include: {
@@ -196,7 +227,8 @@ export class TalentsService {
       },
     });
     if (!candidate) throw new NotFoundException('候选人不存在或已删除');
-    const recipientIds = [...new Set(candidate.shares.flatMap((share) => share.recipientIds))];
+    const shares = actor && !canWriteRecruitment(actor) ? [] : candidate.shares;
+    const recipientIds = [...new Set(shares.flatMap((share) => share.recipientIds))];
     const recipients = recipientIds.length
       ? await this.prisma.user.findMany({ where: { id: { in: recipientIds } }, select: { id: true, name: true } })
       : [];
@@ -205,7 +237,7 @@ export class TalentsService {
     return {
       ...serializeTalentSalary(summary),
       editVersion: talentEditVersion(candidate),
-      shares: candidate.shares.map((share) => ({
+      shares: shares.map((share) => ({
         ...share,
         recipientNames: share.recipientIds.map((recipientId) => nameById.get(recipientId) ?? '已删除用户'),
       })),
@@ -241,7 +273,8 @@ export class TalentsService {
     });
   }
 
-  async checkPhone(phone: string) {
+  async checkPhone(phone: string, operator?: AuthUser) {
+    if (operator) await this.assertRead(operator);
     const normalized = phone.trim();
     if (!/^1\d{10}$/.test(normalized)) throw new BadRequestException('手机号格式不正确');
     const existing = await this.prisma.talentCandidate.findFirst({
@@ -263,16 +296,19 @@ export class TalentsService {
     const duplicate = await this.findByPhone(input.phone);
     if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
     try {
-      const ownerId = input.ownerId ?? operator.id;
-      await this.assertOwner(ownerId, this.prisma);
-      const education = await this.resolveEducation(input, this.prisma);
-      const candidate = await this.prisma.talentCandidate.create({
+      const candidate = await this.prisma.$transaction(async tx => {
+        await this.assertWriter(tx, operator);
+        const ownerId = input.ownerId ?? operator.id;
+        await this.assertOwner(ownerId, tx);
+        const education = await this.resolveEducation(input, tx);
+        return tx.talentCandidate.create({
         data: {
           name: input.name,
           phone: input.phone,
           email: input.email || null,
           gender: input.gender ?? 'unknown',
           birthYear: input.birthYear ?? null,
+          ...talentDemographicsWrite(input),
           currentCompany: input.currentCompany || null,
           currentPosition: input.currentPosition || null,
           yearsOfExperience: input.yearsOfExperience ?? null,
@@ -290,7 +326,8 @@ export class TalentsService {
           note: input.note || null,
           createdById: operator.id,
         },
-      });
+        });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
       return { ...serializeTalentSalary(candidate), editVersion: talentEditVersion(candidate) };
     } catch (error) {
       if (this.isUniqueViolation(error)) {
@@ -306,6 +343,7 @@ export class TalentsService {
       return await this.prisma.$transaction(async (tx) => {
         // Share the arrival/deletion row lock before reading any validation inputs.
         await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${id}::uuid FOR UPDATE`;
+        await this.assertWriter(tx, operator);
         const before = await tx.talentCandidate.findFirst({ where: { id, deletedAt: null },
           include: { files: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
             followUps: { orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] } } });
@@ -329,7 +367,7 @@ export class TalentsService {
         if (ownerChanged) await this.assertOwner(input.ownerId!, tx);
         const education = await this.resolveEducation(input, tx, before);
         const data: Prisma.TalentCandidateUncheckedUpdateInput = {
-          ...this.buildUpdateData(rest, operator),
+          ...this.buildUpdateData(rest, operator, before),
           ...salary,
           ...education,
           ...(ownerChanged ? { ownerId: input.ownerId } : {}),
@@ -347,7 +385,7 @@ export class TalentsService {
         await tx.auditLog.create({ data: { userId: operator.id, action: 'update_talent_candidate',
           entityType: 'talent_candidate', entityId: id, newValue: { changedFields } } });
         return { ...serializeTalentSalary(candidate), editVersion: talentEditVersion(candidate) };
-      });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     } catch (error) {
       if (this.isUniqueViolation(error) && input.phone !== undefined) {
         const existing = await this.findByPhone(input.phone);
@@ -361,6 +399,7 @@ export class TalentsService {
   async remove(id: string, operator: AuthUser, input: DeleteTalentDto = {}) {
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${id}::uuid FOR UPDATE`;
+      await this.assertWriter(tx, operator);
       const before = await tx.talentCandidate.findUnique({ where: { id } });
       if (!before) throw new NotFoundException('候选人不存在或已删除');
       if (before.deletedAt) return { id, deleted: true };
@@ -376,7 +415,7 @@ export class TalentsService {
           interviewIds: impact.interviews.map((row) => row.id), requestIds: impact.requests.map((row) => row.id) },
       } });
       return { id, deleted: true };
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
   async deleteImpact(id: string) {
@@ -419,13 +458,15 @@ export class TalentsService {
     throw new BadRequestException('请通过入离职办理并确认到岗，不支持手动关联员工');
   }
 
-  private buildUpdateData(input: Omit<UpdateTalentDto, 'status' | 'userId'>, operator: AuthUser): Prisma.TalentCandidateUpdateInput {
+  private buildUpdateData(input: Omit<UpdateTalentDto, 'status' | 'userId'>, operator: AuthUser,
+    before: { birthYear?: number | null; birthMonth?: number | null; reportedAge?: number | null; reportedAgeRecordedAt?: Date | null }): Prisma.TalentCandidateUpdateInput {
     return {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.phone !== undefined ? { phone: input.phone } : {}),
       ...(input.email !== undefined ? { email: input.email || null } : {}),
       ...(input.gender !== undefined ? { gender: input.gender } : {}),
       ...(input.birthYear !== undefined ? { birthYear: input.birthYear } : {}),
+      ...talentDemographicsWrite(input, before),
       ...(input.currentCompany !== undefined ? { currentCompany: input.currentCompany || null } : {}),
       ...(input.currentPosition !== undefined ? { currentPosition: input.currentPosition || null } : {}),
       ...(input.yearsOfExperience !== undefined ? { yearsOfExperience: input.yearsOfExperience } : {}),

@@ -31,14 +31,14 @@ async function load() {
   } finally { if (token === session) loading.value = false; }
 }
 function open(key: RecruitmentWorkbenchKey, item: RecruitmentWorkbenchItem) {
-  if (key === 'interview' || key === 'feedback') void router.push({ path: `/talent-interviews/${item.id}` });
+  if (key === 'interview' || key === 'feedback') void router.push({ path: `/talent-interviews/${item.id}`, query: { work: 'interviews', scope: 'mine', bucket: key === 'feedback' ? 'feedback' : 'upcoming' } });
   else if (key === 'hiring_review') void router.push({ path: '/talent-hiring', query: { applicationId: item.id } });
   else if (key === 'onboarding' && item.candidateId && item.applicationId) {
     void router.push({ path: '/entry-exit', query: { talentId: item.candidateId, talentApplicationId: item.applicationId } });
   } else if (item.candidateId) void router.push({ path: '/talents', query: { candidateId: item.candidateId } });
 }
 function openAll(key: RecruitmentWorkbenchKey) {
-  if (key === 'interview' || key === 'feedback') void router.push('/talent-interviews');
+  if (key === 'interview' || key === 'feedback') void router.push({ path: '/talent-interviews', query: { work: 'interviews', scope: 'mine', bucket: key === 'feedback' ? 'feedback' : 'upcoming' } });
   else if (key === 'hiring_review') void router.push('/talent-hiring');
   else void router.push({ path: '/talents', query: key === 'follow_up'
     ? { responsibilityScope: 'talent', dueOnly: 'true' }

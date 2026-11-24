@@ -92,8 +92,9 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     }).expect(200)).body.data.request;
   }
   async function approve(id: string) {
+    const seen = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id } });
     const response = await app.http.post(`${root}/reviews/approve`).set(headers(reviewer))
-      .send({ requestIds: [id], scopes: ['profile'] }).expect(201);
+      .send({ requestIds: [id], requestVersions: { [id]: seen.requestVersion }, scopes: ['profile'] }).expect(201);
     expect(response.body.data.failed).toEqual([]);
     expect(response.body.data.succeeded).toEqual([expect.objectContaining({ requestId: id })]);
   }
@@ -110,7 +111,7 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     expect(await app.prisma.employmentRecord.findUniqueOrThrow({ where: { sourceRequestId: request.id } }))
       .toMatchObject({ jobFamily: '虚拟档案原职系', workLocation: '虚拟新地点' });
     await app.http.post(`${root}/reviews/reject`).set(headers(reviewer))
-      .send({ requestIds: [request.id], reason: '虚拟复核绩效关系' }).expect(201);
+      .send({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, reason: '虚拟复核绩效关系' }).expect(201);
     // Resubmit the returned relationship on the same base-approved application.
     const partial = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: request.id } });
     expect(partial.profileReviewStatus).toBe('approved');
@@ -214,14 +215,14 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
   it('uses persisted review capability, retains edit restrictions and records a return audit', async () => {
     const { user } = await fixture();
     const request = await submit(user.id, { workLocation: '虚拟待补地点' });
-    await app.http.post(`${root}/reviews/reject`).send({ requestIds: [request.id], reason: '虚拟补资料' }).expect(401);
+    await app.http.post(`${root}/reviews/reject`).send({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, reason: '虚拟补资料' }).expect(401);
     for (const token of [editor, employee, plainHr]) {
       await app.http.post(`${root}/reviews/reject`).set(headers(token))
-        .send({ requestIds: [request.id], reason: '虚拟补资料' }).expect(403);
+        .send({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, reason: '虚拟补资料' }).expect(403);
     }
     await app.http.patch(`${root}/${user.id}/profile`).set(headers(reviewer)).send({}).expect(403);
     const result = await app.http.post(`${root}/reviews/reject`).set(headers(reviewer))
-      .send({ requestIds: [request.id], reason: '虚拟补资料' }).expect(201);
+      .send({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, reason: '虚拟补资料' }).expect(201);
     expect(result.body.data.failed).toEqual([]);
     expect(result.body.data.succeeded).toHaveLength(1);
     expect(await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: request.id } }))
@@ -248,10 +249,10 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     const blocked = (await app.http.post(`${root}/${user.id}/employments`).set(headers())
       .send(departure).expect(201)).body.data;
     const failed = await app.http.post(`${root}/reviews/approve`).set(headers(reviewer))
-      .send({ requestIds: [blocked.id], scopes: ['profile'] }).expect(201);
+      .send({ requestIds: [blocked.id], requestVersions: { [blocked.id]: blocked.requestVersion }, scopes: ['profile'] }).expect(201);
     expect(failed.body.data.failed).toEqual([expect.objectContaining({ reason: '所属部门不能为空' })]);
     await app.http.post(`${root}/reviews/reject`).set(headers(reviewer))
-      .send({ requestIds: [blocked.id], reason: '虚拟先补部门' }).expect(201);
+      .send({ requestIds: [blocked.id], requestVersions: { [blocked.id]: blocked.requestVersion }, reason: '虚拟先补部门' }).expect(201);
     const submitted = (await app.http.patch(`${root}/${user.id}/draft`).set(headers()).send({
       draftId: saved.id, expectedVersion: saved.requestVersion, employee: { deptId }, profile: {},
     }).expect(200)).body.data;

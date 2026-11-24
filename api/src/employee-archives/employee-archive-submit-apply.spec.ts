@@ -665,7 +665,7 @@ describe('manual archive changes apply at submission', () => {
 
   it('keeps independent review authority unavailable to an edit-only HR', async () => {
     const f = setup();
-    await expect(new EmployeeDataReviewsService(f.db).approveBatch({ requestIds: ['hire'], scopes: ['profile'] }, editor)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(new EmployeeDataReviewsService(f.db).approveBatch({ requestIds: ['hire'], requestVersions: { hire: 1 }, scopes: ['profile'] }, editor)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it.each([UserStatus.resigned, UserStatus.pending_entry])('does not use an archive edit to start %s lifecycle', async status => {
@@ -741,7 +741,7 @@ describe('manual archive changes apply at submission', () => {
       const original = f.requests[0];
       original.recordStatus = 'submitted';
       const reviewer = { ...editor, id: 'reviewer', hrCapabilities: ['employee_archive_review'] };
-      const approved = await new EmployeeDataReviewsService(f.db).approveBatch({ requestIds: [draft.id], scopes: ['profile'] }, reviewer);
+      const approved = await new EmployeeDataReviewsService(f.db).approveBatch({ requestIds: [draft.id], requestVersions: { [draft.id]: draft.requestVersion }, scopes: ['profile'] }, reviewer);
       expect(approved.failed).toEqual([]);
       const appliedEmployment = f.user.employmentHistory[0];
       expect(appliedEmployment).toMatchObject({ userId: f.user.id, sourceRequestId: original.id,

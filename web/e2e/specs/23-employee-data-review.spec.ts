@@ -19,7 +19,7 @@ test('HR administrator reviews employee and department changes from the personne
   const reviews = [
     {
       id: '11111111-1111-4111-8111-111111111111', userId: 'employee-1', employeeNo: '001', employeeName: '员工一',
-      sourceType: 'employee_roster_import', profileReviewStatus: 'pending', performanceReviewStatus: 'pending',
+      requestVersion: 1, sourceType: 'employee_roster_import', profileReviewStatus: 'pending', performanceReviewStatus: 'pending',
       validationErrors: [],
       baseValue: {
         employee: { position: '项目助理' },
@@ -42,7 +42,7 @@ test('HR administrator reviews employee and department changes from the personne
     },
     {
       id: '22222222-2222-4222-8222-222222222222', userId: 'employee-2', employeeNo: '002', employeeName: '员工二',
-      sourceType: 'employee_roster_import', profileReviewStatus: 'not_required', performanceReviewStatus: 'pending',
+      requestVersion: 3, sourceType: 'employee_roster_import', profileReviewStatus: 'not_required', performanceReviewStatus: 'pending',
       validationErrors: ['绩效直属上级待设置'], baseValue: {},
       proposedValue: { employee: { position: '设计师' }, performance: { managerId: null } },
       createdBy: { id: 'ordinary-hr-1', name: '余焱玲', sysRole: 'hr_user' },
@@ -205,6 +205,7 @@ test('HR administrator reviews employee and department changes from the personne
 
   await expect.poll(() => approveBody).toEqual({
     requestIds: [reviews[0].id, reviews[1].id],
+    requestVersions: { [reviews[0].id]: reviews[0].requestVersion, [reviews[1].id]: reviews[1].requestVersion },
     scopes: ['profile', 'performance'],
   });
   await expect(page.getByText('已通过 1 人；未通过 1 人：员工二—绩效直属上级待设置')).toBeVisible();

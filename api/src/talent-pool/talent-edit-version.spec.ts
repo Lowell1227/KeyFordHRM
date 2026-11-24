@@ -17,7 +17,8 @@ function fixture() {
       findFirst: jest.fn(async () => row.deletedAt ? null : { ...row }),
       update: jest.fn(async ({ data }) => { Object.assign(row, data); return { ...row }; }),
     },
-    user: { findMany: jest.fn().mockResolvedValue([]) }, auditLog,
+    user: { findMany: jest.fn().mockResolvedValue([]),
+      findUnique: jest.fn().mockResolvedValue({ ...hr, status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false }) }, auditLog,
     $transaction: jest.fn(async callback => callback(prisma)),
   };
   return { row, prisma, sut: new TalentsService(prisma) };

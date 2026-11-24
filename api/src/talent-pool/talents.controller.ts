@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query,
+  Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards,
 } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -18,13 +18,15 @@ import { ConvertTalentDto, CreateFollowUpDto } from './dto/create-follow-up.dto'
 import { CreateShareDto } from './dto/create-share.dto';
 import { ShareRecipientQueryDto } from './dto/share-recipient-query.dto';
 import { DeleteTalentDto } from './dto/talent-interview.dto';
+import { TalentManagementGuard } from './talent-management.guard';
 
 /**
  * 人才库（需求 v2）。候选人不是员工：不写 users、不产生工号、不触发绩效。
- * 权限：hr / system_admin，或具备档案权限的 hr_user；服务层由 RolesGuard 二次校验。
+ * 读取支持独立招聘查看能力；维护仍由档案编辑能力与服务层当前资格约束。
  */
 @Controller('talents')
 @Roles(SysRole.hr, SysRole.system_admin)
+@UseGuards(TalentManagementGuard)
 export class TalentsController {
   constructor(
     private readonly talents: TalentsService,
@@ -34,7 +36,7 @@ export class TalentsController {
   ) {}
 
   @Get()
-  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  @HrCapabilities('recruitment_view', 'employee_archive_edit', 'employee_archive_review')
   list(@Query() query: TalentQueryDto, @CurrentUser() user: AuthUser) {
     return this.talents.list(query, user);
   }
@@ -47,15 +49,15 @@ export class TalentsController {
   }
 
   @Get('application-positions')
-  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  applicationPositions() {
-    return this.talents.applicationPositions();
+  @HrCapabilities('recruitment_view', 'employee_archive_edit', 'employee_archive_review')
+  applicationPositions(@CurrentUser() user: AuthUser) {
+    return this.talents.applicationPositions(user);
   }
 
   @Get('check-phone')
-  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  checkPhone(@Query('phone') phone: string) {
-    return this.talents.checkPhone(phone ?? '');
+  @HrCapabilities('recruitment_view', 'employee_archive_edit', 'employee_archive_review')
+  checkPhone(@Query('phone') phone: string, @CurrentUser() user: AuthUser) {
+    return this.talents.checkPhone(phone ?? '', user);
   }
 
   @Get('share-recipients')
@@ -71,9 +73,9 @@ export class TalentsController {
   }
 
   @Get(':id')
-  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  detail(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.talents.detail(id);
+  @HrCapabilities('recruitment_view', 'employee_archive_edit', 'employee_archive_review')
+  detail(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() user: AuthUser) {
+    return this.talents.detail(id, user);
   }
 
   @Patch(':id')
@@ -139,8 +141,9 @@ export class TalentsController {
   }
 
   @Get(':id/follow-ups')
-  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  listFollowUps(@Param('id', new ParseUUIDPipe()) id: string) {
+  @HrCapabilities('recruitment_view', 'employee_archive_edit', 'employee_archive_review')
+  async listFollowUps(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() user: AuthUser) {
+    await this.talents.assertRead(user);
     return this.followUps.list(id);
   }
 

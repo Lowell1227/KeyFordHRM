@@ -160,9 +160,9 @@ describe('archive assistant controlled synthetic reception', () => {
     expect(f.audits).toHaveLength(3);
   });
   it('blocks submitted pilot approval before applying either scope', async () => {
-    const tx: any = { employeeDataChangeRequest: { findUnique: jest.fn(async () => ({ id: 'pilot', sourceSystem: 'archive_assistant_pilot', recordStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'pending' })) } };
+    const tx: any = { employeeDataChangeRequest: { findUnique: jest.fn(async () => ({ id: 'pilot', requestVersion: 1, sourceSystem: 'archive_assistant_pilot', recordStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'pending' })) } };
     const service = new EmployeeDataReviewsService({ $transaction: async (fn: any) => fn(tx) } as any);
-    const result = await service.approveBatch({ requestIds: ['pilot'], scopes: ['profile', 'performance'] }, viewer);
+    const result = await service.approveBatch({ requestIds: ['pilot'], requestVersions: { pilot: 1 }, scopes: ['profile', 'performance'] }, viewer);
     expect(result.failed[0].reason).toBe('测试资料仅可保存待核草稿');
   });
 });

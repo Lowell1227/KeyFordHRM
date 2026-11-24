@@ -103,13 +103,18 @@ const parseError = ref('');
 const parseSummary = ref('');
 const parseReview = ref<Array<{ field: string; reason: string }>>([]);
 const parseConflicts = ref<Array<{ field: ResumeField; label: string; value: string | number; selected: boolean;
-  existing: string | number | null | undefined; negotiable: boolean }>>([]);
+  existing: string | number | null | undefined; negotiable: boolean; requiredBirthYear?: number;
+  birthSnapshot?: { year?: number; month?: number } }>>([]);
 const owners = ref<TalentRecruitmentOwner[]>([]);
 const ownersLoading = ref(false);
 const ownerError = ref('');
 const ownerFieldError = ref('');
 const educationError = ref('');
 const emailError = ref('');
+const birthError = ref('');
+const reportedAgeError = ref('');
+const reportedAgeRecordedAt = ref<string | null>(null);
+const recordedAge = ref<number | null>(null);
 let ownerGeneration = 0;
 let parseGeneration = 0;
 const loadError = ref('');
@@ -139,6 +144,8 @@ const form = reactive({
   email: '',
   gender: 'unknown' as TalentGender,
   birthYear: undefined as number | undefined,
+  birthMonth: undefined as number | undefined,
+  reportedAge: undefined as number | undefined,
   currentCompany: '',
   currentPosition: '',
   yearsOfExperience: undefined as number | undefined,
@@ -191,6 +198,8 @@ watch(() => form.salaryNegotiable, (negotiable) => {
 watch(() => [form.education, form.educationReferenceDataId], () => { educationError.value = ''; });
 watch(() => form.ownerId, () => { ownerFieldError.value = ''; });
 watch(() => form.email, () => { emailError.value = ''; });
+watch(() => [form.birthYear, form.birthMonth], () => { birthError.value = ''; });
+watch(() => form.reportedAge, () => { reportedAgeError.value = ''; });
 watch(() => [resumeTask.value, formReady.value && !parsePreparing.value] as const, ([task, ready]) => {
   if (!task || !ready) return;
   if (!resumeSourceFile.value && !recoveringResumeFile.value && !fileError.value) void recoverResumeFile();
@@ -265,10 +274,13 @@ async function onOpen() {
 
 function resetForm() {
   salaryError.value = ''; salaryNeedsReview.value = false;
+  birthError.value = ''; reportedAgeError.value = '';
+  reportedAgeRecordedAt.value = null; recordedAge.value = null;
   Object.assign(loadedSalary, { min: undefined, max: undefined, negotiable: false });
   Object.assign(form, {
     name: '', phone: '', email: '', gender: 'unknown' as TalentGender,
-    birthYear: undefined, currentCompany: '', currentPosition: '', yearsOfExperience: undefined,
+    birthYear: undefined, birthMonth: undefined, reportedAge: undefined,
+    currentCompany: '', currentPosition: '', yearsOfExperience: undefined,
     appliedPosition: '', expectCity: '',
     expectSalaryMin: undefined, expectSalaryMax: undefined, salaryNegotiable: false,
     education: '', educationReferenceDataId: null, ownerId: auth.user?.id ?? '', school: '', major: '', sourceChannel: '', tags: [], note: '', status: 'new',
@@ -284,6 +296,8 @@ function fillForm(detail: TalentCandidateDetail) {
     email: detail.email ?? '',
     gender: detail.gender,
     birthYear: detail.birthYear ?? undefined,
+    birthMonth: detail.birthMonth ?? undefined,
+    reportedAge: detail.reportedAge ?? undefined,
     currentCompany: detail.currentCompany ?? '',
     currentPosition: detail.currentPosition ?? '',
     yearsOfExperience: detail.yearsOfExperience ?? undefined,
@@ -303,6 +317,8 @@ function fillForm(detail: TalentCandidateDetail) {
     status: detail.status,
   });
   Object.assign(loadedSalary, { min: form.expectSalaryMin, max: form.expectSalaryMax, negotiable: form.salaryNegotiable });
+  recordedAge.value = detail.reportedAge ?? null;
+  reportedAgeRecordedAt.value = detail.reportedAgeRecordedAt ?? null;
   savedForm = JSON.stringify(form);
   conflict.value = null;
 }
@@ -439,11 +455,13 @@ async function loadOwners(keyword = '') {
 }
 
 const resumeLabels: Record<ResumeField, string> = {
-  name: '姓名', phone: '手机', email: '邮箱', birthYear: '出生年份', currentCompany: '当前公司',
+  name: '姓名', phone: '手机', email: '邮箱', gender: '性别', birthYear: '出生年份',
+  birthMonth: '出生月份', reportedAge: '简历注明年龄', currentCompany: '当前公司',
   currentPosition: '当前职位', yearsOfExperience: '工作年限', education: '学历', school: '院校', major: '专业',
   appliedPosition: '意向岗位', expectCity: '期望城市', expectSalaryMin: '最低薪资（元/月）', expectSalaryMax: '最高薪资（元/月）',
 };
 function applyResumeField(field: ResumeField, value: string | number) {
+  if (field === 'birthYear' && value !== form.birthYear) form.birthMonth = undefined;
   Object.assign(form, { [field]: value });
   if (field === 'education') form.educationReferenceDataId = null;
   if (field === 'expectSalaryMin' || field === 'expectSalaryMax') form.salaryNegotiable = false;
@@ -521,6 +539,9 @@ function applyParsedResult() {
   if (!formReady.value || saving.value || pendingUploading.value || task?.status !== 'succeeded' || !result) return;
   parseConflicts.value = [];
   let applied = 0;
+  const birthSnapshot = { year: form.birthYear, month: form.birthMonth };
+  const birthYearConflict = result.fields.birthYear !== undefined && form.birthYear !== undefined
+    && result.fields.birthYear !== form.birthYear;
   for (const field of Object.keys(resumeLabels) as ResumeField[]) {
     const rawValue = result.fields[field];
     // The resume API retains K units for existing clients; this form edits integer yuan.
@@ -529,11 +550,15 @@ function applyParsedResult() {
     if (value === undefined || value === '') continue;
     const existing = form[field];
     const negotiable = form.salaryNegotiable && (field === 'expectSalaryMin' || field === 'expectSalaryMax');
-    if (!negotiable && (existing === '' || existing === undefined || existing === null)) {
+    const blockedMonth = field === 'birthMonth' && birthYearConflict;
+    if (!negotiable && !blockedMonth && (existing === '' || existing === undefined || existing === null
+      || (field === 'gender' && existing === 'unknown'))) {
       applyResumeField(field, value); applied++;
-    } else if (negotiable || String(existing) !== String(value)) {
+    } else if (negotiable || blockedMonth || String(existing) !== String(value)) {
       parseConflicts.value.push({ field, label: `${resumeLabels[field]}${negotiable ? '（当前面议）' : ''}`,
-        value, selected: false, existing, negotiable });
+        value, selected: false, existing, negotiable,
+        ...(['birthYear', 'birthMonth'].includes(field) ? { birthSnapshot } : {}),
+        ...(field === 'birthMonth' ? { requiredBirthYear: Number(result.fields.birthYear) } : {}) });
     }
   }
   appliedTaskId = task.id;
@@ -565,10 +590,14 @@ async function clearResumeTask() {
 function applySelectedParsedFields() {
   if (!formReady.value || saving.value || pendingUploading.value) return;
   const negotiable = form.salaryNegotiable;
+  const previous = { ...form };
   for (const item of parseConflicts.value.filter(item => item.selected)) {
     const salary = item.field === 'expectSalaryMin' || item.field === 'expectSalaryMax';
-    if (form[item.field] !== item.existing || (salary && negotiable !== item.negotiable)) {
+    if (previous[item.field] !== item.existing || (salary && negotiable !== item.negotiable)
+      || (item.birthSnapshot && (previous.birthYear !== item.birthSnapshot.year || previous.birthMonth !== item.birthSnapshot.month))
+      || (item.field === 'birthMonth' && form.birthYear !== item.requiredBirthYear)) {
       item.selected = false; item.existing = form[item.field]; item.negotiable = salary && negotiable;
+      if (item.birthSnapshot) item.birthSnapshot = { year: form.birthYear, month: form.birthMonth };
       parseSummary.value = '填写内容已变化，请重新核对并选择需要替换的字段。';
     } else applyResumeField(item.field, item.value);
   }
@@ -593,6 +622,8 @@ function captureConflict(error: unknown) {
   if (data?.reason === 'TALENT_EDIT_CONFLICT') editConflict.value = true;
   educationError.value = data?.fieldErrors?.educationReferenceDataId ?? '';
   ownerFieldError.value = data?.fieldErrors?.ownerId ?? '';
+  birthError.value = data?.fieldErrors?.birthMonth ?? data?.fieldErrors?.birthYear ?? '';
+  reportedAgeError.value = data?.fieldErrors?.reportedAge ?? '';
   const messages = Array.isArray(response?.message) ? response.message : typeof response?.message === 'string' ? [response.message] : [];
   emailError.value = failure?.status === 400 ? data?.fieldErrors?.email ?? messages.find(message => /邮箱|\bemail\b/i.test(message)) ?? '' : '';
   const message = messages.join('；');
@@ -630,6 +661,17 @@ async function submit() {
   const targetId = props.candidateId;
   const valid = await formRef.value?.validate().catch(() => false);
   if (!valid || !isCurrentLoad(generation, targetId) || saveDisabled.value) return;
+  if (form.birthYear != null && (!Number.isInteger(form.birthYear) || form.birthYear < 1900
+    || form.birthYear > new Date().getFullYear())) {
+    birthError.value = '出生年份请填写 1900 年至当年的整数年份'; return;
+  }
+  if (form.birthMonth != null && (form.birthYear == null || !Number.isInteger(form.birthMonth)
+    || form.birthMonth < 1 || form.birthMonth > 12)) {
+    birthError.value = '出生月份须为 1 至 12，且须填写出生年份'; return;
+  }
+  if (form.reportedAge != null && (!Number.isInteger(form.reportedAge) || form.reportedAge < 0 || form.reportedAge > 150)) {
+    reportedAgeError.value = '简历注明年龄请填写 0 至 150 的整数'; return;
+  }
   if (!form.salaryNegotiable && [form.expectSalaryMin, form.expectSalaryMax].some(value => value != null
     && (!Number.isInteger(value) || value < 0 || value > 2147483647))) {
     salaryError.value = '薪资请填写非负整数元/月'; return;
@@ -650,6 +692,8 @@ async function submit() {
       email: form.email.trim() || null,
       gender: form.gender,
       birthYear: form.birthYear ?? null,
+      birthMonth: form.birthMonth ?? null,
+      reportedAge: form.reportedAge ?? null,
       currentCompany: form.currentCompany.trim() || null,
       currentPosition: form.currentPosition.trim() || null,
       yearsOfExperience: form.yearsOfExperience ?? null,
@@ -742,7 +786,7 @@ async function submit() {
     <el-alert v-if="editConflict" title="资料已更新，当前输入已保留。请核对最新资料后再保存。" type="warning" :closable="false" show-icon>
       <el-button link type="primary" @click="reloadAfterConflict">重新加载最新资料</el-button>
     </el-alert>
-    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="talent-form"
+    <el-form v-if="formReady" ref="formRef" :model="form" :rules="rules" label-position="top" class="talent-form"
       :disabled="!formReady || saving || pendingUploading"
       @submit.prevent="submit">
       <h4 class="talent-form__group-title">简历文件</h4>
@@ -803,7 +847,7 @@ async function submit() {
       <div v-if="parseSummary" role="status" class="talent-form__hint">{{ parseSummary }}</div>
       <div v-if="parseConflicts.length" class="talent-form__parse-conflicts">
         <div v-for="item in parseConflicts" :key="item.field">
-          <el-checkbox v-model="item.selected">{{ item.label }}：{{ item.value }}</el-checkbox>
+          <el-checkbox v-model="item.selected">{{ item.label }}：{{ item.field === 'gender' ? TALENT_GENDER_LABELS[item.value as TalentGender] : item.value }}</el-checkbox>
         </div>
         <el-button size="small" :disabled="!parseConflicts.some(item => item.selected)" @click="applySelectedParsedFields">替换所选字段</el-button>
       </div>
@@ -830,9 +874,21 @@ async function submit() {
           <el-radio-button v-for="g in TALENT_GENDERS" :key="g" :value="g">{{ TALENT_GENDER_LABELS[g] }}</el-radio-button>
         </el-radio-group>
       </el-form-item>
-      <el-form-item label="出生年份">
-        <el-input-number v-model="form.birthYear" :min="1940" :max="new Date().getFullYear()" :controls="false"
+      <el-form-item label="出生年份" :error="birthError">
+        <el-input-number v-model="form.birthYear" :min="1900" :max="new Date().getFullYear()" :controls="false"
           placeholder="选填" class="talent-form__year" />
+      </el-form-item>
+      <el-form-item label="出生月份">
+        <el-select v-model="form.birthMonth" clearable placeholder="未知" class="talent-form__year">
+          <el-option v-for="month in 12" :key="month" :label="`${month} 月`" :value="month" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="简历注明年龄" :error="reportedAgeError">
+        <el-input-number v-model="form.reportedAge" :min="0" :max="150" :controls="false"
+          placeholder="岁（选填）" class="talent-form__year" />
+        <span v-if="reportedAgeRecordedAt && form.reportedAge === recordedAge" class="talent-form__hint">
+          记录于 {{ new Date(reportedAgeRecordedAt).toLocaleDateString('zh-CN') }}，非当前实龄
+        </span>
       </el-form-item>
       <el-form-item label="当前公司">
         <el-input v-model="form.currentCompany" placeholder="选填" maxlength="50" />

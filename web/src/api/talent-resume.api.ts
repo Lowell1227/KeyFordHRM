@@ -1,7 +1,7 @@
 import http from './http';
 import type { AxiosResponse } from 'axios';
 
-export type ResumeField = 'name' | 'phone' | 'email' | 'birthYear' | 'currentCompany' | 'currentPosition'
+export type ResumeField = 'name' | 'phone' | 'email' | 'gender' | 'birthYear' | 'birthMonth' | 'reportedAge' | 'currentCompany' | 'currentPosition'
   | 'yearsOfExperience' | 'education' | 'school' | 'major' | 'appliedPosition' | 'expectCity'
   | 'expectSalaryMin' | 'expectSalaryMax';
 export interface ResumeParseResult {

@@ -5,6 +5,7 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -46,6 +47,11 @@ export class ApproveEmployeeDataReviewsDto {
   @IsUUID('4', { each: true })
   requestIds!: string[];
 
+  // Legacy clients must reach the service's refresh-required version conflict.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsObject()
+  requestVersions!: Record<string, number>;
+
   @IsArray()
   @ArrayMinSize(1)
   @ArrayUnique()
@@ -59,6 +65,10 @@ export class RejectEmployeeDataReviewsDto {
   @ArrayUnique()
   @IsUUID('4', { each: true })
   requestIds!: string[];
+
+  @ValidateIf((_, value) => value !== undefined)
+  @IsObject()
+  requestVersions!: Record<string, number>;
 
   @IsString()
   @MinLength(2)

@@ -36,7 +36,7 @@ import TalentFormDrawer from './components/TalentFormDrawer.vue';
 import TalentDeleteDialog from './components/TalentDeleteDialog.vue';
 import { useTalentPermissions } from './useTalentPermissions';
 
-const { canEdit } = useTalentPermissions();
+const { canEdit, canExport } = useTalentPermissions();
 const auth = useAuthStore();
 const route = useRoute();
 
@@ -99,7 +99,7 @@ async function loadApplicationPositions() {
   catch { positionsError.value = '应聘岗位选项读取失败'; }
 }
 async function exportApplications() {
-  if (exporting.value) return;
+  if (!canExport.value || exporting.value) return;
   exportError.value = '';
   try { await download(() => talentPoolApi.exportApplications(currentFilters()), `人才应聘记录-${new Date().toISOString().slice(0, 10)}.xlsx`); }
   catch (cause) { exportError.value = cause instanceof Error ? cause.message : '导出失败，请重试'; }
@@ -217,7 +217,7 @@ const EMPTY_TEXT = '还没有人才记录。点「新增人才」开始，纸质
   <BusinessListPage variant="record" :loading="loading" class="talent-list">
     <template #primary-action>
       <el-button v-if="canEdit" type="primary" @click="openCreate">新增人才</el-button>
-      <el-button :loading="exporting" :disabled="loading" @click="exportApplications">导出应聘记录</el-button>
+      <el-button v-if="canExport" :loading="exporting" :disabled="loading" @click="exportApplications">导出应聘记录</el-button>
     </template>
     <template #filters>
       <div class="talent-filter-bar">

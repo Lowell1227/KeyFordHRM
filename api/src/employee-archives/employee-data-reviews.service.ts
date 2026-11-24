@@ -34,7 +34,14 @@ export type EmployeeReviewScope = 'profile' | 'performance';
 
 export interface ApproveEmployeeReviewsInput {
   requestIds: string[];
+  requestVersions?: Record<string, number>;
   scopes: EmployeeReviewScope[];
+}
+
+class ReviewVersionConflictException extends ConflictException {
+  constructor() {
+    super({ code: ERROR_CODE.CONFLICT, message: '申请版本缺失或已变化，请刷新后重新核对再审核' });
+  }
 }
 
 export interface EmployeeReviewBatchResult {
@@ -311,10 +318,13 @@ export class EmployeeDataReviewsService {
     };
 
     const approveScope = async (tx: Prisma.TransactionClient, requestId: string, scope: EmployeeReviewScope): Promise<boolean> => {
+        const requestVersion = input.requestVersions?.[requestId];
+        if (!Number.isSafeInteger(requestVersion) || requestVersion! < 1) throw new ReviewVersionConflictException();
         const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
         if (!request) {
           throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
         }
+        if (request.requestVersion !== requestVersion) throw new ReviewVersionConflictException();
         if (request.sourceSystem === 'archive_assistant_pilot') throw new BadRequestException('测试资料仅可保存待核草稿');
         if (request.recordStatus === 'draft') {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿尚未提交审核' });
@@ -341,14 +351,14 @@ export class EmployeeDataReviewsService {
 
         const claimed = scope === 'profile'
           ? await tx.employeeDataChangeRequest.updateMany({
-            where: { id: requestId, recordStatus: 'submitted', archivedAt: null, profileReviewStatus: 'pending' },
+            where: { id: requestId, requestVersion, recordStatus: 'submitted', archivedAt: null, cancelledAt: null, profileReviewStatus: 'pending' },
             data: { profileReviewStatus: 'applying' },
           })
           : await tx.employeeDataChangeRequest.updateMany({
-            where: { id: requestId, recordStatus: 'submitted', archivedAt: null, performanceReviewStatus: 'pending' },
+            where: { id: requestId, requestVersion, recordStatus: 'submitted', archivedAt: null, cancelledAt: null, performanceReviewStatus: 'pending' },
             data: { performanceReviewStatus: 'applying' },
           });
-        if (claimed.count !== 1) return false;
+        if (claimed.count !== 1) throw new ReviewVersionConflictException();
 
         const now = new Date();
 
@@ -478,6 +488,7 @@ export class EmployeeDataReviewsService {
             for (const scope of applied) addSucceeded(requestId, scope);
             if (applied.length) progressed = true;
           } catch (error) {
+            if (requestIds.length === 1 && error instanceof ReviewVersionConflictException) throw error;
             const message = this.errorMessage(error);
             if (message.includes('花名册直属主管') && message.includes('无法唯一匹配')) {
               deferred.push(requestId);
@@ -586,6 +597,7 @@ export class EmployeeDataReviewsService {
     requestIds: string[],
     reason: string,
     operator: AuthUser,
+    requestVersions?: Record<string, number>,
   ): Promise<EmployeeReviewBatchResult> {
     if (!hasHrCapability(operator, 'employee_archive_review')) {
       throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '无权限退回人事变更' });
@@ -594,8 +606,11 @@ export class EmployeeDataReviewsService {
     for (const requestId of [...new Set(requestIds)]) {
       try {
         await this.prisma.$transaction(async (tx) => {
+          const requestVersion = requestVersions?.[requestId];
+          if (!Number.isSafeInteger(requestVersion) || requestVersion! < 1) throw new ReviewVersionConflictException();
           const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
           if (!request) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
+          if (request.requestVersion !== requestVersion) throw new ReviewVersionConflictException();
           if (request.recordStatus === 'draft') {
             throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿尚未提交审核' });
           }
@@ -609,8 +624,9 @@ export class EmployeeDataReviewsService {
           }
           await lockTalentSource(tx, request.talentCandidateId);
           const now = new Date();
-          await tx.employeeDataChangeRequest.update({
-            where: { id: requestId },
+          const claimed = await tx.employeeDataChangeRequest.updateMany({
+            where: { id: requestId, requestVersion, recordStatus: 'submitted', archivedAt: null,
+              profileReviewStatus: request.profileReviewStatus, performanceReviewStatus: request.performanceReviewStatus },
             data: {
               ...(profilePending ? {
                 profileReviewStatus: 'rejected',
@@ -625,6 +641,7 @@ export class EmployeeDataReviewsService {
               rejectedReason: reason.trim(),
             },
           });
+          if (claimed.count !== 1) throw new ReviewVersionConflictException();
           await tx.auditLog.create({
             data: {
               userId: operator.id,
@@ -637,6 +654,10 @@ export class EmployeeDataReviewsService {
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         result.succeeded.push({ requestId, scopes: ['profile', 'performance'] });
       } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+          error = new ReviewVersionConflictException();
+        }
+        if (new Set(requestIds).size === 1 && error instanceof ReviewVersionConflictException) throw error;
         result.failed.push({ requestId, reason: this.errorMessage(error) });
       }
     }

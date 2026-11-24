@@ -17,12 +17,15 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { SysRole } from '@prisma/client';
 import { LegacyTaskAttachmentsService } from './legacy-task-attachments.service';
+import { PrismaService } from '@/prisma/prisma.service';
+import { assertRecruitmentReader, assertRecruitmentWriter } from '@/talent-pool/talent-recruitment-policy';
 
 @Controller('storage')
 export class StorageController {
   constructor(
     private readonly storageService: StorageService,
     private readonly taskAttachments: LegacyTaskAttachmentsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /** POST /storage/upload — 通用单文件上传，返回可持久访问的下载 URL。 */
@@ -39,9 +42,7 @@ export class StorageController {
     if (purpose.startsWith('employee-contract-') && !this.canAccessContractMaterials(operator)) {
       throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限管理合同材料' });
     }
-    if (purpose === 'talent-resume' && !this.canAccessTalentPool(operator)) {
-      throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限管理人才库简历' });
-    }
+    if (purpose === 'talent-resume') await assertRecruitmentWriter(this.prisma, operator);
     return this.storageService.uploadFile(file, purpose, operator.id);
   }
 
@@ -69,9 +70,7 @@ export class StorageController {
       }
     }
     if (objectName.startsWith('talent-resume/')) {
-      if (!this.canAccessTalentPool(operator)) {
-        throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限访问人才库简历' });
-      }
+      await assertRecruitmentReader(this.prisma, operator);
     }
     if (!objectName.startsWith('employee-contracts/') && !objectName.startsWith('talent-resume/')) {
       await this.taskAttachments.assertDownload(objectName, operator);
@@ -84,10 +83,5 @@ export class StorageController {
       || operator.sysRole === SysRole.system_admin
       || hasHrCapability(operator, 'employee_archive_edit')
       || hasHrCapability(operator, 'employee_archive_review');
-  }
-
-  /** 人才库权限边界与合同材料一致（需求 §7）：hr/system_admin 或具备档案权限的 hr_user。 */
-  private canAccessTalentPool(operator: AuthUser): boolean {
-    return this.canAccessContractMaterials(operator);
   }
 }

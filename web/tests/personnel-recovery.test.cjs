@@ -44,8 +44,13 @@ function mountSetup(t, name, input, api = {}) {
   const source = compileScript(descriptor, { id: name }).content;
   const dialogs = [];
   const component = evaluate(filename, source, {
+    '@/stores/auth.store': { useAuthStore: () => ({ user: {
+      id: 'fictional-archive-editor', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'],
+    } }) },
     '@/api/employee-archives.api': { employeeArchivesApi: api },
-    '@/api/positions.api': { positionsApi: { findAll: async () => [] } },
+    '@/api/positions.api': { positionsApi: { findAll: async () => [
+      { id: 'fictional-position', name: 'Fictional position', isActive: true, jobFamily: null },
+    ] } },
     'element-plus': {
       ElMessage: { success() {}, warning() {} },
       ElMessageBox: { confirm: async (...args) => { dialogs.push(args); throw 'cancel'; } },
@@ -432,30 +437,38 @@ function createDrawer(t, api, extra = {}) {
 }
 
 test('talent autosave conflict opens the existing application from the Axios error envelope', async t => {
+  const existing = returnedArrival({ id: 'existing-1', talentCandidateId: 'talent-1' });
   const { state, events } = createDrawer(t, {
     saveEmployeeCreateDraft: async () => { throw conflict({ applicationId: 'existing-1' }); },
+    getApplication: async id => { assert.equal(id, existing.id); return existing; },
   });
   await state.persistDraft();
-  assert.deepEqual(events, [['update:modelValue', false], ['application', 'existing-1']]);
+  assert.deepEqual(events, [['update:modelValue', false], ['application', 'existing-1', existing]]);
   assert.equal(state.draftId.value, undefined, 'must not overwrite the existing application with the new form');
 });
 
 test('talent submit conflict also opens the existing application', async t => {
+  const existing = returnedArrival({ id: 'existing-2', talentCandidateId: 'talent-1' });
+  let submissions = 0;
   const { state, events } = createDrawer(t, {
-    createEmployee: async () => { throw conflict({ applicationId: 'existing-2' }); },
+    createEmployee: async () => { submissions++; throw conflict({ applicationId: 'existing-2' }); },
+    getApplication: async id => { assert.equal(id, existing.id); return existing; },
   });
-  Object.assign(state.form, { company: 'fuede', deptId: 'dept-1', entryDate: '2026-11-12', effectiveFrom: '2026-11-12' });
+  Object.assign(state.form, { company: 'fuede', deptId: 'dept-1', positionId: 'fictional-position', entryDate: '2026-11-12', effectiveFrom: '2026-11-12' });
   state.form.employee.companyText = 'Fictional company';
   await state.submit();
-  assert.deepEqual(events, [['update:modelValue', false], ['application', 'existing-2']]);
+  assert.equal(submissions, 1, 'reach the real submit request before checking conflict recovery');
+  assert.deepEqual(events, [['update:modelValue', false], ['application', 'existing-2', existing]]);
 });
 
 test('recovering an existing talent application while closing does not ask to discard unsaved data', async t => {
+  const existing = returnedArrival({ id: 'existing-3', talentCandidateId: 'talent-1' });
   const { state, events, dialogs } = createDrawer(t, {
     saveEmployeeCreateDraft: async () => { throw conflict({ applicationId: 'existing-3' }); },
+    getApplication: async id => { assert.equal(id, existing.id); return existing; },
   });
   await state.prepareToLeave();
-  assert.deepEqual(events, [['update:modelValue', false], ['application', 'existing-3']]);
+  assert.deepEqual(events, [['update:modelValue', false], ['application', 'existing-3', existing]]);
   assert.deepEqual(dialogs, []);
 });
 
@@ -499,15 +512,17 @@ const pendingIdentity = { id: 'employee-1', status: 'pending_entry', archived: f
 test('matched pending identity opens its recoverable original application and preserves the original talent source', async t => {
   const lookups = [];
   const archived = [];
+  const original = cancelledArrival();
   const { state, events } = createDrawer(t, {
     saveEmployeeCreateDraft: async () => ({ id: 'temporary-draft', requestVersion: 1 }),
-    getCurrentReentry: async id => { lookups.push(id); return archived.length ? cancelledArrival() : null; },
+    getCurrentReentry: async id => { lookups.push(id); return archived.length ? original : null; },
+    getApplication: async id => { assert.equal(id, original.id); return original; },
     archiveDrafts: async ids => { archived.push(ids); return { failed: [] }; },
   });
   await state.openCandidate(pendingIdentity);
   assert.deepEqual(lookups, ['employee-1']);
   assert.deepEqual(archived, [['temporary-draft']]);
-  assert.deepEqual(events, [['saved'], ['update:modelValue', false], ['application', 'request-1']]);
+  assert.deepEqual(events, [['saved'], ['update:modelValue', false], ['application', 'request-1', original]]);
 });
 
 test('discovering and opening cancelled first hire only reopens after explicit review submission', async t => {
@@ -517,6 +532,7 @@ test('discovering and opening cancelled first hire only reopens after explicit r
     saveEmployeeCreateDraft: async () => ({ id: 'temporary-draft', requestVersion: 1 }),
     archiveDrafts: async () => ({ failed: [] }),
     getCurrentReentry: async () => request,
+    getApplication: async id => { assert.equal(id, request.id); return request; },
     reviseArrivalDate: async (...args) => {
       revisions.push(args);
       return { ...request, recordStatus: 'submitted', onboardingStatus: 'submitted',
@@ -526,7 +542,7 @@ test('discovering and opening cancelled first hire only reopens after explicit r
   const drawer = createDrawer(t, api);
   await drawer.state.openCandidate(pendingIdentity);
   assert.deepEqual(revisions, []);
-  assert.deepEqual(drawer.events.at(-1), ['application', 'request-1']);
+  assert.deepEqual(drawer.events.at(-1), ['application', 'request-1', request]);
   const panel = mountSetup(t, 'EmployeeArrivalConfirmation.vue', {
     request, canEdit: true, canConfirm: true,
   }, api);
@@ -542,16 +558,17 @@ test('discovering and opening cancelled first hire only reopens after explicit r
 
 test('matched pending identity keeps finding reopened submitted and pending-entry first hires', async t => {
   for (const onboardingStatus of ['submitted', 'pending_entry']) {
+    const original = returnedArrival({
+      onboardingStatus, profileReviewStatus: onboardingStatus === 'submitted' ? 'pending' : 'approved',
+    });
     const { state, events } = createDrawer(t, {
       saveEmployeeCreateDraft: async () => ({ id: 'temporary-draft', requestVersion: 1 }),
       archiveDrafts: async () => ({ failed: [] }),
-      getCurrentReentry: async () => returnedArrival({
-        onboardingStatus,
-        profileReviewStatus: onboardingStatus === 'submitted' ? 'pending' : 'approved',
-      }),
+      getCurrentReentry: async () => original,
+      getApplication: async id => { assert.equal(id, original.id); return original; },
     });
     await state.openCandidate(pendingIdentity);
-    assert.deepEqual(events, [['saved'], ['update:modelValue', false], ['application', 'request-1']]);
+    assert.deepEqual(events, [['saved'], ['update:modelValue', false], ['application', 'request-1', original]]);
   }
 });
 

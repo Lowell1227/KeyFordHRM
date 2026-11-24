@@ -75,8 +75,9 @@ describe('Contract subjects real HTTP and PostgreSQL', () => {
     };
   }
   async function approve(requestId: string, success = true) {
+    const seen = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: requestId } });
     const result = await app.http.post('/api/v1/employee-archives/reviews/approve')
-      .set(authorization()).send({ requestIds: [requestId], scopes: ['profile', 'performance'] }).expect(201);
+      .set(authorization()).send({ requestIds: [requestId], requestVersions: { [requestId]: seen.requestVersion }, scopes: ['profile', 'performance'] }).expect(201);
     if (success) expect(result.body.data.failed).toEqual([]);
     else expect(result.body.data.failed).toHaveLength(1);
     return result.body.data;

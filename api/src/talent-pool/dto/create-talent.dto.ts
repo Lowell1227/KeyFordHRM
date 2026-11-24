@@ -1,7 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize, IsArray, IsEmail, IsIn, IsInt, IsNotEmpty, IsOptional,
-  IsString, IsUUID, Matches, Max, MaxLength, Min,
+  IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateBy,
 } from 'class-validator';
 import {
   TALENT_GENDERS, TALENT_SOURCE_CHANNELS, TALENT_STATUSES, TALENT_TAGS,
@@ -33,6 +33,21 @@ export class CreateTalentDto {
   @IsInt()
   @Min(1900) @Max(2100)
   birthYear?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt() @Min(1) @Max(12)
+  @ValidateBy({ name: 'birthMonthRequiresYear', validator: {
+    validate: (_value, args) => Number.isInteger((args?.object as CreateTalentDto).birthYear),
+    defaultMessage: () => '填写出生月份时须同时填写出生年份',
+  } })
+  birthMonth?: number | null;
+
+  /** 简历注明年龄，不推算当前实龄；记录时间由服务端维护。 */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt() @Min(0) @Max(150)
+  reportedAge?: number | null;
 
   @IsOptional()
   @Transform(trim)

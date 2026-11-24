@@ -101,6 +101,9 @@ export interface TalentCandidateListItem {
   email: string | null;
   gender: TalentGender;
   birthYear: number | null;
+  birthMonth?: number | null;
+  reportedAge?: number | null;
+  reportedAgeRecordedAt?: string | null;
   currentCompany: string | null;
   currentPosition: string | null;
   yearsOfExperience: number | null;
@@ -222,6 +225,8 @@ export interface TalentCandidateInput {
   email?: string | null;
   gender?: TalentGender;
   birthYear?: number | null;
+  birthMonth?: number | null;
+  reportedAge?: number | null;
   currentCompany?: string | null;
   currentPosition?: string | null;
   yearsOfExperience?: number | null;

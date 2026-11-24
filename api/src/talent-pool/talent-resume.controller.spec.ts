@@ -27,7 +27,8 @@ describe('TalentResumeController', () => {
     };
     const module = await Test.createTestingModule({ controllers: [TalentResumeController], providers: [{ provide: TalentResumeService, useValue: service }] }).compile();
     const app = module.createNestApplication();
-    app.use((req: any, _res: any, next: any) => { req.user = { id: 'hr', sysRole: 'hr' }; next(); });
+    let actor: any = { id: 'hr', sysRole: 'hr' };
+    app.use((req: any, _res: any, next: any) => { req.user = actor; next(); });
     await app.init();
     try {
       const status = await request(app.getHttpServer()).get('/talent-resume/status').expect(200);
@@ -42,6 +43,13 @@ describe('TalentResumeController', () => {
       await request(app.getHttpServer()).post('/talent-resume/parse').attach('other', Buffer.from('synthetic'), 'resume.pdf').expect(400);
       await request(app.getHttpServer()).post('/talent-resume/parse').attach('file', Buffer.from('one'), 'one.pdf').attach('file', Buffer.from('two'), 'two.pdf').expect(400);
       expect(service.parse).toHaveBeenCalledTimes(1);
+      for (const sysRole of ['hr', 'system_admin', 'hr_user']) {
+        actor = { id: 'assessor', sysRole, isAssessorOnly: true, hrCapabilities: ['employee_archive_edit', 'recruitment_view'] };
+        await request(app.getHttpServer()).get('/talent-resume/status').expect(403);
+        await request(app.getHttpServer()).post('/talent-resume/parse').attach('file', Buffer.from('synthetic'), 'synthetic.pdf').expect(403);
+      }
+      expect(service.parse).toHaveBeenCalledTimes(1);
+      expect(service.getStatus).toHaveBeenCalledTimes(1);
     } finally { await app.close(); }
   });
 });

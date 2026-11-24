@@ -28,11 +28,11 @@ export class TalentInterviewsService {
   constructor(private readonly prisma: PrismaService) {}
 
   private canReadTalent(user: AuthUser) {
-    return hasHrCapability(user, 'employee_archive_edit') || hasHrCapability(user, 'employee_archive_review');
+    return canReadRecruitment(user);
   }
 
   private assertWrite(user: AuthUser) {
-    if (!hasHrCapability(user, 'employee_archive_edit')) throw new ForbiddenException('无权限维护面试邀约');
+    if (user.isAssessorOnly || !hasHrCapability(user, 'employee_archive_edit')) throw new ForbiddenException('无权限维护面试邀约');
   }
 
   private async currentWriter(tx: Prisma.TransactionClient, user: AuthUser) {
@@ -46,8 +46,7 @@ export class TalentInterviewsService {
   }
 
   private listWhere(query: TalentInterviewQueryDto, user: AuthUser) {
-    if (['responsible', 'all'].includes(query.scope ?? '') && !canReadRecruitment(user)) throw new ForbiddenException('无权限查看招聘管理队列');
-    if (query.scope === 'created') this.assertWrite(user);
+    if (['created', 'responsible', 'all'].includes(query.scope ?? '') && !canReadRecruitment(user)) throw new ForbiddenException('无权限查看招聘管理队列');
     if ((query.candidateId || query.applicationId) && !canReadRecruitment(user)) throw new ForbiddenException('无权限查看候选人面试列表');
     const where: Prisma.TalentInterviewWhereInput = query.scope === 'created'
       ? { createdById: user.id, ...(query.candidateId ? { candidateId: query.candidateId } : {}) }

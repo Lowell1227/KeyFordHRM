@@ -189,6 +189,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '绩效校准', value: 'performance_calibration' },
   { label: '结果公示', value: 'performance_publish' },
   { label: '转正管理与 HR 审批', value: 'confirmation_manage' },
+  { label: '招聘查看', value: 'recruitment_view' },
   { label: '人才录用确认', value: 'talent_hiring_confirm' },
 ];
 
@@ -1243,26 +1244,34 @@ function applicationReviewPending(request: EmployeeDataReview | null): boolean {
   return Boolean(request && (request.profileReviewStatus === 'pending' || request.performanceReviewStatus === 'pending'));
 }
 
+const applicationRejectReasons = new Map<string, string>();
+
 async function reviewApplicationFromDetail(action: 'approve' | 'reject') {
   const detail = applicationDetail.value;
   if (!detail || applicationSaving.value) return;
+  const requestVersions = { [detail.id]: detail.requestVersion };
+  const draftKey = JSON.stringify(requestVersions);
   let reason = '';
   if (action === 'reject') {
     try {
       const prompt = await ElMessageBox.prompt('请填写退回原因，提交人可据此重新修改。', '退回员工变更', {
         confirmButtonText: '确认退回', cancelButtonText: '取消', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写 2 个字',
+        inputValue: applicationRejectReasons.get(draftKey) ?? '',
       });
       reason = prompt.value;
+      applicationRejectReasons.set(draftKey, reason);
     } catch { return; }
   }
   applicationSaving.value = true;
   try {
     const result = action === 'approve'
-      ? await employeeArchivesApi.approveReviews([detail.id], ['profile', 'performance'])
-      : await employeeArchivesApi.rejectReviews([detail.id], reason);
+      ? await employeeArchivesApi.approveReviews([detail.id], ['profile', 'performance'], requestVersions)
+      : await employeeArchivesApi.rejectReviews([detail.id], reason, requestVersions);
     if (result.failed.length > 0) {
       ElMessage.warning(`办理未完成：${result.failed.map(item => item.reason).join('；')}`);
+      return;
     } else {
+      applicationRejectReasons.delete(draftKey);
       ElMessage.success(action === 'approve'
         ? detail.requiresArrivalConfirmation && detail.onboardingStatus !== 'effective' ? '审核已通过，确认到岗后入职生效' : '审核已通过，变更进入生效处理'
         : '已退回，提交人可修改后重新提交');
@@ -1270,7 +1279,8 @@ async function reviewApplicationFromDetail(action: 'approve' | 'reject') {
     await openApplication(detail.id, () => true, false);
     refreshCurrentView();
     window.dispatchEvent(new CustomEvent('personnel-data-changed'));
-  } catch {
+  } catch (error) {
+    if ((error as { response?: { status?: number } })?.response?.status === 409) return;
     ElMessage.error('办理未完成，请稍后重试');
   } finally {
     applicationSaving.value = false;
@@ -1864,6 +1874,12 @@ function setTalentHiringConfirmation(enabled: string | number | boolean) {
   personSettingsDialog.value.hrCapabilities = capabilities;
 }
 
+function setRecruitmentViewing(enabled: string | number | boolean) {
+  const capabilities: HrCapability[] = personSettingsDialog.value.hrCapabilities.filter(item => item !== 'recruitment_view');
+  if (enabled === true) capabilities.push('recruitment_view');
+  personSettingsDialog.value.hrCapabilities = capabilities;
+}
+
 function toggleOrgMemberSelection(item: ManagedUser, checked: boolean) {
   selectedOrgMembers.value = checked
     ? [...selectedOrgMembers.value.filter((row) => row.id !== item.id), item]
@@ -1931,7 +1947,7 @@ async function confirmPersonSettings() {
       isSystemAdmin.value && personSettingsDialog.value.sysRole !== personSettingsDialog.value.originalSysRole;
     const nextHrCapabilities = personSettingsDialog.value.sysRole === 'hr_user'
       ? [...personSettingsDialog.value.hrCapabilities].sort()
-      : personSettingsDialog.value.hrCapabilities.filter(item => item === 'talent_hiring_confirm');
+      : personSettingsDialog.value.hrCapabilities.filter(item => ['recruitment_view', 'talent_hiring_confirm'].includes(item)).sort();
     const hrCapabilitiesChanged = isSystemAdmin.value
       && JSON.stringify(nextHrCapabilities) !== JSON.stringify([...personSettingsDialog.value.originalHrCapabilities].sort());
     const actions: Promise<unknown>[] = [];
@@ -3149,6 +3165,8 @@ onBeforeUnmount(() => {
           <small class="dialog-tip">编辑与审核可分别赋给不同人员，也允许同一人同时拥有两项能力。</small>
         </el-form-item>
         <el-form-item v-if="isSystemAdmin && !['hr', 'hr_user'].includes(personSettingsDialog.sysRole)" label="招聘职责">
+          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_view')"
+            data-testid="recruitment-view-capability" @change="setRecruitmentViewing">招聘查看</el-checkbox>
           <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('talent_hiring_confirm')"
             data-testid="talent-hiring-confirm-capability" @change="setTalentHiringConfirmation">人才录用确认</el-checkbox>
         </el-form-item>

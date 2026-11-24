@@ -52,7 +52,7 @@ async function runInPreview() {
         company: 'fuede', deptId: dept.id, employmentType: 'full_time', employeeStatus: 'active',
         positionId: position.id, position: position.name,
         entryDate: today, effectiveFrom: today };
-      await observer.employeeDataChangeRequest.create({ data: { id: f.id, employeeName: employee.name,
+      const seen = await observer.employeeDataChangeRequest.create({ data: { id: f.id, employeeName: employee.name,
         employeeNo: f.number, sourceType: 'manual_employee_create', sourceSystem: prefix,
         intakeType: 'new_hire', onboardingStatus: 'submitted', requiresArrivalConfirmation: true,
         profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', recordStatus: 'submitted',
@@ -62,7 +62,7 @@ async function runInPreview() {
         sourceRequestId: f.id, status: 'reserved' } });
       const tracked = { remaining: failures, cancelled, reads: 0, codes: [] as string[] };
       conflicts.set(f.id, tracked);
-      const result = await service.approveBatch({ requestIds: [f.id], scopes: ['profile'] }, actor);
+      const result = await service.approveBatch({ requestIds: [f.id], requestVersions: { [f.id]: seen.requestVersion }, scopes: ['profile'] }, actor);
       const request = await observer.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: f.id } });
       const users = await observer.user.findMany({ where: { employeeNo: f.number } });
       const employments = await observer.employmentRecord.count({ where: { sourceRequestId: f.id } });

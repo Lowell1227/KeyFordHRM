@@ -92,7 +92,7 @@ describe('TalentResumeClient (mock HTTP only)', () => {
     chat({}, { message: { role: 'assistant', content: '   ' } }),
     chat({}, { message: { role: 'assistant', content: '```json\n{}\n```' } }),
     chat({}, { message: { role: 'assistant', content: '{}', tool_calls: [{ function: { name: 'save' } }] } }),
-    chat({ fields: { gender: 'male' }, evidence: {}, uncertainFields: [] }),
+    chat({ fields: { age: 28 }, evidence: {}, uncertainFields: [] }),
     chat({ fields: { __proto__: null }, evidence: {}, uncertainFields: [] }),
     chat({ ...extraction(), tools: ['write'] }),
   ])('rejects malformed, refused, truncated, or non-whitelisted JSON %#', async (value) => {
@@ -105,6 +105,75 @@ describe('TalentResumeClient (mock HTTP only)', () => {
       birthYear: '出生日期：2000-02-29', phone: '手机：13900000000', expectSalaryMin: '期望月薪：10000-15000元', expectSalaryMax: '期望月薪：10000-15000元', yearsOfExperience: '工作经验：3年',
     } as any)));
     expect((await run()).fields).toEqual({ birthYear: 2000, phone: '13900000000', expectSalaryMin: 10, expectSalaryMax: 15, yearsOfExperience: 3 });
+  });
+
+  it.each([
+    ['性别：男', { gender: 'male' }, { gender: 'male' }],
+    ['性别：女', { gender: 'female' }, { gender: 'female' }],
+    ['性别：女', { gender: '女' }, { gender: 'female' }],
+    ['Gender: female', { gender: 'female' }, { gender: 'female' }],
+    ['男 | 28岁 | 本科', { gender: 'male' }, { gender: 'male' }],
+    ['性别：未知', { gender: 'unknown' }, { gender: 'unknown' }],
+    ['出生年月：1998年5月', { birthYear: 1998, birthMonth: 5 }, { birthYear: 1998, birthMonth: 5 }],
+    ['出生日期：2000-02-29', { birthYear: 2000, birthMonth: 2 }, { birthYear: 2000, birthMonth: 2 }],
+    ['出生日期：1998年5月31日', { birthYear: 1998, birthMonth: 5 }, { birthYear: 1998, birthMonth: 5 }],
+    ['出生年份：1998', { birthYear: 1998 }, { birthYear: 1998 }],
+    ['年龄：28岁', { reportedAge: 28 }, { reportedAge: 28 }],
+    ['28岁', { reportedAge: 28 }, { reportedAge: 28 }],
+    ['Age: 28 years old', { reportedAge: 28 }, { reportedAge: 28 }],
+  ])('accepts only explicitly labelled personal facts: %s', async (quote, fields, expected) => {
+    const evidence = Object.fromEntries(Object.keys(fields).map(field => [field, quote]));
+    replies(ocr({ pages: [{ index: 0, text: quote, finish_reason: 'stop' }] }), chat({ fields, evidence, uncertainFields: [] }));
+    expect(await run()).toMatchObject({ fields: expected, reviewItems: [] });
+  });
+
+  it.each([
+    ['姓名：虚构女士', { gender: 'female' }],
+    ['姓名：虚构男同学', { gender: 'male' }],
+    ['性别：男/女', { gender: 'male' }],
+    ['毕业日期：1998年5月', { birthYear: 1998, birthMonth: 5 }],
+    ['年龄：28岁', { birthYear: 1998 }],
+    ['出生年份：1998', { birthYear: 1998, birthMonth: 5 }, { birthYear: 1998 }],
+    ['出生年月：1998年5月', { birthMonth: 5 }],
+    ['出生日期：2001-02-29', { birthYear: 2001, birthMonth: 2 }],
+    ['出生日期：1998-04-31', { birthYear: 1998, birthMonth: 4 }],
+    ['出生日期：1998-00-10', { birthYear: 1998, birthMonth: 0 }],
+    ['出生年月：1998年5月', { birthYear: 1998, birthMonth: 6 }, { birthYear: 1998 }],
+    ['出生日期：1998-02-290', { birthYear: 1998, birthMonth: 2 }],
+    ['工作经验：28年', { reportedAge: 28 }],
+    ['年龄：28-29岁', { reportedAge: 28 }],
+    ['年龄：28岁-29岁', { reportedAge: 28 }],
+    ['年龄：28岁', { reportedAge: 29 }],
+  ])('leaves unsupported personal facts for review: %s', async (quote, fields, expected: Record<string, unknown> = {}) => {
+    const evidence = Object.fromEntries(Object.keys(fields).map(field => [field, quote]));
+    replies(ocr({ pages: [{ index: 0, text: quote, finish_reason: 'stop' }] }), chat({ fields, evidence, uncertainFields: [] }));
+    const result = await run();
+    expect(result.fields).toEqual(expected);
+    for (const field of Object.keys(fields).filter(field => !(field in expected))) {
+      expect(result.reviewItems).toContainEqual({ field, reason: expect.any(String) });
+    }
+  });
+
+  it.each([
+    ['性别：男\n性别：女', '性别：男', { gender: 'male' }],
+    ['出生年月：1998年5月\n出生年月：1999年5月', '出生年月：1998年5月', { birthYear: 1998, birthMonth: 5 }],
+    ['年龄：28岁\n年龄：29岁', '年龄：28岁', { reportedAge: 28 }],
+  ])('does not choose one conflicting source fact: %s', async (source, quote, fields) => {
+    const evidence = Object.fromEntries(Object.keys(fields).map(field => [field, quote]));
+    replies(ocr({ pages: [{ index: 0, text: source, finish_reason: 'stop' }] }), chat({ fields, evidence, uncertainFields: [] }));
+    const result = await run();
+    expect(result.fields).toEqual({});
+    expect(result.reviewItems).toHaveLength(Object.keys(fields).length);
+  });
+
+  it('keeps explicitly uncertain personal facts empty even when the evidence looks valid', async () => {
+    const quote = '出生年月：1998年5月';
+    replies(ocr({ pages: [{ index: 0, text: quote, finish_reason: 'stop' }] }), chat({
+      fields: { birthYear: 1998, birthMonth: 5 }, evidence: { birthYear: quote, birthMonth: quote }, uncertainFields: ['birthYear'],
+    }));
+    expect(await run()).toMatchObject({ fields: {}, reviewItems: expect.arrayContaining([
+      { field: 'birthYear', reason: expect.any(String) }, { field: 'birthMonth', reason: expect.any(String) },
+    ]) });
   });
 
   it.each([[12000, 12], [12500, 12.5], [5500, 5.5], [5501, 5.501], [999000, 999], [2147483647, 2147483.647], [2147483648, undefined], [0, 0]])(

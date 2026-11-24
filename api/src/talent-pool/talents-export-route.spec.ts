@@ -24,8 +24,9 @@ describe('talent export HTTP authorization and query contract', () => {
       { provide: TalentFollowUpsService, useValue: {} }, { provide: TalentSharesService, useValue: {} },
       { provide: JwtService, useValue: { verifyAsync: async value => ({ sub: value }) } },
       { provide: AuthService, useValue: { validateSession: async ({ sub }) => ({ id: sub, name: 'Synthetic',
-        sysRole: ['hr', 'system_admin', 'employee'].includes(sub) ? sub : 'hr_user',
-        hrCapabilities: sub === 'reviewer' ? ['employee_archive_review'] : sub === 'editor' ? ['employee_archive_edit'] : [],
+        sysRole: sub.startsWith('mixed-') ? sub.slice(6) : sub === 'recruitment-reader' ? 'employee' : ['hr', 'system_admin', 'employee'].includes(sub) ? sub : 'hr_user',
+        isAssessorOnly: sub.startsWith('mixed-'),
+        hrCapabilities: sub.startsWith('mixed-') ? ['employee_archive_edit', 'recruitment_view'] : sub === 'recruitment-reader' ? ['recruitment_view'] : sub === 'reviewer' ? ['employee_archive_review'] : sub === 'editor' ? ['employee_archive_edit'] : [],
       }) } },
       { provide: APP_GUARD, useClass: JwtAuthGuard }, { provide: APP_GUARD, useClass: RolesGuard },
     ] }).compile();
@@ -36,13 +37,21 @@ describe('talent export HTTP authorization and query contract', () => {
   });
   afterAll(async () => { await app?.close(); });
 
-  it('keeps exports and historical position options behind the same existing talent-read roles', async () => {
+  it('keeps existing export roles and blocks mixed assessors on both routes', async () => {
     for (const path of ['/talents/export', '/talents/application-positions']) {
       await request(app.getHttpServer()).get(path).expect(401);
       for (const token of ['employee', 'unqualified']) await request(app.getHttpServer()).get(path).auth(token, { type: 'bearer' }).expect(403);
+      for (const token of ['mixed-hr', 'mixed-system_admin', 'mixed-hr_user', 'mixed-employee']) await request(app.getHttpServer()).get(path).auth(token, { type: 'bearer' }).expect(403);
       for (const token of ['hr', 'system_admin', 'reviewer', 'editor']) await request(app.getHttpServer()).get(path).auth(token, { type: 'bearer' }).expect(200);
     }
     expect(talents.detail).not.toHaveBeenCalled();
+  });
+
+  it('recruitment-only readers keep position options but cannot reach Excel export', async () => {
+    talents.exportApplications.mockClear();
+    await request(app.getHttpServer()).get('/talents/application-positions').auth('recruitment-reader', { type: 'bearer' }).expect(200);
+    await request(app.getHttpServer()).get('/talents/export').auth('recruitment-reader', { type: 'bearer' }).expect(403);
+    expect(talents.exportApplications).not.toHaveBeenCalled();
   });
 
   it('streams an unwrapped workbook and validates same-application query fields', async () => {

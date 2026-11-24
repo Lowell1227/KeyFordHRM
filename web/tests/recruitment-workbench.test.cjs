@@ -35,7 +35,7 @@ test('reads one authorized projection, keeps feedback separate and links exact o
   view.state.open('follow_up', { id: 'candidate', candidateId: 'candidate' });
   view.state.open('onboarding', { id: 'application', candidateId: 'candidate', applicationId: 'application' });
   assert.deepEqual(view.pushes, [
-    { path: '/talent-interviews/interview' },
+    { path: '/talent-interviews/interview', query: { work: 'interviews', scope: 'mine', bucket: 'feedback' } },
     { path: '/talent-hiring', query: { applicationId: 'application' } },
     { path: '/talents', query: { candidateId: 'candidate' } },
     { path: '/entry-exit', query: { talentId: 'candidate', talentApplicationId: 'application' } },

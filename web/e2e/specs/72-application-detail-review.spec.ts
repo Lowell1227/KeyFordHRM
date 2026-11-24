@@ -35,6 +35,7 @@ async function setupPage(page: Page) {
 function makeRequest(overrides: Record<string, unknown> = {}) {
   return {
     id: 'review-detail-1',
+    requestVersion: 2,
     userId: 'employee-yu',
     employeeName: '余焱玲',
     employeeNo: '001',
@@ -84,7 +85,7 @@ test('审核人在办理详情抽屉内直接通过待审核变更', async ({ pa
   await detailDialog.getByRole('button', { name: '通过', exact: true }).click();
 
   await expect.poll(() => approveCalls.length).toBe(1);
-  expect(approveCalls[0]).toEqual({ requestIds: ['review-detail-1'], scopes: ['profile', 'performance'] });
+  expect(approveCalls[0]).toEqual({ requestIds: ['review-detail-1'], requestVersions: { 'review-detail-1': 2 }, scopes: ['profile', 'performance'] });
   // 审核完成后刷新详情，审核按钮消失
   await expect(detailDialog.getByRole('button', { name: '通过', exact: true })).toHaveCount(0);
   await expect(detailDialog.getByRole('button', { name: '退回', exact: true })).toHaveCount(0);
@@ -121,7 +122,7 @@ test('审核人在办理详情抽屉内退回待审核变更并填写原因', as
   await prompt.getByRole('button', { name: '确认退回' }).click();
 
   await expect.poll(() => rejectCalls.length).toBe(1);
-  expect(rejectCalls[0]).toEqual({ requestIds: ['review-detail-1'], reason: '职级调整依据不足' });
+  expect(rejectCalls[0]).toEqual({ requestIds: ['review-detail-1'], requestVersions: { 'review-detail-1': 2 }, reason: '职级调整依据不足' });
   // 详情刷新为已退回，审核按钮消失
   await expect(detailDialog.getByText('已退回，待修改')).toBeVisible();
   await expect(detailDialog.getByRole('button', { name: '退回', exact: true })).toHaveCount(0);

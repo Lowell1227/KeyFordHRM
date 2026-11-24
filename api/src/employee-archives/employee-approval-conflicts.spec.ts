@@ -89,8 +89,9 @@ function fixture() {
     afterRollback: (callback: typeof afterRollback) => { afterRollback = callback; },
     beforePerformanceWrite: (callback: typeof beforePerformanceWrite) => { beforePerformanceWrite = callback; },
     approve: (scopes: EmployeeReviewScope[] = ['profile', 'performance'], requestIds = ['review-1']) =>
-      service.approveBatch({ requestIds, scopes }, operator),
-    reject: () => service.rejectBatch(['review-1'], 'Needs correction', operator),
+      service.approveBatch({ requestIds, scopes,
+        requestVersions: Object.fromEntries(requestIds.map(id => [id, state.requests[id]?.requestVersion])) }, operator),
+    reject: () => service.rejectBatch(['review-1'], 'Needs correction', operator, { 'review-1': request.requestVersion }),
   };
 }
 
@@ -238,10 +239,15 @@ describe('approval serialization conflict recovery', () => {
   it.each(['P2034', 'P2028'])('keeps a rolled-back rejection pending with no false success or raw %s error', async code => {
     const f = fixture();
     f.commitFailures.set(1, databaseError(code));
-    const result = await f.reject();
-    expect(result.succeeded).toEqual([]);
-    expect(result.failed).toHaveLength(1);
-    expect(result.failed[0].reason).not.toMatch(/Raw|SQL|engine|P2034|P2028/);
+    if (code === 'P2034') {
+      await expect(f.reject()).rejects.toMatchObject({ status: 409,
+        message: '申请版本缺失或已变化，请刷新后重新核对再审核' });
+    } else {
+      const result = await f.reject();
+      expect(result.succeeded).toEqual([]);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0].reason).not.toMatch(/Raw|SQL|engine|P2034|P2028/);
+    }
     expect(f.attempts).toHaveLength(1);
     expect(f.state().requests['review-1']).toMatchObject({ profileReviewStatus: 'pending', performanceReviewStatus: 'pending' });
     expect(f.state().audits).toEqual([]);

@@ -14,7 +14,7 @@ function setup() {
     employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
     talentFollowUp: { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'followup' }) },
     talentShare: { findUnique: jest.fn().mockResolvedValue({ id: 'share', token: 'secret-share-token', candidateId: candidate.id, revokedAt: null }), update: jest.fn() },
-    auditLog: { create: jest.fn() }, user: { findUnique: jest.fn().mockResolvedValue({ id: 'employee' }) },
+    auditLog: { create: jest.fn() }, user: { findUnique: jest.fn().mockResolvedValue({ ...hr, status: 'active', archivedAt: null, deletedAt: null }) },
     $queryRaw: jest.fn().mockResolvedValue([candidate]), $transaction: jest.fn(),
   };
   prisma.$transaction.mockImplementation((fn) => typeof fn === 'function' ? fn(prisma) : Promise.all(fn));

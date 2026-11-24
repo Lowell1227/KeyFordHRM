@@ -15,7 +15,7 @@ function archiveReview(positionChanged: boolean, directoryFamily: string | null,
   const proposal = { ...employee, workLocation: '新工作地点', workLocationId: locationId,
     ...(proposedFamily !== undefined ? { jobFamily: proposedFamily } : {}),
     ...(positionChanged ? { positionId: 'new-position', position: '提案岗位名称' } : {}) };
-  const review = { id: 'synthetic-review', userId: 'synthetic-employee', sourceType: 'manual_archive_change',
+  const review = { id: 'synthetic-review', requestVersion: 1, userId: 'synthetic-employee', sourceType: 'manual_archive_change',
     sourceBatchId: null, intakeType: null, recordStatus: 'submitted', archivedAt: null,
     profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
     baseValue: { employee, profile: {}, contracts: [] },
@@ -39,7 +39,7 @@ function archiveReview(positionChanged: boolean, directoryFamily: string | null,
     auditLog: { create: jest.fn(async () => ({})) },
   };
   const service = new EmployeeDataReviewsService({ $transaction: async (run: any) => run(tx) } as any);
-  return { written, current, review, tx, approve: () => service.approveBatch({ requestIds: [review.id], scopes: ['profile'] }, operator) };
+  return { written, current, review, tx, approve: () => service.approveBatch({ requestIds: [review.id], requestVersions: { [review.id]: review.requestVersion }, scopes: ['profile'] }, operator) };
 }
 
 describe('employee review preserves family outside a requested position change', () => {

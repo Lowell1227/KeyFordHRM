@@ -62,8 +62,9 @@ describe('Personnel lifecycle real HTTP/database acceptance', () => {
   });
 
   async function approve(requestId: string, scopes = ['profile', 'performance']) {
+    const seen = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: requestId } });
     const result = await app.http.post('/api/v1/employee-archives/reviews/approve').set(headers())
-      .send({ requestIds: [requestId], scopes }).expect(201);
+      .send({ requestIds: [requestId], requestVersions: { [requestId]: seen.requestVersion }, scopes }).expect(201);
     expect(result.body.data.failed).toEqual([]);
     expect(result.body.data.succeeded).toEqual([expect.objectContaining({ requestId })]);
   }
@@ -125,7 +126,7 @@ describe('Personnel lifecycle real HTTP/database acceptance', () => {
     const first = await app.http.post('/api/v1/employee-archives').set(headers()).send(payload).expect(201);
     const id = first.body.data.id;
     await app.http.post('/api/v1/employee-archives/reviews/reject').set(headers())
-      .send({ requestIds: [id], reason: '补充任职信息' }).expect(201);
+      .send({ requestIds: [id], requestVersions: { [id]: first.body.data.requestVersion }, reason: '补充任职信息' }).expect(201);
     const applications = await app.http.get('/api/v1/employee-archives/applications/list').set(headers()).expect(200);
     expect(JSON.stringify(applications.body.data)).toContain(id);
     const resubmitted = await app.http.post('/api/v1/employee-archives').set(headers())
@@ -276,7 +277,7 @@ describe('Personnel lifecycle real HTTP/database acceptance', () => {
     const originalEmployeeNo = (await app.prisma.user.findUniqueOrThrow({ where: { id: userId } })).employeeNo;
     const originalEmploymentIds = (await app.prisma.employmentRecord.findMany({ where: { userId } })).map((item) => item.id);
     await app.http.post('/api/v1/employee-archives/reviews/reject').set(headers())
-      .send({ requestIds: [requestId], reason: '请确认绩效关系后重新提交' }).expect(201);
+      .send({ requestIds: [requestId], requestVersions: { [requestId]: baseApproved.requestVersion }, reason: '请确认绩效关系后重新提交' }).expect(201);
     const resubmitted = await app.http.patch(`/api/v1/employee-archives/reentry/${requestId}`).set(headers())
       .send({ performanceOnly: true, performanceManagerId: manager.id }).expect(200);
     expect(resubmitted.body.data.id).toBe(requestId);
@@ -300,7 +301,7 @@ describe('Personnel lifecycle real HTTP/database acceptance', () => {
       .send(newEmployee(name, { performanceManagerId: randomUUID() })).expect(201);
     const requestId = submitted.body.data.id;
     const result = await app.http.post('/api/v1/employee-archives/reviews/approve').set(headers())
-      .send({ requestIds: [requestId], scopes: ['profile', 'performance'] }).expect(201);
+      .send({ requestIds: [requestId], requestVersions: { [requestId]: submitted.body.data.requestVersion }, scopes: ['profile', 'performance'] }).expect(201);
     expect(result.body.data.succeeded).toEqual([]);
     expect(result.body.data.failed).toEqual([expect.objectContaining({ requestId })]);
     expect(await app.prisma.user.count({ where: { name } })).toBe(0);

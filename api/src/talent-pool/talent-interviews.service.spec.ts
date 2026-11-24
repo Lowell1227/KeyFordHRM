@@ -41,6 +41,25 @@ function pauseLock(prisma: ReturnType<typeof setup>['prisma'], table: string) {
 }
 
 describe('talent interview safety and access', () => {
+  it('allows an explicit employee recruitment reader to see an unassigned invitation without writing', async () => {
+    const { sut } = setup();
+    const reader = { ...employee, id: 'reader', hrCapabilities: ['recruitment_view'] };
+    await expect(sut.detail('invite', reader)).resolves.toMatchObject({ candidateId: 'candidate', applicationId: 'application' });
+    await expect(sut.list({ scope: 'all' }, reader)).resolves.toHaveLength(1);
+    await expect(sut.list({ scope: 'created' }, reader)).resolves.toHaveLength(1);
+    await expect(sut.list({ scope: 'responsible' }, reader)).resolves.toHaveLength(1);
+    await expect(sut.create(draft, reader)).rejects.toThrow(ForbiddenException);
+  });
+  it.each(['hr', 'system_admin', 'hr_user'])('does not leak IDs to an assessor-only %s participant or allow unassigned detail', async sysRole => {
+    const { sut } = setup();
+    const actor = { ...employee, sysRole, isAssessorOnly: true, hrCapabilities: ['employee_archive_edit', 'employee_archive_review', 'recruitment_view'] } as AuthUser;
+    const own = await sut.detail('invite', actor);
+    expect(own).not.toHaveProperty('candidateId');
+    expect(own).not.toHaveProperty('applicationId');
+    expect(own).not.toHaveProperty('participants');
+    await expect(sut.detail('invite', { ...actor, id: 'unassigned' })).rejects.toThrow(NotFoundException);
+    await expect(sut.list({ scope: 'all' }, actor)).rejects.toThrow(ForbiddenException);
+  });
   it('displays only the linked position and batch to talent readers, including explicit unlinked invitations', async () => {
     const application = { positionName: 'Synthetic role', recruitmentBatch: 'Round 1' };
     const { sut } = setup({ applicationId: 'application', application });

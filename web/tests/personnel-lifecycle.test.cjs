@@ -50,15 +50,24 @@ test('arrival must match reviewed date, carry a version, and not be future in Sh
   assert.equal(lifecycle.reviewedArrivalDate({ ...pending(), intakeType: 'reentry', proposedValue: { employee: { effectiveDate: '2026-11-12' } } }), '2026-11-12');
 });
 
-test('ordinary interview routes require login without talent-management authorization or menu entries', () => {
+test('ordinary interview routes require login while only recruitment readers receive the list menu', () => {
   const { routes } = loadTs('src/router/routes.ts');
+  const { buildNavigation, canAccessRoute } = loadTs('src/router/navigation.ts');
+  const employee = { sysRole: 'employee', hrCapabilities: [], canViewAll: false, isAssessorOnly: false };
   for (const routePath of ['/talent-interviews', '/talent-interviews/:id']) {
     const route = routes.find(item => item.path === routePath);
     assert.equal(route.meta.requiresAuth, true);
     assert.equal(route.meta.roles, undefined);
     assert.equal(route.meta.hrCapabilities, undefined);
-    assert.equal(route.meta.navigation, undefined);
+    assert.equal(canAccessRoute(route, employee), true);
   }
+  assert.equal(routes.find(item => item.path === '/talent-interviews/:id').meta.navigation, undefined);
+  const ordinaryMenu = buildNavigation(routes, employee).flatMap(item => item.groups.flatMap(group => group.items));
+  assert.equal(ordinaryMenu.some(item => item.name === 'TalentInterviews'), false);
+  const readerMenu = buildNavigation(routes, { ...employee, hrCapabilities: ['recruitment_view'] })
+    .find(item => item.key === 'recruitment').groups.flatMap(group => group.items);
+  assert.equal(readerMenu.some(item => item.name === 'TalentInterviews'), true);
+  assert.equal(readerMenu.some(item => item.name === 'TalentHiringReview'), false);
   const performanceRoutes = routes.filter(item => item.path === '/interviews');
   assert.equal(performanceRoutes.length, 1);
   assert.equal(performanceRoutes[0].meta.title, '绩效面谈');
@@ -93,11 +102,12 @@ test('legacy review and application links retain query context at entry-exit', (
   assert.equal(oldProcessing.redirect({ query: { requestId: 'r2' }, hash: '' }).query.requestId, 'r2');
 });
 
-test('archive editor exposes one Submit command without manual save or policy modes', () => {
+test('archive editor keeps one submit command and labels contract-only saves without policy modes', () => {
   const view = fs.readFileSync(path.join(root, 'src/views/admin/UserManageView.vue'), 'utf8');
   const editor = fs.readFileSync(path.join(root, 'src/views/admin/components/EmployeeArchiveInlineEditor.vue'), 'utf8');
   assert.equal(/reviewMode|宽松模式|保存后关闭|saveArchiveAndClose/.test(view + editor), false);
-  assert.match(view, /@click="archiveEditorRef\?\.submit\(\)">提交<\/el-button>/);
+  assert.equal([...view.matchAll(/@click="archiveEditorRef\?\.submit\(\)"/g)].length, 1);
+  assert.match(view, /@click="archiveEditorRef\?\.submit\(\)">\{\{\s*archiveContractOnly\s*\?\s*'保存并生效'\s*:\s*'提交'\s*\}\}<\/el-button>/);
   assert.match(editor, /session !== generation/);
   assert.match(editor, /expectedVersion: draftId \? draftVersion/);
 });
@@ -109,8 +119,10 @@ test('talent source travels in payloads, never from name/phone route parameters'
   assert.equal(/fromTalent|route\.query\.phone|route\.query\.name/.test(view), false);
   assert.equal(view.includes('await talentPoolApi.detail(id)'), true);
   assert.equal(create.includes('talentCandidateId: sourceTalentId.value'), true);
-  assert.equal(create.includes("emit('reentry', candidate.id, talentId)"), true);
+  assert.equal(create.includes('talentApplicationId: sourceTalentApplicationId.value'), true);
+  assert.equal(create.includes("emit('reentry', candidate.id, talentId, sourceTalentApplicationId.value)"), true);
   assert.equal(reentry.includes('talentCandidateId: currentRequest.value?.talentCandidateId ?? props.talentCandidateId'), true);
+  assert.equal(reentry.includes('talentApplicationId: currentRequest.value?.talentApplicationId ?? props.talentApplicationId'), true);
   assert.equal(/saveAndExit|保存并退出/.test(create), false);
 });
 

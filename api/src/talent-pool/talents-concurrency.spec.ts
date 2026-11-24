@@ -21,7 +21,8 @@ function fixture() {
     trace.push('write'); Object.assign(row, data); return { ...row, files: [], followUps: [] };
   });
   const tx = {
-    $queryRaw: jest.fn(async (..._args: any[]) => { trace.push('lock'); return [{ id: row.id }]; }),
+    $queryRaw: jest.fn(async (sql: TemplateStringsArray, ..._values: unknown[]) => { trace.push(sql.join('').includes('FROM users') ? 'actor-lock' : 'lock'); return [{ id: row.id }]; }),
+    user: { findUnique: jest.fn().mockResolvedValue({ id: operator.id, sysRole: 'hr', status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false }) },
     talentCandidate: { findFirst: read, update: write },
     auditLog: { create: jest.fn() },
   };
@@ -47,7 +48,8 @@ describe('TalentsService concurrent editing boundary', () => {
     const f = fixture();
     await expect(f.service.update(f.row.id, { note: 'Current edit', editVersion: talentEditVersion(f.row as never) }, operator))
       .resolves.toMatchObject({ note: 'Current edit', files: [], followUps: [] });
-    expect(f.trace).toEqual(['lock', 'read', 'write']);
+    expect(f.trace).toEqual(['lock', 'actor-lock', 'read', 'write']);
+    expect(f.tx.$queryRaw.mock.calls[1][0].join('?')).toContain('FOR SHARE');
     expect(f.prisma.talentCandidate.findFirst).not.toHaveBeenCalled();
     expect(f.tx.$queryRaw.mock.calls[0][0].join('?')).toContain('FOR UPDATE');
     expect(f.tx.$queryRaw.mock.calls[0][1]).toBe(f.row.id);

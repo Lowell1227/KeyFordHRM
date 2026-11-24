@@ -19,7 +19,7 @@ describe('employee company text', () => {
     const current = { ...user(), deptId: null, entryDate: null, ...overrides.current };
     const employee = { employeeNo: '001', name: '员工甲', company: 'fuede', companyText: '花名册公司原文',
       deptId: null, entryDate: null, employmentType: 'full_time', employeeStatus: 'active', ...overrides.base };
-    const request = { id: 'review-1', userId: overrides.userId === undefined ? current.id : overrides.userId,
+    const request = { id: 'review-1', requestVersion: 1, userId: overrides.userId === undefined ? current.id : overrides.userId,
       intakeType: null, sourceType: overrides.sourceType ?? 'manual_archive_change', sourceBatchId: null,
       recordStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
       baseValue: { employee }, proposedValue: { employee: { ...employee, ...(overrides.userId === null ? { positionId: 'position' } : {}), companyText: '已补公司', ...overrides.proposed },
@@ -36,7 +36,7 @@ describe('employee company text', () => {
       auditLog: { create: jest.fn() },
     };
     const service = new EmployeeDataReviewsService({ $transaction: async (run: any) => run(tx) } as any);
-    return { tx, approve: () => service.approveBatch({ requestIds: ['review-1'], scopes: ['profile'] }, operator) };
+    return { tx, approve: () => service.approveBatch({ requestIds: ['review-1'], requestVersions: { 'review-1': request.requestVersion }, scopes: ['profile'] }, operator) };
   }
 
   it('allows existing missing department and entry date to remain while other archive fields are corrected', async () => {
@@ -126,7 +126,7 @@ describe('employee company text', () => {
     const baseEmployee = { employeeNo: '001', name: '员工甲', company: 'fuede', companyText: '花名册公司原文',
       deptId: 'dept-1', entryDate: '2024-01-01T00:00:00.000Z', employmentType: 'full_time', employeeStatus: 'active' };
     const request = {
-      id: 'review-1', userId: current.id, intakeType: null, sourceType: 'manual_archive_change', sourceBatchId: null,
+      id: 'review-1', requestVersion: 1, userId: current.id, intakeType: null, sourceType: 'manual_archive_change', sourceBatchId: null,
       recordStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
       baseValue: { employee: companyText === undefined ? { ...baseEmployee, companyText: undefined } : baseEmployee },
       proposedValue: { employee: { ...baseEmployee, companyText, ...(companyText === undefined ? { probationMonths: 3 } : {}) } },
@@ -146,7 +146,7 @@ describe('employee company text', () => {
       employeeContract: { findMany: jest.fn().mockResolvedValue([]) }, auditLog: { create: jest.fn() },
     };
     const service = new EmployeeDataReviewsService({ $transaction: async (run: any) => run(tx) } as any);
-    const result = await service.approveBatch({ requestIds: ['review-1'], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: ['review-1'], requestVersions: { 'review-1': request.requestVersion }, scopes: ['profile'] }, operator);
     if (stale) {
       expect(result.failed).toEqual([{ requestId: 'review-1', reason: '正式基础档案已发生变化，请重新提交审核' }]);
       expect(tx.employmentRecord.create).not.toHaveBeenCalled();

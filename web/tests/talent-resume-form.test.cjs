@@ -95,6 +95,96 @@ test('parse fills blanks and requires selection to replace existing values', asy
   state.parseConflicts.value[0].selected = true;
   state.applySelectedParsedFields(); assert.equal(state.form.name, 'Parsed');
 });
+
+test('explicit personal fields fill blanks, save their precision and reload without calculating age', async t => {
+  let saved;
+  const parsed = { gender: 'female', birthYear: 1998, birthMonth: 5, reportedAge: 27 };
+  const { state } = form(t, { parseResume: async () => ({ fields: parsed, reviewItems: [] }),
+    api: { create: async body => { saved = body; return { id: 'saved', editVersion: 'v1' }; } } });
+  await state.parseResume(new File(['synthetic'], 'fictional.pdf'));
+  for (const [key, value] of Object.entries(parsed)) assert.equal(state.form[key], value);
+  await state.submit();
+  for (const [key, value] of Object.entries(parsed)) assert.equal(saved[key], value);
+  assert.equal('reportedAgeRecordedAt' in saved, false);
+  const reopened = form(t, { candidateId: 'saved', api: { detail: async () => ({ ...detail('saved'), ...parsed,
+    reportedAgeRecordedAt: '2026-11-24T02:00:00Z' }) } });
+  await flush();
+  for (const [key, value] of Object.entries(parsed)) assert.equal(reopened.state.form[key], value);
+});
+
+test('age-only parsing never populates birth year or month and manual fields can be cleared', async t => {
+  let saved;
+  const { state } = form(t, { parseResume: async () => ({ fields: { reportedAge: 28 }, reviewItems: [] }),
+    api: { create: async body => { saved = body; return { id: 'saved', editVersion: 'v1' }; } } });
+  await state.parseResume(new File(['synthetic'], 'fictional.pdf'));
+  assert.equal(state.form.reportedAge, 28);
+  assert.equal(state.form.birthYear, undefined); assert.equal(state.form.birthMonth, undefined);
+  state.form.reportedAge = undefined;
+  await state.submit();
+  assert.equal(saved.reportedAge, null); assert.equal(saved.birthMonth, null);
+});
+
+test('parsed birth month cannot be silently paired with a conflicting existing birth year', async t => {
+  const { state } = form(t, { parseResume: async () => ({ fields: { birthYear: 1998, birthMonth: 5 }, reviewItems: [] }) });
+  state.form.birthYear = 1997;
+  await state.parseResume(new File(['synthetic'], 'fictional.pdf'));
+  assert.equal(state.form.birthYear, 1997); assert.equal(state.form.birthMonth, undefined);
+  const month = state.parseConflicts.value.find(item => item.field === 'birthMonth');
+  month.selected = true; state.applySelectedParsedFields();
+  assert.equal(state.form.birthMonth, undefined);
+  for (const item of state.parseConflicts.value) item.selected = true;
+  state.applySelectedParsedFields();
+  assert.equal(state.form.birthYear, 1998); assert.equal(state.form.birthMonth, 5);
+});
+
+test('year-only replacement clears an old month instead of inventing new date precision', async t => {
+  const { state } = form(t, { parseResume: async () => ({ fields: { birthYear: 1998 }, reviewItems: [] }) });
+  state.form.birthYear = 1997; state.form.birthMonth = 6;
+  await state.parseResume(new File(['synthetic'], 'fictional.pdf'));
+  state.parseConflicts.value[0].selected = true; state.applySelectedParsedFields();
+  assert.equal(state.form.birthYear, 1998); assert.equal(state.form.birthMonth, undefined);
+});
+
+test('newer manual birth month invalidates the whole pending parsed birth pair', async t => {
+  const { state } = form(t, { parseResume: async () => ({ fields: { birthYear: 1998, birthMonth: 5 }, reviewItems: [] }) });
+  state.form.birthYear = 1997; state.form.birthMonth = 6;
+  await state.parseResume(new File(['synthetic'], 'fictional.pdf'));
+  for (const item of state.parseConflicts.value) item.selected = true;
+  state.form.birthMonth = 7; state.applySelectedParsedFields();
+  assert.equal(state.form.birthYear, 1997); assert.equal(state.form.birthMonth, 7);
+});
+
+test('existing explicit gender and age require selection and keep newer manual input', async t => {
+  const { state } = form(t, { parseResume: async () => ({ fields: { gender: 'female', reportedAge: 28 }, reviewItems: [] }) });
+  state.form.gender = 'male'; state.form.reportedAge = 27;
+  await state.parseResume(new File(['synthetic'], 'fictional.pdf'));
+  assert.equal(state.form.gender, 'male'); assert.equal(state.form.reportedAge, 27);
+  for (const item of state.parseConflicts.value) item.selected = true;
+  state.form.reportedAge = 29; state.applySelectedParsedFields();
+  assert.equal(state.form.gender, 'female'); assert.equal(state.form.reportedAge, 29);
+});
+
+test('unpaired or invalid personal fields block saving at their field', async t => {
+  let writes = 0;
+  const { state } = form(t, { api: { create: async () => { writes++; return { id: 'saved', editVersion: 'v1' }; } } });
+  await flush(); state.form.birthMonth = 5; await state.submit();
+  assert.equal(writes, 0); assert.match(state.birthError.value, /年份/);
+  state.form.birthYear = 1998; state.form.reportedAge = 28.5; await state.submit();
+  assert.equal(writes, 0); assert.match(state.reportedAgeError.value, /整数/);
+});
+
+test('server personal field errors appear beside their inputs without losing human data', async t => {
+  const { state } = form(t, { api: { create: async () => {
+    throw { response: { status: 400, data: { message: '请核对出生年月和注明年龄', data: {
+      fieldErrors: { birthMonth: '出生月份与年份不匹配', reportedAge: '注明年龄待核对' },
+    } } } };
+  } } });
+  await flush(); state.form.birthYear = 1998; state.form.birthMonth = 5; state.form.reportedAge = 28;
+  await state.submit();
+  assert.equal(state.birthError.value, '出生月份与年份不匹配');
+  assert.equal(state.reportedAgeError.value, '注明年龄待核对');
+  assert.equal(state.form.birthMonth, 5); assert.equal(state.form.reportedAge, 28);
+});
 test('late parsing cannot fill a closed or replaced form', async t => {
   let resolve, started;
   const parsingStarted = new Promise(r => { started = r; });
@@ -279,7 +369,7 @@ test('owner rejection is shown at the owner field and clears on selection change
   state.form.ownerId = 'valid-hr'; await vue.nextTick();
   assert.equal(state.ownerFieldError.value, '');
   const source = fs.readFileSync(path.resolve(__dirname, '../src/views/talent/components/TalentFormDrawer.vue'), 'utf8');
-  assert.match(source, /<el-form-item[^>]*label="负责人"[^>]*:error="ownerFieldError \|\| ownerError"/);
+  assert.match(source, /<el-form-item[^>]*label="人才负责人"[^>]*:error="ownerFieldError \|\| ownerError"/);
 });
 
 test('late photo preparation after replacing candidate cannot start parsing or change its form', async t => {

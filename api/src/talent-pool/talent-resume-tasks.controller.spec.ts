@@ -25,7 +25,8 @@ describe('Resume task HTTP boundary', () => {
     const module = await Test.createTestingModule({ controllers: [TalentResumeTasksController],
       providers: [{ provide: TalentResumeTasksService, useValue: tasks }] }).compile();
     const app = module.createNestApplication();
-    app.use((req: any, _res: any, next: any) => { req.user = user; next(); });
+    let actor: any = user;
+    app.use((req: any, _res: any, next: any) => { req.user = actor; next(); });
     await app.init();
     try {
       const start = await request(app.getHttpServer()).post('/talent-resume/tasks').set('X-Resume-Context', 'new')
@@ -42,6 +43,17 @@ describe('Resume task HTTP boundary', () => {
       await request(app.getHttpServer()).delete('/talent-resume/tasks/id').expect(204);
       await request(app.getHttpServer()).post('/talent-resume/tasks').field('context', 'new')
         .attach('file', Buffer.from('synthetic'), 'resume.pdf').expect(400);
+      for (const sysRole of ['hr', 'system_admin', 'hr_user']) {
+        actor = { id: 'assessor', sysRole, isAssessorOnly: true, hrCapabilities: ['employee_archive_edit', 'recruitment_view'] };
+        await request(app.getHttpServer()).get('/talent-resume/tasks/current?context=new').expect(403);
+        await request(app.getHttpServer()).get('/talent-resume/tasks/id').expect(403);
+        await request(app.getHttpServer()).get('/talent-resume/tasks/id/file').expect(403);
+        await request(app.getHttpServer()).post('/talent-resume/tasks/id/retry').expect(403);
+        await request(app.getHttpServer()).delete('/talent-resume/tasks/id').expect(403);
+        await request(app.getHttpServer()).post('/talent-resume/tasks').attach('file', Buffer.from('synthetic'), 'synthetic.pdf').expect(403);
+      }
+      expect(tasks.start).toHaveBeenCalledTimes(1);
+      expect(tasks.file).toHaveBeenCalledTimes(1);
     } finally { await app.close(); }
   });
 });

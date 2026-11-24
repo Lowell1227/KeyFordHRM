@@ -24,6 +24,7 @@ function setup() {
       findMany: jest.fn(async () => [{ ...row }]), count: jest.fn(async () => 1),
     },
     user: { findFirst: jest.fn(async () => ({ id: ownerId })),
+      findUnique: jest.fn(async () => ({ ...hr, status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false })),
       findMany: jest.fn(async () => [{ id: hr.id, name: 'Creator' }, { id: ownerId, name: 'Owner' }]) },
     personnelReferenceData: { findFirst: jest.fn(async () => ({ id: educationId, name: 'Degree from reference' })) },
     auditLog: { create: jest.fn() }, $queryRaw: jest.fn(async () => []),
@@ -33,6 +34,25 @@ function setup() {
 }
 
 describe('talent ownership and reference education', () => {
+  it('persists explicit resume demographics through create and update without deriving values', async () => {
+    const { sut, row } = setup();
+    const created = await sut.create({ name: 'Synthetic', phone: '17000000000', sourceChannel: 'referral',
+      gender: 'female', birthYear: 1998, birthMonth: 5, reportedAge: 27 } as any, hr);
+    expect(created).toMatchObject({ gender: 'female', birthYear: 1998, birthMonth: 5, reportedAge: 27,
+      reportedAgeRecordedAt: expect.any(Date) });
+    const saved = await sut.update(row.id, { gender: 'female', birthYear: 1998, birthMonth: 5, reportedAge: 27,
+      editVersion: talentEditVersion(row) } as any, hr);
+    expect(saved).toMatchObject({ gender: 'female', birthYear: 1998, birthMonth: 5, reportedAge: 27 });
+    expect(await sut.detail(row.id)).toMatchObject({ birthYear: 1998, birthMonth: 5, reportedAge: 27 });
+  });
+
+  it('does not disclose share tokens to an independently authorized recruitment reader', async () => {
+    const { sut, row, prisma } = setup();
+    row.shares = [{ token: 'synthetic-private-token', recipientIds: [] }];
+    prisma.user.findUnique.mockResolvedValue({ ...hr, sysRole: 'employee', hrCapabilities: ['recruitment_view'], status: 'active' });
+    expect(await sut.detail(row.id, hr)).toMatchObject({ shares: [] });
+  });
+
   it('defaults new ownership to the creator and resolves explicitly selected active education', async () => {
     const { sut, prisma } = setup();
     const result = await sut.create({ name: 'Synthetic', phone: '17000000000', sourceChannel: 'referral',

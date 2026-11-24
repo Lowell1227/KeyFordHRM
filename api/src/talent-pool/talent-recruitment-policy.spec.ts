@@ -1,9 +1,36 @@
-import { allowedApplicationActions, canConfirmTalentHiring, canReadRecruitment, canWriteRecruitment, isFeedbackOpen } from './talent-recruitment-policy';
+import { ForbiddenException } from '@nestjs/common';
+import { allowedApplicationActions, assertRecruitmentReader, assertRecruitmentWriter, canConfirmTalentHiring, canReadRecruitment, canWriteRecruitment, isFeedbackOpen } from './talent-recruitment-policy';
 
 const hr = { id: 'hr', sysRole: 'hr', status: 'active', archivedAt: null, deletedAt: null, isAssessorOnly: false, hrCapabilities: [] };
 const application = { stage: 'hiring_review', hiringRequestedById: 'submitter', reviewReturnStage: 'interviewing' };
 
 describe('recruitment policy', () => {
+  it.each([undefined, null, {}])('rejects missing trusted identity before looking up any account: %j', async user => {
+    const tx = { user: { findUnique: jest.fn() } };
+    await expect(assertRecruitmentReader(tx as never, user as never)).rejects.toThrow(ForbiddenException);
+    await expect(assertRecruitmentWriter(tx as never, user as never)).rejects.toThrow(ForbiddenException);
+    expect(tx.user.findUnique).not.toHaveBeenCalled();
+  });
+  it('uses current database grants instead of the request role and never requires request status', async () => {
+    const tx = { user: { findUnique: jest.fn().mockResolvedValue({ ...hr, sysRole: 'employee', hrCapabilities: ['recruitment_view'] }) } };
+    const staleRequest = { id: hr.id, sysRole: 'hr' };
+    await expect(assertRecruitmentReader(tx as never, staleRequest)).resolves.toMatchObject({ sysRole: 'employee' });
+    await expect(assertRecruitmentWriter(tx as never, staleRequest)).rejects.toThrow(ForbiddenException);
+    tx.user.findUnique.mockResolvedValue({ ...hr, sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] });
+    await expect(assertRecruitmentWriter(tx as never, { id: hr.id })).resolves.toMatchObject({ sysRole: 'hr_user' });
+  });
+  it.each(['employee', 'manager', 'dept_head', 'vp', 'hr_user'])('lets explicit %s recruitment readers read without maintenance or hiring confirmation', sysRole => {
+    const reader = { ...hr, sysRole, hrCapabilities: ['recruitment_view'] };
+    expect(canReadRecruitment(reader)).toBe(true);
+    expect(canWriteRecruitment(reader)).toBe(false);
+    expect(canConfirmTalentHiring(reader, 'other')).toBe(false);
+    expect(allowedApplicationActions(reader, application, false)).toEqual([]);
+  });
+  it.each(['hr', 'system_admin', 'hr_user', 'employee'])('blocks assessor-only mixed %s from full recruitment reads', sysRole => {
+    const actor = { ...hr, sysRole, isAssessorOnly: true, hrCapabilities: ['recruitment_view', 'employee_archive_edit', 'employee_archive_review'] };
+    expect(canReadRecruitment(actor)).toBe(false);
+    expect(canWriteRecruitment(actor)).toBe(false);
+  });
   it('requires independent HR or an explicit grant, never administrator or view-all inference', () => {
     expect(canConfirmTalentHiring(hr, 'submitter')).toBe(true);
     expect(canConfirmTalentHiring(hr, hr.id)).toBe(false);

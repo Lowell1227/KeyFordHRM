@@ -108,13 +108,24 @@ const leave = useRecruitmentLeaveGuard({ dirty: () => editing.value, busy: () =>
 async function closeEditor() { if (await leave.prepareToLeave()) resetEditor(); }
 async function toggleHistory() { if (await leave.prepareToLeave()) { showHistory.value = !showHistory.value; opened.value = []; } }
 watch(() => props.application?.id, () => { showHistory.value = false; opened.value = []; });
-function useInviteTemplate() {
+function fillInviteTemplate() {
   form.invitationText = `${props.candidateName || current.value?.candidateNameSnapshot || '候选人'}，您好！\n邀请您参加${editorApplication.value?.positionName || '本岗位'}${inviteMode.value}。\n时间：${form.startsAt || '请补充开始时间'} 至 ${form.endsAt || '请补充结束时间'}（北京时间）\n${inviteMode.value === '线上面试' ? '会议方式 / 链接' : inviteMode.value === '电话面试' ? '联系电话 / 接听方式' : '面试地点'}：${inviteLocation.value || '请补充'}\n请回复是否能够参加，谢谢。`;
   generatedTemplate.value = form.invitationText;
   invitationChanged(form.invitationText);
 }
+async function useInviteTemplate() {
+  if (!editing.value || !canSaveEditor.value || busy.value) return;
+  const editor = editorSession, originalText = form.invitationText;
+  if (form.invitationText && form.invitationText !== generatedTemplate.value) {
+    try { await ElMessageBox.confirm('当前候选人邀请已填写。填入模板会替换现有文案，是否继续？', '替换候选人邀请', {
+      confirmButtonText: '替换为模板', cancelButtonText: '保留原文', type: 'warning',
+    }); } catch { return; }
+  }
+  if (editor !== editorSession || !editing.value || !canSaveEditor.value || busy.value || form.invitationText !== originalText) return;
+  fillInviteTemplate();
+}
 watch([() => form.startsAt, () => form.endsAt, inviteMode, inviteLocation], () => {
-  if (editing.value && !current.value && form.invitationText === generatedTemplate.value) useInviteTemplate();
+  if (editing.value && !current.value && form.invitationText === generatedTemplate.value) fillInviteTemplate();
 });
 async function refreshEditor() {
   const row = current.value, editor = editorSession;
@@ -195,7 +206,7 @@ async function openEditor(row: TalentInterviewView | null, targetApplication?: I
   people.value = [];
   participantNames.value = Object.fromEntries((row?.participants ?? []).map(p => [p.userId, p.userNameSnapshot]));
   participantIssues.value = Object.fromEntries(form.participantIds.map(id => [id, '正在核验当前任职状态']));
-  if (!row) useInviteTemplate();
+  if (!row) fillInviteTemplate();
   formRef.value?.clearValidate();
   void searchPeople();
 }
@@ -207,7 +218,7 @@ async function openForApplication(application: InterviewApplication) {
 defineExpose({ openForApplication, prepareToLeave: leave.prepareToLeave });
 async function save() {
   const token = generation, editor = editorSession, candidateId = props.candidateId, row = current.value;
-  const valid = () => token === generation && editor === editorSession && candidateId === props.candidateId && editing.value;
+  const valid = () => canSaveEditor.value && token === generation && editor === editorSession && candidateId === props.candidateId && editing.value;
   if (!canSaveEditor.value || busy.value || checkingParticipants.value || !valid()) return;
   busy.value = true; error.value = '';
   const formValid = await formRef.value?.validate().catch(() => false);
@@ -257,7 +268,7 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
     try { await ElMessageBox.confirm(command === 'cancel' ? '取消这条面试邀约？腾讯会议本身仍需单独处理。' : (new Date(row.startsAt).getTime() > Date.now() ? '该面试尚未到预约时间。仅在实际已完成面试时提前标记，是否继续？' : '请确认实际已完成面试，再将这条记录标记为已完成。'), '面试邀约',
       { confirmButtonText: command === 'cancel' ? '取消面试' : '完成面试', cancelButtonText: '返回' }); } catch { return; }
   }
-  if (token !== generation) return;
+  if (!props.editable || token !== generation || busy.value) return;
   busy.value = true; error.value = '';
   try { await talentInterviewsApi.action(row.id, command, row.version); if (token !== generation) return; emit('changed'); await load(); }
   catch (cause) { if (token === generation) error.value = failure(cause); }
@@ -305,9 +316,9 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
       <div class="interview-panel__template">
         <el-select v-model="inviteMode" aria-label="面试方式"><el-option v-for="mode in ['现场面试', '电话面试', '线上面试']" :key="mode" :label="mode" :value="mode" /></el-select>
         <el-input v-model="inviteLocation" aria-label="面试地点或联系方式" placeholder="面试地点、接听方式或会议链接" />
-        <el-button @click="useInviteTemplate">填入邀请模板</el-button>
+        <el-button @click="useInviteTemplate">填入候选人模板</el-button>
       </div>
-      <el-form-item label="会议邀请内容" prop="invitationText"><el-input v-model="form.invitationText" type="textarea" :rows="5" maxlength="10000" show-word-limit @input="invitationChanged" /></el-form-item>
+      <el-form-item label="会议邀请内容（候选人版）" prop="invitationText"><el-input v-model="form.invitationText" type="textarea" :rows="5" maxlength="10000" show-word-limit @input="invitationChanged" /></el-form-item>
       <el-form-item label="腾讯会议链接（选填）" prop="meetingUrl">
         <el-input v-model="form.meetingUrl" maxlength="1000" placeholder="https://meeting.tencent.com/..." @input="meetingLinkManual = true" />
         <p v-if="meetingHint" role="status" class="interview-panel__link-hint">{{ meetingHint }}</p>

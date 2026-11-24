@@ -23,6 +23,11 @@ describe('archive review permissions across the route and review service', () =>
     employeeDataChangeRequest: {
       findUnique: jest.fn(async ({ where }: any) => where.id === reviewId ? { ...review } : null),
       update: jest.fn(async ({ data }: any) => Object.assign(review, data)),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        if (!Object.entries(where).every(([key, value]) => review[key] === value)) return { count: 0 };
+        Object.assign(review, data);
+        return { count: 1 };
+      }),
     },
     auditLog: { create: jest.fn(async ({ data }: any) => { audited.push(data); return data; }) },
   };
@@ -32,7 +37,7 @@ describe('archive review permissions across the route and review service', () =>
     id: reviewId, ...input, arrivalConfirmedById: operator.id, onboardingStatus: 'effective',
   })), reviseArrivalDate: jest.fn(async () => ({ id: reviewId, profileReviewStatus: 'pending' })) };
   const reject = () => request(app.getHttpServer()).post('/employee-archives/reviews/reject')
-    .send({ requestIds: [reviewId], reason: '请补充资料' });
+    .send({ requestIds: [reviewId], requestVersions: { [reviewId]: review.requestVersion }, reason: '请补充资料' });
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -59,7 +64,7 @@ describe('archive review permissions across the route and review service', () =>
     actor = { id: 'synthetic-reviewer', name: '审核员', sysRole: SysRole.hr_user,
       deptId: 'reviewer-department', isAssessorOnly: false, canViewAll: false,
       hrCapabilities: ['employee_archive_review'] };
-    review = { id: reviewId, userId: 'synthetic-employee-in-other-department', recordStatus: 'submitted',
+    review = { id: reviewId, requestVersion: 1, userId: 'synthetic-employee-in-other-department', recordStatus: 'submitted',
       archivedAt: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required' };
   });
 
@@ -71,7 +76,7 @@ describe('archive review permissions across the route and review service', () =>
     expect(review).toMatchObject({ profileReviewStatus: 'rejected', profileReviewedById: actor.id,
       performanceReviewStatus: 'not_required', rejectedReason: '请补充资料' });
     expect(audited).toEqual([expect.objectContaining({ userId: actor.id, action: 'reject_employee_data_change',
-      entityId: reviewId, newValue: { reason: '请补充资料' } })]);
+      entityId: reviewId, newValue: { reason: '请补充资料', requestVersion: 1 } })]);
   });
 
   it.each([
@@ -82,10 +87,24 @@ describe('archive review permissions across the route and review service', () =>
     actor.sysRole = role;
     actor.hrCapabilities = capabilities;
     await reject().expect(403);
-    await expect(service.rejectBatch([reviewId], '请补充资料', actor)).rejects.toThrow();
+    await expect(service.rejectBatch([reviewId], '请补充资料', actor, { [reviewId]: review.requestVersion })).rejects.toThrow();
     expect(db.$transaction).not.toHaveBeenCalled();
     expect(review.profileReviewStatus).toBe('pending');
     expect(audited).toEqual([]);
+  });
+
+  it.each(['approve', 'reject'])('rejects an old or versionless %s page with 409 and no writes', async action => {
+    review.requestVersion = 2;
+    const before = { ...review };
+    for (const requestVersions of [undefined, { [reviewId]: 1 }]) {
+      await request(app.getHttpServer()).post(`/employee-archives/reviews/${action}`)
+        .send({ requestIds: [reviewId], requestVersions, scopes: ['profile'], reason: 'Fictional correction' })
+        .expect(409);
+      expect(review).toEqual(before);
+      expect(audited).toEqual([]);
+      expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+      expect(tx.employeeDataChangeRequest.updateMany).not.toHaveBeenCalled();
+    }
   });
 
   it('does not grant archive editing to a review-only HR user', async () => {

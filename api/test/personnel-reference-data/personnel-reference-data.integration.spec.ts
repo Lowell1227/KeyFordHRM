@@ -121,10 +121,11 @@ describe('Personnel reference data real HTTP and PostgreSQL', () => {
     return result.body.data as { id: string; name: string; isActive: boolean };
   }
   async function approve(requestId: string) {
+    const seen = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: requestId } });
     const result = await app.http
       .post('/api/v1/employee-archives/reviews/approve')
       .set(authorization())
-      .send({ requestIds: [requestId], scopes: ['profile', 'performance'] })
+      .send({ requestIds: [requestId], requestVersions: { [requestId]: seen.requestVersion }, scopes: ['profile', 'performance'] })
       .expect(201);
     expect(result.body.data.failed).toEqual([]);
   }

@@ -564,12 +564,12 @@ export const employeeArchivesApi = {
     return http.get('/employee-archives/reviews/list', { params }) as unknown as Promise<EmployeeDataReviewPage>;
   },
 
-  approveReviews(requestIds: string[], scopes: EmployeeReviewScope[]): Promise<EmployeeReviewBatchResult> {
-    return http.post('/employee-archives/reviews/approve', { requestIds, scopes }) as unknown as Promise<EmployeeReviewBatchResult>;
+  approveReviews(requestIds: string[], scopes: EmployeeReviewScope[], requestVersions: Record<string, number | undefined>): Promise<EmployeeReviewBatchResult> {
+    return http.post('/employee-archives/reviews/approve', { requestIds, scopes, requestVersions }) as unknown as Promise<EmployeeReviewBatchResult>;
   },
 
-  rejectReviews(requestIds: string[], reason: string): Promise<EmployeeReviewBatchResult> {
-    return http.post('/employee-archives/reviews/reject', { requestIds, reason }) as unknown as Promise<EmployeeReviewBatchResult>;
+  rejectReviews(requestIds: string[], reason: string, requestVersions: Record<string, number | undefined>): Promise<EmployeeReviewBatchResult> {
+    return http.post('/employee-archives/reviews/reject', { requestIds, reason, requestVersions }) as unknown as Promise<EmployeeReviewBatchResult>;
   },
 
   proposePerformanceManager(userId: string, managerId: string | null): Promise<EmployeeDataReview> {

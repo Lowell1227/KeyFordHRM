@@ -67,8 +67,9 @@ describe('Unified company directory: real HTTP, JWT, migrations and PostgreSQL',
     return (await app.http.get(`${root}/${id}`).set(auth()).expect(200)).body.data;
   }
   async function approve(id: string, expectSuccess = true) {
+    const seen = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id } });
     const response = await app.http.post(`${root}/reviews/approve`).set(auth(reviewer))
-      .send({ requestIds: [id], scopes: ['profile', 'performance'] }).expect(201);
+      .send({ requestIds: [id], requestVersions: { [id]: seen.requestVersion }, scopes: ['profile', 'performance'] }).expect(201);
     if (expectSuccess) expect(response.body.data.failed).toEqual([]);
     else expect(response.body.data.failed).toHaveLength(1);
     return response.body.data;

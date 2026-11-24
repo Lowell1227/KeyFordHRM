@@ -53,11 +53,13 @@ describe('a new accepted application after a cancelled first hire (disposable Po
       company: 'fuede' as const, employee: { contractSubjectId: subject.id }, deptId: dept.id, positionId: position.id,
       entryDate: today, effectiveFrom: today, employmentType: 'full_time' as const, employeeStatus: 'probation' as const,
     };
-    const approve = async (id: string) => expect((await reviews.approveBatch({ requestIds: [id], scopes: ['profile'] }, reviewer)).failed).toEqual([]);
+    const approve = async (seen: { id: string; requestVersion: number }) => expect((await reviews.approveBatch({
+      requestIds: [seen.id], requestVersions: { [seen.id]: seen.requestVersion }, scopes: ['profile'],
+    }, reviewer)).failed).toEqual([]);
     const old = await accepted('Synthetic A');
     const a = await archive.createEmployee({ ...body, profile: { school: 'Prior verified school' },
       contracts: [{ contractType: 'attachment', name: 'Prior attachment' }], talentApplicationId: old.id }, editor);
-    await approve(a.id);
+    await approve(a);
     await onboarding.cancelReentry(a.id, { reason: 'Synthetic no-show' }, editor.id);
     const oldStage = await recruitment.detail(old.id, editor);
     if (scenario !== 'both-cancelled') await recruitment.act(old.id, { expectedRevision: oldStage.revision, action: 'withdraw', note: 'Synthetic' }, editor);
@@ -106,7 +108,7 @@ describe('a new accepted application after a cancelled first hire (disposable Po
     expect(raced.find(r => r.status === 'rejected')).toMatchObject({ reason: { status: 409 } });
     const b = await db.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: draft.id } });
     expect(b).toMatchObject({ talentApplicationId: next.id, intakeType: 'new_hire', profileReviewStatus: 'pending', onboardingStatus: 'submitted' });
-    await approve(b.id);
+    await approve(b);
     const pending = await db.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: b.id } });
     expect(pending).toMatchObject({ userId, onboardingStatus: 'pending_entry', arrivalConfirmedAt: null });
     expect((await db.employeeProfile.findUniqueOrThrow({ where: { userId } }))).toMatchObject({ school: 'Prior verified school', major: 'Current verified major' });

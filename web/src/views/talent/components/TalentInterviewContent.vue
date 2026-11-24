@@ -5,25 +5,22 @@ import { CopyDocument } from '@element-plus/icons-vue';
 import { INTERVIEW_STATUS_LABELS, type TalentInterviewView } from '@/types/talent.types';
 import { formatInterviewTime } from '../interview-time';
 import { interviewApplicationLabel } from '../interview-application';
+import { safeTencentMeetingLink } from '../interview-meeting-link';
+import { interviewInvitationCopies } from '../interview-invitation';
 import TalentInterviewFeedback from './TalentInterviewFeedback.vue';
 
 const emit = defineEmits<{ changed: [] }>();
 const feedback = ref<InstanceType<typeof TalentInterviewFeedback>>();
 defineExpose({ prepareToLeave: async () => await feedback.value?.prepareToLeave() ?? true });
 const props = defineProps<{ invitation: TalentInterviewView }>();
-const safeLink = computed(() => {
-  try {
-    const value = props.invitation.meetingUrl;
-    if (!value || /[\s\\\u0000-\u001f\u007f]/.test(value)) return null;
-    const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'meeting.tencent.com' && !url.username && !url.password
-      && (!url.port || url.port === '443') ? url.href : null;
-  } catch { return null; }
-});
+const audience = ref<'candidate' | 'interviewer'>('candidate');
+const safeLink = computed(() => safeTencentMeetingLink(props.invitation.meetingUrl ?? ''));
+const invitationCopies = computed(() => interviewInvitationCopies(props.invitation, window.location.origin));
+const selectedInvitation = computed(() => invitationCopies.value[audience.value]);
 async function copy() {
   try {
-    await navigator.clipboard.writeText([props.invitation.invitationText, safeLink.value].filter(Boolean).join('\n'));
-    ElMessage.success('邀请已复制，请人工发送给候选人');
+    await navigator.clipboard.writeText(selectedInvitation.value);
+    ElMessage.success(audience.value === 'candidate' ? '候选人邀请已复制，请人工发送给候选人' : '面试官邀请已复制，请人工发送给面试官');
   } catch { ElMessage.error('复制失败，请手动选中邀请内容复制'); }
 }
 </script>
@@ -40,8 +37,11 @@ async function copy() {
       <dt>面试时间<small>北京时间</small></dt><dd>{{ formatInterviewTime(invitation.startsAt) }} 至 {{ formatInterviewTime(invitation.endsAt) }}</dd>
       <dt>内部参与人</dt><dd>{{ invitation.participantNames.join('、') }}</dd>
     </dl>
-    <div class="interview-content__heading"><h4>会议邀请</h4><el-tooltip content="复制邀请内容"><el-button :icon="CopyDocument" aria-label="复制邀请内容" size="small" @click="copy" /></el-tooltip></div>
-    <p class="interview-invitation-text">{{ invitation.invitationText }}</p><p class="interview-content__manual">候选人需经办人工联系，HRM保存安排不代表已送达候选人。</p>
+    <div class="interview-content__heading"><h4>面试邀请</h4>
+      <el-radio-group v-model="audience" size="small" aria-label="邀请对象"><el-radio-button value="candidate">候选人版</el-radio-button><el-radio-button value="interviewer">面试官版</el-radio-button></el-radio-group>
+      <el-tooltip :content="audience === 'candidate' ? '复制候选人邀请' : '复制面试官邀请'"><el-button :icon="CopyDocument" :aria-label="audience === 'candidate' ? '复制候选人邀请' : '复制面试官邀请'" size="small" @click="copy" /></el-tooltip>
+    </div>
+    <p class="interview-invitation-text">{{ selectedInvitation }}</p><p class="interview-content__manual">{{ audience === 'candidate' ? '候选人需经办人工联系，HRM保存安排不代表已送达候选人。' : '复制后需人工发送，面试官仍须登录HRM并有本场面试权限才能填写本人反馈。' }}</p>
     <a v-if="safeLink" :href="safeLink" target="_blank" rel="noopener noreferrer">打开腾讯会议</a>
     <template v-if="invitation.note"><h4>安排备注（内部参与人可见）</h4><p class="interview-invitation-text">{{ invitation.note }}</p></template>
     <TalentInterviewFeedback ref="feedback" :key="invitation.id" :interview-id="invitation.id" :interview-version="invitation.version" @changed="emit('changed')" />

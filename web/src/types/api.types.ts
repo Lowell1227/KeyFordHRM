@@ -153,6 +153,7 @@ export interface BusinessCapabilities {
 export type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
 export type HrCapability =
+  | 'recruitment_view'
   | 'employee_archive_edit'
   | 'employee_archive_review'
   | 'organization_edit'

@@ -20,7 +20,7 @@ test('real DeepSeek single parse survives close/reload and explicitly applies re
     }
   });
 
-  await page.setContent('<html><meta charset="utf-8"><body style="font:24px Arial;line-height:1.8;padding:32px;color:#111;background:white"><h1>Fictional Resume</h1><p>Name: Synthetic Example</p><p>Phone: 17000001001</p><p>Email: synthetic@example.com</p><p>Education: Bachelor</p><p>School: Fictional University</p></body></html>');
+  await page.setContent('<html><meta charset="utf-8"><body style="font:24px Arial;line-height:1.8;padding:32px;color:#111;background:white"><h1>Fictional Resume</h1><p>Name: Synthetic Example</p><p>Phone: 17000001001</p><p>Email: synthetic@example.com</p><p>Gender: Female</p><p>Date of birth:1998-05</p><p>Age:27</p><p>Education: Bachelor</p><p>School: Fictional University</p></body></html>');
   const buffer = await page.pdf({ format: 'A4' });
   await page.goto('/login');
   await page.getByTestId('preview-login').click();
@@ -55,7 +55,7 @@ test('real DeepSeek single parse survives close/reload and explicitly applies re
   await drawer.getByPlaceholder('候选人姓名').fill('人工重新填写姓名');
   const recovered = (await (await recoveredResponse).json()).data;
   const result = recovered.result;
-  expect(result.fields).toMatchObject({ name: 'Synthetic Example', phone: '17000001001' });
+  expect(result.fields).toMatchObject({ name: 'Synthetic Example', phone: '17000001001', gender: 'female', birthYear: 1998, birthMonth: 5, reportedAge: 27 });
   await expect(drawer.getByText('解析完成', { exact: true })).toBeVisible();
   await expect(drawer.getByTestId('resume-task')).not.toContainText('已用');
   await expect(drawer.getByPlaceholder('11 位手机号')).toHaveValue('');
@@ -63,6 +63,10 @@ test('real DeepSeek single parse survives close/reload and explicitly applies re
   await drawer.getByRole('button', { name: '填入解析结果', exact: true }).click();
   await expect(drawer.getByPlaceholder('11 位手机号')).toHaveValue('17000001001');
   await expect(drawer.getByPlaceholder('候选人姓名')).toHaveValue('人工重新填写姓名');
+  await expect(drawer.getByRole('radio', { name: '女', exact: true })).toBeChecked();
+  await expect(drawer.locator('.el-form-item').filter({ has: page.getByText('出生年份', { exact: true }) }).getByRole('spinbutton')).toHaveValue('1998');
+  await expect(drawer.locator('.el-form-item').filter({ has: page.getByText('出生月份', { exact: true }) }).locator('.el-select__selected-item.el-select__placeholder')).toHaveText('5 月');
+  await expect(drawer.getByPlaceholder('岁（选填）')).toHaveValue('27');
   const conflicts = drawer.locator('.talent-form__parse-conflicts');
   const nameChoice = conflicts.getByRole('checkbox', { name: '姓名：Synthetic Example', exact: true });
   await expect(nameChoice).not.toBeChecked();

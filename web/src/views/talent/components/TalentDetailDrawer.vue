@@ -20,6 +20,8 @@ import {
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
 import { formatTalentSalary } from '@/utils/talent-salary';
+import { formatTalentBirth, formatReportedTalentAge } from '@/utils/talent-demographics';
+import { useAuthStore } from '@/stores/auth.store';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import TalentFileList from './TalentFileList.vue';
 import TalentFollowUpTimeline from './TalentFollowUpTimeline.vue';
@@ -31,6 +33,9 @@ import { useRecruitmentLeaveGuard } from '../useRecruitmentLeaveGuard';
 import { formatInterviewTime } from '../interview-time';
 
 const { canEdit } = useTalentPermissions();
+const auth = useAuthStore();
+const canViewEmployeeArchive = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
+  || (auth.user?.sysRole === 'hr_user' && auth.user.hrCapabilities?.some(cap => cap === 'employee_archive_edit' || cap === 'employee_archive_review')));
 
 /**
  * 候选人详情抽屉（需求 §5.3）。
@@ -112,10 +117,6 @@ function field(value: string | number | null | undefined): string {
 
 function salaryText(item: TalentCandidateDetail): string {
   return formatTalentSalary(item);
-}
-
-function ageText(item: TalentCandidateDetail): string {
-  return item.birthYear ? `${new Date().getFullYear() - item.birthYear} 岁` : '—';
 }
 
 function tagLabel(tag: string): string {
@@ -238,7 +239,7 @@ function onShareChanged(context: { candidateId: string; session: number }) {
 
       <el-alert v-if="detail.status === 'hired'" type="success" :closable="false" class="talent-detail__converted">
         已于 {{ formatDate(detail.convertedAt) }} 办理入职，
-        <el-button link type="primary" @click="openEmployeeArchive">查看员工档案：{{ detail.name }}</el-button>
+        <el-button v-if="canViewEmployeeArchive" link type="primary" @click="openEmployeeArchive">查看员工档案：{{ detail.name }}</el-button>
       </el-alert>
 
       <TalentApplicationPanel ref="applicationPanel" :key="detail.id" :candidate-id="detail.id" :application-match="applicationMatch" :editable="canEdit" :converted-user-id="detail.convertedUserId" :before-switch="prepareInterviewSwitch" @selected="currentApplication = $event" @changed="onFollowUpChanged" @interview="application => interviewPanel?.openForApplication(application)" />
@@ -249,7 +250,8 @@ function onShareChanged(context: { candidateId: string; session: number }) {
         <div class="talent-detail__field"><span class="talent-detail__label">手机</span><span>{{ detail.phone }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">邮箱</span><span>{{ field(detail.email) }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">性别</span><span>{{ TALENT_GENDER_LABELS[detail.gender] }}</span></div>
-        <div class="talent-detail__field"><span class="talent-detail__label">年龄</span><span>{{ ageText(detail) }}</span></div>
+        <div class="talent-detail__field"><span class="talent-detail__label">出生年月</span><span>{{ formatTalentBirth(detail) }}</span></div>
+        <div class="talent-detail__field"><span class="talent-detail__label">简历年龄</span><span>{{ formatReportedTalentAge(detail) }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">当前公司</span><span>{{ field(detail.currentCompany) }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">当前职位</span><span>{{ field(detail.currentPosition) }}</span></div>
         <div class="talent-detail__field"><span class="talent-detail__label">工作年限</span><span>{{ detail.yearsOfExperience == null ? '—' : `${detail.yearsOfExperience} 年` }}</span></div>

@@ -34,7 +34,7 @@ function buildPrisma() {
       create: jest.fn(),
       update: jest.fn(),
     },
-    user: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn().mockResolvedValue({ id: HR.id }) },
+    user: { findMany: jest.fn(), findUnique: jest.fn().mockResolvedValue({ ...HR, status: 'active', archivedAt: null, deletedAt: null }), findFirst: jest.fn().mockResolvedValue({ id: HR.id }) },
     auditLog: { create: jest.fn() },
     talentInterview: { findMany: jest.fn().mockResolvedValue([]) },
     employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },

@@ -148,7 +148,7 @@ export class EmployeeArchivesController {
     @Body() dto: RejectEmployeeDataReviewsDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    return this.reviews.rejectBatch(dto.requestIds, dto.reason, operator);
+    return this.reviews.rejectBatch(dto.requestIds, dto.reason, operator, dto.requestVersions);
   }
 
   @Patch('reviews/:requestId/performance-manager')
