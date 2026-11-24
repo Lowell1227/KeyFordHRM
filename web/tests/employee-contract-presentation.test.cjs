@@ -17,8 +17,15 @@ function loadTs(filename, source = fs.readFileSync(filename, 'utf8'), dependenci
   }).outputText, filename);
   return loaded.exports;
 }
-const { contractTitle, sortContractsLatestFirst, selectEmployeeContracts, groupEmployeeContracts, overlappingContractIds } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-presentation.ts'));
+const { contractCompany, contractTitle, sortContractsLatestFirst, selectEmployeeContracts, groupEmployeeContracts, overlappingContractIds } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-presentation.ts'));
 const { employeeContractStatus } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-status.ts'));
+
+test('transfer company comes from its new company, including imported contracts without signingCompany', () => {
+  assert.equal(contractCompany({ contractType: 'transfer', signingCompany: null, newCompany: '虚构转签主体' }), '虚构转签主体');
+  assert.equal(contractCompany({ contractType: 'transfer', signingCompany: '虚构原主体', newCompany: '虚构新主体' }), '虚构新主体');
+  assert.equal(contractCompany({ contractType: 'transfer', signingCompany: '虚构已选主体', newCompany: '' }), '虚构已选主体');
+  assert.equal(contractCompany({ contractType: 'contract', signingCompany: '虚构首签主体', newCompany: '无关字段' }), '虚构首签主体');
+});
 
 test('contract titles retain their name and signing day when list order changes', () => {
   const contract = { id: 'fixture-contract', name: '研发劳动合同', signedAt: '2026-11-12T00:00:00.000Z', effectiveFrom: '2026-12-01' };

@@ -9,6 +9,10 @@ const typeLabels: Record<string, string> = {
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
 const date = (value: unknown) => formatEmployeeContractDate(text(value));
 
+export function contractCompany(contract: ContractPresentation): string {
+  return (text(contract.contractType || contract.kind) === 'transfer' ? text(contract.newCompany) : '') || text(contract.signingCompany);
+}
+
 export function contractTitle(contract: ContractPresentation): string {
   const type = text(contract.contractType) || text(contract.kind);
   const title = text(contract.name) || typeLabels[type] || type || '合同';

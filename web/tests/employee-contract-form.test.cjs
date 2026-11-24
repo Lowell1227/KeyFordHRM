@@ -75,6 +75,18 @@ async function mount(t, name, input, upload = async () => material(), api = {}) 
 async function editor(t, contracts = [], upload) {
   return mount(t, 'EmployeeArchiveInlineEditor.vue', { editing: true, archive: archive(contracts), departments: [] }, upload);
 }
+
+test('reopening an imported transfer and continuing its contract use the transferred company and subject', async t => {
+  const { state } = await editor(t, [{ id: 'fictional-transfer', contractType: 'transfer', sequence: 0,
+    name: '虚构转签合同', signingCompany: null, newCompany: '虚构转签主体', contractSubjectId: 'fictional-subject', images: [], attachments: [] }]);
+  const source = state.form.contracts[0];
+  assert.equal(source.signingCompany, '虚构转签主体');
+  state.addContract('renew', source);
+  assert.equal(state.form.contracts[1].signingCompany, '虚构转签主体');
+  assert.equal(state.form.contracts[1].contractSubjectId, 'fictional-subject');
+  state.addContract('transfer', source);
+  assert.equal(state.form.contracts[2].originalCompany, '虚构转签主体');
+});
 async function drawer(t, upload, api) {
   const context = await mount(t, 'EmployeeCreateDrawer.vue', { modelValue: true, departments: [] }, upload, api);
   Object.assign(context.state.form, {

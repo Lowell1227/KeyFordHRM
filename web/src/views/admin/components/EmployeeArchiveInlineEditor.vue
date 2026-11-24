@@ -13,7 +13,7 @@ import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSele
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { archiveFieldPath } from '@/utils/employee-archive-fields';
-import { contractTitle, overlappingContractIds } from '@/utils/employee-contract-presentation';
+import { contractCompany, contractTitle, overlappingContractIds } from '@/utils/employee-contract-presentation';
 import { validateContractDates } from '@/utils/employee-contract-validation';
 import { useContractUploads } from '@/utils/employee-contract-uploads';
 
@@ -233,7 +233,7 @@ function reset() {
       contractType: item.contractType,
       sequence: item.sequence,
       name: item.name,
-      signingCompany: item.signingCompany,
+      signingCompany: contractCompany(item),
       contractSubjectId: item.contractSubjectId ?? undefined,
       signedAt: dateValue(item.signedAt),
       effectiveFrom: dateValue(item.effectiveFrom),
@@ -320,19 +320,20 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); clearTimeout(auto
 onMounted(async () => { positions.value = await positionsApi.findAll({ includeInactive: true }); });
 
 function addContract(kind: ContractAction = 'create', source?: Record<string, any>) {
+  const sourceCompany = source ? contractCompany(source) : '';
   form.contracts.push({
     __key: `new-${Date.now()}-${form.contracts.length}`,
     contractType: kind === 'renew' ? 'renewal' : kind === 'transfer' ? 'transfer' : 'contract',
     sequence: form.contracts.length,
     name: source?.name || '劳动合同',
-    signingCompany: kind === 'transfer' ? '' : source?.signingCompany || form.employee.companyText || '',
-    contractSubjectId: kind === 'transfer' ? undefined : source?.signingCompany
-      ? source.contractSubjectId || undefined : form.employee.contractSubjectId || undefined,
+    signingCompany: kind === 'transfer' ? '' : sourceCompany || form.employee.companyText || '',
+    contractSubjectId: kind === 'transfer' ? undefined : sourceCompany
+      ? source?.contractSubjectId || undefined : form.employee.contractSubjectId || undefined,
     signedAt: null,
     effectiveFrom: null,
     expiresAt: null,
     termType: '',
-    originalCompany: kind === 'transfer' ? source?.signingCompany || form.employee.companyText || '' : '',
+    originalCompany: kind === 'transfer' ? sourceCompany || form.employee.companyText || '' : '',
     newCompany: '',
     confidentialityAgreement: '',
     nonCompeteAgreement: '',

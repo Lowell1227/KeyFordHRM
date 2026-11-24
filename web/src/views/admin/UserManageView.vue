@@ -55,7 +55,7 @@ import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 import { employeeContractStatus, formatEmployeeContractDate } from '@/utils/employee-contract-status';
-import { contractTitle, groupEmployeeContracts, overlappingContractIds } from '@/utils/employee-contract-presentation';
+import { contractCompany, contractTitle, groupEmployeeContracts, overlappingContractIds } from '@/utils/employee-contract-presentation';
 
 type PersonnelView = 'org' | 'users' | 'processing';
 
@@ -2894,7 +2894,7 @@ onBeforeUnmount(() => {
                     <span v-if="contract.termType" class="contract-term-label">{{ contract.termType }}</span>
                   </div>
                   <div class="contract-quick-facts">
-                    <span>{{ contract.signingCompany || '签约公司待补充' }}</span>
+                    <span>{{ contractCompany(contract) || '签约公司待补充' }}</span>
                     <span>{{ formatEmployeeContractDate(contract.effectiveFrom) }} 至 {{ contract.termType?.includes('无固定期限') && !contract.expiresAt ? '无固定期限' : formatEmployeeContractDate(contract.expiresAt) }}</span>
                     <span>材料 {{ (contract.images?.length || 0) + (contract.attachments?.length || 0) }} 份</span>
                   </div>
@@ -2914,7 +2914,7 @@ onBeforeUnmount(() => {
                     <div class="employee-archive__facts">
                       <div><span>类型</span><strong>{{ contractTypeLabels[contract.contractType] || contract.contractType || '未填写' }}</strong></div>
                       <div><span>合同名称</span><strong>{{ contract.name || '未填写' }}</strong></div>
-                      <div><span>签约公司</span><strong>{{ contract.signingCompany || '未填写' }}</strong></div>
+                      <div><span>签约公司</span><strong>{{ contractCompany(contract) || '未填写' }}</strong></div>
                       <div><span>签订日期</span><strong>{{ formatEmployeeContractDate(contract.signedAt) }}</strong></div>
                       <div><span>生效日期</span><strong>{{ formatEmployeeContractDate(contract.effectiveFrom) }}</strong></div>
                       <div><span>到期日期</span><strong>{{ formatEmployeeContractDate(contract.expiresAt) }}</strong></div>
