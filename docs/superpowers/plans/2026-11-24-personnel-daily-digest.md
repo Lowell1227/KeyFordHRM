@@ -6,4 +6,5 @@
 - [x] Expose the projection on a protected HRM page, with overdue groups open and the other groups expandable. Route actions to existing screens.
 - [x] Implement the schedule in Asia/Shanghai, default 09:00. Claim the date in the existing audit table before sending. An ambiguous provider response must never trigger an automatic repeat.
 - [x] Verify signing and dispatch against a fictional webhook response. Deploy API/Web only and check both services.
-- [ ] Load the group's runtime-only webhook and signing secret from the host. Enable delivery and verify the first scheduled message.
+- [x] Load the group's runtime-only webhook and signing secret from the host. Enable delivery and verify the running configuration and account scope.
+- [ ] Verify the first scheduled message against the delivery audit and the target DingTalk group.
