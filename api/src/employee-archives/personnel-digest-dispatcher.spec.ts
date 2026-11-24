@@ -28,7 +28,7 @@ function fixture() {
     auditLog,
     user: { findUnique: jest.fn().mockResolvedValue({ id: 'hr', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] }) },
   };
-  const digest = { list: jest.fn().mockResolvedValue({ items: [] }) };
+  const digest = { list: jest.fn().mockResolvedValue({ items: [], reminderDays: { contract: 25, probation: 10 } }) };
   const dispatcher = new PersonnelDigestDispatcher(prisma as unknown as PrismaService, config as ConfigService,
     digest as unknown as PersonnelDigestService);
   return { dispatcher, settings, auditLog, prisma, digest };
@@ -59,6 +59,7 @@ describe('daily personnel digest delivery', () => {
     const timestamp = sent.searchParams.get('timestamp');
     expect(sent.searchParams.get('sign')).toBe(createHmac('sha256', secret).update(timestamp + '\n' + secret).digest('base64'));
     expect(String(options?.body)).toContain('今日暂无待办');
+    expect(String(options?.body)).toContain('合同未来 25 天、试用期未来 10 天');
     expect(auditLog.update).toHaveBeenCalledWith(expect.objectContaining({ data: { newValue: { state: 'accepted', day: '2026-11-28', total: 0 } } }));
   });
 

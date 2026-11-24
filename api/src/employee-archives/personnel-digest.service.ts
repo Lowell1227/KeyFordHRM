@@ -5,7 +5,7 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { currentArchiveFactsSelect, loadCurrentArchiveIssues } from './employee-archive-current-issues';
 import { activeApplicationWhere } from './employee-data-change-view';
-import { addDays, contractDeadline, dateKey, digestDay, digestKinds, projectApplication, type DigestItem } from './personnel-digest';
+import { addDays, contractDeadline, dateKey, defaultDigestReminderDays, digestDay, digestKinds, projectApplication, type DigestItem } from './personnel-digest';
 
 @Injectable()
 export class PersonnelDigestService {
@@ -36,8 +36,12 @@ export class PersonnelDigestService {
       const item = projectApplication(row, viewer.id, day);
       return item ? [item] : [];
     });
-    const probationHorizon = addDays(day, this.window('PERSONNEL_DIGEST_PROBATION_DAYS', 14));
-    const contractHorizon = addDays(day, this.window('PERSONNEL_DIGEST_CONTRACT_DAYS', 30));
+    const reminderDays = {
+      probation: this.window('PERSONNEL_DIGEST_PROBATION_DAYS', defaultDigestReminderDays.probation),
+      contract: this.window('PERSONNEL_DIGEST_CONTRACT_DAYS', defaultDigestReminderDays.contract),
+    };
+    const probationHorizon = addDays(day, reminderDays.probation);
+    const contractHorizon = addDays(day, reminderDays.contract);
     for (const person of staff) {
       const common = { id: person.id, employee: person.name, link: '/users?employeeId=' + person.id };
       const planned = dateKey(person.plannedRegularDate);
@@ -54,7 +58,7 @@ export class PersonnelDigestService {
       }
     }
     items.sort((a, b) => (a.due ?? '9999').localeCompare(b.due ?? '9999') || a.employee.localeCompare(b.employee, 'zh-CN'));
-    return { day, items, kinds: digestKinds };
+    return { day, items, kinds: digestKinds, reminderDays };
   }
 
   private window(name: string, fallback: number) {

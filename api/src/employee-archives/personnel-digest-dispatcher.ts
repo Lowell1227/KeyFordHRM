@@ -51,7 +51,7 @@ export class PersonnelDigestDispatcher {
         this.logger.warn('人事待办推送凭据格式无效');
         return;
       }
-      const { items } = await this.digest.list(actor, day);
+      const { items, reminderDays } = await this.digest.list(actor, day);
       const fetchedAt = digestDay(new Date());
       if (fetchedAt.day !== day || fetchedAt.time.slice(0, 2) !== sendTime.slice(0, 2)) return;
       const claim = await this.prisma.auditLog.createMany({
@@ -70,7 +70,7 @@ export class PersonnelDigestDispatcher {
         const response = await fetch(url, {
           method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000),
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(digestBody(day, items, origin + '/personnel-digest')),
+          body: JSON.stringify(digestBody(day, items, origin + '/personnel-digest', reminderDays)),
         });
         if (response.ok) {
           const receipt: { errcode?: unknown } = await response.json();

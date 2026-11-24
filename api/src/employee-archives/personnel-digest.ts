@@ -107,15 +107,46 @@ export function projectApplication(row: Application, viewer: string, day: string
   return null;
 }
 
-export function digestBody(day: string, items: DigestItem[], link: string) {
-  const counts = Object.entries(digestKinds).map(([kind, name]) =>
-    [name, items.filter(item => item.kind === kind).length] as const);
+export const defaultDigestReminderDays = { contract: 30, probation: 14 };
+
+function deadlineLines(day: string, items: DigestItem[], kind: 'contract' | 'probation') {
+  let today = 0;
+  let overdue = 0;
+  let upcoming = 0;
+  const remaining = new Map<number, number>();
+  for (const item of items) {
+    if (item.kind !== kind || !item.due) continue;
+    if (item.due < day) overdue++;
+    else if (item.due === day) today++;
+    else {
+      upcoming++;
+      const days = (Date.parse(item.due) - Date.parse(day)) / 86_400_000;
+      remaining.set(days, (remaining.get(days) ?? 0) + 1);
+    }
+  }
+  const label = kind === 'contract' ? '合同' : '试用期';
+  const lines = [`- **${label}** · 即将到期 ${upcoming} 项 · 今日到期 ${today} 项 · 已逾期 ${overdue} 项`];
+  if (upcoming) {
+    const nearest = [...remaining].sort(([a], [b]) => a - b).slice(0, 3);
+    const breakdown = nearest.map(([days, count]) => `剩 ${days} 天 ${count} 项`).join('、');
+    const other = upcoming - nearest.reduce((sum, [, count]) => sum + count, 0);
+    lines.push('  - ' + breakdown + (other ? `、其余 ${other} 项见 HRM` : ''));
+  }
+  return lines;
+}
+
+export function digestBody(day: string, items: DigestItem[], link: string, reminderDays = defaultDigestReminderDays) {
+  const line = (kind: 'arrival' | 'returned' | 'archive' | 'resignation') =>
+    digestKinds[kind] + ' ' + items.filter(item => item.kind === kind).length + ' 项';
   const overdue = items.filter(item => item.due && item.due < day).length;
   const title = '余焱玲｜人事待办概况';
   const text = [
     '### ' + title,
-    day + ' · ' + (items.length ? '待办 ' + items.length + ' 项（其中逾期 ' + overdue + ' 项）' : '今日暂无待办'),
-    counts.map(([name, count]) => name + ' ' + count).join(' · '),
+    day + ' · ' + (items.length ? `**待办 ${items.length} 项** · **逾期 ${overdue} 项**` : '今日暂无待办'),
+    ['**到期提醒**', ...deadlineLines(day, items, 'contract'), ...deadlineLines(day, items, 'probation')].join('\n'),
+    ['**其他待办**', '- ' + line('arrival') + ' · ' + line('returned'),
+      '- ' + line('resignation') + ' · ' + line('archive')].join('\n'),
+    `**说明** · 按自然日计算。即将到期统计合同未来 ${reminderDays.contract} 天、试用期未来 ${reminderDays.probation} 天。今日到期单列，过了到期日计为逾期。`,
     '[查看 HRM 人事待办](' + link + ')',
   ].join('\n\n');
   return { msgtype: 'markdown', markdown: { title, text } };

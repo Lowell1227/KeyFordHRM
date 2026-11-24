@@ -48,4 +48,18 @@ describe('personnel digest', () => {
     expect(digestBody('2026-11-24', [], 'https://example.com/personnel-digest').markdown.text)
       .toContain('今日暂无待办');
   });
+
+  it('separates upcoming, today and overdue reminders and lists time remaining in order', () => {
+    const contracts = ['2026-12-17', '2026-11-24', '2026-11-23', '2026-12-01', '2026-12-01'].map(due => ({
+      id: 'private-id', employee: '虚构姓名', kind: 'contract' as const, due, next: '', link: '',
+    }));
+    const { markdown } = digestBody('2026-11-24', contracts, 'https://example.com/personnel-digest');
+    expect(markdown.text).toContain('**到期提醒**');
+    expect(markdown.text).toContain('**合同** · 即将到期 3 项 · 今日到期 1 项 · 已逾期 1 项');
+    expect(markdown.text).toContain('剩 7 天 2 项、剩 23 天 1 项');
+    expect(markdown.text).toContain('合同未来 30 天、试用期未来 14 天');
+    expect(markdown.text).not.toContain('2026-12-01');
+    expect(markdown.text).not.toContain('2026-12-17');
+    expect(markdown.text).not.toContain('虚构姓名');
+  });
 });
