@@ -249,6 +249,18 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: '面试邀约', activeNavigationPath: '/talent-interviews' },
   },
   {
+    path: '/personnel-digest',
+    name: 'PersonnelDigest',
+    component: () => import('@/views/employee-archives/PersonnelDigestView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '人事待办',
+      roles: ['hr', 'system_admin'],
+      hrCapabilities: ['employee_archive_edit', 'employee_archive_review'],
+      activeNavigationPath: '/entry-exit',
+    },
+  },
+  {
     path: '/personnel-processing',
     name: 'PersonnelProcessing',
     redirect: to => ({ path: '/entry-exit', query: to.query, hash: to.hash }),
