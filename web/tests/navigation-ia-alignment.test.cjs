@@ -51,12 +51,13 @@ for (const [label, actor, talent, hiring] of matrix) test(`IA role matrix: ${lab
   assert.equal(canAccessRoute(route('TalentInterviews'), actor), true); // own queue, server filters objects
 });
 
-test('personnel and performance ownership, defaults and all four performance groups', () => {
+test('personnel and performance ownership, defaults and probation placement', () => {
   const nav = buildNavigation(routes, user('hr', [], { canViewReports: true }));
   const performance = nav.find(item => item.key === 'performance');
-  assert.deepEqual(performance.groups.map(group => group.label), ['绩效任务', '绩效运营', '绩效分析', '绩效设置']);
-  assert.equal(route('ConfirmationManage').meta.navigation.module, 'people');
-  assert.equal(route('ConfirmationMine').meta.navigation.module, 'people');
+  assert.deepEqual(performance.groups.map(group => group.label), ['绩效任务', '绩效运营', '试用期与转正', '绩效分析', '绩效设置']);
+  assert.equal(route('ConfirmationManage').meta.navigation.module, 'performance');
+  assert.equal(route('ConfirmationMine').meta.navigation.module, 'performance');
+  assert.deepEqual(nav.find(item => item.key === 'people').groups.map(group => group.label), ['人员档案']);
   assert.equal(route('BasicData').meta.navigation.label, '人事基础资料');
   assert.equal(route('Dashboard').meta.title, '全局工作台');
   assert.equal(route('MyTasks').meta.title, '绩效任务');
@@ -65,6 +66,23 @@ test('personnel and performance ownership, defaults and all four performance gro
   assert.equal(buildNavigation(routes, user('employee', ['talent_hiring_confirm'])).find(item => item.key === 'recruitment').defaultPath, '/talent-hiring');
   assert.equal(routes.filter(item => item.path === '/entry-exit' && item.meta.navigation).length, 1);
   assert.equal(route('PersonnelLifecycle').meta.navigation.module, 'people');
+});
+
+test('personnel and performance operators retain separate management capabilities', () => {
+  const personnel = user('hr_user', ['employee_archive_edit', 'organization_edit']);
+  const performance = user('hr_user', ['cycle_plan_edit', 'cycle_plan_review', 'performance_calibration', 'performance_publish', 'confirmation_manage']);
+  for (const actor of [personnel, performance]) {
+    const nav = buildNavigation(routes, actor);
+    const probation = nav.find(item => item.key === 'performance').groups.find(group => group.key === 'performance-probation');
+    assert.ok(probation);
+    assert.equal(probation.label, '试用期与转正');
+    assert.equal(probation.items.some(item => item.name === 'ConfirmationManage'), actor === performance);
+    assert.ok(probation.items.some(item => item.name === 'ConfirmationMine'));
+    assert.equal(nav.some(item => item.key === 'people'), actor === personnel);
+    assert.equal(canAccessRoute(route('Users'), actor), actor === personnel);
+  }
+  assert.equal(canAccessRoute(route('ConfirmationManage'), personnel), false);
+  assert.equal(canAccessRoute(route('ConfirmationManage'), user('employee', [], { canHandleConfirmationApprovals: true })), true);
 });
 
 test('preserves public share and existing legacy deep-link object/query/hash', () => {

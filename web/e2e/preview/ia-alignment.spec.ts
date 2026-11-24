@@ -115,7 +115,7 @@ test('three-size navigation, collapse/reload, real queues, notification/share an
     await page.setViewportSize(size);
     await page.getByTestId('nav-module-performance').click();
     await expect(page.getByTestId('app-route-title')).toHaveText('绩效任务');
-    await expect(page.locator('.menu-group__title')).toHaveText(['绩效任务', '绩效运营', '绩效分析', '绩效设置']);
+    await expect(page.locator('.menu-group__title')).toHaveText(['绩效任务', '绩效运营', '试用期与转正', '绩效分析', '绩效设置']);
     const settings = page.getByRole('button', { name: '绩效设置', exact: true });
     if (size.width > 768) {
       await settings.click(); await expect(settings).toHaveAttribute('aria-expanded', 'false');
@@ -139,8 +139,10 @@ test('three-size navigation, collapse/reload, real queues, notification/share an
     await page.getByTestId('nav-module-people').click();
     await expect(page.locator('.menu-panel').getByRole('button', { name: '人才库', exact: true })).toHaveCount(0);
     await expect(page.locator('.menu-panel').getByRole('button', { name: '人事基础资料', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '转正管理', exact: true })).toHaveCount(0);
+    await page.getByTestId('nav-module-performance').click();
     await page.getByRole('button', { name: '转正管理', exact: true }).click();
-    await expect(page.getByTestId('nav-module-people')).toHaveClass(/is-active/);
+    await expect(page.getByTestId('nav-module-performance')).toHaveClass(/is-active/);
     await page.getByTestId('nav-module-recruitment').click();
     await expect(page).toHaveURL(/\/talents$/);
     await page.getByRole('button', { name: '应聘与面试', exact: true }).click();

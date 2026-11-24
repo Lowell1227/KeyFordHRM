@@ -20,7 +20,7 @@ test.describe("02-role-menu-visibility navigation employee", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, ["工作台", "绩效", "人员"]);
+    await expectModules(dashboard, ["工作台", "绩效"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("绩效任务")).toBeVisible();
     await expect(dashboard.menuItem("目标跟进")).toHaveCount(0);
@@ -41,7 +41,7 @@ test.describe("02-role-menu-visibility navigation manager", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, ["工作台", "绩效", "人员"]);
+    await expectModules(dashboard, ["工作台", "绩效"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("绩效任务")).toBeVisible();
     await expect(dashboard.menuItem("绩效面谈")).toHaveCount(0);
@@ -73,13 +73,15 @@ test.describe("02-role-menu-visibility navigation HR", () => {
     await expect(dashboard.groupTitle("绩效设置")).toBeVisible();
     await expect(dashboard.menuItem("指标库")).toBeVisible();
     await expect(dashboard.menuItem("考核模板")).toBeVisible();
+    await expect(dashboard.groupTitle("试用期与转正")).toBeVisible();
+    await expect(dashboard.menuItem("转正管理")).toBeVisible();
+    await expect(dashboard.menuItem("我的转正申请")).toBeVisible();
     await dashboard.openModule("people");
     await expect(dashboard.groupTitle("人员档案")).toBeVisible();
     await expect(dashboard.menuItem("员工档案")).toBeVisible();
     await expect(dashboard.menuItem("人事基础资料")).toBeVisible();
-    await expect(dashboard.groupTitle("试用与转正")).toBeVisible();
-    await expect(dashboard.menuItem("转正管理")).toBeVisible();
-    await expect(dashboard.menuItem("我的转正申请")).toBeVisible();
+    await expect(dashboard.menuItem("转正管理")).toHaveCount(0);
+    await expect(dashboard.menuItem("我的转正申请")).toHaveCount(0);
     await expect(dashboard.menuItem("人才库")).toHaveCount(0);
     await dashboard.openModule("recruitment");
     await expect(page).toHaveURL(/\/talents(?:\?|$)/);

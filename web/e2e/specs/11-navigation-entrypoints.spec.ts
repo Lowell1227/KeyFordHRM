@@ -212,12 +212,11 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
     expect(modules.map((module) => module.label)).toEqual([
       "工作台",
       "绩效",
-      "人员",
     ]);
     const people = modules.find((module) => module.key === "people");
-    expect(people?.groups.map((group) => group.label)).toEqual([
-      "试用与转正",
-    ]);
+    expect(people).toBeUndefined();
+    expect(modules.find((module) => module.key === "performance")?.groups
+      .find((group) => group.key === "performance-probation")?.label).toBe("试用期与转正");
     expect(JSON.stringify(modules)).not.toContain("团队绩效");
     expect(JSON.stringify(modules)).not.toContain("考勤");
     expect(JSON.stringify(modules)).not.toContain("目标跟进");
@@ -260,22 +259,19 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
           "申诉记录",
         ],
       },
+      { label: "试用期与转正", items: ["转正管理", "我的转正申请"] },
       { label: "绩效分析", items: ["绩效报表"] },
       { label: "绩效设置", items: ["指标库", "考核模板"] },
     ]);
     const people = modules.find((module) => module.key === "people");
     expect(
       people?.groups.map((group) => group.label),
-    ).toEqual(["人员档案", "试用与转正"]);
+    ).toEqual(["人员档案"]);
     expect(people?.groups[0].items.map((item) => item.label)).toEqual([
       "员工档案",
       "组织架构",
       "人事基础资料",
       "入离职",
-    ]);
-    expect(people?.groups[1].items.map((item) => item.label)).toEqual([
-      "转正管理",
-      "我的转正申请",
     ]);
     const recruitment = modules.find((module) => module.key === "recruitment");
     expect(recruitment?.defaultPath).toBe("/talents");
