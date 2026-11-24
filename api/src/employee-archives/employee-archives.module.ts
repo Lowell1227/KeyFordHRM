@@ -20,7 +20,7 @@ import { PersonnelDigestService } from './personnel-digest.service';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [ArchiveAssistantController, EmployeeArchiveIssuesController, EmployeeArchivesController, PersonnelDigestController],
+  controllers: [ArchiveAssistantController, PersonnelDigestController, EmployeeArchiveIssuesController, EmployeeArchivesController],
   providers: [
     ArchiveAssistantService,
     EmployeeArchivesService,
