@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { PrismaService } from '@/prisma/prisma.service';
 import type { ArchiveIssue } from './employee-archive-issues';
 import { shanghaiBusinessDate } from './employment-timeline';
+import { explainContractOverlap } from './contract-overlap-explanations';
 
 type Facts = Record<string, any>;
 type Context = { at?: Date; proposals?: any[]; exemptions?: Array<{ issueId: string; fingerprint: string; isExempt: boolean; version?: number }> };
@@ -42,6 +43,7 @@ export function currentArchiveIssues(user: Facts, context: Context = {}): Archiv
   const notApplicable = context.proposals?.some(value => object(value).hrConfirmation20261123?.questions?.some((q: Facts) => q.contractApplicability === '不适用'));
   if (!contracts.length && !notApplicable) add('contract-missing', 'contracts', '合同或协议资料待核实', '没有可查看的合同或协议记录', '有合同请补资料；如未签、不适用或历史资料暂缺，请说明实际情况。', []);
   const pairs: string[] = [], overlapping = new Set<string>();
+  const details: NonNullable<ArchiveIssue['details']> = [];
   for (let i = 0; i < contracts.length; i++) for (let j = i + 1; j < contracts.length; j++) {
     const a = contracts[i], b = contracts[j], aStart = date(a.effectiveFrom), bStart = date(b.effectiveFrom);
     if (!aStart || !bStart) continue;
@@ -50,11 +52,16 @@ export function currentArchiveIssues(user: Facts, context: Context = {}): Archiv
     if (aStart <= (bEnd ?? '9999-12-31') && bStart <= (aEnd ?? '9999-12-31')) {
       overlapping.add(a.id); overlapping.add(b.id);
       pairs.push(`${a.name ?? '合同'}（${aStart}至${aEnd ?? '无固定期限'}）与${b.name ?? '合同'}（${bStart}至${bEnd ?? '无固定期限'}）`);
+      const explanation = explainContractOverlap(a, b);
+      details.push({ title: safeArchiveIssueText(explanation.title), records: safeArchiveIssueText(explanation.records),
+        reason: safeArchiveIssueText(explanation.reason), suggestion: safeArchiveIssueText(explanation.suggestion) });
     }
   }
   if (pairs.length) add('contract-overlap', 'contracts', '合同交叠：请核对替代或并存关系', pairs.join('\n'),
     '交叠不一定填错。若转签替代，请补原合同实际结束情况；若确实并存或只是公司变更协议，可说明原因。不会自动截断日期。',
     contractFacts.filter((c: Facts) => overlapping.has(c.id)), [...overlapping]);
+  const overlapIssue = result.find(i => i.id === 'current:contract-overlap');
+  if (overlapIssue) overlapIssue.details = details;
   const expired = contractFacts.filter((c: Facts) => c.end && c.end < today);
   if (working && expired.length && contractFacts.every((c: Facts) => c.end && c.end < today || c.start && c.start > today)) {
     add('contract-expired', 'contracts', '在岗，但已记录合同已到期', `最新已结束合同到期日：${expired.map((c: Facts) => c.end).sort().at(-1)}`,
@@ -67,7 +74,8 @@ export const currentArchiveFactsSelect = {
   id: true, accountType: true, archivedAt: true, deletedAt: true, status: true, entryDate: true, leaveDate: true,
   actualRegularDate: true, deptId: true,
   employeeProfile: { select: { housingFundStartDate: true, socialSecurityStartDate: true } },
-  employeeContracts: { select: { id: true, isActive: true, contractType: true, effectiveFrom: true, expiresAt: true, termType: true, name: true } },
+  employeeContracts: { select: { id: true, isActive: true, contractType: true, effectiveFrom: true, expiresAt: true, termType: true, name: true,
+    signingCompany: true, originalCompany: true, newCompany: true } },
 } as const;
 
 /** Batched list/filter projection; no writes, decrypted fields or source-to-current mappings. */
