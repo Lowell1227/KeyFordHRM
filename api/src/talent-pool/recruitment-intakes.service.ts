@@ -13,7 +13,7 @@ import { assertRecruitmentEditor } from './talent-recruitment-policy';
 import { TALENT_SOURCE_CHANNELS } from './talent.constants';
 import { CreateTalentDto } from './dto/create-talent.dto';
 import { RecruitmentMailboxGateway, normalizeRecruitmentMailboxPage, recruitmentMailUnits } from './recruitment-mail-gateway';
-import { recruitmentSourceTx, sourceFingerprint, sourceOwner } from './recruitment-postings.service';
+import { lockRecruitmentSources, recruitmentSourceTx, sourceFingerprint, sourceOwner } from './recruitment-postings.service';
 import { AssociateRecruitmentIntakeDto, CloseRecruitmentIntakeDto, ConfirmRecruitmentIntakeDto, CreateRecruitmentIntakeDto, ParseRecruitmentIntakeDto, RecruitmentIntakeQueryDto, SyncRecruitmentMailboxDto, UpdateRecruitmentIntakeDto } from './recruitment-intakes.dto';
 import type { RecruitmentIntakeView, RecruitmentMailboxSyncView } from './recruitment-intakes.types';
 
@@ -148,6 +148,8 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
     const where:Prisma.RecruitmentIntakeWhereInput={...(query.state?{state:query.state}:{}),...(query.ownerId?{ownerId:query.ownerId}:{}),
       ...(query.demandId?{demandId:query.demandId}:{}),...(query.postingId?{postingId:query.postingId}:{}),...(query.sourceChannel?{sourceChannel:query.sourceChannel}:{}),
       ...(keyword?{OR:['positionName','sourceNotes','subject'].map(field=>({[field]:{contains:keyword,mode:'insensitive'}}))}:{})};
+    if(query.workQueue)where.AND=[{associatedToId:null},query.workQueue==='assignment'
+      ? {demandId:null,state:{in:OPEN}} : {demandId:{not:null},state:{in:['pending_review','needs_material']}}];
     const [rows,total]=await this.db.$transaction([this.db.recruitmentIntake.findMany({where,include,orderBy:[{updatedAt:'desc'},{id:'asc'}],skip:(query.page-1)*query.pageSize,take:query.pageSize}),this.db.recruitmentIntake.count({where})]);
     return {items:await Promise.all(rows.map(row=>this.view(row))),total,page:query.page,pageSize:query.pageSize};
   }
@@ -308,8 +310,9 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
   async confirm(id:string,input:ConfirmRecruitmentIntakeDto,user:AuthUser) {
     await assertRecruitmentEditor(this.db,user);
     const fingerprint=sourceFingerprint({mode:input.mode,existingCandidateId:input.existingCandidateId,candidate:input.candidate,
-      application:input.application,existingApplicationId:input.existingApplicationId});
+      application:input.application,existingApplicationId:input.existingApplicationId,expectedExistingApplicationRevision:input.expectedExistingApplicationRevision});
     try { await this.db.$transaction(async tx=>{
+      await lockRecruitmentSources(tx,user);
       await this.lock(tx,user);const old=await this.row(tx,id);
       const previous=await tx.recruitmentIntake.findUnique({where:{confirmRequestId:input.requestId}});
       if(previous) {
@@ -340,10 +343,13 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
       let applicationId:string|null=null;
       if(input.mode==='candidate_application') {
         if(!input.application?.positionName?.trim())throw new BadRequestException('入库并创建应聘须明确确认应聘岗位');
-        const fields=input.application;
+        if(input.application.sourceChannel!=null&&input.application.sourceChannel!==old.sourceChannel)throw new ConflictException('本次应聘来源与已核对收件来源不一致，请先核对来源');
+        if(old.demandId&&input.application.intentDemandId!==undefined&&input.application.intentDemandId!==old.demandId)throw new ConflictException('本次应聘意向与收件关联需求不一致，请先核对收件归属');
+        const fields={...input.application,sourceChannel:old.sourceChannel,intentDemandId:input.application.intentDemandId??old.demandId};
         const same=await tx.talentApplication.findMany({where:{candidateId,positionName:fields.positionName.trim(),deptId:fields.deptId??null},select:{id:true}});
         if(input.existingApplicationId) {
           if(!same.some(app=>app.id===input.existingApplicationId))throw new ConflictException('选择复用的应聘与本人才、部门或岗位不一致');
+          await this.recruitment.reuseForIntake(tx,input.existingApplicationId,candidateId,fields,input.expectedExistingApplicationRevision,user);
           applicationId=input.existingApplicationId;
         } else {
           if(same.length)throw new ConflictException({message:'该人才已有同部门同岗位应聘，请明确选择原应聘办理',data:{reason:'TALENT_APPLICATION_EXISTS',applicationIds:same.map(app=>app.id)}});

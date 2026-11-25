@@ -191,6 +191,18 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
       if (phone.value?.exists) { await loadExisting(); if (!existingProfile.value || existingError.value) { error.value = '请先读取并核对已有档案及应聘。'; return; } }
       const existingApp = existingApplications.value.find(item => item.id === existingApplicationId.value);
       if (mode === 'candidate_application' && existingApplicationId.value && (!reuseExisting.value || !existingApp || existingApp.candidateId !== phone.value?.candidate?.id || existingApp.deptId !== application.deptId || existingApp.positionName !== application.positionName.trim())) { error.value = '请重新核对已有应聘的人员、部门和岗位。'; return; }
+      if (mode === 'candidate_application' && existingApp && existingApp.intentDemandId && existingApp.intentDemandId !== (form.demandId || null)) {
+        error.value = '已有应聘的意向需求与本次收件不同，请先到原应聘核对归属；当前输入已保留，不会自动改归属。'; return;
+      }
+      if (mode === 'candidate_application' && existingApp) {
+        if (!Number.isSafeInteger(existingApp.revision) || existingApp.revision < 0) { error.value = '已有应聘版本不可用，请重新读取原应聘后核对。'; return; }
+        if (!existingApp.intentDemandId && form.demandId) {
+          const selection = JSON.stringify([existingApplicationId.value, form.demandId, form.sourceChannel, application]);
+          try { await ElMessageBox.confirm('该应聘尚无意向需求。本次将明确关联到已核对的收件需求，保留原应聘来源和历史录用快照。', '确认首次关联意向需求', { confirmButtonText: '关联需求并复用应聘', cancelButtonText: '继续核对', type: 'warning' }); }
+          catch { return; }
+          if (context !== epoch || selection !== JSON.stringify([existingApplicationId.value, form.demandId, form.sourceChannel, application])) return;
+        }
+      }
       if (mode === 'candidate_application' && !existingApplicationId.value && (!application.deptId || !application.positionName.trim() || !application.ownerId)) { error.value = '请明确确认本次应聘的部门、岗位和负责人。'; return; }
       if (context !== epoch || !canEdit.value || current.value?.id !== row.id) return;
       if (dirty.value) {
@@ -199,7 +211,8 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
       }
       confirmIntent.value = { requestId: crypto.randomUUID(), expectedRevision: revision.value, mode,
         ...(phone.value?.exists ? { existingCandidateId: phone.value.candidate!.id } : { candidate: { ...compactDraft(draft.value), ownerId: form.ownerId } }),
-        ...(mode === 'candidate_application' ? { application: { deptId: application.deptId, positionName: application.positionName.trim(), ownerId: application.ownerId }, ...(existingApplicationId.value ? { existingApplicationId: existingApplicationId.value } : {}) } : {}) };
+        ...(mode === 'candidate_application' ? { application: { deptId: application.deptId, positionName: application.positionName.trim(), ownerId: application.ownerId,
+          intentDemandId: form.demandId || null, sourceChannel: form.sourceChannel || null }, ...(existingApp ? { existingApplicationId: existingApp.id, expectedExistingApplicationRevision: existingApp.revision } : {}) } : {}) };
     }
     const token = epoch; busy.value = true; error.value = ''; result.value = '';
     try { const saved = await recruitmentIntakesApi.confirm(row.id, copy(confirmIntent.value)); if (token !== epoch || !canEdit.value) return;

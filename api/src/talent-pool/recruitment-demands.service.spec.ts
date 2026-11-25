@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, ServiceUnav
 import { RecruitmentDemandsService } from './recruitment-demands.service';
 import type { AuthUser } from '@/common/types/auth.types';
 import type { RecruitmentDemandSource } from './recruitment-demands.types';
-import { RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto } from './recruitment-demands.dto';
+import { RecruitmentDemandIntentOptionsQueryDto, RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto } from './recruitment-demands.dto';
 import { randomUUID } from 'node:crypto';
 
 const actor = { id: 'editor', name: 'Synthetic editor', sysRole: 'employee', status: 'active', hrCapabilities: ['recruitment_edit'] };
@@ -84,6 +84,17 @@ function setup() {
 }
 
 describe('recruitment demand ledger', () => {
+  it('offers paginated early intents without requiring an application or performing remote verification', async () => {
+    const f = setup(); await f.sync(); await f.map();
+    f.gateway.verifyForSubmission.mockClear();
+    f.tx.talentApplication.findUnique.mockClear();
+    const query = Object.assign(new RecruitmentDemandIntentOptionsQueryDto(), { deptId: f.department.id, positionName: f.position.name });
+    expect(await f.sut.intentOptions(query, user)).toMatchObject({ total: 1, items: [{ id: 'demand-1', usable: true }] });
+    expect(f.tx.talentApplication.findUnique).not.toHaveBeenCalled();
+    expect(f.gateway.verifyForSubmission).not.toHaveBeenCalled();
+    f.currentActor.hrCapabilities = [];
+    await expect(f.sut.intentOptions(query, user)).rejects.toThrow(ForbiddenException);
+  });
   it('requires fresh one-use proof and rechecks local versions after the remote read', async () => {
     const f = setup(); await f.sync(); await f.map();
     await expect(f.sut.assertSubmission(f.tx, f.application, 'demand-1', 2, user)).rejects.toThrow(ConflictException);

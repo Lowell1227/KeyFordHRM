@@ -74,6 +74,11 @@ function validateProfile(value, scope) {
   return value;
 }
 
+function windowsProfileEnvironment(file, parent = process.env) {
+  return { ...parent, HRM_MAIL_PROFILE_PATH: file,
+    PSModulePath: path.win32.join(parent.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'Modules') };
+}
+
 async function readProfile(scope) {
   if (process.platform !== 'win32') throw new Error('WINDOWS_PROFILE_REQUIRED');
   const file = profilePath(scope);
@@ -82,7 +87,7 @@ async function readProfile(scope) {
     const stat = lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) throw new Error('Invalid local profile');
     text = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', DECRYPT_SCRIPT], {
-      env: { ...process.env, HRM_MAIL_PROFILE_PATH: file }, encoding: 'utf8', windowsHide: true,
+      env: windowsProfileEnvironment(file), encoding: 'utf8', windowsHide: true,
       timeout: 20000, maxBuffer: 65536, stdio: ['ignore', 'pipe', 'pipe'],
     });
     return validateProfile(JSON.parse(text), scope);
@@ -113,7 +118,7 @@ async function runProbe(scope, dependencies = {}) {
   } finally { profile = undefined; }
 }
 
-module.exports = { parseArguments, profilePath, validateProfile, runProbe, DECRYPT_SCRIPT };
+module.exports = { parseArguments, profilePath, validateProfile, runProbe, DECRYPT_SCRIPT, windowsProfileEnvironment };
 if (require.main === module) {
   Promise.resolve().then(() => runProbe(parseArguments(process.argv.slice(2)))).then(result => process.stdout.write(JSON.stringify(result) + '\n')).catch(error => {
     const safe = ['LOCAL_PROFILE_UNAVAILABLE', 'WINDOWS_PROFILE_REQUIRED', 'APPROVED_SCOPE_MISMATCH', 'MAIL_CONNECT_FAILED'];

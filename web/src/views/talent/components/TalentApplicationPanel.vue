@@ -16,8 +16,9 @@ import { useAuthStore } from '@/stores/auth.store';
 import type { Department } from '@/types/api.types';
 import {
   APPLICATION_ACTION_LABELS, APPLICATION_STAGE_LABELS,
-  TALENT_RESERVE_REASON_LABELS,
+  TALENT_RESERVE_REASON_LABELS, TALENT_SOURCE_CHANNELS, TALENT_SOURCE_LABELS,
   type TalentApplicationAction, type TalentApplicationMatch, type TalentApplicationView, type TalentRecruitmentOwner, type TalentReserveReason,
+  type TalentSourceChannel,
 } from '@/types/talent.types';
 import { formatDate } from '@/utils/date';
 
@@ -41,7 +42,7 @@ const actionResultUnknown = ref(false);
 const selectionError = ref('');
 const editing = ref(false), creating = ref(false), formRef = ref<FormInstance>();
 const createRequestId = ref('');
-const form = reactive({ positionName: '', recruitmentBatch: '', deptId: '', ownerId: '', expectedEntryDate: '' });
+const form = reactive({ positionName: '', recruitmentBatch: '', deptId: '', ownerId: '', expectedEntryDate: '', intentDemandId: '', intentChangeReason: '', sourceChannel: '' as TalentSourceChannel | '' });
 const owners = ref<TalentRecruitmentOwner[]>([]), departments = ref<Array<{ id: string; name: string; isActive: boolean }>>([]);
 const departmentsLoaded = ref(false), departmentError = ref('');
 const optionsError = ref(''), searching = ref(false);
@@ -50,6 +51,13 @@ const reserveReasons = ref<TalentReserveReason[]>([]);
 const selectedDemand = ref<RecruitmentDemandView | null>(null), demandRows = ref<RecruitmentDemandView[]>([]);
 const demandError = ref(''), demandLoadError = ref(''), demandLoading = ref(false), demandPage = ref(1), demandTotal = ref(0), demandKeyword = ref('');
 const demandConnection = ref<RecruitmentDemandStatus | null>(null), demandDirectories = ref<RecruitmentDemandDirectories | null>(null);
+const intentRows = ref<RecruitmentDemandView[]>([]), intentSelected = ref<RecruitmentDemandView | null>(null);
+const intentLoading = ref(false), intentChoosing = ref(false), intentError = ref(''), intentLoadError = ref('');
+const intentPage = ref(1), intentTotal = ref(0), intentKeyword = ref('');
+let intentSession = 0, intentSelection = 0;
+const intentOptions = computed(() => intentSelected.value && !intentRows.value.some(row => row.id === intentSelected.value!.id)
+  ? [intentSelected.value, ...intentRows.value] : intentRows.value);
+const intentChanged = computed(() => !creating.value && (current.value?.intentDemandId || '') !== form.intentDemandId);
 let session = 0, ownerSearch = 0, optionSession = 0, demandSession = 0;
 const demandOptions = computed(() => selectedDemand.value && !demandRows.value.some(row => row.id === selectedDemand.value!.id)
   ? [selectedDemand.value, ...demandRows.value] : demandRows.value);
@@ -155,12 +163,13 @@ async function select(id: string, keepInputs = false) {
 watch([() => props.candidateId, () => props.applicationMatch?.id,
   () => props.applicationMatch?.applicationPosition, () => props.applicationMatch?.applicationStage,
   () => props.applicationMatch?.applicationOwnerId], () => {
-  ++session; ++ownerSearch; ++optionSession; ++demandSession; rows.value = []; selectedId.value = ''; current.value = null;
+  ++session; ++ownerSearch; ++optionSession; ++demandSession; ++intentSession; ++intentSelection; rows.value = []; selectedId.value = ''; current.value = null;
+  intentRows.value = []; intentSelected.value = null; intentLoading.value = false; intentChoosing.value = false;
   selectedDemand.value = null; demandRows.value = []; demandLoading.value = false;
   hiringNeedsRefresh.value = false; actionResult.value = ''; confirming.value = false; actionResultUnknown.value = false;
   editing.value = false; command.value = null; busy.value = false; conflict.value = false; selectionError.value = ''; void loadList();
 }, { immediate: true });
-onBeforeUnmount(() => { ++session; ++ownerSearch; ++optionSession; ++demandSession; });
+onBeforeUnmount(() => { ++session; ++ownerSearch; ++optionSession; ++demandSession; ++intentSession; ++intentSelection; });
 
 async function searchOwners(keyword = '') {
   const token = ++ownerSearch, candidateId = props.candidateId;
@@ -192,11 +201,45 @@ async function openEditor(create: boolean, preserveHiring = false) {
   error.value = ''; departmentError.value = ''; conflict.value = false;
   createRequestId.value = create ? crypto.randomUUID() : '';
   const row = create ? null : current.value;
-  Object.assign(form, { positionName: row?.positionName ?? '', recruitmentBatch: row?.recruitmentBatch ?? '', deptId: row?.deptId ?? '', ownerId: row?.ownerId ?? '', expectedEntryDate: row?.expectedEntryDate?.slice(0, 10) ?? '' });
+  Object.assign(form, { positionName: row?.positionName ?? '', recruitmentBatch: row?.recruitmentBatch ?? '', deptId: row?.deptId ?? '', ownerId: row?.ownerId ?? '', expectedEntryDate: row?.expectedEntryDate?.slice(0, 10) ?? '',
+    intentDemandId: row?.intentDemandId || '', intentChangeReason: '', sourceChannel: row?.sourceChannel || '' });
+  ++intentSession; ++intentSelection; intentRows.value = []; intentSelected.value = row?.intentDemandCurrent || null;
+  intentError.value = ''; intentLoadError.value = ''; intentPage.value = 1; intentKeyword.value = ''; intentTotal.value = 0; intentChoosing.value = false;
   owners.value = row ? [{ id: row.ownerId, name: row.ownerName ?? '原应聘负责人', employeeNo: null, deptName: null }] : [];
-  formRef.value?.clearValidate(); void loadOptions();
+  formRef.value?.clearValidate(); void loadOptions(); void loadIntentOptions();
 }
-function resetEditor() { editing.value = false; createRequestId.value = ''; error.value = ''; conflict.value = false; ++ownerSearch; ++optionSession; }
+function resetEditor() { editing.value = false; createRequestId.value = ''; error.value = ''; conflict.value = false; ++ownerSearch; ++optionSession; ++intentSession; ++intentSelection; intentChoosing.value = false; intentLoading.value = false; }
+async function loadIntentOptions(keyword = intentKeyword.value) {
+  if (!editing.value || !props.editable || !canEditRecruitment.value) return;
+  if (keyword !== intentKeyword.value) intentPage.value = 1;
+  intentKeyword.value = keyword;
+  const token = ++intentSession, candidateId = props.candidateId;
+  intentLoading.value = true; intentLoadError.value = '';
+  try {
+    const result = await recruitmentDemandsApi.intentOptions({ keyword: keyword.trim() || undefined, page: intentPage.value, pageSize: 20 });
+    if (token !== intentSession || candidateId !== props.candidateId || !editing.value || !canEditRecruitment.value) return;
+    intentRows.value = result.items; intentTotal.value = result.total;
+  } catch (cause) { if (token === intentSession) { intentRows.value = []; intentTotal.value = 0; intentLoadError.value = demandErrorMessage(cause); } }
+  finally { if (token === intentSession) intentLoading.value = false; }
+}
+async function chooseIntentDemand(id: string) {
+  if (!editing.value || !props.editable || !canEditRecruitment.value || busy.value || intentChoosing.value) return;
+  const token = ++intentSelection, candidateId = props.candidateId;
+  intentError.value = '';
+  if (!id) { form.intentDemandId = ''; intentSelected.value = null; return; }
+  const row = intentOptions.value.find(item => item.id === id);
+  if (!row?.usable || !row.deptId || !row.positionName) { intentError.value = '请选择已批准且部门、岗位已核对的有效需求。'; return; }
+  const before = JSON.stringify(form);
+  if ((form.deptId && form.deptId !== row.deptId) || (form.positionName.trim() && form.positionName.trim() !== row.positionName)) {
+    intentChoosing.value = true;
+    try { await ElMessageBox.confirm(`所选需求为“${row.departmentName} / ${row.positionName}”，与已填部门或岗位不同。将本次应聘明确改为该需求的部门和岗位？`, '核对应聘归属', { confirmButtonText: '使用该需求部门和岗位', cancelButtonText: '保留原输入', type: 'warning' }); }
+    catch { return; }
+    finally { if (token === intentSelection) intentChoosing.value = false; }
+  }
+  if (token !== intentSelection || candidateId !== props.candidateId || !editing.value || !canEditRecruitment.value || before !== JSON.stringify(form)) return;
+  intentSelected.value = row; form.intentDemandId = row.id; form.deptId = row.deptId; form.positionName = row.positionName;
+  departmentError.value = '';
+}
 async function cancelEditor() {
   if (command.value === 'submit_hiring') {
     if (busy.value) return;
@@ -208,14 +251,18 @@ async function cancelEditor() {
 }
 async function cancelAction() { if (await leave.prepareToLeave()) { command.value = null; error.value = ''; conflict.value = false; } }
 async function save() {
-  if (busy.value || loading.value || conflict.value) return;
+  if (busy.value || loading.value || conflict.value || intentChoosing.value) return;
   busy.value = true;
   const valid = await formRef.value?.validate().catch(() => false);
   busy.value = false;
   if (!valid || !editing.value) return;
+  intentError.value = '';
+  if (intentChanged.value && (!form.intentChangeReason.trim() || form.intentChangeReason.trim().length > 2000)) { intentError.value = '请填写意向需求变更原因（最多2000字）。'; return; }
+  if (form.intentDemandId && intentSelected.value && (form.deptId !== intentSelected.value.deptId || form.positionName.trim() !== intentSelected.value.positionName)) { intentError.value = '当前部门或岗位与意向需求不一致，请重新核对意向需求。'; return; }
   if (!creating.value && !canEditRecord.value) { error.value = '当前阶段不可修改，输入已保留。'; return; }
   const token = session, candidateId = props.candidateId, row = current.value, isCreate = creating.value;
-  const body = { positionName: form.positionName.trim(), recruitmentBatch: form.recruitmentBatch.trim() || null, deptId: form.deptId || null, ownerId: form.ownerId || undefined, expectedEntryDate: form.expectedEntryDate || null };
+  const body = { positionName: form.positionName.trim(), recruitmentBatch: form.recruitmentBatch.trim() || null, deptId: form.deptId || null, ownerId: form.ownerId || undefined, expectedEntryDate: form.expectedEntryDate || null,
+    intentDemandId: form.intentDemandId || null, sourceChannel: form.sourceChannel || null, ...(intentChanged.value ? { intentChangeReason: form.intentChangeReason.trim() } : {}) };
   busy.value = true; error.value = ''; departmentError.value = '';
   try {
     const result = isCreate ? await talentRecruitmentApi.create(candidateId, { ...body, requestId: createRequestId.value })
@@ -349,7 +396,7 @@ function openOnboarding() {
   if (canOnboard.value) void router.push({ path: '/entry-exit', query: { talentId: props.candidateId, talentApplicationId: row.id } });
 }
 function openOnboardingRequest() { if (canViewArchive.value && current.value?.onboardingRequest) void router.push({ path: '/entry-exit', query: { applicationId: current.value.onboardingRequest.id } }); }
-function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as TalentApplicationAction] ?? ({ create: '新增应聘', update: '修改应聘', start_onboarding: '办理入职', cancel_onboarding: '取消入职', activate_onboarding: '入职生效', submit_feedback: '提交面试反馈', return_feedback: '退回面试反馈', onboarding: '办理入职', hired: '入职生效' } as Record<string, string>)[action] ?? '应聘更新'; }
+function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as TalentApplicationAction] ?? ({ create: '新增应聘', update: '修改应聘', change_intent: '调整意向需求', start_onboarding: '办理入职', cancel_onboarding: '取消入职', activate_onboarding: '入职生效', submit_feedback: '提交面试反馈', return_feedback: '退回面试反馈', onboarding: '办理入职', hired: '入职生效' } as Record<string, string>)[action] ?? '应聘更新'; }
 </script>
 
 <template>
@@ -369,17 +416,28 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
     <el-alert v-if="actionResult" :title="actionResult" type="success" :closable="false" />
     <el-form v-if="editing" ref="formRef" :model="form" :rules="rules" label-position="top" :disabled="busy || loading" class="application-panel__form">
       <div class="application-panel__fields">
+        <el-form-item label="意向招聘需求（选填）" :error="intentError">
+          <el-select :model-value="form.intentDemandId" aria-label="意向招聘需求" filterable remote clearable fit-input-width :remote-method="loadIntentOptions" :loading="intentLoading" :disabled="intentChoosing" placeholder="未关联也可先应聘和面试" @change="chooseIntentDemand">
+            <el-option v-if="form.intentDemandId && !intentOptions.some(row => row.id === form.intentDemandId)" :value="form.intentDemandId" label="原意向需求（待核对）" disabled />
+            <el-option v-for="demand in intentOptions" :key="demand.id" :value="demand.id" :disabled="!demand.usable" :label="[demandOriginLabel(demand), demandReference(demand), demand.departmentName, demand.positionName].filter(Boolean).join(' · ')" />
+          </el-select>
+          <div v-if="intentTotal > 20" class="application-panel__actions"><el-button link :disabled="intentPage <= 1 || intentLoading" @click="intentPage--; loadIntentOptions()">上一页需求</el-button><span>{{ intentPage }} / {{ Math.ceil(intentTotal / 20) }}</span><el-button link :disabled="intentPage * 20 >= intentTotal || intentLoading" @click="intentPage++; loadIntentOptions()">下一页需求</el-button></div>
+        </el-form-item>
+        <el-form-item label="本次应聘来源（选填）"><el-select v-model="form.sourceChannel" clearable aria-label="本次应聘来源"><el-option v-for="source in TALENT_SOURCE_CHANNELS" :key="source" :value="source" :label="TALENT_SOURCE_LABELS[source]" /></el-select></el-form-item>
         <el-form-item label="岗位名称" prop="positionName"><el-input v-model="form.positionName" maxlength="100" /></el-form-item>
         <el-form-item label="招聘批次" prop="recruitmentBatch"><el-input v-model="form.recruitmentBatch" maxlength="100" /></el-form-item>
         <el-form-item label="部门（选填）" prop="deptId" :error="departmentError"><el-select v-model="form.deptId" clearable filterable @change="departmentError = ''"><el-option v-for="dept in departmentOptions" :key="dept.id" :value="dept.id" :label="dept.name" :disabled="dept.disabled" /></el-select></el-form-item>
         <el-form-item label="应聘负责人"><el-select v-model="form.ownerId" clearable filterable remote :remote-method="searchOwners" :loading="searching" placeholder="默认当前经办" @focus="searchOwners()"><el-option v-for="owner in owners" :key="owner.id" :value="owner.id" :label="[owner.name, owner.deptName].filter(Boolean).join(' · ')" /></el-select></el-form-item>
         <el-form-item label="预计到岗"><el-date-picker v-model="form.expectedEntryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
       </div>
+      <el-form-item v-if="intentChanged" label="意向需求变更原因" required :error="intentError"><el-input v-model="form.intentChangeReason" aria-label="意向需求变更原因" type="textarea" :rows="2" maxlength="2000" show-word-limit /></el-form-item>
+      <el-alert v-if="intentLoadError" :title="intentLoadError" type="error" :closable="false"><el-button link type="primary" @click="loadIntentOptions()">重试意向需求</el-button></el-alert>
       <el-alert v-if="optionsError" :title="optionsError" type="error" :closable="false"><el-button link type="primary" @click="loadOptions">重试选项</el-button></el-alert>
       <div class="application-panel__actions"><el-button @click="cancelEditor">取消编辑</el-button><el-button type="primary" :loading="busy" :disabled="loading || conflict || (!creating && !canEditRecord)" @click="save">保存应聘</el-button></div>
     </el-form>
     <template v-else-if="current">
       <dl><dt>本次应聘阶段</dt><dd class="application-panel__stage">{{ applicationStageLabel(current) }}</dd><dt>应聘负责人</dt><dd>{{ current.ownerName || '未指定' }}</dd><dt>部门</dt><dd>{{ current.departmentNameSnapshot || '未指定' }}</dd><dt>预计到岗</dt><dd>{{ current.expectedEntryDate ? formatDate(current.expectedEntryDate) : '未填写' }}</dd></dl>
+      <dl aria-label="当前意向归属"><dt>当前意向需求</dt><dd><el-button v-if="current.intentDemandId" class="application-panel__intent-link" link type="primary" @click="router.push({ path: '/recruitment/demands', query: { demandId: current.intentDemandId } })">{{ current.intentDemandCurrent ? `${demandReference(current.intentDemandCurrent)} · ${current.intentDemandCurrent.positionName || '岗位待核对'}` : '查看意向需求原单' }}</el-button><span v-else>未关联</span></dd><dt>本次应聘来源</dt><dd>{{ current.sourceChannel ? TALENT_SOURCE_LABELS[current.sourceChannel] : '待核对' }}</dd></dl>
       <p v-if="['screening', 'interviewing', 'reserve'].includes(current.stage)" class="application-panel__muted">下一步：安排本岗位面试，或按实际情况更新应聘阶段。进入面试阶段不会自动创建邀约。</p>
       <p v-if="current.stage === 'hiring_review'" class="application-panel__muted">待其他有录用确认权限的人员办理，提交人不能确认本人提交的申请。</p>
       <p v-else-if="current.stage === 'offered'" class="application-panel__muted">下一步：由经办记录候选人接受或拒绝；候选人接受后，交人事办理入职。</p>
@@ -440,7 +498,9 @@ h4, h5 { font-size: 14px; margin: 12px 0; }
 .application-panel :deep(.el-select), .application-panel :deep(.el-date-editor) { width: 100%; min-width: 0; }
 .application-panel :deep(.el-alert) { margin: 10px 0; }
 dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px; font-size: 13px; }
-dt, .application-panel__muted { color: var(--el-text-color-secondary); } dd { margin: 0; }
+dt, .application-panel__muted { color: var(--el-text-color-secondary); } dd { margin: 0; min-width: 0; }
+.application-panel__intent-link { max-width: 100%; height: auto; white-space: normal; text-align: left; line-height: 1.5; }
+.application-panel__intent-link :deep(span) { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .application-panel__note { white-space: pre-wrap; margin: 4px 0; }
 .application-panel__event-reasons { margin: 4px 0; }
 .application-panel__demand-link { align-self: center; color: var(--el-color-primary); font-size: 14px; text-decoration: underline; }

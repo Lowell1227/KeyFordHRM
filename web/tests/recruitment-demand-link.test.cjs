@@ -59,6 +59,7 @@ async function panel(t, overrides = {}, props = {}, user = { sysRole: 'employee'
     '@/router/navigation': { canAccessRoute: () => false },
     '@/api/talent-recruitment.api': { talentRecruitmentApi: api, recruitmentError: error => error.response?.data?.message || error.message },
     '@/api/recruitment-demands.api': { recruitmentDemandsApi: {
+      intentOptions: async query => { queries.push({ intent: true, ...query }); return { items: options.intentRows || [demand()], total: options.intentRows?.length ?? 1 }; },
       options: async query => { queries.push(query); return { items: options.demandRows || [demand()], total: options.demandRows?.length ?? 1 }; }, detail: async () => options.demandDetail || demand({ revision: 4 }),
       status: async () => ({ configured: options.configured !== false, missing: [], readOnly: true }),
       directories: async () => ({ departments: [{ id: 'dept-A', name: 'Fictional department' }], positions: [{ id: 'job-A', code: 'F01', name: 'Fictional job' }] }),
@@ -73,6 +74,52 @@ async function panel(t, overrides = {}, props = {}, user = { sysRole: 'employee'
   return { state, calls, queries, confirmations };
 }
 
+test('early application creation explicitly confirms conflicting demand fields and sends intent/source without a hiring snapshot', async t => {
+  const view = await panel(t);
+  await view.state.openEditor(true); await flush();
+  view.state.form.positionName = 'Manual job'; view.state.form.deptId = 'manual-dept';
+  await view.state.chooseIntentDemand('demand-A');
+  assert.equal(view.confirmations.length, 1);
+  assert.equal(view.state.form.positionName, 'Fictional job'); assert.equal(view.state.form.deptId, 'dept-A');
+  view.state.form.sourceChannel = 'job_site'; view.state.formRef.value = { validate: async () => true };
+  await view.state.save();
+  assert.equal(view.calls[0].intentDemandId, 'demand-A'); assert.equal(view.calls[0].sourceChannel, 'job_site');
+  assert.equal('recruitmentDemandSnapshot' in view.calls[0], false); assert.equal('recruitmentDemandId' in view.calls[0], false);
+});
+
+test('cancelled intent selection never replaces nonempty manual department/job', async t => {
+  const view = await panel(t, {}, {}, undefined, { confirm: async () => { throw new Error('cancel'); } });
+  await view.state.openEditor(true); await flush();
+  Object.assign(view.state.form, { deptId: 'manual-dept', positionName: 'Manual job' });
+  await view.state.chooseIntentDemand('demand-A');
+  assert.equal(view.state.form.intentDemandId, ''); assert.equal(view.state.form.deptId, 'manual-dept'); assert.equal(view.state.form.positionName, 'Manual job');
+});
+
+test('first intent binding and clearing on an existing application require a reason; 409 preserves it and snapshots', async t => {
+  const frozen = { demandId: 'historical-demand', revision: 1 };
+  const view = await panel(t, { applications: async () => [application({ recruitmentDemandSnapshot: frozen })],
+    update: async (_id, body) => { view.calls.push(body); throw { response: { status: 409, data: { message: 'Changed' } } }; } });
+  await view.state.openEditor(false); await flush(); await view.state.chooseIntentDemand('demand-A');
+  view.state.formRef.value = { validate: async () => true }; await view.state.save(); assert.equal(view.calls.length, 0);
+  assert.match(view.state.intentError.value, /原因/);
+  view.state.form.intentChangeReason = 'Reviewed intended recruitment'; await view.state.save();
+  assert.equal(view.calls[0].intentChangeReason, 'Reviewed intended recruitment'); assert.equal(view.state.form.intentDemandId, 'demand-A');
+  assert.equal(view.state.form.intentChangeReason, 'Reviewed intended recruitment'); assert.deepEqual(view.state.current.value.recruitmentDemandSnapshot, frozen);
+  const clearing = await panel(t, { applications: async () => [application({ intentDemandId: 'demand-A', intentDemandCurrent: demand() })] });
+  await clearing.state.openEditor(false); await clearing.state.chooseIntentDemand('');
+  clearing.state.formRef.value = { validate: async () => true }; await clearing.state.save();
+  assert.equal(clearing.calls.length, 0); assert.match(clearing.state.intentError.value, /原因/);
+});
+
+test('unchanged intent permits ordinary edits without a reason and a read-only panel cannot search intent options', async t => {
+  const view = await panel(t, { applications: async () => [application({ intentDemandId: 'demand-A', intentDemandCurrent: demand() })],
+    update: async (_id, body) => { view.calls.push(body); return application(); } });
+  await view.state.openEditor(false); await flush(); view.state.formRef.value = { validate: async () => true }; await view.state.save();
+  assert.equal(view.calls.length, 1); assert.equal('intentChangeReason' in view.calls[0], false);
+  const reader = await panel(t, {}, { editable: false }, { sysRole: 'employee', hrCapabilities: ['recruitment_view'] });
+  await reader.state.loadIntentOptions(); assert.equal(reader.queries.length, 0);
+});
+
 test('submit hiring requires a demand near the action; creation and interview do not', async t => {
   const view = await panel(t);
   await view.state.beginAction('submit_hiring'); view.state.note.value = 'Fictional hiring opinion';
@@ -83,13 +130,13 @@ test('submit hiring requires a demand near the action; creation and interview do
   await view.state.beginAction('start_interview'); await view.state.execute();
   assert.equal(view.calls[0].action, 'start_interview');
   assert.equal('recruitmentDemandId' in view.calls[0], false);
-  const count = view.queries.length;
+  const count = view.queries.filter(query => !query.intent).length;
   await view.state.openEditor(true);
   view.state.form.positionName = 'Any free-text job'; view.state.formRef.value = { validate: async () => true };
   await view.state.save();
   assert.equal(view.calls.at(-1).positionName, 'Any free-text job');
   assert.equal('recruitmentDemandId' in view.calls.at(-1), false);
-  assert.equal(view.queries.length, count);
+  assert.equal(view.queries.filter(query => !query.intent).length, count);
 });
 
 test('selected actual demand and revision travel only with submit_hiring', async t => {
@@ -339,6 +386,23 @@ test('review-only demand access has local review controls but does not mount can
   const drawer = nodes.find(node => node.type === view.state.BusinessDetailDrawer);
   assert.match(displayText(drawer.children.footer()), /审核通过/);
   await view.state.beginLocalCreate(); assert.equal(view.state.localOpen.value, false);
+});
+
+test('demand detail embeds the existing lifecycle and channel analysis for its exact demand', async t => {
+  const view = await ledger(t); await view.state.openDetail(demand());
+  const nodes = nestedNodes(renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state).children.detail());
+  assert.ok(view.state.RecruitmentDemandLifecycle); assert.ok(view.state.RecruitmentChannelAnalysis);
+  const lifecycle = nodes.find(node => node.type === view.state.RecruitmentDemandLifecycle);
+  assert.equal(lifecycle.props['demand-id'], 'demand-A'); assert.equal(lifecycle.props.revision, 3); assert.equal(typeof lifecycle.props.onUpdated, 'function');
+  assert.equal(nodes.find(node => node.type === view.state.RecruitmentChannelAnalysis).props['demand-id'], 'demand-A');
+});
+
+test('closing or switching a demand cannot discard a pending lifecycle edit', async t => {
+  const view = await ledger(t); await view.state.openDetail(demand());
+  assert.ok(view.state.lifecyclePanel);
+  view.state.lifecyclePanel.value = { prepareToLeave: async () => false };
+  await view.state.closeDetail(); assert.equal(view.state.drawerOpen.value, true);
+  await view.state.openDetail({ id: 'another-demand' }); assert.equal(view.state.current.value.id, 'demand-A');
 });
 
 test('an independent demand-only reviewer can approve using server actions with DingTalk absent', async t => {

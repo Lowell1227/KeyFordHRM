@@ -1,5 +1,6 @@
 import http from './http';
 import type { Paginated } from '@/types/api.types';
+import type { RecruitmentDemandIntentQuery, RecruitmentDemandProgress } from '@/types/recruitment-demand.types';
 import type { RecruitmentDemandApplication, RecruitmentDemandApplicationQuery, RecruitmentDemandDirectories, RecruitmentDemandLocalCreate, RecruitmentDemandLocalUpdate, RecruitmentDemandLocalCommand, RecruitmentDemandMapping, RecruitmentDemandQuery, RecruitmentDemandStatus, RecruitmentDemandSyncInput, RecruitmentDemandSyncResult, RecruitmentDemandView } from '@/types/recruitment-demand.types';
 
 const base = '/recruitment-demands';
@@ -25,6 +26,12 @@ export const recruitmentDemandsApi = {
   },
   options(query: { applicationId: string; keyword?: string; page?: number; pageSize?: number }): Promise<Paginated<RecruitmentDemandView>> {
     return http.get(`${base}/options`, { params: query, ...localError }) as unknown as Promise<Paginated<RecruitmentDemandView>>;
+  },
+  intentOptions(query: RecruitmentDemandIntentQuery): Promise<Paginated<RecruitmentDemandView>> {
+    return http.get(`${base}/intent-options`, { params: query, ...localError }) as unknown as Promise<Paginated<RecruitmentDemandView>>;
+  },
+  progress(id: string): Promise<RecruitmentDemandProgress> {
+    return http.get(`${base}/${encodeURIComponent(id)}/progress`, localError) as unknown as Promise<RecruitmentDemandProgress>;
   },
   detail(id: string): Promise<RecruitmentDemandView> {
     return http.get(`${base}/${encodeURIComponent(id)}`, localError) as unknown as Promise<RecruitmentDemandView>;

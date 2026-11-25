@@ -10,6 +10,8 @@ import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import RecruitmentDemandSeats from './components/RecruitmentDemandSeats.vue';
 import RecruitmentDemandApplications from './components/RecruitmentDemandApplications.vue';
+import RecruitmentDemandLifecycle from './components/RecruitmentDemandLifecycle.vue';
+import RecruitmentChannelAnalysis from './components/RecruitmentChannelAnalysis.vue';
 import RecruitmentPostingsPanel from './components/RecruitmentPostingsPanel.vue';
 import { describeDemandSeats } from './demand-seat-presentation';
 import { usePagination } from '@/composables/usePagination';
@@ -25,6 +27,7 @@ const route = useRoute(), router = useRouter();
 const auth = useAuthStore();
 const { canRead: canReadTalent, canReadDemand: canRead, canEdit } = useTalentPermissions();
 const rows = ref<RecruitmentDemandView[]>([]), current = ref<RecruitmentDemandView | null>(null);
+const lifecyclePanel = ref<InstanceType<typeof RecruitmentDemandLifecycle>>();
 const loading = ref(false), detailLoading = ref(false), saving = ref(false);
 const loadError = ref(''), detailError = ref(''), statusError = ref(''), resultMessage = ref('');
 const connection = ref<RecruitmentDemandStatus | null>(null);
@@ -82,6 +85,7 @@ async function loadConnection() {
 function search() { page.value = 1; void loadList(); }
 function resetFilters() { filters.keyword = ''; filters.status = ''; reset(); void loadList(); }
 async function openDetail(row: Pick<RecruitmentDemandView, 'id'>) {
+  if (lifecyclePanel.value && !await lifecyclePanel.value.prepareToLeave()) return;
   if (!canRead.value || !await leave.prepareToLeave()) return;
   const token = ++detailSession;
   drawerOpen.value = true; selectedId.value = row.id; current.value = null; detailError.value = ''; mappingConflict.value = false; detailLoading.value = true;
@@ -90,6 +94,7 @@ async function openDetail(row: Pick<RecruitmentDemandView, 'id'>) {
   finally { if (token === detailSession) detailLoading.value = false; }
 }
 async function closeDetail(done?: () => void) {
+  if (lifecyclePanel.value && !await lifecyclePanel.value.prepareToLeave()) return;
   if (!await leave.prepareToLeave()) return;
   ++detailSession; drawerOpen.value = false; detailLoading.value = false; done?.();
 }
@@ -105,6 +110,7 @@ async function reloadDetail() {
   } catch (cause) { if (token === detailSession) detailError.value = demandErrorMessage(cause); }
   finally { if (token === detailSession) detailLoading.value = false; }
 }
+async function reloadLifecycle() { await Promise.all([reloadDetail(), loadList()]); }
 async function beginMapping() {
   if (!canEdit.value || !current.value || isLocalDemand(current.value) || saving.value || detailLoading.value) return;
   mappingOpen.value = true; mappingConflict.value = false; directoryError.value = ''; detailError.value = '';
@@ -427,7 +433,11 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
           </section>
           <RecruitmentDemandSeats :value="current" />
           <RecruitmentPostingsPanel v-if="canEdit && current.sourceState === 'approved'" :demand="current" />
-          <RecruitmentDemandApplications v-if="canReadTalent" :demand-id="current.id" />
+          <RecruitmentDemandApplications v-if="canReadTalent" :demand-id="current.id" :revision="current.revision" />
+          <el-collapse v-if="canReadTalent" class="demand-detail-sections">
+            <el-collapse-item title="招聘结案与外部职位处理" name="lifecycle"><RecruitmentDemandLifecycle ref="lifecyclePanel" :demand-id="current.id" :revision="current.revision" @updated="reloadLifecycle" /></el-collapse-item>
+            <el-collapse-item title="本岗位渠道转化" name="channels"><RecruitmentChannelAnalysis :demand-id="current.id" /></el-collapse-item>
+          </el-collapse>
           <section aria-label="需求时间线"><h3>需求时间线</h3><el-timeline v-if="current.events?.length"><el-timeline-item v-for="event in current.events" :key="event.id" :timestamp="formatDate(event.createdAt)"><div>{{ event.actorName || '系统' }} · {{ demandEventLabel(event.action) }} · 版本 {{ event.revision }}</div><p v-if="event.reason" class="event-reason">{{ event.reason }}</p></el-timeline-item></el-timeline><p v-else class="muted">暂无变更记录</p></section>
         </template>
         <template #footer>

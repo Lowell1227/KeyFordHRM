@@ -132,6 +132,53 @@ describe('resume intake isolated PostgreSQL and HTTP',()=>{
     const noSource=await manual({sourceChannel:null});
     await expect(intakes.confirm(noSource.id,{requestId:randomUUID(),expectedRevision:noSource.revision,mode:'candidate_only',candidate:candidate()},editor)).rejects.toMatchObject({status:400});
   });
+  it('carries confirmed intake intent and application channel without a hiring snapshot',async()=>{
+    const row=await manual({demandId,positionName:'Synthetic intake role'});
+    const result=await intakes.confirm(row.id,{requestId:randomUUID(),expectedRevision:row.revision,mode:'candidate_application',candidate:candidate(),
+      application:{deptId,positionName:'Synthetic intake role'}},editor);
+    expect(await db.talentApplication.findUniqueOrThrow({where:{id:result.applicationId!}})).toMatchObject({intentDemandId:demandId,sourceChannel:'referral',recruitmentDemandId:null,recruitmentDemandSnapshot:null});
+  });
+  it('uses the same mutually exclusive work queues for counts, pagination and deep-linked lists',async()=>{
+    const tag=`Synthetic queue ${randomUUID()}`;
+    const assigned=await manual({demandId,ownerId:second.id,sourceNotes:tag});
+    const material=await manual({demandId,ownerId:second.id,sourceNotes:tag,state:'needs_material'});
+    const unassigned=await manual({ownerId:second.id,sourceNotes:tag});
+    const waiting=await manual({ownerId:second.id,sourceNotes:tag,state:'awaiting_resume'});
+    const closed=await manual({ownerId:second.id,sourceNotes:tag});
+    await intakes.close(closed.id,{expectedRevision:closed.revision,reason:'Synthetic closed queue item'},editor);
+    const base={page:1,pageSize:1,ownerId:second.id,keyword:tag};
+    const review=await intakes.list({...base,workQueue:'review'} as never,second);
+    const assignment=await intakes.list({...base,workQueue:'assignment'} as never,second);
+    expect(review.total).toBe(2);expect(assignment.total).toBe(2);
+    const reviewAll=await intakes.list({...base,pageSize:20,workQueue:'review'} as never,second);
+    const assignmentAll=await intakes.list({...base,pageSize:20,workQueue:'assignment'} as never,second);
+    expect(reviewAll.items.map(row=>row.id).sort()).toEqual([assigned.id,material.id].sort());
+    expect(assignmentAll.items.map(row=>row.id).sort()).toEqual([unassigned.id,waiting.id].sort());
+    await get(second,'/recruitment-intakes?workQueue=unknown').expect(400);
+  });
+  it('binds a previously unassigned reused application only at its displayed revision',async()=>{
+    const original=await new TalentsService(db).create(candidate(),editor);
+    const existing=await new TalentRecruitmentService(db,demands).create(original.id,{deptId,positionName:'Synthetic intake role'},editor);
+    const row=await manual({demandId,positionName:'Synthetic intake role'});
+    const body={requestId:randomUUID(),expectedRevision:row.revision,mode:'candidate_application' as const,existingCandidateId:original.id,
+      existingApplicationId:existing.id,expectedExistingApplicationRevision:existing.revision+1,application:{deptId,positionName:'Synthetic intake role'}};
+    await expect(intakes.confirm(row.id,body as never,editor)).rejects.toMatchObject({status:409});
+    expect((await intakes.detail(row.id,editor)).state).toBe('pending_review');
+    const result=await intakes.confirm(row.id,{...body,expectedExistingApplicationRevision:existing.revision} as never,editor);
+    expect(await db.talentApplication.findUniqueOrThrow({where:{id:result.applicationId!}})).toMatchObject({intentDemandId:demandId,sourceChannel:null,revision:existing.revision+1});
+  });
+  it('does not silently reassign an existing application from another intended demand',async()=>{
+    const draft=await demands.createLocal({requestId:randomUUID(),deptId,positionId,headcount:1,reason:'Synthetic second demand'},editor);
+    const pending=await demands.actLocal(draft.id,{expectedRevision:draft.revision,action:'submit'},editor);
+    const otherDemand=await demands.actLocal(draft.id,{expectedRevision:pending.revision,action:'approve'},reviewer);
+    const original=await new TalentsService(db).create(candidate(),editor);
+    const existing=await new TalentRecruitmentService(db,demands).create(original.id,{deptId,positionName:'Synthetic intake role',intentDemandId:otherDemand.id} as never,editor);
+    const row=await manual({demandId,positionName:'Synthetic intake role'});
+    await expect(intakes.confirm(row.id,{requestId:randomUUID(),expectedRevision:row.revision,mode:'candidate_application',existingCandidateId:original.id,
+      existingApplicationId:existing.id,expectedExistingApplicationRevision:existing.revision,application:{deptId,positionName:'Synthetic intake role'}} as never,editor)).rejects.toMatchObject({status:409});
+    expect((await intakes.detail(row.id,editor)).state).toBe('pending_review');
+    expect((await db.talentApplication.findUniqueOrThrow({where:{id:existing.id}})).intentDemandId).toBe(otherDemand.id);
+  });
   it('reuses one candidate without replacing fields or follow-ups, requires explicit same-job reuse and permits another job',async()=>{
     const original=await new TalentsService(db).create(candidate(),editor);
     const follow=await db.talentFollowUp.create({data:{candidateId:original.id,occurredAt:new Date('2037-01-01'),channel:'phone',summary:'Synthetic existing follow-up',nextFollowUpAt:new Date('2037-02-01'),planStatus:'pending',createdById:editor.id}});
@@ -273,5 +320,30 @@ describe('resume intake isolated PostgreSQL and HTTP',()=>{
     await new Promise(r=>setTimeout(r,30));release();await revocation;
     await expect(pending).rejects.toMatchObject({status:403});expect(await db.talentCandidate.count()).toBe(count);
     await db.user.update({where:{id:second.id},data:{hrCapabilities:['recruitment_edit']}});
+  });
+  it('takes the demand ledger before a candidate lock when confirmation competes with an application writer',async()=>{
+    const original=await new TalentsService(db).create(candidate(),editor),row=await manual({demandId});
+    let unlock:()=>void=()=>undefined,ready:()=>void=()=>undefined;
+    const held=new Promise<void>(resolve=>{unlock=resolve;}),locked=new Promise<void>(resolve=>{ready=resolve;});
+    const writer=other.$transaction(async tx=>{
+      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended('recruitment-demand-ledger',0))`;
+      ready();await held;
+      await tx.$executeRaw`SET LOCAL lock_timeout='750ms'`;
+      await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id=${original.id}::uuid FOR UPDATE`;
+    },{timeout:15000}).then(()=>({okay:true}),()=>({okay:false}));
+    await locked;
+    const confirmation=intakes.confirm(row.id,{requestId:randomUUID(),expectedRevision:row.revision,mode:'candidate_application',
+      existingCandidateId:original.id,application:{deptId,positionName:'Synthetic intake role'}},editor).then(()=>({okay:true}),()=>({okay:false}));
+    let observed=false;
+    try{
+      for(let attempt=0;attempt<100;attempt++){
+        const [active]=await db.$queryRaw<Array<{count:bigint}>>`SELECT COUNT(*)::bigint AS count FROM pg_stat_activity
+          WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%recruitment-demand-ledger%'`;
+        if(Number(active.count)>0){observed=true;break;}
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+    }finally{unlock();}
+    const [writerResult,confirmResult]=await Promise.all([writer,confirmation]);
+    expect(observed).toBe(true);expect(writerResult.okay).toBe(true);expect(confirmResult.okay).toBe(true);
   });
 });

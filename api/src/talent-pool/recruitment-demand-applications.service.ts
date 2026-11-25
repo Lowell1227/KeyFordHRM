@@ -4,10 +4,11 @@ import { Prisma } from '@prisma/client';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PaginationDto, type Paginated } from '@/common/dto/pagination.dto';
 import { PrismaService } from '@/prisma/prisma.service';
-import { assertRecruitmentReader } from './talent-recruitment-policy';
+import { assertRecruitmentReader, canEditRecruitment } from './talent-recruitment-policy';
 import { summarizeRecruitmentDemandSeats } from './recruitment-demand-seats';
+import { recruitmentSeatJoin as latestSeat, currentRecruitmentDemandSql, recruitmentProgressCategorySql as categoryExpression } from './recruitment-progress-sql';
 
-export const RECRUITMENT_DEMAND_APPLICATION_CATEGORIES = ['awaiting_reply', 'accepted', 'terminated', 'hired'] as const;
+export const RECRUITMENT_DEMAND_APPLICATION_CATEGORIES = ['screening', 'interviewing', 'hiring_review', 'awaiting_reply', 'accepted', 'terminated', 'hired'] as const;
 export type RecruitmentDemandApplicationCategory = typeof RECRUITMENT_DEMAND_APPLICATION_CATEGORIES[number];
 
 export class RecruitmentDemandApplicationsQueryDto extends PaginationDto {
@@ -31,21 +32,30 @@ export interface RecruitmentDemandApplicationItem {
 
 type ProgressRow = Omit<RecruitmentDemandApplicationItem, 'occupied'> & { seatAction: string | null; seatVersion: number | null };
 
-const latestSeat = Prisma.sql`LEFT JOIN LATERAL (
-  SELECT e.action, e.version FROM talent_application_events e
-  WHERE e.application_id = a.id AND e.action IN ('accept_offer', 'terminate_offer')
-  ORDER BY e.version DESC, e.id DESC LIMIT 1
-) seat ON TRUE`;
-const categoryExpression = Prisma.sql`CASE
-  WHEN seat.action = 'accept_offer' AND a.stage = 'hired' THEN 'hired'
-  WHEN seat.action = 'accept_offer' THEN 'accepted'
-  WHEN seat.action = 'terminate_offer' AND a.stage = 'withdrawn' THEN 'terminated'
-  WHEN a.stage = 'offered' THEN 'awaiting_reply'
-  ELSE NULL END`;
-
 @Injectable()
 export class RecruitmentDemandApplicationsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async progress(id: string, user: AuthUser) {
+    return this.prisma.$transaction(async tx => {
+      const actor = await assertRecruitmentReader(tx, user);
+      if (!await tx.recruitmentDemand.findUnique({ where: { id }, select: { id: true } })) throw new NotFoundException('招聘需求不存在');
+      const rows = await tx.$queryRaw<Array<{ category: string | null; total: bigint }>>(Prisma.sql`
+        SELECT (${categoryExpression}) AS category, COUNT(*)::bigint AS total
+        FROM talent_applications a ${latestSeat}
+        WHERE (${currentRecruitmentDemandSql}) = ${id}::uuid GROUP BY (${categoryExpression})`);
+      const applications: Record<string, number> = Object.fromEntries(RECRUITMENT_DEMAND_APPLICATION_CATEGORIES.map(key => [key, 0]));
+      for (const row of rows) applications[row.category ?? 'other'] = Number(row.total);
+      let intakes: Record<string, number> | null = null;
+      if (canEditRecruitment(actor)) {
+        intakes = { awaiting_resume: 0, pending_review: 0, needs_material: 0 };
+        const intakeRows = await tx.recruitmentIntake.groupBy({ by: ['state'], where: { demandId: id,
+          state: { in: ['awaiting_resume', 'pending_review', 'needs_material'] }, associatedToId: null }, _count: { _all: true } });
+        for (const row of intakeRows) intakes[row.state] = row._count._all;
+      }
+      return { applications, intakes };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 10000 });
+  }
 
   async list(id: string, query: RecruitmentDemandApplicationsQueryDto, user: AuthUser): Promise<Paginated<RecruitmentDemandApplicationItem>> {
     return this.prisma.$transaction(async tx => {
@@ -54,7 +64,7 @@ export class RecruitmentDemandApplicationsService {
       if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100 || !Number.isSafeInteger(skip)
         || (query.category !== undefined && !RECRUITMENT_DEMAND_APPLICATION_CATEGORIES.includes(query.category))) throw new BadRequestException('关联进度筛选或分页参数无效');
       if (!await tx.recruitmentDemand.findUnique({ where: { id }, select: { id: true } })) throw new NotFoundException('招聘需求不存在');
-      const matching = Prisma.sql`a.recruitment_demand_id = ${id}::uuid
+      const matching = Prisma.sql`(${currentRecruitmentDemandSql}) = ${id}::uuid
         ${query.category ? Prisma.sql`AND (${categoryExpression}) = ${query.category}` : Prisma.empty}`;
       // Count and page use the same event classification inside one consistent read snapshot.
       const [count] = await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`

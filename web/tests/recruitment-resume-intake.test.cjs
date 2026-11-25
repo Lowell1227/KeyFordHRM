@@ -110,6 +110,46 @@ test('candidate-only and application modes are explicit and application requires
   const g = workflow(t); await g.state.open('intake-a'); g.state.application.positionName = ''; await g.state.confirm('candidate_application'); assert.equal(g.calls.length, 0);
 });
 
+test('intake application confirmation explicitly carries its reviewed intent and source', async t => {
+  const f = workflow(t, { api: { detail: async () => intake({ demandId: 'reviewed-demand' }) } });
+  await f.state.open('intake-a'); await f.state.confirm('candidate_application');
+  assert.equal(f.calls[0][2].application.intentDemandId, 'reviewed-demand');
+  assert.equal(f.calls[0][2].application.sourceChannel, 'job_site');
+  const g = workflow(t); await g.state.open('intake-a'); await g.state.confirm('candidate_application');
+  assert.equal(g.calls[0][2].application.intentDemandId, null);
+});
+
+test('reusing a same-job application cannot silently move its existing intent', async t => {
+  const f = workflow(t, { phoneResult: { exists: true, candidate: { id: 'existing-a' } },
+    api: { detail: async () => intake({ demandId: 'new-demand' }) },
+    existingApplications: [{ id: 'existing-app', candidateId: 'existing-a', positionName: 'Fictional engineer', deptId: 'dept-a', intentDemandId: 'old-demand', sourceChannel: 'referral' }] });
+  await f.state.open('intake-a'); await f.state.checkPhone(); f.state.reuseExisting.value = true; await flush();
+  f.state.existingApplicationId.value = 'existing-app'; await f.state.confirm('candidate_application');
+  assert.equal(f.calls.length, 0); assert.match(f.state.error.value, /意向|来源/);
+  assert.equal(f.state.form.demandId, 'new-demand'); assert.equal(f.state.existingApplicationId.value, 'existing-app');
+});
+
+test('first intent binding in an existing application is explicit, versioned and preserves its source', async t => {
+  const f = workflow(t, { phoneResult: { exists: true, candidate: { id: 'existing-a' } },
+    api: { detail: async () => intake({ demandId: 'reviewed-demand' }) },
+    existingApplications: [{ id: 'existing-app', revision: 7, candidateId: 'existing-a', positionName: 'Fictional engineer', deptId: 'dept-a', intentDemandId: null, sourceChannel: 'referral' }] });
+  await f.state.open('intake-a'); await f.state.checkPhone(); f.state.reuseExisting.value = true; await flush();
+  f.state.existingApplicationId.value = 'existing-app'; await f.state.confirm('candidate_application');
+  assert.equal(f.confirmations.length, 1); assert.equal(f.calls[0][2].expectedExistingApplicationRevision, 7);
+  assert.equal(f.calls[0][2].application.intentDemandId, 'reviewed-demand');
+  assert.equal(f.state.existingApplications.value[0].sourceChannel, 'referral');
+});
+
+test('a newly created revision zero application can be explicitly reused and assigned its first intent', async t => {
+  const f = workflow(t, { phoneResult: { exists: true, candidate: { id: 'existing-a' } },
+    api: { detail: async () => intake({ demandId: 'reviewed-demand' }) },
+    existingApplications: [{ id: 'existing-app', revision: 0, candidateId: 'existing-a', positionName: 'Fictional engineer', deptId: 'dept-a', intentDemandId: null, sourceChannel: 'referral' }] });
+  await f.state.open('intake-a'); await f.state.checkPhone(); f.state.reuseExisting.value = true; await flush();
+  f.state.existingApplicationId.value = 'existing-app'; await f.state.confirm('candidate_application');
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0][2].expectedExistingApplicationRevision, 0);
+  assert.equal(f.calls[0][2].application.intentDemandId, 'reviewed-demand');
+});
+
 test('one explicit confirm saves a changed checked draft first and confirms with the returned revision', async t => {
   const f = workflow(t); await f.state.open('intake-a'); f.state.draft.value.name = 'Fictional corrected applicant';
   await f.state.confirm('candidate_only');
@@ -132,7 +172,7 @@ test('lost confirmation result retries the exact body and request ID without cha
 
 test('explicit same-job existing application reuse sends its ID and reviewed job context', async t => {
   const f = workflow(t, { phoneResult: { exists: true, candidate: { id: 'existing-a', name: 'Fictional existing' } },
-    existingApplications: [{ id: 'existing-app', candidateId: 'existing-a', positionName: 'Fictional engineer', deptId: 'dept-a' }] });
+    existingApplications: [{ id: 'existing-app', revision: 3, candidateId: 'existing-a', positionName: 'Fictional engineer', deptId: 'dept-a', sourceChannel: 'job_site' }] });
   await f.state.open('intake-a'); await f.state.checkPhone(); f.state.reuseExisting.value = true; await flush();
   f.state.existingApplicationId.value = 'existing-app'; await f.state.confirm('candidate_application');
   assert.equal(f.calls[0][2].existingApplicationId, 'existing-app'); assert.equal(f.calls[0][2].application.positionName, 'Fictional engineer');
@@ -298,25 +338,45 @@ test('posting identity requires an explicit verification decision with evidence,
   assert.ok(validatePosting({ ...input, verifiedIdentity: false, url: 'javascript:alert(1)' }).url);
 });
 
-async function intakePage(t, demandDetail, postingDetail) {
-  const route = vue.reactive({ query: {} }), auth = vue.reactive({ user: { id: 'editor-a', name: 'Fictional editor' } });
+async function intakePage(t, demandDetail, postingDetail, options = {}) {
+  const route = vue.reactive({ query: options.query || {} }), auth = vue.reactive({ user: { id: 'editor-a', name: 'Fictional editor' } });
   const dependencies = {
-    'vue-router': { useRoute: () => route, useRouter: () => ({ push() {} }) },
+    'vue-router': { useRoute: () => route, useRouter: () => ({ push() {}, replace: async target => { route.query = target.query; } }) },
     '@/stores/auth.store': { useAuthStore: () => auth }, '@/views/talent/useTalentPermissions': { useTalentPermissions: () => ({ canEdit: vue.ref(true) }) },
     '@/views/talent/useRecruitmentLeaveGuard': { useRecruitmentLeaveGuard: () => ({ prepareToLeave: async () => true }) },
-    '@/api/recruitment-intakes.api': { recruitmentIntakesApi: { list: async () => ({ items: [], total: 0 }), mailStatus: async () => ({ configured: false }) } },
-    '@/api/recruitment-demands.api': { recruitmentDemandsApi: { detail: demandDetail, directories: async () => ({ departments: [], positions: [] }), list: async () => ({ items: [] }) } },
+    '@/api/recruitment-intakes.api': { recruitmentIntakesApi: { list: async query => { options.onList?.(query); return { items: [], total: 0 }; }, mailStatus: async () => ({ configured: false }) } },
+    '@/api/recruitment-demands.api': { recruitmentDemandsApi: { detail: demandDetail, directories: async () => ({ departments: [], positions: [] }), intentOptions: async () => ({ items: [] }) } },
     '@/api/recruitment-postings.api': { recruitmentPostingsApi: { detail: postingDetail, list: async () => ({ items: [] }) } },
     '@/api/talent-recruitment.api': { talentRecruitmentApi: { owners: async () => ({ items: [] }) } },
     '@/api/talent-pool.api': { talentPoolApi: {} }, '@/api/upload.api': { uploadApi: {} },
     '@/utils/image-compress': { isImageFile: () => false, compressImage: async file => file },
-    'element-plus': { ElMessageBox: { confirm: async () => true } },
+    'element-plus': { ElMessageBox: { confirm: async () => options.confirm ? options.confirm() : true } },
   };
   const component = load('views/recruitment/RecruitmentIntakesView.vue', dependencies).default;
   const renderer = vue.createRenderer({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null });
   let state; const app = renderer.createApp({ setup() { state = component.setup({}, { expose() {}, emit() {} }); return () => null; } });
   app.mount({}); t.after(() => app.unmount()); await flush(); state.review.start('pending_review'); return state;
 }
+
+test('demand progress links filter the original intake list by exact demand and state', async t => {
+  const calls = []; await intakePage(t, async () => ({}), async () => ({}), { query: { demandId: 'exact-demand', state: 'needs_material' }, onList: query => calls.push(query) });
+  assert.equal(calls[0].demandId, 'exact-demand'); assert.equal(calls[0].state, 'needs_material');
+});
+
+test('workbench intake filters remain visible and clearing them removes both queue and owner from route and requests', async t => {
+  const calls = [], state = await intakePage(t, async () => ({}), async () => ({}), { query: { demandId: 'demand-a', workQueue: 'review', ownerId: 'editor-a' }, onList: query => calls.push(query) });
+  assert.equal(calls[0].workQueue, 'review'); assert.equal(calls[0].ownerId, 'editor-a');
+  assert.equal(state.workQueueLabel.value, '待核对简历');
+  await state.clearWorkQueue(); await flush();
+  assert.equal(calls.at(-1).workQueue, undefined); assert.equal(calls.at(-1).ownerId, undefined); assert.equal(calls.at(-1).demandId, 'demand-a');
+});
+
+test('intake demand selection requires confirmation before replacing manually entered job fields', async t => {
+  const state = await intakePage(t, async id => ({ id, usable: true, sourceState: 'approved', deptId: 'dept-b', positionName: 'Demand job' }), async () => ({}), { confirm: async () => { throw new Error('cancel'); } });
+  Object.assign(state.application, { deptId: 'manual-dept', positionName: 'Manual job' }); state.form.demandId = 'old-demand';
+  await state.useDemand('new-demand');
+  assert.equal(state.form.demandId, 'old-demand'); assert.equal(state.application.positionName, 'Manual job'); assert.equal(state.application.deptId, 'manual-dept');
+});
 test('late demand A and posting A resolution cannot replace a newer demand B selection', async t => {
   for (const viaPosting of [false, true]) {
     let resolveA;

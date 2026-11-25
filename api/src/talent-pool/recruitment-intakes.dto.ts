@@ -17,6 +17,7 @@ export class RecruitmentIntakeQueryDto extends PaginationDto {
   @IsOptional() @IsUUID() demandId?: string;
   @IsOptional() @IsUUID() postingId?: string;
   @IsOptional() @IsIn(TALENT_SOURCE_CHANNELS) sourceChannel?: string;
+  @IsOptional() @IsIn(['review', 'assignment']) workQueue?: 'review' | 'assignment';
 }
 export class CreateRecruitmentIntakeDto {
   @IsUUID() requestId!: string;
@@ -47,6 +48,7 @@ export class ConfirmRecruitmentIntakeDto extends RecruitmentIntakeVersionDto {
   @IsOptional() @ValidateNested() @Type(() => CreateTalentDto) candidate?: CreateTalentDto;
   @IsOptional() @ValidateNested() @Type(() => CreateTalentApplicationDto) application?: CreateTalentApplicationDto;
   @IsOptional() @IsUUID() existingApplicationId?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(2147483646) expectedExistingApplicationRevision?: number;
 }
 export class CloseRecruitmentIntakeDto extends RecruitmentIntakeVersionDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(2000) reason!: string;

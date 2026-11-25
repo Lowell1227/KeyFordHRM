@@ -34,7 +34,7 @@ async function view(t, implementation, user = { id: 'reader-A', sysRole: 'employ
   const dependencies = {
     'vue-router': { useRouter: () => ({ push: target => navigations.push(target) }) },
     '@/stores/auth.store': { useAuthStore: () => auth },
-    '@/api/recruitment-demands.api': { recruitmentDemandsApi: { applications: async (id, query) => {
+    '@/api/recruitment-demands.api': { recruitmentDemandsApi: { progress: async () => ({ applications: { screening: 4, interviewing: 2, hiring_review: 1 }, intakes: user.hrCapabilities.includes('recruitment_edit') ? { awaiting_resume: 3, pending_review: 2, needs_material: 1 } : null }), applications: async (id, query) => {
       calls.push({ id, ...query }); return implementation ? implementation(id, query) : { items: [item('application-A', query.category)], total: 23, page: query.page, pageSize: query.pageSize };
     } } },
   };
@@ -75,16 +75,38 @@ test('demand applications API encodes the demand id and forwards category pagina
   assert.deepEqual(calls[0][1], { params: { category: 'terminated', page: 3, pageSize: 10 }, skipErrorMessage: true });
 });
 
-test('four server-defined categories reset pagination and retain only the current list', async t => {
+test('front and later application categories reset pagination and retain only the current list', async t => {
   const list = await view(t);
-  assert.deepEqual(list.calls, [{ id: 'demand-A', category: 'awaiting_reply', page: 1, pageSize: 10 }]);
-  for (const category of ['accepted', 'terminated', 'hired']) {
+  assert.deepEqual(list.calls, [{ id: 'demand-A', category: 'screening', page: 1, pageSize: 10 }]);
+  for (const category of ['interviewing', 'hiring_review', 'awaiting_reply', 'accepted', 'terminated', 'hired']) {
     list.state.page.value = 3; await list.state.changeCategory(category);
     assert.deepEqual(list.calls.at(-1), { id: 'demand-A', category, page: 1, pageSize: 10 });
     assert.equal(list.state.rows.value[0].category, category);
   }
   list.state.page.value = 2; await list.state.loadList();
   assert.equal(list.calls.at(-1).page, 2); assert.equal(list.calls.at(-1).category, 'hired');
+});
+
+test('progress keeps intake record units separate and links editors to exact demand/state only', async t => {
+  const editor = await view(t, undefined, { id: 'editor-A', sysRole: 'employee', hrCapabilities: ['recruitment_edit'] });
+  assert.equal(editor.state.progress.value.applications.screening, 4);
+  assert.equal(editor.state.progress.value.intakes.awaiting_resume, 3);
+  editor.state.openIntakes('pending_review');
+  assert.deepEqual(editor.navigations, [{ path: '/recruitment/intakes', query: { demandId: 'demand-A', state: 'pending_review' } }]);
+  const reader = await view(t); reader.state.openIntakes('pending_review'); assert.deepEqual(reader.navigations, []);
+});
+
+test('all applications includes other stages without sending an unsupported category', async t => {
+  const list = await view(t); await list.state.changeCategory('all');
+  assert.equal(list.state.category.value, 'all'); assert.equal(list.calls.at(-1).category, undefined);
+});
+
+test('intent options and progress APIs use their dedicated read endpoints', async () => {
+  const calls = [], api = load(path.join(root, 'api/recruitment-demands.api.ts'), { './http': { __esModule: true, default: { get: async (...args) => { calls.push(args); return {}; } } } }).recruitmentDemandsApi;
+  await api.intentOptions({ keyword: 'Fictional', page: 2, pageSize: 20, deptId: 'dept-A', positionName: 'Fictional job' });
+  await api.progress('id/a');
+  assert.equal(calls[0][0], '/recruitment-demands/intent-options'); assert.equal(calls[0][1].params.deptId, 'dept-A');
+  assert.equal(calls[1][0], '/recruitment-demands/id%2Fa/progress');
 });
 
 test('a list item returns to the exact candidate/application, never inventing a personnel permission', async t => {

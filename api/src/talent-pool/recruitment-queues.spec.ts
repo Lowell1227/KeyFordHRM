@@ -14,6 +14,15 @@ function setup(){
  return{db,row,recruitment:new TalentRecruitmentService(db),interviews:new TalentInterviewsService(db)};
 }
 describe('authorized recruitment work queues',()=>{
+ it('filters effective overdue facts before applying count and pagination',async()=>{
+  const {db,recruitment}=setup();
+  db.$transaction=jest.fn(async(fn:any)=>fn(db));
+  db.talentApplication.findMany.mockResolvedValueOnce([{id:'a',candidateId:'c',ownerId:hr.id,stage:'accepted',positionName:'Role',
+   expectedEntryDate:new Date('2000-01-01'),candidate:{name:'Fictional candidate',deletedAt:null},onboardingRequests:[],interviews:[]}]);
+  await recruitment.queue({page:2,pageSize:10,skip:10,take:10,scope:'all',overdueOnly:true} as never,hr);
+  expect(db.talentApplication.count.mock.calls[0][0].where).toMatchObject({id:{in:['a']}});
+  expect(db.talentApplication.findMany.mock.calls[1][0]).toMatchObject({skip:10,take:10,where:{id:{in:['a']}}});
+ });
  it('paginates transformed HTTP query DTOs without relying on inherited getters',async()=>{
   const {db,interviews}=setup();const query=plainToInstance(TalentInterviewQueueQueryDto,{scope:'mine',page:'2',pageSize:'1'});
   await interviews.queue(query,employee);

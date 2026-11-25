@@ -28,12 +28,15 @@ import { RecruitmentPostingsService } from './recruitment-postings.service';
 import { RecruitmentPostingsController } from './recruitment-postings.controller';
 import { RecruitmentIntakesService } from './recruitment-intakes.service';
 import { RecruitmentIntakesController } from './recruitment-intakes.controller';
+import { RecruitmentLifecycleController, RecruitmentAnalyticsController } from './recruitment-lifecycle.controller';
+import { RecruitmentLifecycleService } from './recruitment-lifecycle.service';
+import { RecruitmentAnalyticsService } from './recruitment-analytics.service';
 
 /** 人才库（MVP）：候选人录入 / 检索 / 跟进 / 转员工 / 单条只读转发。 */
 @Module({
   imports: [StorageModule, AiProgressModule, AuthModule],
-  controllers: [TalentsController, TalentSharesController, TalentInterviewsController, TalentRecruitmentController, TalentResumeController, TalentResumeTasksController, TalentWorkbenchController, RecruitmentDemandsController, RecruitmentPostingsController, RecruitmentIntakesController],
-  providers: [TalentsService, TalentFilesService, TalentFollowUpsService, TalentSharesService, TalentShareSessionGuard, TalentInterviewsService, TalentRecruitmentService, TalentResumeService, TalentResumeClient, TalentResumeTasksService, TalentWorkbenchService, RecruitmentDemandsService, RecruitmentDemandApplicationsService, RecruitmentMailboxGateway, RecruitmentPostingsService, RecruitmentIntakesService],
+  controllers: [TalentsController, TalentSharesController, TalentInterviewsController, TalentRecruitmentController, TalentResumeController, TalentResumeTasksController, TalentWorkbenchController, RecruitmentDemandsController, RecruitmentPostingsController, RecruitmentIntakesController, RecruitmentLifecycleController, RecruitmentAnalyticsController],
+  providers: [TalentsService, TalentFilesService, TalentFollowUpsService, TalentSharesService, TalentShareSessionGuard, TalentInterviewsService, TalentRecruitmentService, TalentResumeService, TalentResumeClient, TalentResumeTasksService, TalentWorkbenchService, RecruitmentDemandsService, RecruitmentDemandApplicationsService, RecruitmentMailboxGateway, RecruitmentPostingsService, RecruitmentIntakesService, RecruitmentLifecycleService, RecruitmentAnalyticsService],
   exports: [TalentsService, TalentInterviewsService],
 })
 export class TalentPoolModule {}

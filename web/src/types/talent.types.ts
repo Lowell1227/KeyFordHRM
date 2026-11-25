@@ -376,6 +376,7 @@ export interface TalentInterviewQueueQuery {
 }
 export interface TalentApplicationQueueQuery {
   scope?: 'owned' | 'all'; keyword?: string; stage?: TalentApplicationStage; deptId?: string;
+  overdueOnly?: boolean;
   page?: number; pageSize?: number;
 }
 export interface TalentApplicationQueueItem {
@@ -428,6 +429,9 @@ export interface TalentApplicationEvent {
   createdAt: string;
 }
 export interface TalentApplicationView {
+  intentDemandId?: string | null;
+  intentDemandCurrent?: import('./recruitment-demand.types').RecruitmentDemandView | null;
+  sourceChannel?: TalentSourceChannel | null;
   offerTerminated?: boolean;
   recruitmentDemandId?: string | null;
   recruitmentDemandRevision?: number | null;
@@ -461,6 +465,9 @@ export interface TalentApplicationView {
   onboardingRequest: TalentOnboardingRequest | null;
 }
 export interface TalentApplicationInput {
+  intentDemandId?: string | null;
+  intentChangeReason?: string;
+  sourceChannel?: TalentSourceChannel | null;
   positionName: string;
   recruitmentBatch?: string | null;
   deptId?: string | null;
@@ -499,7 +506,7 @@ export interface TalentFeedbackResponse {
   canEdit: boolean;
   canReturn: boolean;
 }
-export type RecruitmentWorkbenchKey = 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding';
+export type RecruitmentWorkbenchKey = 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding' | 'intake_review' | 'intake_assignment' | 'entry_overdue';
 export interface RecruitmentWorkbenchItem {
   id: string;
   title: string;
@@ -507,6 +514,10 @@ export interface RecruitmentWorkbenchItem {
   date: string | null;
   candidateId?: string;
   applicationId?: string;
+  intakeId?: string;
+  onboardingRequestId?: string;
+  ownerName?: string | null;
+  nextAction?: string;
 }
 export interface RecruitmentWorkbenchGroup {
   key: RecruitmentWorkbenchKey;

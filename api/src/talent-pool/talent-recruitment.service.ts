@@ -5,6 +5,8 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { RecruitmentDemandsService } from './recruitment-demands.service';
 import type { RecruitmentDemandSubmissionProof } from './recruitment-demands.types';
+import { TALENT_SOURCE_CHANNELS } from './talent.constants';
+import { readRecruitmentEntryOverdue } from './talent-workbench.service';
 import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, TalentApplicationQueueQueryDto, UpdateTalentApplicationDto } from './dto/talent-recruitment.dto';
 import { allowedApplicationActions, canConfirmTalentHiring, canEditRecruitment, canReadRecruitment, canReadTalentApplication, canWriteRecruitment, hasActiveTalentAcceptance, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, talentOwnerWhere, TALENT_RESERVE_REASONS, type RecruitmentActor, type TalentReserveReason } from './talent-recruitment-policy';
 
@@ -38,23 +40,36 @@ export class TalentRecruitmentService {
   }
 
   async queue(query: TalentApplicationQueueQueryDto, user: AuthUser) {
+    if (query.overdueOnly !== undefined && typeof query.overdueOnly !== 'boolean') throw new BadRequestException('逾期筛选参数无效');
+    if (query.overdueOnly) return this.prisma.$transaction(async tx => {
+      const actor = await this.actor(tx, user); this.assertRead(actor);
+      return this.queueRows(tx, query, actor, await readRecruitmentEntryOverdue(tx, actor, new Date()));
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 10000 });
     const actor = await this.actor(this.prisma, user);this.assertRead(actor);
+    return this.queueRows(this.prisma, query, actor);
+  }
+
+  private async queueRows(db: Prisma.TransactionClient, query: TalentApplicationQueueQueryDto, actor: RecruitmentActor,
+    overdue?: Awaited<ReturnType<typeof readRecruitmentEntryOverdue>>) {
     const keyword = query.keyword?.trim();
     const where: Prisma.TalentApplicationWhereInput = { candidate: { deletedAt: null },
+      ...(overdue ? { id: { in: overdue.map(row => row.id) } } : {}),
       ...((query.scope ?? 'owned') === 'owned' ? { ownerId: actor.id } : {}),
       ...(query.stage ? { stage: query.stage } : {}), ...(query.deptId ? { deptId: query.deptId } : {}),
       ...(keyword ? { OR: [{ candidate: { name: { contains: keyword, mode: 'insensitive' } } },
         { positionName: { contains: keyword, mode: 'insensitive' } }, { recruitmentBatch: { contains: keyword, mode: 'insensitive' } }] } : {}) };
     const [rows, total] = await Promise.all([
-      this.prisma.talentApplication.findMany({ where, select: { id: true, candidateId: true, candidate: { select: { name: true } },
+      db.talentApplication.findMany({ where, select: { id: true, candidateId: true, candidate: { select: { name: true } },
         positionName: true, recruitmentBatch: true, stage: true, ownerId: true, departmentNameSnapshot: true, expectedEntryDate: true, updatedAt: true,
         interviews: { where: { status: 'scheduled' }, orderBy: [{ startsAt: 'asc' }, { id: 'asc' }], take: 1,
           select: { id: true, startsAt: true, endsAt: true, status: true } } },
         orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
-      this.prisma.talentApplication.count({ where }),
+      db.talentApplication.count({ where }),
     ]);
-    const owners = new Map((await this.prisma.user.findMany({ where: { id: { in: [...new Set(rows.map(r => r.ownerId))] } }, select: { id: true, name: true } })).map(u => [u.id, u.name]));
-    return { items: rows.map(({ candidate, interviews, ...row }) => ({ ...row, candidateName: candidate.name, ownerName: owners.get(row.ownerId) ?? null, nextInterview: interviews[0] ?? null })),
+    const owners = new Map((await db.user.findMany({ where: { id: { in: [...new Set(rows.map(r => r.ownerId))] } }, select: { id: true, name: true } })).map(u => [u.id, u.name]));
+    const dates = new Map(overdue?.map(row => [row.id, new Date(`${row.date}T00:00:00.000Z`)]));
+    return { items: rows.map(({ candidate, interviews, ...row }) => ({ ...row, expectedEntryDate: dates.get(row.id) ?? row.expectedEntryDate,
+      candidateName: candidate.name, ownerName: owners.get(row.ownerId) ?? null, nextInterview: interviews[0] ?? null })),
       total, page: query.page, pageSize: query.pageSize };
   }
 
@@ -127,9 +142,11 @@ export class TalentRecruitmentService {
     const activitySummary = { scheduledCount: activity.filter(i => i.status === 'scheduled').length,
       unsubmittedFeedbackCount: activity.reduce((n, i) => n + i.participants.filter(p => !i.feedback.some(f => f.userId === p.userId)).length, 0) };
     const recruitmentDemandCurrent = this.demands && canReadTalentApplication(actor, row) ? await this.demands.currentForApplication(tx, row, actor) : null;
-    return { ...fields, recruitmentDemandId: row.recruitmentDemandId ?? null, recruitmentDemandRevision: row.recruitmentDemandRevision ?? null,
+    const intentDemandCurrent = this.demands && canReadRecruitment(actor) ? await this.demands.currentIntent(tx, row.intentDemandId ?? null, actor) : null;
+    return { ...fields, intentDemandId: row.intentDemandId ?? null, sourceChannel: row.sourceChannel ?? null, intentDemandCurrent,
+      recruitmentDemandId: row.recruitmentDemandId ?? null, recruitmentDemandRevision: row.recruitmentDemandRevision ?? null,
       recruitmentDemandSnapshot: row.recruitmentDemandSnapshot ?? null, recruitmentDemandCurrent,
-      offerTerminated: row.stage === 'withdrawn' && !hasActiveTalentAcceptance(events) && events.some(event => event.action === 'terminate_offer'),
+      offerTerminated: row.stage === 'withdrawn' && !hasActiveTalentAcceptance(events) && events.some(event => event.action === 'terminate_offer' && event.version === row.revision),
       ...(canReadRecruitment(actor) ? { activitySummary } : {}), candidateName: candidate.name, ownerName: names.get(row.ownerId) ?? null, creatorName: names.get(row.createdById) ?? null,
       allowedActions: allowedApplicationActions(actor, row, activeOnboarding ?? await this.hasActiveOnboarding(tx, row.candidateId)),
       events: visibleEvents.map(event => ({ ...event, actorName: names.get(event.actorId) ?? null })),
@@ -138,6 +155,11 @@ export class TalentRecruitmentService {
 
   private async lockCandidate(tx: Prisma.TransactionClient, candidateId: string) {
     await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id = ${candidateId}::uuid FOR UPDATE`;
+  }
+
+  private async lockLedger(tx: Prisma.TransactionClient) {
+    // Intake confirmation already takes this lock before candidate/application locks.
+    await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended('recruitment-demand-ledger', 0))`;
   }
 
   private async lockApplication(tx: Prisma.TransactionClient, id: string) {
@@ -180,6 +202,8 @@ export class TalentRecruitmentService {
     if (input.positionName !== undefined) data.positionName = this.text(input.positionName, '应聘岗位', 100, true)!;
     if (input.recruitmentBatch !== undefined) data.recruitmentBatch = this.text(input.recruitmentBatch, '招聘批次', 100);
     if (input.expectedEntryDate !== undefined) data.expectedEntryDate = this.date(input.expectedEntryDate);
+    if (input.intentDemandId !== undefined) data.intentDemandId = input.intentDemandId;
+    if (input.sourceChannel !== undefined) data.sourceChannel = this.sourceChannel(input.sourceChannel);
     if (input.ownerId !== undefined) {
       if (!input.ownerId) throw new BadRequestException('请选择负责人');
       await this.assertOwner(tx, input.ownerId);
@@ -194,17 +218,31 @@ export class TalentRecruitmentService {
     return data;
   }
 
+  private sourceChannel(value: string | null | undefined) {
+    if (value == null) return null;
+    if (!(TALENT_SOURCE_CHANNELS as readonly string[]).includes(value)) throw new BadRequestException('请选择本次应聘的实际来源渠道');
+    return value;
+  }
+
+  private async intent(tx: Prisma.TransactionClient, id: string | null | undefined, application: { deptId: string | null; positionName: string }, user: AuthUser) {
+    if (!id) return;
+    if (!this.demands) throw new ServiceUnavailableException('招聘需求关联尚未就绪，请稍后重试');
+    await this.demands.assertIntent(tx, id, application, user);
+  }
+
   async create(candidateId: string, input: CreateTalentApplicationDto, user: AuthUser) {
     return this.prisma.$transaction(tx => this.createInTransaction(tx, candidateId, input, user));
   }
 
   /** Source confirmation shares this transaction and the original creation/event rules. */
   async createInTransaction(tx: Prisma.TransactionClient, candidateId: string, input: CreateTalentApplicationDto, user: AuthUser) {
+      await this.lockLedger(tx);
       await this.lockCandidate(tx, candidateId);
       if (input.requestId) {
         // Different candidate locks cannot serialize a reused global request UUID.
         await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${input.requestId.toLowerCase()}, 0))`;
       }
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR SHARE`;
       const actor = await this.actor(tx, user);
       this.assertWrite(actor);
       const candidate = await tx.talentCandidate.findUnique({ where: { id: candidateId }, select: { id: true, deletedAt: true } });
@@ -213,9 +251,10 @@ export class TalentRecruitmentService {
       const positionName = this.text(input.positionName, '应聘岗位', 100, true)!;
       const recruitmentBatch = this.text(input.recruitmentBatch, '招聘批次', 100);
       const expectedEntryDate = this.date(input.expectedEntryDate);
-      const creationFingerprint = input.requestId ? createHash('sha256').update(JSON.stringify([
-        positionName, recruitmentBatch, input.deptId?.toLowerCase() ?? null, ownerId.toLowerCase(), expectedEntryDate,
-      ])).digest('hex') : null;
+      const intentDemandId = input.intentDemandId ?? null, sourceChannel = this.sourceChannel(input.sourceChannel);
+      const creationFields: unknown[] = [positionName, recruitmentBatch, input.deptId?.toLowerCase() ?? null, ownerId.toLowerCase(), expectedEntryDate];
+      if (intentDemandId || sourceChannel) creationFields.push(intentDemandId, sourceChannel);
+      const creationFingerprint = input.requestId ? createHash('sha256').update(JSON.stringify(creationFields)).digest('hex') : null;
       if (input.requestId) {
         const existing = await tx.talentApplication.findUnique({ where: { requestId: input.requestId }, include: applicationInclude });
         if (existing) {
@@ -226,30 +265,68 @@ export class TalentRecruitmentService {
         }
       }
       const fields = await this.editableFields(tx, { ownerId, deptId: input.deptId });
+      await this.intent(tx, intentDemandId, { deptId: (fields.deptId as string | null) ?? null, positionName }, user);
       const row = await tx.talentApplication.create({ data: {
         candidateId, createdById: actor.id, ownerId, stage: 'screening', revision: 0,
-        requestId: input.requestId ?? null, creationFingerprint, positionName, recruitmentBatch, expectedEntryDate,
+        requestId: input.requestId ?? null, creationFingerprint, positionName, recruitmentBatch, expectedEntryDate, intentDemandId, sourceChannel,
         deptId: fields.deptId as string | null | undefined, departmentNameSnapshot: fields.departmentNameSnapshot as string | null | undefined,
       }, include: applicationInclude });
       await this.event(tx, row, actor.id, 'create', null, null);
-      await this.audit(tx, actor.id, 'create_application', 'talent_application', row.id, null, { candidateId, stage: row.stage, revision: row.revision });
+      await this.audit(tx, actor.id, 'create_application', 'talent_application', row.id, null, { candidateId, stage: row.stage, revision: row.revision, intentDemandId, sourceChannel });
       return this.reloadView(tx, row.id, actor);
   }
 
   async update(id: string, input: UpdateTalentApplicationDto, user: AuthUser) {
     return this.prisma.$transaction(async tx => {
+      await this.lockLedger(tx);
       const row = await this.applicationForUpdate(tx, id);
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR SHARE`;
       const actor = await this.actor(tx, user);
       this.assertWrite(actor);
       this.revision(row.revision, input.expectedRevision);
       if (!['screening', 'interviewing', 'reserve'].includes(row.stage)) throw new BadRequestException('当前应聘阶段不能编辑');
+      const candidate = await tx.talentCandidate.findUnique({ where: { id: row.candidateId }, select: { deletedAt: true } });
+      if (!candidate || candidate.deletedAt) throw new NotFoundException('候选人已失效，不能修改应聘');
+      const changedIntent = input.intentDemandId !== undefined && input.intentDemandId !== (row.intentDemandId ?? null);
+      if (changedIntent && hasActiveTalentAcceptance(row.events)) throw new BadRequestException('本次录用仍有效，不能更换意向需求，请先核对录用办理状态');
+      const reason = this.text(input.intentChangeReason, '改归属原因', 2000, changedIntent);
       const fields = await this.editableFields(tx, input);
+      const intentDemandId = input.intentDemandId === undefined ? row.intentDemandId : input.intentDemandId;
+      if (intentDemandId && (changedIntent || input.positionName !== undefined || input.deptId !== undefined)) {
+        await this.intent(tx, intentDemandId, { deptId: input.deptId === undefined ? row.deptId : input.deptId,
+          positionName: input.positionName ?? row.positionName }, user);
+      }
       await this.changeApplication(tx, row, fields);
       const updated = { ...row, revision: row.revision + 1 };
-      await this.event(tx, updated, actor.id, 'update', row.stage, null);
-      await this.audit(tx, actor.id, 'update_application', 'talent_application', id, { stage: row.stage, revision: row.revision }, { stage: row.stage, revision: updated.revision });
+      await this.event(tx, updated, actor.id, changedIntent ? 'change_intent' : 'update', row.stage, reason);
+      await this.audit(tx, actor.id, 'update_application', 'talent_application', id,
+        { stage: row.stage, revision: row.revision, intentDemandId: row.intentDemandId ?? null, sourceChannel: row.sourceChannel ?? null },
+        { stage: row.stage, revision: updated.revision, intentDemandId: intentDemandId ?? null,
+          sourceChannel: input.sourceChannel === undefined ? row.sourceChannel ?? null : input.sourceChannel, reason });
       return this.reloadView(tx, id, actor);
     });
+  }
+
+  async reuseForIntake(tx: Prisma.TransactionClient, id: string, candidateId: string,
+    input: CreateTalentApplicationDto, expectedRevision: number | undefined, user: AuthUser) {
+    await this.lockLedger(tx);
+    const row = await this.applicationForUpdate(tx, id);
+    const actor = await this.actor(tx, user); this.assertWrite(actor);
+    if (row.candidateId !== candidateId || row.deptId !== (input.deptId ?? null) || row.positionName !== input.positionName.trim()) {
+      throw new ConflictException('选择复用的应聘与本人才、部门或岗位不一致，请重新核对');
+    }
+    if (expectedRevision !== undefined) this.revision(row.revision, expectedRevision);
+    if (!input.intentDemandId || input.intentDemandId === row.intentDemandId) return;
+    if (row.intentDemandId || !['screening', 'interviewing', 'reserve'].includes(row.stage) || hasActiveTalentAcceptance(row.events)) {
+      throw new ConflictException('原应聘已有不同意向或已进入录用，请打开原应聘核对，不会自动更换招聘需求');
+    }
+    if (expectedRevision === undefined) throw new ConflictException('请重新选择并核对原应聘的当前版本，再关联本次意向需求');
+    await this.intent(tx, input.intentDemandId, row, user);
+    await this.changeApplication(tx, row, { intentDemandId: input.intentDemandId });
+    await this.event(tx, { ...row, revision: row.revision + 1 }, actor.id, 'change_intent', row.stage, '收件核对后关联意向需求');
+    await this.audit(tx, actor.id, 'update_application', 'talent_application', row.id,
+      { revision: row.revision, intentDemandId: null, sourceChannel: row.sourceChannel },
+      { revision: row.revision + 1, intentDemandId: input.intentDemandId, sourceChannel: row.sourceChannel, source: 'intake_confirmation' });
   }
 
   async act(id: string, input: TalentApplicationActionDto, user: AuthUser) {
@@ -269,6 +346,7 @@ export class TalentRecruitmentService {
       demandProof = await this.demands.prepareSubmission(input.recruitmentDemandId, input.expectedDemandRevision, user);
     }
     return this.prisma.$transaction(async tx => {
+      await this.lockLedger(tx);
       const row = await this.applicationForUpdate(tx, id);
       if (input.action === 'terminate_offer') await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR SHARE`;
       const actor = await this.actor(tx, user);
@@ -312,7 +390,7 @@ export class TalentRecruitmentService {
         }
         if (!this.demands) throw new ServiceUnavailableException('招聘需求校验尚未就绪，不能提交录用');
         const selected = await this.demands.assertSubmission(tx, row, input.recruitmentDemandId, input.expectedDemandRevision, user, demandProof);
-        Object.assign(fields, { recruitmentDemandId: selected.id, recruitmentDemandRevision: selected.revision, recruitmentDemandSnapshot: { ...selected.snapshot } });
+        Object.assign(fields, { intentDemandId: selected.id, recruitmentDemandId: selected.id, recruitmentDemandRevision: selected.revision, recruitmentDemandSnapshot: { ...selected.snapshot } });
       }
       if (input.action === 'submit_hiring') Object.assign(fields, { hiringReason: note, hiringRequestedById: actor.id,
         hiringRequestedAt: new Date(), reviewReturnStage: row.stage, hiringReviewedById: null, hiringReviewedAt: null });
@@ -321,9 +399,9 @@ export class TalentRecruitmentService {
       const updated = { ...row, stage, revision: row.revision + 1 };
       await this.event(tx, updated, actor.id, input.action, row.stage, note, reserveReasons);
       await this.audit(tx, actor.id, input.action, 'talent_application', id,
-        { stage: row.stage, revision: row.revision, ...(input.action === 'submit_hiring' ? { recruitmentDemandSnapshot: row.recruitmentDemandSnapshot ?? null } : {}),
+        { stage: row.stage, revision: row.revision, ...(input.action === 'submit_hiring' ? { intentDemandId: row.intentDemandId ?? null, recruitmentDemandSnapshot: row.recruitmentDemandSnapshot ?? null } : {}),
           ...(input.action === 'terminate_offer' ? { recruitmentDemandId: row.recruitmentDemandId ?? null, seatOccupied: true } : {}) },
-        { stage, revision: updated.revision, ...(input.action === 'submit_hiring' ? { recruitmentDemandSnapshot: fields.recruitmentDemandSnapshot as Prisma.InputJsonValue } : {}),
+        { stage, revision: updated.revision, ...(input.action === 'submit_hiring' ? { intentDemandId: input.recruitmentDemandId!, recruitmentDemandSnapshot: fields.recruitmentDemandSnapshot as Prisma.InputJsonValue } : {}),
           ...(input.action === 'terminate_offer' ? { recruitmentDemandId: row.recruitmentDemandId ?? null, seatReleased: Boolean(row.recruitmentDemandId), offerTerminated: true } : {}) });
       return this.reloadView(tx, id, actor);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30000, maxWait: 10000 });

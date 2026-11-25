@@ -2,10 +2,20 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { parseArguments, profilePath, validateProfile, runProbe, DECRYPT_SCRIPT } = require('./probe-recruitment-mail.cjs');
+const { parseArguments, profilePath, validateProfile, runProbe, DECRYPT_SCRIPT, windowsProfileEnvironment } = require('./probe-recruitment-mail.cjs');
 
 const scope = { account: 'hr@example.invalid', folder: 'Recruitment fixture' };
 const credential = { version: 1, provider: 'alimail', ...scope, authorizedFrom: '2037-01-01T00:00:00.000Z', password: 'fictional-client-password' };
+
+test('Windows PowerShell profile reader uses its own system modules without mutating the host environment', () => {
+  const parent = { SystemRoot: 'C:\\Windows', PSModulePath: 'C:\\Program Files\\PowerShell\\7\\Modules', OTHER_SETTING: 'unchanged' };
+  const child = windowsProfileEnvironment('C:\\Fixture\\private.dpapi', parent);
+  assert.equal(child.PSModulePath, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules');
+  assert.equal(child.HRM_MAIL_PROFILE_PATH, 'C:\\Fixture\\private.dpapi');
+  assert.equal(child.OTHER_SETTING, 'unchanged');
+  assert.equal(parent.PSModulePath, 'C:\\Program Files\\PowerShell\\7\\Modules');
+  assert.equal(parent.HRM_MAIL_PROFILE_PATH, undefined);
+});
 
 test('probe takes scope metadata, never a password or arbitrary credential path', () => {
   assert.deepEqual(parseArguments(['--account', scope.account, '--folder', scope.folder]), scope);

@@ -21,12 +21,12 @@ export interface IntakeFields {
 }
 export interface IntakeCreate extends IntakeFields { requestId: string }
 export interface IntakeUpdate extends IntakeFields { expectedRevision: number }
-export interface IntakeQuery { state?: IntakeState; ownerId?: string; sourceChannel?: string; demandId?: string; postingId?: string; keyword?: string; page?: number; pageSize?: number }
-export interface IntakeApplication { deptId?: string | null; positionName?: string; ownerId?: string; recruitmentBatch?: string | null; expectedEntryDate?: string | null }
+export interface IntakeQuery { state?: IntakeState; ownerId?: string; workQueue?: 'review' | 'assignment'; sourceChannel?: string; demandId?: string; postingId?: string; keyword?: string; page?: number; pageSize?: number }
+export interface IntakeApplication { deptId?: string | null; positionName?: string; ownerId?: string; recruitmentBatch?: string | null; expectedEntryDate?: string | null; intentDemandId?: string | null; sourceChannel?: TalentSourceChannel | null }
 export interface IntakeConfirm {
   requestId: string; expectedRevision: number; mode: 'candidate_only' | 'candidate_application';
   candidate?: TalentCandidateInput; existingCandidateId?: string;
-  application?: IntakeApplication; existingApplicationId?: string;
+  application?: IntakeApplication; existingApplicationId?: string; expectedExistingApplicationRevision?: number;
 }
 export interface RecruitmentPosting {
   id: string; revision: number; demandId: string; channel: string; name: string; url: string; externalId: string | null;

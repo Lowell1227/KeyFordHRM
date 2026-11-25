@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Upload, Download } from '@element-plus/icons-vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
@@ -27,7 +28,10 @@ import { formatDate } from '@/utils/date';
 const auth = useAuthStore(), route = useRoute(), router = useRouter(), { canEdit } = useTalentPermissions();
 const rows = ref<RecruitmentIntake[]>([]), loading = ref(false), listError = ref(''), referenceError = ref('');
 const { page, pageSize, total, pageSizeOptions } = usePagination();
-const filters = reactive({ state: '' as IntakeState | '', keyword: '', ownerId: '', sourceChannel: '' });
+function routeState(): IntakeState | '' { const value = route.query.state; return typeof value === 'string' && Object.prototype.hasOwnProperty.call(INTAKE_STATE_LABELS, value) ? value as IntakeState : ''; }
+function routeWorkQueue(): 'review' | 'assignment' | '' { return route.query.workQueue === 'review' || route.query.workQueue === 'assignment' ? route.query.workQueue : ''; }
+const filters = reactive({ state: routeState(), workQueue: routeWorkQueue(), keyword: '', ownerId: typeof route.query.ownerId === 'string' ? route.query.ownerId : '', sourceChannel: '' });
+const workQueueLabel = computed(() => filters.workQueue === 'assignment' ? '待归岗位' : filters.workQueue === 'review' ? '待核对简历' : '');
 const mailboxConfigured = ref(false), mailboxError = ref(''), syncing = ref(false), mailMessage = ref('');
 const owners = ref<TalentRecruitmentOwner[]>([]), postings = ref<RecruitmentPosting[]>([]), demands = ref<RecruitmentDemandView[]>([]);
 const directories = ref<RecruitmentDemandDirectories>({ departments: [], positions: [] });
@@ -38,11 +42,22 @@ async function loadList() {
   const token = ++listEpoch; loading.value = true; listError.value = '';
   try {
     const result = await recruitmentIntakesApi.list({ page: page.value, pageSize: pageSize.value, state: filters.state || undefined,
+      workQueue: filters.workQueue || undefined,
       keyword: filters.keyword.trim() || undefined, ownerId: filters.ownerId || undefined, sourceChannel: filters.sourceChannel || undefined,
       ...(typeof route.query.demandId === 'string' ? { demandId: route.query.demandId } : {}), ...(typeof route.query.postingId === 'string' ? { postingId: route.query.postingId } : {}) });
     if (token !== listEpoch || !canEdit.value) return; rows.value = result.items; total.value = result.total;
   } catch (cause) { if (token === listEpoch) { rows.value = []; total.value = 0; listError.value = intakeError(cause); } }
   finally { if (token === listEpoch) loading.value = false; }
+}
+async function clearWorkQueue() {
+  filters.workQueue = ''; filters.ownerId = ''; page.value = 1;
+  const query = { ...route.query }; delete query.workQueue; delete query.ownerId;
+  await router.replace({ query });
+}
+async function resetFilters() {
+  Object.assign(filters, { state: '', workQueue: '', keyword: '', ownerId: '', sourceChannel: '' }); page.value = 1;
+  const query = { ...route.query }; delete query.state; delete query.workQueue; delete query.ownerId;
+  if (route.query.state || route.query.workQueue || route.query.ownerId) await router.replace({ query }); else await loadList();
 }
 const review = useRecruitmentIntake(loadList);
 const { current, opened, loading: detailLoading, busy, editable, error, result, blocked, unknown, draft, form, application,
@@ -51,7 +66,9 @@ const { current, opened, loading: detailLoading, busy, editable, error, result, 
 const leave = useRecruitmentLeaveGuard({ dirty: () => (opened.value && review.dirty.value) || unknown.value, busy: () => busy.value || syncing.value,
   discard: () => { if (!unknown.value) review.reset(); } });
 const completedTarget = computed(() => intakeResultTarget(current.value));
-const existingTarget = computed(() => intakeResultTarget({ candidateId: existingProfile.value?.id }));
+const selectedExistingApplication = computed(() => existingApplications.value.find(item => item.id === existingApplicationId.value));
+const existingTarget = computed(() => intakeResultTarget({ candidateId: existingProfile.value?.id, applicationId: selectedExistingApplication.value?.id }));
+const existingSourceLabel = computed(() => selectedExistingApplication.value?.sourceChannel ? TALENT_SOURCE_LABELS[selectedExistingApplication.value.sourceChannel] : '待核对');
 const matchingApplications = computed(() => existingApplications.value.filter(row => row.deptId === application.deptId && row.positionName === application.positionName));
 const terminal = computed(() => !!current.value && (!editable.value || current.value.state === 'completed' || current.value.state === 'closed'));
 const suggestions = computed(() => Object.entries(current.value?.parseResult?.fields || {}).filter(([field]) => Object.prototype.hasOwnProperty.call(INTAKE_FIELD_LABELS, field)));
@@ -82,18 +99,25 @@ async function searchPostings(keyword = '') {
 }
 async function searchDemands(keyword = '') {
   const token = ++demandQuery, context = refsEpoch;
-  try { const result = await recruitmentDemandsApi.list({ keyword: keyword || undefined, status: 'approved', page: 1, pageSize: 20 }); if (token === demandQuery && context === refsEpoch && canEdit.value) demands.value = result.items.filter(row => row.usable); }
+  try { const result = await recruitmentDemandsApi.intentOptions({ keyword: keyword || undefined, page: 1, pageSize: 20 }); if (token === demandQuery && context === refsEpoch && canEdit.value) demands.value = result.items.filter(row => row.usable); }
   catch (cause) { if (token === demandQuery && context === refsEpoch) referenceError.value = intakeError(cause); }
 }
 async function useDemand(id: string) {
-  const token = ++selectionEpoch; form.demandId = id || '';
-  if (id) await resolveDemand(id, token);
+  const token = ++selectionEpoch;
+  if (id) await resolveDemand(id, token); else form.demandId = '';
 }
 async function resolveDemand(id: string, token: number) {
   try { const row = await recruitmentDemandsApi.detail(id); if (token !== selectionEpoch || !canEdit.value || !opened.value) return;
-    if (!row.usable || row.sourceState !== 'approved') { referenceError.value = '该需求当前不可用，请重新核对。'; form.demandId = ''; return; }
+    if (!row.usable || row.sourceState !== 'approved' || !row.deptId || !row.positionName) { referenceError.value = '该需求当前不可用，请重新核对。'; return; }
+    const before = JSON.stringify([form.demandId, form.positionName, application.deptId, application.positionName]);
+    if ((application.deptId && application.deptId !== row.deptId) || (application.positionName.trim() && application.positionName.trim() !== row.positionName) || (form.positionName.trim() && form.positionName.trim() !== row.positionName)) {
+      try { await ElMessageBox.confirm(`所选需求为“${row.departmentName || '已核对部门'} / ${row.positionName}”，将替换已填写的本次应聘部门和岗位。是否使用该需求？`, '核对收件归属', { confirmButtonText: '使用该需求部门和岗位', cancelButtonText: '保留原输入', type: 'warning' }); }
+      catch { return; }
+    }
+    if (token !== selectionEpoch || !canEdit.value || !opened.value || before !== JSON.stringify([form.demandId, form.positionName, application.deptId, application.positionName])) return;
     demands.value = [row, ...demands.value.filter(item => item.id !== row.id)]; form.demandId = row.id;
     form.positionName = row.positionName || ''; application.positionName = row.positionName || ''; application.deptId = row.deptId || '';
+    referenceError.value = '';
   } catch (cause) { if (token === selectionEpoch) referenceError.value = intakeError(cause); }
 }
 async function choosePosting(id: string) {
@@ -167,7 +191,10 @@ watch([canEdit, () => auth.user?.id], () => {
   page.value = 1; mailboxConfigured.value = false;
   if (canEdit.value) { void loadList(); void references(); void readMailboxStatus(); }
 }, { immediate: true });
-watch(() => route.query, () => { ++selectionEpoch; page.value = 1; if (canEdit.value) void loadList(); });
+watch(() => route.query, () => { ++selectionEpoch; filters.state = routeState(); filters.workQueue = routeWorkQueue(); filters.ownerId = typeof route.query.ownerId === 'string' ? route.query.ownerId : ''; page.value = 1; if (canEdit.value) void loadList(); });
+watch([() => route.query.intakeId, canEdit, () => auth.user?.id], ([id, allowed]) => {
+  if (allowed && typeof id === 'string' && id && current.value?.id !== id) void open(id);
+}, { immediate: true });
 watch(opened, value => { if (!value) ++selectionEpoch; });
 onBeforeUnmount(() => { ++listEpoch; ++refsEpoch; ++selectionEpoch; });
 </script>
@@ -181,10 +208,10 @@ onBeforeUnmount(() => { ++listEpoch; ++refsEpoch; ++selectionEpoch; });
     <template #filters><QueryFilterPanel><el-form inline @submit.prevent="page = 1; loadList()">
       <el-form-item label="状态"><el-select :fit-input-width="true" v-model="filters.state" clearable aria-label="收件状态"><el-option v-for="(label, state) in INTAKE_STATE_LABELS" :key="state" :value="state" :label="label" /></el-select></el-form-item>
       <el-form-item label="岗位 / 来源线索"><el-input v-model="filters.keyword" clearable maxlength="100" aria-label="岗位或来源线索" /></el-form-item>
-      <el-form-item label="负责人"><el-select :fit-input-width="true" v-model="filters.ownerId" clearable filterable remote :remote-method="searchOwners" aria-label="筛选负责人"><el-option v-for="owner in owners" :key="owner.id" :value="owner.id" :label="`${owner.name}${owner.employeeNo ? ` · ${owner.employeeNo}` : ''}`" /></el-select></el-form-item>
+      <el-form-item label="负责人"><el-select :fit-input-width="true" v-model="filters.ownerId" clearable filterable remote :remote-method="searchOwners" aria-label="筛选负责人"><el-option v-if="filters.ownerId && !owners.some(owner => owner.id === filters.ownerId)" :value="filters.ownerId" :label="filters.ownerId === auth.user?.id ? '当前经办' : '指定经办'" /><el-option v-for="owner in owners" :key="owner.id" :value="owner.id" :label="`${owner.name}${owner.employeeNo ? ` · ${owner.employeeNo}` : ''}`" /></el-select></el-form-item>
       <el-form-item label="来源"><el-select :fit-input-width="true" v-model="filters.sourceChannel" clearable aria-label="筛选来源"><el-option v-for="source in TALENT_SOURCE_CHANNELS" :key="source" :value="source" :label="TALENT_SOURCE_LABELS[source]" /></el-select></el-form-item>
-      <el-form-item><el-button type="primary" @click="page = 1; loadList()">查询</el-button><el-button @click="Object.assign(filters, { state: '', keyword: '', ownerId: '', sourceChannel: '' }); page = 1; loadList()">重置</el-button></el-form-item>
-    </el-form></QueryFilterPanel></template>
+      <el-form-item><el-button type="primary" @click="page = 1; loadList()">查询</el-button><el-button @click="resetFilters">重置</el-button></el-form-item>
+    </el-form><el-tag v-if="workQueueLabel" closable aria-label="工作台收件筛选" @close="clearWorkQueue">{{ workQueueLabel }}{{ filters.ownerId === auth.user?.id ? ' · 由我经办' : '' }}</el-tag></QueryFilterPanel></template>
     <template #feedback>
       <el-alert v-if="!canEdit" title="简历收件仅供招聘经办办理" type="error" :closable="false" />
       <el-alert v-else-if="!mailboxConfigured" title="招聘邮箱未配置，手工收件可继续办理。" type="info" :closable="false" />
@@ -233,6 +260,7 @@ onBeforeUnmount(() => { ++listEpoch; ++refsEpoch; ++selectionEpoch; });
         <p v-if="existingProfile" class="muted">原人才来源：{{ TALENT_SOURCE_LABELS[existingProfile.sourceChannel] }}；已有跟进 {{ existingProfile.followUps.length }} 条，保持不变。</p>
       </section>
       <section aria-label="本次应聘"><h3>本次应聘</h3><el-form label-position="top" :disabled="busy || terminal || unknown || blocked" class="form-grid"><el-form-item label="应聘部门"><el-select :fit-input-width="true" v-model="application.deptId" filterable clearable aria-label="应聘部门"><el-option v-for="dept in directories.departments" :key="dept.id" :value="dept.id" :label="dept.fullPath || dept.name" /></el-select></el-form-item><el-form-item label="应聘岗位"><el-select :fit-input-width="true" v-model="application.positionName" filterable clearable aria-label="应聘岗位"><el-option v-for="position in directories.positions" :key="position.id" :value="position.name" :label="`${position.code} · ${position.name}`" /></el-select></el-form-item><el-form-item label="应聘负责人"><el-select :fit-input-width="true" v-model="application.ownerId" filterable remote :remote-method="searchOwners" aria-label="应聘负责人"><el-option v-if="auth.user" :value="auth.user.id" :label="auth.user.name" /><el-option v-for="owner in owners.filter(item => item.id !== auth.user?.id)" :key="owner.id" :value="owner.id" :label="owner.name" /></el-select></el-form-item><el-form-item v-if="reuseExisting" label="同岗位已有应聘"><el-select :fit-input-width="true" v-model="existingApplicationId" clearable aria-label="复用已有应聘" placeholder="不选则建立本次应聘"><el-option v-for="item in matchingApplications" :key="item.id" :value="item.id" :label="`${item.positionName} · ${APPLICATION_STAGE_LABELS[item.stage]} · ${item.id}`" /></el-select></el-form-item></el-form></section>
+      <dl class="intake-application-origin" aria-label="本次应聘归属核对"><dt>意向需求</dt><dd><el-button v-if="form.demandId" link type="primary" @click="router.push({ path: '/recruitment/demands', query: { demandId: form.demandId } })">{{ demands.find(item => item.id === form.demandId)?.positionName || '查看收件需求原单' }}</el-button><span v-else>未关联</span></dd><dt>本次收件来源</dt><dd>{{ form.sourceChannel ? TALENT_SOURCE_LABELS[form.sourceChannel] : '待核对' }}</dd><template v-if="existingApplicationId"><dt>原应聘来源</dt><dd>{{ existingSourceLabel }}</dd><dt>原应聘</dt><dd><el-button v-if="existingTarget" link type="primary" @click="router.push(existingTarget)">打开原应聘核对</el-button></dd></template></dl>
       <section v-if="current?.transport === 'email' && editable" aria-label="关联原待收简历"><h3>关联原待收简历</h3><el-alert v-if="awaitingError" :title="awaitingError" type="error" :closable="false" /><div class="inline-actions"><el-select :fit-input-width="true" v-model="awaitingId" filterable remote :remote-method="findAwaiting" aria-label="原待收简历" @visible-change="value => value && findAwaiting()"><el-option v-for="item in awaitingRows" :key="item.id" :value="item.id" :label="`${item.candidateDraft?.name || '姓名待核对'} · ${item.positionName || '岗位待确认'} · ${item.ownerName || '经办待核'} · ${item.id}`" /></el-select><el-button :loading="associating" :disabled="busy || blocked || unknown" @click="associate">关联并保留原跟进</el-button></div></section>
       <section v-if="current?.events?.length" aria-label="收件时间线"><h3>收件时间线</h3><el-timeline><el-timeline-item v-for="event in current.events" :key="event.id" :timestamp="formatDate(event.createdAt)">{{ event.actorName || '系统' }} · {{ intakeEventLabel(event.action) }} · 版本 {{ event.revision }}<p class="source-text">{{ event.reason }}</p><div v-for="mapping in intakeMappingHistory(event)" :key="mapping.label" class="mapping-history"><span>{{ mapping.label }}：</span><el-button v-if="mapping.target" link type="primary" @click="mapping.target && router.push(mapping.target)">{{ mapping.reference }}</el-button><span v-else>{{ mapping.reference }}</span><span v-if="mapping.postingRevision"> · 职位版本 {{ mapping.postingRevision }}</span></div></el-timeline-item></el-timeline></section>
       <el-form v-if="closing && editable" label-position="top" @submit.prevent="review.close"><el-form-item label="关闭原因" required :error="!closeReason.trim() ? '请填写关闭原因' : ''"><el-input v-model="closeReason" type="textarea" :rows="2" maxlength="2000" aria-label="关闭原因" /></el-form-item><el-button :loading="busy" @click="review.close">记录原因并关闭收件</el-button></el-form>

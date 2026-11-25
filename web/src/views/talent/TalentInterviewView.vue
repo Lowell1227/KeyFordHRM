@@ -21,6 +21,7 @@ const route=useRoute(),router=useRouter(),{canEdit,canRead}=useTalentPermissions
 const canManage=canRead;
 const mode=ref<'applications'|'interviews'>('applications'),keyword=ref(''),scope=ref('all'),stage=ref<TalentApplicationStage|''>(''),day=ref('');
 const bucket=ref<'upcoming'|'feedback'|'history'|'all'>('upcoming'),page=ref(1),pageSize=ref(20),total=ref(0),loading=ref(false),error=ref('');
+const overdueOnly=ref(false);
 const applications=ref<TalentApplicationQueueItem[]>([]),interviews=ref<TalentInterviewView[]>([]),detail=ref<TalentInterviewView|null>(null);
 const drawer=ref<InstanceType<typeof TalentDetailDrawer>>(),singlePanel=ref<InstanceType<typeof TalentInterviewPanel>>(),singleContent=ref<InstanceType<typeof TalentInterviewContent>>();
 const drawerOpen=ref(false),candidateId=ref<string|null>(null),applicationId=ref<string|undefined>(),newApplication=ref(false);
@@ -29,7 +30,7 @@ const applicationMatch=computed(()=>applicationId.value?{id:applicationId.value}
 const pickerOpen=ref(false),picking=ref(false),pickerError=ref(''),people=ref<TalentCandidateListItem[]>([]),picked=ref('');
 let generation=0,peopleGeneration=0;
 const time=(v:string)=>formatInterviewTime(v).slice(0,16);
-const nextStep=(row:TalentApplicationQueueItem)=>({screening:row.nextInterview?'查看面试安排':'初筛 / 安排面试',interviewing:row.nextInterview?'查看安排 / 反馈':'安排面试 / 决定下一步',hiring_review:'等待独立录用确认',offered:'记录候选人答复',accepted:'办理入职',onboarding:'跟进入职 / 到岗',hired:'查看员工档案',declined:'查看历史',rejected:'查看历史',reserve:'继续沟通 / 安排面试',withdrawn:'查看历史'}[row.stage]);
+const nextStep=(row:TalentApplicationQueueItem)=>overdueOnly.value&&['accepted','onboarding'].includes(row.stage)?'核对实际到岗结果':({screening:row.nextInterview?'查看面试安排':'初筛 / 安排面试',interviewing:row.nextInterview?'查看安排 / 反馈':'安排面试 / 决定下一步',hiring_review:'等待独立录用确认',offered:'记录候选人答复',accepted:'办理入职',onboarding:'跟进入职 / 到岗',hired:'查看员工档案',declined:'查看历史',rejected:'查看历史',reserve:'继续沟通 / 安排面试',withdrawn:'查看历史'}[row.stage]);
 async function canLeave(){
   if(formOpen.value && formDrawer.value && !await formDrawer.value.prepareToLeave())return false;
   if(drawerOpen.value && drawer.value && !await drawer.value.prepareToLeave())return false;
@@ -42,6 +43,7 @@ function syncQuery(){
   const allowed=mode.value==='applications'?['all','owned']:canManage.value?['all','responsible','mine','created']:['mine'];
   scope.value=typeof q.scope==='string'&&allowed.includes(q.scope)?q.scope:allowed[0]!;
   stage.value=typeof q.stage==='string'&&Object.prototype.hasOwnProperty.call(APPLICATION_STAGE_LABELS,q.stage)?q.stage as TalentApplicationStage:'';
+  overdueOnly.value=mode.value==='applications'&&q.overdueOnly==='true';
   day.value=typeof q.day==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(q.day)?q.day:'';
   bucket.value=['upcoming','feedback','history','all'].includes(String(q.bucket))?q.bucket as typeof bucket.value:'upcoming';page.value=Math.max(1,Number(q.page)||1);
   formOpen.value=false;editCandidateId.value=null;
@@ -53,7 +55,7 @@ async function load(){
   try{
     if(typeof route.params.id==='string'){const row=await talentInterviewsApi.detail(route.params.id);if(token===generation)detail.value=row;return;}
     detail.value=null;
-    const result=mode.value==='applications'?await talentRecruitmentApi.queue({scope:scope.value as 'owned'|'all',keyword:keyword.value.trim()||undefined,stage:stage.value||undefined,page:page.value,pageSize:pageSize.value})
+    const result=mode.value==='applications'?await talentRecruitmentApi.queue({scope:scope.value as 'owned'|'all',keyword:keyword.value.trim()||undefined,stage:stage.value||undefined,overdueOnly:overdueOnly.value||undefined,page:page.value,pageSize:pageSize.value})
       :await talentInterviewsApi.queue({scope:scope.value as 'mine'|'created'|'responsible'|'all',keyword:keyword.value.trim()||undefined,view:bucket.value,day:day.value||undefined,page:page.value,pageSize:pageSize.value});
     if(token!==generation)return;total.value=result.total;
     if(mode.value==='applications')applications.value=result.items as TalentApplicationQueueItem[];else interviews.value=result.items as TalentInterviewView[];
@@ -62,12 +64,14 @@ async function load(){
 }
 async function search(reset=true){
   if(reset)page.value=1;
-  const q={work:mode.value,scope:scope.value,keyword:keyword.value.trim()||undefined,stage:mode.value==='applications'?stage.value||undefined:undefined,
+  const q={...route.query,work:mode.value,scope:scope.value,keyword:keyword.value.trim()||undefined,stage:mode.value==='applications'?stage.value||undefined:undefined,
+    overdueOnly:mode.value==='applications'&&overdueOnly.value?'true':undefined,candidateId:undefined,applicationId:undefined,newApplication:undefined,
     bucket:mode.value==='interviews'?bucket.value:undefined,day:mode.value==='interviews'?day.value||undefined:undefined,page:String(page.value)};
   if(Object.entries(q).every(([key,value])=>route.query[key]===value)&&!route.query.candidateId)await load();else await router.replace({path:'/talent-interviews',query:q});
 }
 async function changeMode(value:string|number){if(!await canLeave())return;mode.value=canManage.value&&value==='applications'?'applications':'interviews';scope.value=canManage.value?'all':'mine';await search();}
-async function reset(){keyword.value='';stage.value='';day.value='';bucket.value='upcoming';scope.value=canManage.value?'all':'mine';await search();}
+async function reset(){keyword.value='';stage.value='';day.value='';bucket.value='upcoming';overdueOnly.value=false;scope.value=canManage.value?'all':'mine';await search();}
+async function clearOverdueFilter(){overdueOnly.value=false;await search();}
 async function openApplication(row:Pick<TalentApplicationQueueItem,'candidateId'|'id'>){await router.push({query:{...route.query,candidateId:row.candidateId,applicationId:row.id}});}
 async function closeDrawer(value:boolean){
   // Programmatic hiding during the edit handoff must not remove the selected application.
@@ -117,6 +121,7 @@ onBeforeUnmount(()=>{++generation;++peopleGeneration;});
         <el-date-picker v-else v-model="day" type="date" value-format="YYYY-MM-DD" placeholder="面试日期（北京时间）" aria-label="面试日期"/>
         <el-button type="primary" @click="search()">查询</el-button><el-button @click="reset">重置</el-button>
       </QueryFilterPanel>
+      <el-tag v-if="mode==='applications'&&overdueOnly" closable @close="clearOverdueFilter">预计到岗已过</el-tag>
       <el-tabs v-if="canManage" :model-value="mode" @tab-change="changeMode"><el-tab-pane label="应聘办理" name="applications"/><el-tab-pane label="面试安排" name="interviews"/></el-tabs>
       <el-radio-group v-if="mode==='interviews'" v-model="bucket" class="interview-buckets" aria-label="面试待办" @change="search()"><el-radio-button value="upcoming">待进行 / 待确认结果</el-radio-button><el-radio-button value="feedback">待本人反馈</el-radio-button><el-radio-button value="history">历史记录</el-radio-button><el-radio-button value="all">全部</el-radio-button></el-radio-group>
     </template>
@@ -125,12 +130,13 @@ onBeforeUnmount(()=>{++generation;++peopleGeneration;});
       <el-table v-if="mode==='applications'" v-loading="loading" :data="applications" row-key="id" empty-text="暂无匹配的应聘记录" class="app-table">
         <el-table-column prop="candidateName" label="候选人" min-width="120"/><el-table-column prop="positionName" label="应聘岗位" min-width="150"/>
         <el-table-column label="进度" min-width="130"><template #default="{row}">{{ APPLICATION_STAGE_LABELS[row.stage as TalentApplicationStage] }}</template></el-table-column><el-table-column prop="ownerName" label="负责人" min-width="100"/>
+        <el-table-column v-if="overdueOnly" label="预计到岗" width="115"><template #default="{row}">{{ row.expectedEntryDate ? row.expectedEntryDate.slice(0, 10) : '未填写' }}</template></el-table-column>
         <el-table-column label="面试安排" min-width="175"><template #default="{row}">{{ row.nextInterview?time(row.nextInterview.startsAt):'尚未安排' }}</template></el-table-column><el-table-column label="下一步" min-width="175"><template #default="{row}">{{ nextStep(row as TalentApplicationQueueItem) }}</template></el-table-column><el-table-column label="操作" width="90" fixed="right"><template #default="{row}"><el-button link type="primary" @click="openApplication(row as TalentApplicationQueueItem)">{{ canEdit ? '办理' : '查看' }}</el-button></template></el-table-column>
       </el-table>
       <el-table v-else v-loading="loading" :data="interviews" row-key="id" empty-text="暂无匹配的面试安排" class="app-table"><el-table-column prop="candidateNameSnapshot" label="候选人" min-width="120"/><el-table-column v-if="canManage" label="关联应聘" min-width="175"><template #default="{row}">{{ interviewApplicationLabel(row.application) }}</template></el-table-column><el-table-column label="北京时间" min-width="175"><template #default="{row}">{{ time(row.startsAt) }}</template></el-table-column><el-table-column label="进度" min-width="120"><template #default="{row}">{{ row.status==='scheduled'&&Date.parse(row.endsAt)<Date.now()?'待确认实际结果':INTERVIEW_STATUS_LABELS[row.status as keyof typeof INTERVIEW_STATUS_LABELS] }}</template></el-table-column><el-table-column label="参与人" min-width="160"><template #default="{row}">{{ row.participantNames.join('、') }}</template></el-table-column><el-table-column label="操作" width="130" fixed="right"><template #default="{row}"><el-button link type="primary" @click="openInterview(row as TalentInterviewView)">{{ bucket==='feedback'?'填写本人反馈':'查看安排' }}</el-button></template></el-table-column></el-table>
     </template>
     <template #mobile-list>
-      <template v-if="mode==='applications'"><el-empty v-if="!loading&&!applications.length" description="暂无匹配的应聘记录" :image-size="50"/><MobileResultCard v-for="row in applications" :key="row.id"><template #title>{{ row.candidateName }} · {{ row.positionName }}</template><template #status>{{ APPLICATION_STAGE_LABELS[row.stage] }}</template><p>负责人：{{ row.ownerName||'未指定' }}</p><p>面试：{{ row.nextInterview?time(row.nextInterview.startsAt):'尚未安排' }}</p><p>下一步：{{ nextStep(row as TalentApplicationQueueItem) }}</p><template #actions><el-button link type="primary" @click="openApplication(row as TalentApplicationQueueItem)">{{ canEdit ? '办理' : '查看' }}</el-button></template></MobileResultCard></template>
+      <template v-if="mode==='applications'"><el-empty v-if="!loading&&!applications.length" description="暂无匹配的应聘记录" :image-size="50"/><MobileResultCard v-for="row in applications" :key="row.id"><template #title>{{ row.candidateName }} · {{ row.positionName }}</template><template #status>{{ APPLICATION_STAGE_LABELS[row.stage] }}</template><p>负责人：{{ row.ownerName||'未指定' }}</p><p v-if="overdueOnly">预计到岗：{{ row.expectedEntryDate?.slice(0, 10) || '未填写' }}</p><p v-else>面试：{{ row.nextInterview?time(row.nextInterview.startsAt):'尚未安排' }}</p><p>下一步：{{ nextStep(row as TalentApplicationQueueItem) }}</p><template #actions><el-button link type="primary" @click="openApplication(row as TalentApplicationQueueItem)">{{ canEdit ? '办理' : '查看' }}</el-button></template></MobileResultCard></template>
       <template v-else><el-empty v-if="!loading&&!interviews.length" description="暂无匹配的面试安排" :image-size="50"/><MobileResultCard v-for="row in interviews" :key="row.id"><template #title>{{ row.candidateNameSnapshot }}</template><template #status>{{ INTERVIEW_STATUS_LABELS[row.status] }}</template><p v-if="canManage">{{ interviewApplicationLabel(row.application) }}</p><p>{{ time(row.startsAt) }}（北京时间）</p><p>{{ row.participantNames.join('、') }}</p><template #actions><el-button link type="primary" @click="openInterview(row as TalentInterviewView)">{{ bucket==='feedback'?'填写本人反馈':'查看安排' }}</el-button></template></MobileResultCard></template>
     </template>
     <template #pagination><ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" @change="search(false)"/></template>

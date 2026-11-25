@@ -67,6 +67,48 @@ describe('demand applications: owned PostgreSQL', () => {
   }
   function query(changes = {}) { return Object.assign(new RecruitmentDemandApplicationsQueryDto(), changes); }
 
+  it('counts early intent once without occupying a seat and separates raw intake work', async () => {
+    const row = await demand(), app = await application(row.id, 'screening');
+    await db.talentApplication.update({ where: { id: app.id }, data: { recruitmentDemandId: null, intentDemandId: row.id } });
+    await db.recruitmentIntake.create({ data: { demandId: row.id, ownerId: reader.id, createdById: reader.id, state: 'pending_review' } });
+    expect(await service.list(row.id, query({ category: 'screening' }), reader)).toMatchObject({ total: 1, items: [{ id: app.id, category: 'screening', occupied: false }] });
+    expect(await (service as any).progress(row.id, reader)).toMatchObject({ applications: { screening: 1 }, intakes: null });
+    await db.user.update({ where: { id: reader.id }, data: { hrCapabilities: ['recruitment_view', 'recruitment_edit'] } });
+    try { expect(await (service as any).progress(row.id, reader)).toMatchObject({ applications: { screening: 1 }, intakes: { awaiting_resume: 0, pending_review: 1, needs_material: 0 } }); }
+    finally { await db.user.update({ where: { id: reader.id }, data: { hrCapabilities: ['recruitment_view'] } }); }
+    const [counts] = await attachRecruitmentDemandSeats(db, [{ id: row.id, approvedHeadcount: 2, usable: true }]);
+    expect(counts.occupiedCount).toBe(0);
+  });
+
+  it('uses an explicitly changed early intent instead of its historical frozen demand', async () => {
+    const old = await demand(), current = await demand(), app = await application(old.id, 'screening');
+    await db.talentApplication.update({ where: { id: app.id }, data: { intentDemandId: current.id } });
+    expect((await service.list(old.id, query(), reader)).items.some(item => item.id === app.id)).toBe(false);
+    expect(await service.list(current.id, query({ category: 'screening' }), reader)).toMatchObject({ total: 1, items: [{ id: app.id }] });
+    expect((await db.talentApplication.findUniqueOrThrow({ where: { id: app.id } })).recruitmentDemandId).toBe(old.id);
+  });
+
+  it('does not restore a historical demand after the operator explicitly clears the intent', async () => {
+    const row = await demand(), app = await application(row.id, 'screening', [{ action: 'change_intent', version: 1 }]);
+    expect((await service.list(row.id, query(), reader)).items.some(item => item.id === app.id)).toBe(false);
+  });
+  it.each(['rejected','withdrawn'])('retains the revised intent after an early %s result rather than restoring a frozen demand',async stage=>{
+    const old=await demand(),current=await demand(),app=await application(old.id,stage,[{action:'change_intent',version:1}]);
+    await db.talentApplication.update({where:{id:app.id},data:{intentDemandId:current.id}});
+    expect((await service.list(old.id,query(),reader)).total).toBe(0);
+    expect((await service.list(current.id,query(),reader)).items.map(item=>item.id)).toEqual([app.id]);
+    await db.talentApplication.update({where:{id:app.id},data:{intentDemandId:null}});
+    expect((await service.list(old.id,query(),reader)).total).toBe(0);
+    expect((await service.list(current.id,query(),reader)).total).toBe(0);
+  });
+  it('does not classify a later ordinary withdrawal as the earlier terminated offer',async()=>{
+    const old=await demand(),current=await demand(),app=await application(old.id,'withdrawn',[
+      {action:'accept_offer',version:1},{action:'terminate_offer',version:2},{action:'reopen',version:3},{action:'change_intent',version:4},{action:'withdraw',version:5}]);
+    await db.talentApplication.update({where:{id:app.id},data:{intentDemandId:current.id}});
+    expect((await service.list(old.id,query(),reader)).total).toBe(0);
+    expect(await service.list(current.id,query(),reader)).toMatchObject({total:1,items:[{id:app.id,category:null,occupied:false}]});
+  });
+
   it('classifies current relationships and reconciles accepted/hired occupancy with the shared helper', async () => {
     const row = await demand(), accept = { action: 'accept_offer', version: 2 }, terminate = { action: 'terminate_offer', version: 4 };
     await application(row.id, 'offered', [{ action: 'approve_hiring', version: 1 }]);
@@ -85,7 +127,8 @@ describe('demand applications: owned PostgreSQL', () => {
     expect(all.items.filter(item => item.category === 'accepted')).toHaveLength(4);
     expect(all.items.filter(item => item.category === 'terminated')).toHaveLength(1);
     expect(all.items.filter(item => item.category === 'hired')).toHaveLength(1);
-    expect(all.items.filter(item => item.category === null)).toHaveLength(1);
+    expect(all.items.filter(item => item.category === 'hiring_review')).toHaveLength(1);
+    expect(all.items.filter(item => item.category === null)).toHaveLength(0);
     const [counts] = await attachRecruitmentDemandSeats(db, [{ id: row.id, approvedHeadcount: 2, usable: true }]);
     expect(all.items.filter(item => item.occupied)).toHaveLength(counts.occupiedCount);
     expect(all.items.filter(item => item.category === 'accepted')).toHaveLength(counts.acceptedCount);
@@ -136,7 +179,7 @@ describe('demand applications: owned PostgreSQL', () => {
 
   it.each(['screening', 'hiring_review'])('does not label a reopened %s application terminated because of an older event', async stage => {
     const row = await demand(), app = await application(row.id, stage, [{ action: 'accept_offer', version: 1 }, { action: 'terminate_offer', version: 2 }, { action: 'reopen', version: 3 }]);
-    expect(await service.list(row.id, query(), reader)).toMatchObject({ total: 1, items: [{ id: app.id, category: null, occupied: false }] });
+    expect(await service.list(row.id, query(), reader)).toMatchObject({ total: 1, items: [{ id: app.id, category: stage, occupied: false }] });
     expect((await service.list(row.id, query({ category: 'terminated' }), reader)).total).toBe(0);
   });
 

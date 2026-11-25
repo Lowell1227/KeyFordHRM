@@ -15,6 +15,11 @@ export class RecruitmentDemandOptionsQueryDto extends PaginationDto {
   @IsString() @MaxLength(100) keyword?: string;
 }
 
+export class RecruitmentDemandIntentOptionsQueryDto extends RecruitmentDemandQueryDto {
+  @IsOptional() @IsUUID() deptId?: string;
+  @IsOptional() @IsString() @MaxLength(100) positionName?: string;
+}
+
 export class SyncRecruitmentDemandsDto {
   @IsISO8601({ strict: true }) from!: string;
   @IsISO8601({ strict: true }) to!: string;

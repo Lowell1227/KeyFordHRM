@@ -2,9 +2,10 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 import { TALENT_APPLICATION_STAGES } from './talent-application-filter';
-import { canEditRecruitment, canReadRecruitment, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen } from './talent-recruitment-policy';
+import { canEditRecruitment, canReadRecruitment, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, type RecruitmentActor } from './talent-recruitment-policy';
 
 export interface TalentWorkbenchItem {
   id: string;
@@ -13,12 +14,85 @@ export interface TalentWorkbenchItem {
   date: string | null;
   candidateId?: string;
   applicationId?: string;
+  intakeId?: string;
+  onboardingRequestId?: string;
+  ownerName?: string | null;
+  nextAction?: string;
 }
 
 export interface TalentWorkbenchGroup {
-  key: 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding';
+  key: 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding' | 'intake_review' | 'intake_assignment' | 'entry_overdue';
   total: number;
   items: TalentWorkbenchItem[];
+}
+
+export function recruitmentIntakeWorkbenchWhere(key: 'intake_review' | 'intake_assignment', actorId: string): Prisma.RecruitmentIntakeWhereInput {
+  return { ownerId: actorId, associatedToId: null,
+    state: { in: key === 'intake_assignment' ? ['awaiting_resume', 'pending_review', 'needs_material'] : ['pending_review', 'needs_material'] },
+    demandId: key === 'intake_assignment' ? null : { not: null } };
+}
+
+const activeEntryRequest = { archivedAt: null, cancelledAt: null, arrivalConfirmedAt: null,
+  recordStatus: { in: ['draft', 'submitted'] }, onboardingStatus: { in: ['draft', 'submitted', 'pending_entry'] },
+} satisfies Prisma.EmployeeDataChangeRequestWhereInput;
+
+export function recruitmentEntryOverdueScope(actor: RecruitmentActor): Prisma.TalentApplicationWhereInput | null {
+  if (!isCurrentRecruitmentActor(actor)) return null;
+  const scopes: Prisma.TalentApplicationWhereInput[] = [];
+  if (canEditRecruitment(actor)) scopes.push({ ownerId: actor.id });
+  if (hasHrCapability(actor, 'employee_archive_edit') || hasHrCapability(actor, 'employee_archive_review')) {
+    scopes.push({ onboardingRequests: { some: { AND: [activeEntryRequest, { OR: [
+      { sourceSystem: null }, { sourceSystem: { not: 'archive_assistant_pilot' } }, { createdById: actor.id },
+    ] }] } } });
+  }
+  return scopes.length > 1 ? { OR: scopes } : scopes[0] ?? null;
+}
+
+function calendarDate(value: unknown): string | null {
+  let text = value instanceof Date && Number.isFinite(value.getTime()) ? value.toISOString().slice(0, 10) : value;
+  if (typeof text === 'string' && text.includes('T')) {
+    const serialized = new Date(text);
+    if (!Number.isFinite(serialized.getTime()) || serialized.toISOString() !== text) return null;
+    text = serialized.toISOString().slice(0, 10);
+  }
+  if (typeof text !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const date = new Date(`${text}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : null;
+}
+
+// Shared with full-list consumers: filter before pagination because a revised intake date supersedes the application date.
+export async function readRecruitmentEntryOverdue(tx: Prisma.TransactionClient, actor: RecruitmentActor, now: Date) {
+  const scope = recruitmentEntryOverdueScope(actor);
+  if (!scope) return [];
+  const rows = await tx.talentApplication.findMany({ where: { AND: [scope], stage: { in: ['accepted', 'onboarding'] },
+    candidate: { deletedAt: null }, onboardingRequests: { none: { OR: [
+      { onboardingStatus: 'effective' }, { recordStatus: 'effective' }, { arrivalConfirmedAt: { not: null } },
+    ] } },
+  }, select: { id: true, candidateId: true, ownerId: true, stage: true, positionName: true, expectedEntryDate: true,
+    candidate: { select: { name: true, deletedAt: true } }, onboardingRequests: {
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      select: { id: true, intakeType: true, onboardingStatus: true, recordStatus: true, archivedAt: true, cancelledAt: true,
+        arrivalConfirmedAt: true, proposedValue: true, sourceSystem: true, createdById: true },
+    },
+  } });
+  const today = shanghaiBusinessDate(now).toISOString().slice(0, 10);
+  return rows.flatMap(row => {
+    if (!['accepted', 'onboarding'].includes(row.stage) || row.candidate.deletedAt) return [];
+    if (row.onboardingRequests.some(request => request.arrivalConfirmedAt || request.onboardingStatus === 'effective' || request.recordStatus === 'effective')) return [];
+    const request = row.onboardingRequests.find(request => !request.archivedAt && !request.cancelledAt && !request.arrivalConfirmedAt
+      && ['draft', 'submitted', 'pending_entry'].includes(request.onboardingStatus ?? '') && ['draft', 'submitted'].includes(request.recordStatus));
+    if (row.stage === 'onboarding' && !request) return [];
+    let date = calendarDate(row.expectedEntryDate);
+    if (request) {
+      const proposed = request.proposedValue as { employee?: Record<string, unknown> } | null;
+      const employee = proposed?.employee;
+      date = calendarDate(employee?.[request.intakeType === 'reentry' ? 'effectiveDate' : 'effectiveFrom'] ?? employee?.entryDate);
+    }
+    const canOpenIntake = request && (hasHrCapability(actor, 'employee_archive_edit') || hasHrCapability(actor, 'employee_archive_review'))
+      && (request.sourceSystem !== 'archive_assistant_pilot' || request.createdById === actor.id);
+    return date && date < today ? [{ id: row.id, candidateId: row.candidateId, ownerId: row.ownerId,
+      title: row.candidate.name, subtitle: row.positionName, date, requestId: canOpenIntake ? request.id : undefined }] : [];
+  }).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
 }
 
 @Injectable()
@@ -28,13 +102,16 @@ export class TalentWorkbenchService {
   async getWorkbench(user: AuthUser): Promise<{ groups: TalentWorkbenchGroup[] }> {
     return this.prisma.$transaction(async tx => {
       const actor = await tx.user.findUnique({ where: { id: user.id }, select: {
-        id: true, sysRole: true, hrCapabilities: true, status: true,
+        id: true, name: true, sysRole: true, hrCapabilities: true, status: true,
         archivedAt: true, deletedAt: true, isAssessorOnly: true,
       } });
       if (!actor || !isCurrentRecruitmentActor(actor)) throw new ForbiddenException('当前账号不具备办理资格');
       const now = new Date();
       const groups: Array<Promise<TalentWorkbenchGroup>> = [];
-      if (canEditRecruitment(actor)) groups.push(this.followUps(tx, actor.id));
+      if (canEditRecruitment(actor)) {
+        groups.push(this.followUps(tx, actor.id));
+        groups.push(this.intakes(tx, 'intake_assignment', actor), this.intakes(tx, 'intake_review', actor));
+      }
       const participation = { participants: { some: { userId: actor.id } } };
       const reader = canReadRecruitment(actor);
       groups.push(this.interviews(tx, 'interview', {
@@ -52,8 +129,37 @@ export class TalentWorkbenchService {
         stage: 'hiring_review', hiringRequestedById: { not: actor.id },
       }));
       if (canWriteRecruitment(actor)) groups.push(this.onboarding(tx, actor.id, now));
+      if (recruitmentEntryOverdueScope(actor)) groups.push(this.entryOverdue(tx, actor, now));
       return { groups: await Promise.all(groups) };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }
+
+  private async intakes(tx: Prisma.TransactionClient, key: 'intake_review' | 'intake_assignment', actor: RecruitmentActor & { name: string }): Promise<TalentWorkbenchGroup> {
+    const where = recruitmentIntakeWorkbenchWhere(key, actor.id);
+    const [total, rows] = await Promise.all([
+      tx.recruitmentIntake.count({ where }),
+      tx.recruitmentIntake.findMany({ where, take: 5, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, positionName: true, state: true, nextFollowUpAt: true } }),
+    ]);
+    return { key, total, items: rows.map(row => ({ id: row.id, intakeId: row.id,
+      title: row.positionName || '岗位待确认', subtitle: key === 'intake_assignment' ? '待归岗位' : '待核对简历',
+      ownerName: actor.name, nextAction: key === 'intake_assignment' ? '核对岗位和意向需求'
+        : row.state === 'pending_review' ? '核对资料并确认入库' : '补充简历资料后核对',
+      date: row.nextFollowUpAt?.toISOString() ?? null,
+    })) };
+  }
+
+  private async entryOverdue(tx: Prisma.TransactionClient, actor: RecruitmentActor, now: Date): Promise<TalentWorkbenchGroup> {
+    const rows = await readRecruitmentEntryOverdue(tx, actor, now);
+    const selected = rows.slice(0, 5);
+    const names = selected.length ? new Map((await tx.user.findMany({ where: { id: { in: [...new Set(selected.map(row => row.ownerId))] } },
+      select: { id: true, name: true } })).map(row => [row.id, row.name])) : new Map<string, string>();
+    const canOpenIntake = hasHrCapability(actor, 'employee_archive_edit') || hasHrCapability(actor, 'employee_archive_review');
+    return { key: 'entry_overdue', total: rows.length, items: selected.map(({ requestId, ownerId, ...row }) => ({
+      ...row, applicationId: row.id, ownerName: names.get(ownerId) ?? null,
+      ...(canOpenIntake && requestId ? { onboardingRequestId: requestId } : {}),
+      nextAction: canOpenIntake && requestId ? '核对入职办理和实际到岗结果' : '核对预计到岗日期与录用结果',
+    })) };
   }
 
   private async followUps(tx: Prisma.TransactionClient, actorId: string): Promise<TalentWorkbenchGroup> {

@@ -32,7 +32,7 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
   const tx = {
     user: { findUnique: jest.fn(({ where }) => Promise.resolve(actors.find(actor => actor.id === where.id) ?? null)),
       findMany: jest.fn().mockResolvedValue(actors), count: jest.fn().mockResolvedValue(1) },
-    department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept', name: 'Synthetic department', isActive: true }) },
+    department: { findUnique: jest.fn(async ({ where }) => ({ id: where.id, name: 'Synthetic department', isActive: true })) },
     recruitmentDemand: { findUnique: jest.fn(async ({ where }) => where.id === demand.id || where.organizationKey_instanceId?.instanceId === demand.instanceId ? { ...demand } : null),
       findFirst: jest.fn(async () => null), update: jest.fn(async ({ data }) => { Object.assign(demand, data); return { ...demand }; }) },
     recruitmentDemandEvent: { create: jest.fn(async () => ({})) },
@@ -80,6 +80,62 @@ describe('application creation replay', () => {
     expect(replay.events.filter(event => event.action === 'create')).toHaveLength(1);
     await expect(sut.create('candidate', { ...intent, recruitmentBatch: 'Round 2' }, hr)).rejects.toThrow(ConflictException);
     await expect(sut.create('other-candidate', intent, hr)).rejects.toThrow(ConflictException);
+  });
+});
+
+describe('early application demand intent and channel', () => {
+  it('does not call a later ordinary withdrawal the previous terminated offer', async () => {
+    const { sut } = setup({ stage: 'withdrawn', revision: 5, events: [
+      { action: 'terminate_offer', version: 3 }, { action: 'reopen', version: 4 }, { action: 'withdraw', version: 5 },
+    ] });
+    expect(await sut.detail('app', hr)).toMatchObject({ offerTerminated: false });
+  });
+  it('keeps an explicitly selected intent and channel without creating an approval snapshot or seat', async () => {
+    const { sut, tx, gateway } = setup();
+    const created = await sut.create('candidate', { ...applicationInput, intentDemandId: demandSelection.recruitmentDemandId, sourceChannel: 'job_site' } as never, hr);
+    expect(created).toMatchObject({ intentDemandId: demandSelection.recruitmentDemandId, sourceChannel: 'job_site', recruitmentDemandId: null, recruitmentDemandSnapshot: null });
+    expect(tx.talentApplication.create.mock.calls[0][0].data).toMatchObject({ intentDemandId: demandSelection.recruitmentDemandId, sourceChannel: 'job_site' });
+    expect(gateway.verifyForSubmission).not.toHaveBeenCalled();
+    expect(created.events.some(event => event.action === 'accept_offer')).toBe(false);
+  });
+
+  it('rejects an intent for another department before creating an application', async () => {
+    const { sut, tx } = setup();
+    await expect(sut.create('candidate', { ...applicationInput, deptId: 'another-dept', intentDemandId: demandSelection.recruitmentDemandId } as never, hr)).rejects.toThrow(BadRequestException);
+    expect(tx.talentApplication.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an intent for another position and a withdrawn demand', async () => {
+    const { sut, demand } = setup();
+    await expect(sut.create('candidate', { positionName: 'Other position', deptId: 'dept', intentDemandId: demand.id } as never, hr)).rejects.toThrow(BadRequestException);
+    demand.sourceState = 'withdrawn';
+    await expect(sut.create('candidate', { ...applicationInput, intentDemandId: demand.id } as never, hr)).rejects.toThrow(BadRequestException);
+  });
+
+  it('does not allow a request UUID to be reused with a different channel or intent', async () => {
+    const { sut } = setup();
+    const input = { ...applicationInput, requestId: '69b63655-caad-431e-bb8d-e96d5ab930ba', sourceChannel: 'job_site' };
+    await sut.create('candidate', input as never, hr);
+    await expect(sut.create('candidate', { ...input, sourceChannel: 'referral' } as never, hr)).rejects.toThrow(ConflictException);
+  });
+
+  it('requires a reason and current version to change intent, preserving the old frozen approval', async () => {
+    const frozen = { demandId: 'old-formal-demand', revision: 2 };
+    const { sut, tx } = setup({ intentDemandId: 'old-intent', recruitmentDemandId: 'old-formal-demand', recruitmentDemandSnapshot: frozen });
+    await expect(sut.update('app', { expectedRevision: 1, intentDemandId: demandSelection.recruitmentDemandId } as never, hr)).rejects.toThrow(BadRequestException);
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
+    const updated = await sut.update('app', { expectedRevision: 1, intentDemandId: demandSelection.recruitmentDemandId, intentChangeReason: 'Fictional corrected demand' } as never, hr);
+    expect(updated).toMatchObject({ intentDemandId: demandSelection.recruitmentDemandId, recruitmentDemandId: 'old-formal-demand', recruitmentDemandSnapshot: frozen });
+    expect(updated.events.at(-1)).toMatchObject({ action: 'change_intent', note: 'Fictional corrected demand' });
+  });
+
+  it('rejects edits after candidate deletion or capability revocation', async () => {
+    const { sut, tx, actors } = setup();
+    tx.talentCandidate.findUnique.mockResolvedValueOnce({ id: 'candidate', deletedAt: new Date() });
+    await expect(sut.update('app', { expectedRevision: 1, sourceChannel: 'job_site' } as never, hr)).rejects.toThrow(NotFoundException);
+    Object.assign(actors[0], { sysRole: 'employee', hrCapabilities: [] });
+    await expect(sut.update('app', { expectedRevision: 1, sourceChannel: 'job_site' } as never, hr)).rejects.toThrow(ForbiddenException);
+    expect(tx.talentApplication.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -336,6 +392,7 @@ describe('talent recruitment transactions and boundaries', () => {
     expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain('Synthetic hiring reason');
     expect(tx.$queryRaw.mock.calls.map(([sql]) => sql.join('?'))).toEqual([
       expect.stringContaining('pg_advisory_xact_lock'), expect.stringContaining('users'),
+      expect.stringContaining('pg_advisory_xact_lock'),
       expect.stringContaining('talent_candidates'), expect.stringContaining('talent_applications'),
       expect.stringContaining('pg_advisory_xact_lock'), expect.stringContaining('users'), expect.stringContaining('departments'), expect.stringContaining('positions'),
     ]);

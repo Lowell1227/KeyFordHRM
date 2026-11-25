@@ -1,8 +1,24 @@
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
-import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './talent-recruitment.dto';
+import { CreateTalentApplicationDto, ReturnTalentInterviewFeedbackDto, SaveTalentInterviewFeedbackDto, TalentApplicationActionDto, TalentApplicationQueueQueryDto, TalentOwnerQueryDto, UpdateTalentApplicationDto } from './talent-recruitment.dto';
 
 describe('recruitment DTO contract', () => {
+  it('preserves overdue false under implicit HTTP conversion and rejects invalid boolean text', () => {
+    for (const [raw, expected] of [['false', false], ['true', true]] as const) {
+      const dto = plainToInstance(TalentApplicationQueueQueryDto, { overdueOnly: raw }, { enableImplicitConversion: true });
+      expect(validateSync(dto)).toEqual([]); expect(dto.overdueOnly).toBe(expected);
+    }
+    expect(validateSync(plainToInstance(TalentApplicationQueueQueryDto, { overdueOnly: 'not-a-boolean' }, { enableImplicitConversion: true })).length).toBeGreaterThan(0);
+  });
+  it('accepts explicit early intent and channel, but rejects fabricated channels, IDs and hiring snapshots', () => {
+    const base = { positionName: 'Synthetic role', intentDemandId: '880648a3-ddd2-44eb-8bc2-630a2484445c', sourceChannel: 'job_site' };
+    const options = { whitelist: true, forbidNonWhitelisted: true };
+    expect(validateSync(plainToInstance(CreateTalentApplicationDto, base), options)).toEqual([]);
+    for (const invalid of [{ intentDemandId: 'invalid' }, { sourceChannel: 'unknown-platform' }, { recruitmentDemandSnapshot: {} }]) {
+      expect(validateSync(plainToInstance(CreateTalentApplicationDto, { ...base, ...invalid }), options).length).toBeGreaterThan(0);
+    }
+    expect(validateSync(plainToInstance(UpdateTalentApplicationDto, { expectedRevision: 0, intentDemandId: null, intentChangeReason: 'Synthetic clear' }), options)).toEqual([]);
+  });
   it('accepts an optional creation UUID only when opening a new application', () => {
     const options = { whitelist: true, forbidNonWhitelisted: true };
     const requestId = '880648a3-ddd2-44eb-8bc2-630a2484445c';

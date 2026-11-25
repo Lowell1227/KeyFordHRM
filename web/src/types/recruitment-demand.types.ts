@@ -75,8 +75,13 @@ export interface RecruitmentDemandDirectories {
 }
 export interface RecruitmentDemandQuery { keyword?: string; status?: RecruitmentDemandSourceState; page?: number; pageSize?: number }
 export interface RecruitmentDemandMapping { expectedRevision: number; deptId: string; positionId: string; approvedHeadcount: number; reason: string }
-export type RecruitmentDemandApplicationCategory = 'awaiting_reply' | 'accepted' | 'terminated' | 'hired';
-export interface RecruitmentDemandApplicationQuery { category: RecruitmentDemandApplicationCategory; page?: number; pageSize?: number }
+export type RecruitmentDemandApplicationCategory = 'screening' | 'interviewing' | 'hiring_review' | 'awaiting_reply' | 'accepted' | 'terminated' | 'hired';
+export interface RecruitmentDemandIntentQuery { keyword?: string; page?: number; pageSize?: number; deptId?: string; positionName?: string }
+export interface RecruitmentDemandProgress {
+  applications: Record<string, number>;
+  intakes: { awaiting_resume: number; pending_review: number; needs_material: number } | null;
+}
+export interface RecruitmentDemandApplicationQuery { category?: RecruitmentDemandApplicationCategory; page?: number; pageSize?: number }
 export interface RecruitmentDemandApplication {
   id: string;
   candidateId: string;
@@ -87,7 +92,7 @@ export interface RecruitmentDemandApplication {
   revision: number;
   ownerName: string | null;
   expectedEntryDate: string | null;
-  category: RecruitmentDemandApplicationCategory;
+  category: RecruitmentDemandApplicationCategory | null;
   occupied: boolean;
   onboardingRequest: { id: string; recordStatus: string; onboardingStatus: string | null } | null;
 }

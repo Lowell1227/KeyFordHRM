@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DingtalkRecruitmentService } from '@/dingtalk/dingtalk-recruitment.service';
-import { CreateLocalRecruitmentDemandDto, LocalRecruitmentDemandActionDto, MapRecruitmentDemandDto, RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto, SyncRecruitmentDemandsDto, UpdateLocalRecruitmentDemandDto } from './recruitment-demands.dto';
+import { CreateLocalRecruitmentDemandDto, LocalRecruitmentDemandActionDto, MapRecruitmentDemandDto, RecruitmentDemandIntentOptionsQueryDto, RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto, SyncRecruitmentDemandsDto, UpdateLocalRecruitmentDemandDto } from './recruitment-demands.dto';
 import { assertRecruitmentDemandReader, assertRecruitmentDemandReviewer, assertRecruitmentEditor, assertRecruitmentReader, canEditRecruitment, canReadRecruitmentDemand, canReadTalentApplication, canReviewRecruitmentDemand, type RecruitmentActor } from './talent-recruitment-policy';
 import { type RecruitmentDemandGateway, type RecruitmentDemandSource, type RecruitmentDemandSubmissionSnapshot, type RecruitmentDemandSubmissionProof, type RecruitmentDemandVerification } from './recruitment-demands.types';
 import { attachRecruitmentDemandSeats } from './recruitment-demand-seats';
@@ -162,6 +162,37 @@ export class RecruitmentDemandsService {
     const [current] = await attachRecruitmentDemandSeats(this.prisma, [this.view(row, undefined, actor)]);
     return { ...current, events: events.map(event => ({ id: event.id, action: event.action, revision: event.revision,
       createdAt: event.createdAt.toISOString(), actorName: names.get(event.actorId) ?? null, reason: event.reason })) };
+  }
+
+  async intentOptions(query: RecruitmentDemandIntentOptionsQueryDto, user: AuthUser) {
+    const actor = await assertRecruitmentReader(this.prisma, user);
+    const origins: Prisma.RecruitmentDemandWhereInput[] = [{ sourceKind: 'local', approvedById: { not: null }, submittedById: { not: null } }];
+    if (this.sourceStatus().configured) origins.push({ sourceKind: 'dingtalk', ...this.sourceStatus().scope! });
+    const where: Prisma.RecruitmentDemandWhereInput = { AND: [this.keyword(query.keyword), { OR: origins }],
+      ...(query.deptId ? { deptId: query.deptId } : {}), sourceState: 'approved', syncIssue: null,
+      supersededByInstanceId: null, mappedFingerprint: { equals: this.prisma.recruitmentDemand.fields.sourceFingerprint }, approvedHeadcount: { gt: 0 },
+      department: { is: { isActive: true } }, position: { is: { isActive: true, ...(query.positionName ? { name: query.positionName.trim() } : {}) } } };
+    const [rows, total] = await Promise.all([
+      this.prisma.recruitmentDemand.findMany({ where, include: directoryInclude, orderBy: [{ approvedAt: 'desc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
+      this.prisma.recruitmentDemand.count({ where }),
+    ]);
+    return { items: rows.map(row => this.view(row, undefined, actor)), total, page: query.page, pageSize: query.pageSize };
+  }
+
+  async assertIntent(tx: Prisma.TransactionClient, id: string, application: ApplicationReference, user: AuthUser) {
+    await this.lock(tx);
+    await this.editorAfterLock(tx, user);
+    const reference = await this.get(tx, id);
+    if (reference.deptId) await tx.$queryRaw`SELECT id FROM departments WHERE id = ${reference.deptId}::uuid FOR SHARE`;
+    if (reference.positionId) await tx.$queryRaw`SELECT id FROM positions WHERE id = ${reference.positionId}::uuid FOR SHARE`;
+    const issues = this.issues(await this.get(tx, id), application);
+    if (issues.length) throw new BadRequestException(issues.join('；'));
+  }
+
+  async currentIntent(tx: Prisma.TransactionClient, id: string | null, actor: RecruitmentActor) {
+    if (!id || !canReadRecruitmentDemand(actor)) return null;
+    const row = await tx.recruitmentDemand.findUnique({ where: { id }, include: directoryInclude });
+    return row ? this.view(row, undefined, actor) : null;
   }
 
   async currentForApplication(tx: Prisma.TransactionClient, application: { recruitmentDemandId: string | null; stage: string; hiringRequestedById: string | null }, actor: RecruitmentActor) {

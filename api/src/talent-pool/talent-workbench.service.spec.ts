@@ -13,6 +13,7 @@ function setup(actorOverrides: Record<string, unknown> = {}) {
     talentCandidate: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
     talentInterview: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
     talentApplication: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
+    recruitmentIntake: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
   };
   const prisma = { $transaction: jest.fn().mockImplementation(fn => fn(tx)) };
   return { sut: new TalentWorkbenchService(prisma as never), tx, prisma, actor };
@@ -22,8 +23,9 @@ describe('recruitment workbench read projection', () => {
   it('gives explicit operators their follow-ups but no onboarding or hiring-confirmation queue', async () => {
     const { sut, tx } = setup({ sysRole: 'employee', hrCapabilities: ['recruitment_edit'] });
     const result = await sut.getWorkbench(user);
-    expect(result.groups.map(group => group.key)).toEqual(['follow_up', 'interview', 'feedback']);
-    expect(tx.talentApplication.findMany).not.toHaveBeenCalled();
+    expect(result.groups.map(group => group.key)).toEqual(['follow_up', 'intake_assignment', 'intake_review', 'interview', 'feedback', 'entry_overdue']);
+    expect(tx.talentApplication.count).not.toHaveBeenCalled();
+    expect(tx.talentApplication.findMany).toHaveBeenCalledTimes(1);
   });
   beforeEach(() => { jest.useFakeTimers(); jest.setSystemTime(now); });
   afterEach(() => jest.useRealTimers());
@@ -142,11 +144,11 @@ describe('recruitment workbench read projection', () => {
     tx.talentInterview.findMany.mockResolvedValue([{ id: 'invitation', candidateId: 'candidate', applicationId: 'position-two',
       candidateNameSnapshot: 'Snapshot', startsAt: now, application: { positionName: 'Position two' } }]);
     const result = await sut.getWorkbench(user);
-    expect(result.groups.map(group => group.key)).toEqual(['interview', 'feedback']);
+    expect(result.groups.map(group => group.key)).toEqual(['interview', 'feedback', 'entry_overdue']);
     expect(result.groups[0].items[0]).toEqual({ id: 'invitation', title: 'Snapshot', subtitle: 'Position two',
       candidateId: 'candidate', applicationId: 'position-two', date: now.toISOString() });
     expect(tx.talentCandidate.findMany).not.toHaveBeenCalled();
-    expect(tx.talentApplication.findMany).not.toHaveBeenCalled();
+    expect(tx.talentApplication.findMany).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -213,21 +215,25 @@ describe('recruitment workbench read projection', () => {
 
   it('counts all matching rows independently of the stable first-five selection in every group', async () => {
     const { sut, tx, prisma } = setup({ sysRole: 'hr' });
-    for (const delegate of [tx.talentCandidate, tx.talentInterview, tx.talentApplication]) {
+    for (const delegate of [tx.talentCandidate, tx.talentInterview, tx.talentApplication, tx.recruitmentIntake]) {
       delegate.count.mockResolvedValue(9);
     }
     tx.talentCandidate.findMany.mockImplementation(async ({ select }: any) => select.convertedUserId ? []
       : Array.from({ length: 5 }, (_, index) => ({ id: `c${index}`, name: 'Candidate', followUps: [] })));
     tx.talentInterview.findMany.mockResolvedValue(Array.from({ length: 5 }, (_, index) => ({ id: `i${index}`, candidateNameSnapshot: 'Snapshot', startsAt: now })));
-    tx.talentApplication.findMany.mockResolvedValue(Array.from({ length: 5 }, (_, index) => ({ id: `a${index}`, candidateId: 'candidate', candidate: { name: 'Candidate' }, positionName: 'Position' })));
+    tx.talentApplication.findMany.mockImplementation(async ({ where }: any) => Array.from({ length: where.stage?.in ? 9 : 5 }, (_, index) => ({
+      id: `a${index}`, candidateId: 'candidate', ownerId: user.id, candidate: { name: 'Candidate', deletedAt: null }, positionName: 'Position',
+      stage: 'accepted', expectedEntryDate: new Date('2026-11-20'), onboardingRequests: [],
+    })));
+    tx.recruitmentIntake.findMany.mockResolvedValue(Array.from({ length: 5 }, (_, index) => ({ id: `r${index}`, positionName: 'Position', state: 'pending_review' })));
     const result = await sut.getWorkbench(user);
-    expect(result.groups.map(group => group.key)).toEqual(['follow_up', 'interview', 'feedback', 'hiring_review', 'onboarding']);
+    expect(result.groups.map(group => group.key)).toEqual(['follow_up', 'intake_assignment', 'intake_review', 'interview', 'feedback', 'hiring_review', 'onboarding', 'entry_overdue']);
     for (const group of result.groups) {
       expect(group.total).toBe(9);
       expect(group.items).toHaveLength(5);
     }
-    for (const delegate of [tx.talentCandidate, tx.talentInterview, tx.talentApplication]) {
-      for (const [query] of delegate.findMany.mock.calls as any[]) if (!query.select.convertedUserId) expect(query.take).toBe(5);
+    for (const delegate of [tx.talentCandidate, tx.talentInterview, tx.talentApplication, tx.recruitmentIntake]) {
+      for (const [query] of delegate.findMany.mock.calls as any[]) if (!query.select.convertedUserId && !query.where.stage?.in) expect(query.take).toBe(5);
       for (const [query] of delegate.count.mock.calls as any[]) expect(Object.keys(query)).toEqual(['where']);
     }
     expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead' });
@@ -239,5 +245,120 @@ describe('recruitment workbench read projection', () => {
     const { sut, tx } = setup();
     tx.talentInterview.count.mockRejectedValue(new Error('source unavailable'));
     await expect(sut.getWorkbench(user)).rejects.toThrow('source unavailable');
+  });
+
+  it('projects disjoint personal open intake queues without selecting original materials', async () => {
+    const { sut, tx } = setup({ sysRole: 'employee', hrCapabilities: ['recruitment_edit'], name: 'Operator' });
+    tx.recruitmentIntake.count.mockResolvedValue(7);
+    tx.recruitmentIntake.findMany.mockResolvedValue([{ id: 'intake', positionName: null, state: 'needs_material', nextFollowUpAt: null }]);
+    const { groups } = await sut.getWorkbench(user);
+    for (const key of ['intake_assignment', 'intake_review']) {
+      const group = groups.find(item => item.key as string === key);
+      expect(group?.total).toBe(7);
+      expect(group?.items[0]).toMatchObject({ id: 'intake', intakeId: 'intake', ownerName: 'Operator' });
+    }
+    const calls = tx.recruitmentIntake.findMany.mock.calls as any[];
+    expect(calls).toHaveLength(2);
+    for (const [index, [query]] of calls.entries()) {
+      expect(query.where).toEqual({ ownerId: user.id, associatedToId: null,
+        state: { in: index === 0 ? ['awaiting_resume', 'pending_review', 'needs_material'] : ['pending_review', 'needs_material'] },
+        demandId: index === 0 ? null : { not: null },
+      });
+      expect(query.select).toEqual({ id: true, positionName: true, state: true, nextFollowUpAt: true });
+      expect(query.take).toBe(5);
+      expect(query.where).toEqual((tx.recruitmentIntake.count.mock.calls as any[])[index][0].where);
+    }
+  });
+
+  it.each([
+    ['employee', []], ['employee', ['talent_hiring_confirm']], ['hr_user', ['recruitment_view']],
+    ['hr_user', ['employee_archive_review']],
+  ])('does not expose intake queues to %s with %j', async (sysRole, hrCapabilities) => {
+    const { sut, tx } = setup({ sysRole, hrCapabilities });
+    const { groups } = await sut.getWorkbench(user);
+    expect(groups.some(group => group.key.startsWith('intake_'))).toBe(false);
+    expect(tx.recruitmentIntake.findMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps admin intake reminders owner-only and fails visibly if intake reads fail', async () => {
+    const { sut, tx } = setup({ sysRole: 'system_admin', hrCapabilities: [] });
+    tx.recruitmentIntake.count.mockRejectedValue(new Error('intake source unavailable'));
+    await expect(sut.getWorkbench(user)).rejects.toThrow('intake source unavailable');
+    for (const [query] of tx.recruitmentIntake.count.mock.calls as any[]) expect(query.where.ownerId).toBe(user.id);
+  });
+
+  it('uses Shanghai business day and current onboarding dates, excluding finished, invalid and rescheduled arrivals', async () => {
+    jest.setSystemTime(new Date('2026-11-21T16:01:00Z'));
+    const { sut, tx } = setup({ sysRole: 'employee', hrCapabilities: ['recruitment_edit'] });
+    const application = (id: string, overrides: any = {}) => ({ id, candidateId: `c-${id}`, ownerId: user.id, stage: 'accepted',
+      candidate: { name: 'Synthetic', deletedAt: null }, positionName: 'Position', expectedEntryDate: new Date('2026-11-21'), onboardingRequests: [], ...overrides });
+    const request = (date: string, overrides: any = {}) => ({ id: 'request', intakeType: 'new_hire', onboardingStatus: 'pending_entry', recordStatus: 'submitted',
+      cancelledAt: null, archivedAt: null, arrivalConfirmedAt: null, proposedValue: { employee: { effectiveFrom: date } }, ...overrides });
+    tx.talentApplication.findMany.mockImplementation(async ({ where }: any) => where.stage?.in ? [
+      application('late'), application('today', { expectedEntryDate: new Date('2026-11-22') }),
+      application('missing', { expectedEntryDate: null }), application('invalid', { expectedEntryDate: new Date('invalid') }),
+      application('deleted', { candidate: { name: 'Synthetic', deletedAt: now } }),
+      application('hired', { stage: 'hired' }), application('terminated', { stage: 'withdrawn' }),
+      application('rescheduled', { stage: 'onboarding', onboardingRequests: [request('2026-12-01')] }),
+      application('arrived', { stage: 'onboarding', onboardingRequests: [request('2026-11-20', { arrivalConfirmedAt: now })] }),
+      application('effective', { stage: 'onboarding', onboardingRequests: [request('2026-11-20', { onboardingStatus: 'effective' })] }),
+      application('bad-intake-date', { stage: 'onboarding', onboardingRequests: [request('2026-02-30')] }),
+      application('onboarding-late', { stage: 'onboarding', expectedEntryDate: new Date('2026-12-01'), onboardingRequests: [request('2026-11-20')] }),
+    ] : []);
+    const group = (await sut.getWorkbench(user)).groups.find(group => group.key as string === 'entry_overdue');
+    expect(group?.total).toBe(2);
+    expect(group?.items.map(row => row.applicationId)).toEqual(['onboarding-late', 'late']);
+    expect(group?.items[0]).toMatchObject({ candidateId: 'c-onboarding-late', date: '2026-11-20' });
+    expect(group?.items[0]).not.toHaveProperty('onboardingRequestId');
+    const query = (tx.talentApplication.findMany.mock.calls as any[]).find(([q]) => q.where.stage?.in)[0];
+    expect(query.where).toMatchObject({ stage: { in: ['accepted', 'onboarding'] }, candidate: { deletedAt: null }, AND: [{ ownerId: user.id }] });
+  });
+
+  it('lets personnel reviewers locate the original active intake without giving narrow roles an arrival queue', async () => {
+    const { sut, tx } = setup({ hrCapabilities: ['employee_archive_review'] });
+    tx.talentApplication.findMany.mockResolvedValue([{ id: 'app', candidateId: 'candidate', ownerId: 'other', stage: 'onboarding',
+      candidate: { name: 'Synthetic', deletedAt: null }, positionName: 'Position', expectedEntryDate: now,
+      onboardingRequests: [{ id: 'original-intake', intakeType: 'new_hire', onboardingStatus: 'pending_entry', recordStatus: 'submitted',
+        cancelledAt: null, archivedAt: null, arrivalConfirmedAt: null, proposedValue: { employee: { effectiveFrom: '2026-11-20' } } }] }]);
+    const group = (await sut.getWorkbench(user)).groups.find(group => group.key as string === 'entry_overdue');
+    expect(group?.items[0]).toMatchObject({ applicationId: 'app', onboardingRequestId: 'original-intake' });
+    const scope = (tx.talentApplication.findMany.mock.calls as any[])[0][0].where.AND[0];
+    expect(scope.onboardingRequests.some.AND).toContainEqual({ OR: [
+      { sourceSystem: null }, { sourceSystem: { not: 'archive_assistant_pilot' } }, { createdById: user.id },
+    ] });
+    for (const capabilities of [[], ['recruitment_view'], ['talent_hiring_confirm']]) {
+      const narrow = setup({ sysRole: 'employee', hrCapabilities: capabilities });
+      expect((await narrow.sut.getWorkbench(user)).groups.some(g => g.key as string === 'entry_overdue')).toBe(false);
+    }
+  });
+
+  it('does not deep-link another authors restricted archive pilot intake even on an owned application', async () => {
+    const { sut, tx } = setup();
+    tx.talentApplication.findMany.mockImplementation(async ({ where }: any) => where.stage?.in ? [{
+      id: 'app', ownerId: user.id, candidateId: 'candidate', stage: 'onboarding', candidate: { name: 'Synthetic', deletedAt: null },
+      positionName: 'Position', expectedEntryDate: new Date('2026-11-20'), onboardingRequests: [{
+        id: 'private-pilot', sourceSystem: 'archive_assistant_pilot', createdById: 'another-author', intakeType: 'new_hire',
+        onboardingStatus: 'submitted', recordStatus: 'submitted', archivedAt: null, cancelledAt: null, arrivalConfirmedAt: null,
+        proposedValue: { employee: { effectiveFrom: '2026-11-20' } },
+      }],
+    }] : []);
+    const group = (await sut.getWorkbench(user)).groups.find(group => group.key === 'entry_overdue');
+    expect(group?.items[0]).toMatchObject({ applicationId: 'app' });
+    expect(group?.items[0]).not.toHaveProperty('onboardingRequestId');
+  });
+
+  it.each(['new_hire', 'reentry'])('reads the actual serialized %s intake date and respects subsequent rescheduling', async intakeType => {
+    const { sut, tx } = setup({ sysRole: 'employee', hrCapabilities: ['recruitment_edit'] });
+    const dateField = intakeType === 'reentry' ? 'effectiveDate' : 'effectiveFrom';
+    let planned = new Date('2026-11-20').toISOString();
+    tx.talentApplication.findMany.mockImplementation(async () => [{ id: 'app', candidateId: 'candidate', ownerId: user.id,
+      stage: 'onboarding', candidate: { name: 'Synthetic', deletedAt: null }, positionName: 'Position', expectedEntryDate: new Date('2026-12-01'),
+      onboardingRequests: [{ id: 'request', intakeType, onboardingStatus: 'submitted', recordStatus: 'submitted',
+        archivedAt: null, cancelledAt: null, arrivalConfirmedAt: null, proposedValue: { employee: { [dateField]: planned } } }],
+    }]);
+    const read = async () => (await sut.getWorkbench(user)).groups.find(group => group.key === 'entry_overdue');
+    expect((await read())?.items[0]?.date).toBe('2026-11-20');
+    planned = new Date('2026-12-03').toISOString();
+    expect((await read())?.total).toBe(0);
   });
 });

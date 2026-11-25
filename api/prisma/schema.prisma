@@ -2509,6 +2509,8 @@ model TalentApplication {
   hiringReviewedById     String?   @map("hiring_reviewed_by_id") @db.Uuid
   hiringReviewedAt       DateTime? @map("hiring_reviewed_at") @db.Timestamptz(6)
   reviewReturnStage      String?   @map("review_return_stage") @db.VarChar(30)
+  intentDemandId         String?   @map("intent_demand_id") @db.Uuid
+  sourceChannel          String?   @map("source_channel") @db.VarChar(20)
   recruitmentDemandId       String? @map("recruitment_demand_id") @db.Uuid
   recruitmentDemandRevision Int?    @map("recruitment_demand_revision")
   recruitmentDemandSnapshot Json?   @map("recruitment_demand_snapshot") @db.JsonB
@@ -2520,11 +2522,14 @@ model TalentApplication {
   events            TalentApplicationEvent[]
   interviews        TalentInterview[]
   onboardingRequests EmployeeDataChangeRequest[]
-  recruitmentDemand RecruitmentDemand? @relation(fields: [recruitmentDemandId], references: [id], onDelete: Restrict)
+  recruitmentDemand RecruitmentDemand? @relation("ConfirmedRecruitmentDemand", fields: [recruitmentDemandId], references: [id], onDelete: Restrict)
+  intentDemand RecruitmentDemand? @relation("IntendedRecruitmentDemand", fields: [intentDemandId], references: [id], onDelete: Restrict)
 
   @@index([candidateId, updatedAt(sort: Desc)])
   @@index([ownerId, stage])
   @@index([recruitmentDemandId])
+  @@index([intentDemandId, stage])
+  @@index([sourceChannel, createdAt])
   @@map("talent_applications")
 }
 
@@ -2536,6 +2541,10 @@ model RecruitmentDemand {
   instanceId            String?   @map("instance_id") @db.VarChar(200)
   sourceFingerprint     String    @map("source_fingerprint") @db.Char(64)
   sourceState           String    @map("source_state") @db.VarChar(20)
+  trackingState         String    @default("recruiting") @map("tracking_state") @db.VarChar(20)
+  trackingChangedAt     DateTime? @map("tracking_changed_at") @db.Timestamptz(6)
+  trackingChangedById   String?   @map("tracking_changed_by_id") @db.Uuid
+  trackingReason        String?   @map("tracking_reason") @db.VarChar(2000)
   rawDepartment         String?   @map("raw_department") @db.Text
   rawPosition           String?   @map("raw_position") @db.Text
   rawHeadcount          String?   @map("raw_headcount") @db.Text
@@ -2567,7 +2576,8 @@ model RecruitmentDemand {
   department Department? @relation(fields: [deptId], references: [id], onDelete: Restrict)
   position Position? @relation(fields: [positionId], references: [id], onDelete: Restrict)
   events RecruitmentDemandEvent[]
-  applications TalentApplication[]
+  applications TalentApplication[] @relation("ConfirmedRecruitmentDemand")
+  intendedApplications TalentApplication[] @relation("IntendedRecruitmentDemand")
 
   @@unique([organizationKey, instanceId])
   @@index([sourceState, updatedAt(sort: Desc)])
