@@ -42,11 +42,17 @@ const keys = [
 type Settings = Record<(typeof keys)[number], string>;
 type Json = Record<string, unknown>;
 interface VerificationReads {
-  details: Map<string, Json>;
+  details: Map<string, VerifiedInstance>;
   attempted: Set<string>;
+}
+interface VerifiedInstance {
+  data: Json;
+  createdAt: string;
+  createdThrough: number;
 }
 const day = 86400000;
 const idPattern = /^[A-Za-z0-9_-]{1,200}$/;
+const controlIdPattern = /^[\p{L}\p{N}_-]{1,200}$/u;
 class ReadFailure extends Error {}
 function fail(code: string): never {
   throw new ReadFailure(`RECRUITMENT_${code}`);
@@ -72,6 +78,27 @@ function timestamp(value: unknown): string | null {
     Number.isFinite(time)
     ? new Date(time).toISOString()
     : null;
+}
+function minuteZCandidates(value: unknown): number[] {
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/.test(value)
+  )
+    return [];
+  const utc = timestamp(value),
+    local = timestamp(`${value.slice(0, -1)}:00+08:00`);
+  return utc && local ? [Date.parse(utc), Date.parse(local)] : [];
+}
+function finishTimestamp(value: unknown, createdAt: string): string | null {
+  const parsed = timestamp(value);
+  if (!parsed) return null;
+  const candidates = minuteZCandidates(value);
+  if (!candidates.length) return parsed;
+  // Creation membership proves no finish-time clock. Keep ambiguous approval times unusable.
+  const possible = candidates.filter(
+    (start) => start + 59999 >= Date.parse(createdAt) && start <= Date.now(),
+  );
+  return possible.length === 1 ? new Date(possible[0]).toISOString() : null;
 }
 function boundary(value: string, end: boolean): number {
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -110,7 +137,10 @@ export class DingtalkRecruitmentService {
     const missing: string[] = keys.filter(
       (key) =>
         !values[key] ||
-        (key !== 'DINGTALK_APP_SECRET' && !idPattern.test(values[key])),
+        (key !== 'DINGTALK_APP_SECRET' &&
+          !(key.endsWith('_CONTROL_ID') ? controlIdPattern : idPattern).test(
+            values[key],
+          )),
     );
     const controls = keys.slice(4).map((key) => values[key]);
     if (new Set(controls).size !== controls.length && !missing.length)
@@ -206,7 +236,9 @@ export class DingtalkRecruitmentService {
             const parent = await read(current.mainInstanceId, listedIds);
             if (
               !parent.sourceCreatedAt ||
-              parent.sourceCreatedAt > current.sourceCreatedAt
+              Date.parse(parent.sourceCreatedAt) >
+                (reads.details.get(current.instanceId)?.createdThrough ??
+                  Date.parse(current.sourceCreatedAt))
             )
               return null;
             current = parent;
@@ -322,15 +354,15 @@ export class DingtalkRecruitmentService {
     listedIds?: ReadonlySet<string>,
     reads?: VerificationReads,
   ): Promise<RecruitmentDemandSource> {
-    const data = await this.verifiedInstance(
+    const verified = await this.verifiedInstance(
       config,
       instanceId,
       signal,
       listedIds,
       reads,
     );
-    const sourceCreatedAt = timestamp(data.createTime);
-    const finished = timestamp(data.finishTime);
+    const { data, createdAt: sourceCreatedAt } = verified;
+    const finished = finishTimestamp(data.finishTime, sourceCreatedAt);
     const rawDepartment = field(
       data.formComponentValues,
       config.DINGTALK_RECRUITMENT_DEPARTMENT_CONTROL_ID,
@@ -368,7 +400,9 @@ export class DingtalkRecruitmentService {
       if (
         !finished ||
         !sourceCreatedAt ||
-        finished < sourceCreatedAt ||
+        Date.parse(finished) +
+          (minuteZCandidates(data.finishTime).length ? 59999 : 0) <
+          Date.parse(sourceCreatedAt) ||
         !rawDepartment ||
         !rawPosition ||
         !rawHeadcount ||
@@ -387,11 +421,9 @@ export class DingtalkRecruitmentService {
               listedIds,
               reads,
             );
-            const originalCreatedAt = timestamp(original.createTime);
             if (
-              !originalCreatedAt ||
-              originalCreatedAt > sourceCreatedAt ||
-              original.mainProcessInstanceId === instanceId
+              Date.parse(original.createdAt) > verified.createdThrough ||
+              original.data.mainProcessInstanceId === instanceId
             )
               status = 'unknown';
             else {
@@ -540,7 +572,7 @@ export class DingtalkRecruitmentService {
     signal: AbortSignal,
     listedIds?: ReadonlySet<string>,
     reads?: VerificationReads,
-  ): Promise<Json> {
+  ): Promise<VerifiedInstance> {
     signal.throwIfAborted();
     const cached = reads?.details.get(instanceId);
     if (cached) return cached;
@@ -562,19 +594,34 @@ export class DingtalkRecruitmentService {
     ])
       if (data[key] !== undefined && data[key] !== expected)
         fail('SOURCE_MISMATCH');
-    const createdAt = timestamp(data.createTime);
+    let createdAt = timestamp(data.createTime);
     if (!createdAt) fail('SOURCE_UNVERIFIED');
-    if (listedIds?.has(instanceId)) {
-      reads?.details.set(instanceId, data);
-      return data;
+    const candidates = minuteZCandidates(data.createTime);
+    if (candidates.length) {
+      const matches: number[] = [];
+      // The observed minute-Z wire format can carry Beijing wall time. Prove both hypotheses.
+      for (const start of candidates) {
+        const membership = await this.ids(config, start, start + 59999, signal);
+        if (!membership.complete) fail('SOURCE_UNVERIFIED');
+        if (membership.instanceIds.includes(instanceId)) matches.push(start);
+      }
+      if (!matches.length) fail('SOURCE_MISMATCH');
+      if (matches.length !== 1) fail('SOURCE_UNVERIFIED');
+      createdAt = new Date(matches[0]).toISOString();
+    } else if (!listedIds?.has(instanceId)) {
+      // Detail omits processCode/corpId. Prove membership through the exact configured form.
+      const start = Math.floor(Date.parse(createdAt) / 60000) * 60000;
+      const membership = await this.ids(config, start, start + 59999, signal);
+      if (!membership.complete) fail('SOURCE_UNVERIFIED');
+      if (!membership.instanceIds.includes(instanceId)) fail('SOURCE_MISMATCH');
     }
-    // Detail omits processCode/corpId. Prove membership through the app's exact configured form.
-    const start = Math.floor(Date.parse(createdAt) / 60000) * 60000;
-    const membership = await this.ids(config, start, start + 59999, signal);
-    if (!membership.complete) fail('SOURCE_UNVERIFIED');
-    if (!membership.instanceIds.includes(instanceId)) fail('SOURCE_MISMATCH');
-    reads?.details.set(instanceId, data);
-    return data;
+    const verified = {
+      data,
+      createdAt,
+      createdThrough: Date.parse(createdAt) + (candidates.length ? 59999 : 0),
+    };
+    reads?.details.set(instanceId, verified);
+    return verified;
   }
 
   private async request(

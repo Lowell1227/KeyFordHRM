@@ -92,6 +92,35 @@ describe('DingtalkRecruitmentService read-only adapter', () => {
     });
     expect(service.status().configured).toBe(false);
   });
+  it('accepts the observed Unicode control identifiers without relaxing app or instance identity', async () => {
+    service = make({
+      ...config,
+      DINGTALK_RECRUITMENT_POSITION_CONTROL_ID: '需求岗位',
+      DINGTALK_RECRUITMENT_HEADCOUNT_CONTROL_ID: '需求人数',
+    });
+    detail = instance({
+      formComponentValues: [
+        { id: 'dept-field', value: 'Fictional department' },
+        { id: '需求岗位', value: 'Fictional position' },
+        { id: '需求人数', value: '2' },
+        { id: 'salary-field', value: 'PRIVATE-SALARY' },
+      ],
+    });
+    expect(service.status().configured).toBe(true);
+    const result = await service.readInstance('child');
+    expect(result).toMatchObject({
+      rawDepartment: 'Fictional department',
+      rawPosition: 'Fictional position',
+      rawHeadcount: '2',
+    });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE-');
+    await expect(service.readInstance('非法实例')).rejects.toThrow(
+      'RECRUITMENT_INSTANCE_INVALID',
+    );
+    expect(
+      make({ ...config, DINGTALK_APP_KEY: '非法应用' }).status().configured,
+    ).toBe(false);
+  });
   it('returns only allowlisted fields and app-bound source provenance', async () => {
     expect(service.status()).toEqual({
       configured: true,
@@ -581,6 +610,215 @@ describe('DingtalkRecruitmentService read-only adapter', () => {
       /^RECRUITMENT_READ_FAILED$/,
     );
     expect(transport).not.toHaveBeenCalled();
+  });
+  describe('minute-Z wire clock requires unique form membership evidence', () => {
+    const utc = Date.parse('2026-11-04T09:30:00Z');
+    const beijing = Date.parse('2026-11-04T01:30:00Z');
+    function wire(
+      memberships: Record<number, string[]>,
+      changes: Record<string, unknown> = {},
+    ) {
+      detail = instance({
+        status: 'RUNNING',
+        result: '',
+        createTime: '2026-11-04T09:30Z',
+        finishTime: null,
+        ...changes,
+      });
+      transport.mockImplementation(async (url: string, init: RequestInit) => {
+        if (new URL(url).pathname.endsWith('/processInstances'))
+          return Response.json({ success: true, result: detail });
+        const body = JSON.parse(String(init.body));
+        return Response.json({
+          success: true,
+          result: { list: memberships[body.startTime] ?? [], nextToken: null },
+        });
+      });
+    }
+    it.each([
+      { clock: 'UTC', start: utc, createdAt: '2026-11-04T09:30:00.000Z' },
+      {
+        clock: 'Beijing wall clock',
+        start: beijing,
+        createdAt: '2026-11-04T01:30:00.000Z',
+      },
+    ])(
+      'resolves $clock only after checking both exact form minutes',
+      async ({ start, createdAt }) => {
+        wire({ [start]: ['child'] });
+        const result = await service.readInstance('child');
+        expect(result).toMatchObject({
+          status: 'pending',
+          sourceCreatedAt: createdAt,
+          approvedAt: null,
+        });
+        const bodies = transport.mock.calls
+          .filter(([url]) => new URL(url).pathname.endsWith('/query'))
+          .map(([, init]) => JSON.parse(String(init.body)));
+        expect(bodies.map((body) => body.startTime).sort()).toEqual(
+          [utc, beijing].sort(),
+        );
+        for (const body of bodies)
+          expect(body).toMatchObject({
+            processCode: 'PROC-fictional',
+            endTime: body.startTime + 59999,
+          });
+        expect(detail.createTime).toBe('2026-11-04T09:30Z');
+        expect(detail.finishTime).toBeNull();
+      },
+    );
+    it('rejects duplicate inclusion in both candidate minutes rather than choosing an offset', async () => {
+      wire({ [utc]: ['child'], [beijing]: ['child'] });
+      await expect(service.readInstance('child')).rejects.toThrow(
+        'RECRUITMENT_SOURCE_UNVERIFIED',
+      );
+    });
+    it('rejects absence from both candidates without widening the form or source', async () => {
+      wire({});
+      await expect(service.readInstance('child')).rejects.toThrow(
+        'RECRUITMENT_SOURCE_MISMATCH',
+      );
+      expect(
+        transport.mock.calls.filter(([url]) =>
+          new URL(url).pathname.endsWith('/query'),
+        ),
+      ).toHaveLength(2);
+    });
+    it('does not trust an incomplete alternative minute even when one candidate matches', async () => {
+      wire({ [utc]: ['child'] });
+      const original = transport.getMockImplementation()!;
+      transport.mockImplementation(async (url, init) => {
+        if (init.body && JSON.parse(init.body).startTime === beijing)
+          return Response.json({
+            success: true,
+            result: { list: [], nextToken: '0' },
+          });
+        return original(url, init);
+      });
+      await expect(service.readInstance('child')).rejects.toThrow(
+        'RECRUITMENT_SOURCE_UNVERIFIED',
+      );
+    });
+    it('fails closed on an unreadable alternative without swallowing permission errors', async () => {
+      wire({ [utc]: ['child'] });
+      const original = transport.getMockImplementation()!;
+      transport.mockImplementation(async (url, init) => {
+        if (init.body && JSON.parse(init.body).startTime === beijing)
+          return Response.json({ message: 'PRIVATE-DENIED' }, { status: 403 });
+        return original(url, init);
+      });
+      await expect(service.readInstance('child')).rejects.toThrow(
+        /^RECRUITMENT_PERMISSION_DENIED$/,
+      );
+    });
+    it('preserves explicit-offset timestamps and the normal single-minute membership path', async () => {
+      wire(
+        { [beijing]: ['child'] },
+        {
+          status: 'COMPLETED',
+          result: 'agree',
+          createTime: '2026-11-04T09:30:45+08:00',
+          finishTime: '2026-11-04T09:35:45+08:00',
+        },
+      );
+      await expect(service.readInstance('child')).resolves.toMatchObject({
+        sourceCreatedAt: '2026-11-04T01:30:45.000Z',
+        approvedAt: '2026-11-04T01:35:45.000Z',
+      });
+      expect(transport).toHaveBeenCalledTimes(2);
+    });
+    it('does not shift an explicit finish-time offset when creation uses Beijing minute-Z', async () => {
+      wire(
+        { [beijing]: ['child'] },
+        {
+          status: 'COMPLETED',
+          result: 'agree',
+          finishTime: '2026-11-04T10:40:35+08:00',
+        },
+      );
+      await expect(service.readInstance('child')).resolves.toMatchObject({
+        sourceCreatedAt: '2026-11-04T01:30:00.000Z',
+        approvedAt: '2026-11-04T02:40:35.000Z',
+      });
+    });
+    it('rejects an impossible calendar date without querying either candidate', async () => {
+      wire({}, { createTime: '2026-02-30T09:30Z' });
+      await expect(service.readInstance('child')).rejects.toThrow(
+        'RECRUITMENT_SOURCE_UNVERIFIED',
+      );
+      expect(transport).toHaveBeenCalledTimes(1);
+    });
+    it('does not infer an ambiguous minute-Z approval time from the creation clock', async () => {
+      jest.useFakeTimers({ now: Date.parse('2026-11-05T03:00:00Z') });
+      wire(
+        { [beijing]: ['child'] },
+        {
+          status: 'COMPLETED',
+          result: 'agree',
+          finishTime: '2026-11-04T09:35Z',
+        },
+      );
+      await expect(service.readInstance('child')).resolves.toMatchObject({
+        status: 'unknown',
+        sourceCreatedAt: '2026-11-04T01:30:00.000Z',
+        approvedAt: null,
+      });
+    });
+    it('uses a minute-Z finish only when creation order and the current cutoff prove one candidate', async () => {
+      jest.useFakeTimers({ now: Date.parse('2026-11-04T01:40:00Z') });
+      wire(
+        { [beijing]: ['child'] },
+        {
+          status: 'COMPLETED',
+          result: 'agree',
+          finishTime: '2026-11-04T09:35Z',
+        },
+      );
+      await expect(service.readInstance('child')).resolves.toMatchObject({
+        status: 'approved',
+        sourceCreatedAt: '2026-11-04T01:30:00.000Z',
+        approvedAt: '2026-11-04T01:35:00.000Z',
+      });
+    });
+    it('uses the verified normalized creation minute for bounded submission coverage', async () => {
+      jest.useFakeTimers({ now: Date.parse('2026-11-05T03:00:00Z') });
+      wire({ [beijing]: ['child'] });
+      const original = transport.getMockImplementation()!;
+      transport.mockImplementation(async (url, init) => {
+        if (init.body) {
+          const body = JSON.parse(init.body);
+          if (body.endTime - body.startTime > 60000)
+            return Response.json({
+              success: true,
+              result: { list: ['child'], nextToken: null },
+            });
+        }
+        return original(url, init);
+      });
+      service = make({
+        ...config,
+        DINGTALK_RECRUITMENT_VERIFIED_SCOPE: JSON.stringify({
+          organizationKey: config.DINGTALK_CORP_ID,
+          processCode: config.DINGTALK_RECRUITMENT_PROCESS_CODE,
+          appKey: config.DINGTALK_APP_KEY,
+          recordId: 'fictional-clock-acceptance',
+          verifiedAt: '2026-11-04T00:00:00Z',
+        }),
+      });
+      const result = await service.verifyForSubmission('child');
+      expect(result).toMatchObject({
+        replacementCoverage: 'complete',
+        source: { sourceCreatedAt: '2026-11-04T01:30:00.000Z' },
+      });
+      const scans = transport.mock.calls.filter(
+        ([, init]) =>
+          init.body &&
+          JSON.parse(init.body).endTime - JSON.parse(init.body).startTime >
+            60000,
+      );
+      expect(scans).toHaveLength(1);
+      expect(JSON.parse(scans[0][1].body).startTime).toBe(beijing);
+    });
   });
   describe('verifyForSubmission fresh bounded replacement evidence', () => {
     const now = Date.parse('2026-11-25T03:00:00Z');
