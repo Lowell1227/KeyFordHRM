@@ -23,3 +23,5 @@
 - 上线前现场确认固定5173已包含新的提醒投影，未重启/覆盖并行招聘预览。补充真实后端浏览器用例：`npx playwright test --config playwright.preview.config.ts e2e/preview/archive-maintenance-markers.spec.ts --grep 'contract explanations' --output ../test-results/contract-issue-real-preview`，PC/手机2项通过（17.2秒）。真实HTTP读取具体原因、勾选/撤销即时更新、版本回读、两条审计及合同内容不变，页面异常0，自有虚构资料已清理。原完整档案编辑整例未重跑，不混称全量业务签收。
 
 来源/依赖未变化时复用上述针对性结果；本轮不因准备发布机械重跑全量API。发布仍需用户明确授权，并按API/Web实际变更、备份和回滚门槛办理。
+
+用户已授权并完成本轮独立发布，实际运行提交、外网及真实角色只读证据见[发布记录](2026-11-25-contract-issue-explanations-release.md)。真人HR业务签收仍单列。
