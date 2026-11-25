@@ -8,22 +8,22 @@ export class ParticipantPreviewDto extends PaginationDto {
 
   @IsArray()
   @ArrayMaxSize(1000)
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   departmentIds: string[];
 
   @IsArray()
   @ArrayMaxSize(1000)
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   userIds: string[];
 
   @IsArray()
   @ArrayMaxSize(1000)
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   excludedDepartmentIds: string[];
 
   @IsArray()
   @ArrayMaxSize(1000)
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   excludedUserIds: string[];
 
   @IsOptional()

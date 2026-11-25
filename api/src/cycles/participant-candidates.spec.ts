@@ -16,7 +16,8 @@ describe('cycle participant candidates', () => {
   let count: jest.Mock;
   let role: SysRole;
   let capabilities: string[];
-  const id = '11111111-1111-4111-8111-111111111111';
+  // Imported roster identities are UUID v5, unlike generated UUID v4 records.
+  const id = '11111111-1111-5111-8111-111111111111';
   beforeEach(async () => {
     role = SysRole.hr_user;
     capabilities = ['cycle_plan_edit', 'performance_calibration'];
@@ -75,7 +76,7 @@ describe('cycle participant candidates', () => {
 
   it('previews the final included employees from departments and explicit people while applying exclusions', async () => {
     const departmentId = '22222222-2222-4222-8222-222222222222';
-    const excludedId = '33333333-3333-4333-8333-333333333333';
+    const excludedId = '33333333-3333-5333-8333-333333333333';
     const response = await request(app.getHttpServer())
       .post('/cycles/participant-preview')
       .send({
@@ -103,6 +104,14 @@ describe('cycle participant candidates', () => {
         { employeeNo: { contains: 'EMP', mode: 'insensitive' } },
       ] }],
     });
+  });
+
+  it('rejects employee numbers in place of participant UUIDs', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/cycles/participant-preview')
+      .send({ scope: 'custom', departmentIds: [], userIds: ['350'], excludedDepartmentIds: [], excludedUserIds: [] });
+    expect(response.status).toBe(400);
+    expect(findMany).not.toHaveBeenCalled();
   });
 
   it.each([SysRole.hr, SysRole.system_admin])('keeps the existing %s cycle-create role authorized', async (allowedRole) => {
