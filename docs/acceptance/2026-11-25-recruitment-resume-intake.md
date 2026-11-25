@@ -1,5 +1,7 @@
 # 简历收件与入库验收
 
+后续状态：已完成部分随`deb058ea`正式发布，见[正式回执](2026-11-25-recruitment-intake-release.md)。下文“未上线”保留当时开发证据；真实邮箱仍待本机配置及验证。
+
 ## 范围与基线
 
 - 依据：[确认需求](../requirements/2026-11-25-recruitment-resume-intake.md)、[实施计划](../superpowers/plans/2026-11-25-recruitment-resume-intake.md)。
