@@ -4,10 +4,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DingtalkRecruitmentService } from '@/dingtalk/dingtalk-recruitment.service';
-import { MapRecruitmentDemandDto, RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto, SyncRecruitmentDemandsDto } from './recruitment-demands.dto';
-import { assertRecruitmentEditor, assertRecruitmentReader, canReadTalentApplication, type RecruitmentActor } from './talent-recruitment-policy';
+import { CreateLocalRecruitmentDemandDto, LocalRecruitmentDemandActionDto, MapRecruitmentDemandDto, RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto, SyncRecruitmentDemandsDto, UpdateLocalRecruitmentDemandDto } from './recruitment-demands.dto';
+import { assertRecruitmentDemandReader, assertRecruitmentDemandReviewer, assertRecruitmentEditor, assertRecruitmentReader, canEditRecruitment, canReadRecruitmentDemand, canReadTalentApplication, canReviewRecruitmentDemand, type RecruitmentActor } from './talent-recruitment-policy';
 import { type RecruitmentDemandGateway, type RecruitmentDemandSource, type RecruitmentDemandSubmissionSnapshot, type RecruitmentDemandSubmissionProof, type RecruitmentDemandVerification } from './recruitment-demands.types';
 import { attachRecruitmentDemandSeats } from './recruitment-demand-seats';
+import { isUUID } from 'class-validator';
 
 const directoryInclude = {
   department: { select: { id: true, name: true, isActive: true } },
@@ -35,6 +36,11 @@ export class RecruitmentDemandsService {
     return assertRecruitmentEditor(tx, user);
   }
 
+  private async reviewerAfterLock(tx: Prisma.TransactionClient, user: AuthUser) {
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR SHARE`;
+    return assertRecruitmentDemandReviewer(tx, user);
+  }
+
   private sourceStatus(): ReturnType<RecruitmentDemandGateway['status']> {
     const status = this.source?.status() ?? { configured: false, missing: ['recruitmentSource'], readOnly: true as const };
     if (status.configured && (!status.scope?.organizationKey || !status.scope.processCode)) return { ...status, configured: false, missing: [...status.missing, 'recruitmentSourceScope'] };
@@ -46,86 +52,114 @@ export class RecruitmentDemandsService {
     return this.source;
   }
 
-  private inScope(row: { organizationKey: string; processCode: string }) {
+  private inScope(row: { organizationKey: string | null; processCode: string | null }) {
     const status = this.sourceStatus();
     return status.configured && row.organizationKey === status.scope?.organizationKey && row.processCode === status.scope.processCode;
   }
 
   async status(user: AuthUser) {
-    await assertRecruitmentReader(this.prisma, user);
+    await assertRecruitmentDemandReader(this.prisma, user);
     return this.sourceStatus();
   }
 
   private issues(row: Demand, application?: ApplicationReference): string[] {
     const issues: string[] = [];
-    if (!this.sourceStatus().configured) issues.push('来源尚未配置，待核对');
-    else if (!this.inScope(row)) issues.push('需求不属于当前已配置的组织和表单');
+    const local = row.sourceKind === 'local';
+    if (!local) {
+      if (!this.sourceStatus().configured) issues.push('来源尚未配置，待核对');
+      else if (!this.inScope(row)) issues.push('需求不属于当前已配置的组织和表单');
+    }
     if (row.syncIssue) issues.push('来源同步未完成或失败，待重新同步核对');
-    if (row.sourceState !== 'approved') issues.push('需求尚未终审通过或已失效');
+    if (row.sourceState !== 'approved') {
+      if (local) issues.push(({ draft: '请先提交招聘需求，交独立审核人审核', pending: '招聘需求待独立审核',
+        rejected: '请按退回意见修改后重新提交招聘需求', withdrawn: '招聘需求已撤销，不能用于新的录用提交' } as Record<string, string>)[row.sourceState] ?? '招聘需求状态待核对');
+      else issues.push('需求尚未终审通过或已失效');
+    }
     if (row.supersededByInstanceId) issues.push('需求已由更正单替代');
-    if (!row.mappedFingerprint || row.mappedFingerprint !== row.sourceFingerprint) issues.push('来源版本尚未完成人工核对');
+    if ((!local || row.sourceState === 'approved') && (!row.mappedFingerprint || row.mappedFingerprint !== row.sourceFingerprint)) issues.push(local ? '系统创建需求的审批版本不完整' : '来源版本尚未完成人工核对');
+    if (local && row.sourceState === 'approved' && (!row.approvedById || !row.submittedById || row.approvedById === row.submittedById
+      || row.approvedHeadcount !== row.requestedHeadcount)) issues.push('系统创建需求尚未完成独立审核');
     if (!row.department?.isActive) issues.push('请核对有效部门');
     if (!row.position?.isActive) issues.push('请核对有效岗位');
-    if (!Number.isInteger(row.approvedHeadcount) || row.approvedHeadcount! < 1) issues.push('请核对批准人数');
+    if ((!local || row.sourceState === 'approved') && (!Number.isInteger(row.approvedHeadcount) || row.approvedHeadcount! < 1)) issues.push('请核对批准人数');
     if (application && (!application.deptId || application.deptId !== row.deptId)) issues.push('需求部门与当前应聘不一致');
     if (application && application.positionName.trim() !== row.position?.name) issues.push('需求岗位与当前应聘不一致');
     return issues;
   }
 
-  private view(row: Demand, application?: ApplicationReference) {
+  private localActions(row: Demand, actor?: RecruitmentActor): string[] {
+    if (row.sourceKind !== 'local' || !actor) return [];
+    const edit = canEditRecruitment(actor);
+    if (['draft', 'rejected'].includes(row.sourceState)) return edit ? ['edit', 'submit', 'withdraw'] : [];
+    const actions: string[] = [];
+    if (row.sourceState === 'pending' && canReviewRecruitmentDemand(actor) && row.submittedById && row.submittedById !== actor.id) actions.push('approve', 'return');
+    if (edit && ['pending', 'approved'].includes(row.sourceState)) actions.push('withdraw');
+    return actions;
+  }
+
+  private view(row: Demand, application?: ApplicationReference, actor?: RecruitmentActor) {
     const issues = this.issues(row, application);
-    return { id: row.id, revision: row.revision, instanceId: row.instanceId, sourceState: row.sourceState,
+    return { id: row.id, revision: row.revision, sourceKind: row.sourceKind === 'local' ? 'local' as const : 'dingtalk' as const,
+      instanceId: row.instanceId, sourceState: row.sourceState,
       rawDepartment: row.rawDepartment, rawPosition: row.rawPosition, rawHeadcount: row.rawHeadcount,
       deptId: row.deptId, departmentName: row.department?.name ?? null, positionId: row.positionId, positionName: row.position?.name ?? null,
       approvedHeadcount: row.approvedHeadcount, usable: issues.length === 0, issues, approvedAt: row.approvedAt?.toISOString() ?? null,
-      sourceLink: row.sourceLink, lastSyncedAt: row.lastSyncedAt.toISOString() };
+      sourceLink: row.sourceLink, lastSyncedAt: row.lastSyncedAt?.toISOString() ?? null,
+      requestedHeadcount: row.requestedHeadcount ?? null, requestReason: row.requestReason ?? null, createdById: row.createdById ?? null,
+      submittedById: row.submittedById ?? null, approvedById: row.approvedById ?? null, allowedActions: this.localActions(row, actor) };
   }
 
   private keyword(keyword?: string): Prisma.RecruitmentDemandWhereInput {
     const value = keyword?.trim();
-    return value ? { OR: ['instanceId', 'rawDepartment', 'rawPosition'].map(field => ({ [field]: { contains: value, mode: 'insensitive' } })) } : {};
+    return value ? { OR: [
+      ...['instanceId', 'rawDepartment', 'rawPosition'].map(field => ({ [field]: { contains: value, mode: 'insensitive' } })),
+      { department: { is: { name: { contains: value, mode: 'insensitive' } } } },
+      { position: { is: { name: { contains: value, mode: 'insensitive' } } } },
+      ...(isUUID(value) ? [{ id: value }] : []),
+    ] } : {};
   }
 
   async list(query: RecruitmentDemandQueryDto, user: AuthUser) {
-    await assertRecruitmentReader(this.prisma, user);
+    const actor = await assertRecruitmentDemandReader(this.prisma, user);
     const where: Prisma.RecruitmentDemandWhereInput = { ...this.keyword(query.keyword), ...(query.status ? { sourceState: query.status } : {}) };
     const [rows, total] = await Promise.all([
       this.prisma.recruitmentDemand.findMany({ where, include: directoryInclude, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
       this.prisma.recruitmentDemand.count({ where }),
     ]);
-    return { items: await attachRecruitmentDemandSeats(this.prisma, rows.map(row => this.view(row))), total, page: query.page, pageSize: query.pageSize };
+    return { items: await attachRecruitmentDemandSeats(this.prisma, rows.map(row => this.view(row, undefined, actor))), total, page: query.page, pageSize: query.pageSize };
   }
 
   async directories(user: AuthUser) {
-    await assertRecruitmentReader(this.prisma, user);
+    await assertRecruitmentDemandReader(this.prisma, user);
     const departments = await this.prisma.department.findMany({ where: { isActive: true }, select: { id: true, name: true, fullPath: true }, orderBy: [{ fullPath: 'asc' }, { id: 'asc' }] });
     const positions = await this.prisma.position.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }] });
     return { departments: departments.map(({ id, name, fullPath }) => ({ id, name, fullPath })), positions: positions.map(({ id, code, name }) => ({ id, code, name })) };
   }
 
   async options(query: RecruitmentDemandOptionsQueryDto, user: AuthUser) {
-    await assertRecruitmentReader(this.prisma, user);
+    const actor = await assertRecruitmentReader(this.prisma, user);
     const app = await this.prisma.talentApplication.findUnique({ where: { id: query.applicationId }, select: { deptId: true, positionName: true, stage: true, candidate: { select: { deletedAt: true } } } });
     if (!app || app.candidate.deletedAt) throw new NotFoundException('应聘记录不存在');
-    if (!app.deptId || !['screening', 'interviewing'].includes(app.stage) || !this.sourceStatus().configured) return { items: [], total: 0, page: query.page, pageSize: query.pageSize };
+    if (!app.deptId || !['screening', 'interviewing'].includes(app.stage)) return { items: [], total: 0, page: query.page, pageSize: query.pageSize };
+    const origins: Prisma.RecruitmentDemandWhereInput[] = [{ sourceKind: 'local', approvedById: { not: null }, submittedById: { not: null } }];
+    if (this.sourceStatus().configured) origins.push({ sourceKind: 'dingtalk', ...this.sourceStatus().scope! });
     // mappedFingerprint equality is a column comparison, not a client-provided value.
-    const where: Prisma.RecruitmentDemandWhereInput = { ...this.keyword(query.keyword), deptId: app.deptId, sourceState: 'approved', syncIssue: null,
-      organizationKey: this.sourceStatus().scope!.organizationKey, processCode: this.sourceStatus().scope!.processCode,
+    const where: Prisma.RecruitmentDemandWhereInput = { AND: [this.keyword(query.keyword), { OR: origins }], deptId: app.deptId, sourceState: 'approved', syncIssue: null,
       supersededByInstanceId: null, mappedFingerprint: { equals: this.prisma.recruitmentDemand.fields.sourceFingerprint }, approvedHeadcount: { gt: 0 },
       department: { is: { isActive: true } }, position: { is: { isActive: true, name: app.positionName.trim() } } };
     const [rows, total] = await Promise.all([
       this.prisma.recruitmentDemand.findMany({ where, include: directoryInclude, orderBy: [{ approvedAt: 'desc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
       this.prisma.recruitmentDemand.count({ where }),
     ]);
-    return { items: await attachRecruitmentDemandSeats(this.prisma, rows.map(row => this.view(row, app))), total, page: query.page, pageSize: query.pageSize };
+    return { items: await attachRecruitmentDemandSeats(this.prisma, rows.map(row => this.view(row, app, actor))), total, page: query.page, pageSize: query.pageSize };
   }
 
   async detail(id: string, user: AuthUser) {
-    await assertRecruitmentReader(this.prisma, user);
+    const actor = await assertRecruitmentDemandReader(this.prisma, user);
     const row = await this.get(this.prisma, id);
     const events = await this.prisma.recruitmentDemandEvent.findMany({ where: { demandId: id }, orderBy: [{ revision: 'asc' }] });
     const names = new Map((await this.prisma.user.findMany({ where: { id: { in: [...new Set(events.map(event => event.actorId))] } }, select: { id: true, name: true } })).map(actor => [actor.id, actor.name]));
-    const [current] = await attachRecruitmentDemandSeats(this.prisma, [this.view(row)]);
+    const [current] = await attachRecruitmentDemandSeats(this.prisma, [this.view(row, undefined, actor)]);
     return { ...current, events: events.map(event => ({ id: event.id, action: event.action, revision: event.revision,
       createdAt: event.createdAt.toISOString(), actorName: names.get(event.actorId) ?? null, reason: event.reason })) };
   }
@@ -134,7 +168,13 @@ export class RecruitmentDemandsService {
     if (!canReadTalentApplication(actor, application)) throw new ForbiddenException('无权限查看此应聘记录');
     if (!application.recruitmentDemandId) return null;
     const row = await tx.recruitmentDemand.findUnique({ where: { id: application.recruitmentDemandId }, include: directoryInclude });
-    return row ? (await attachRecruitmentDemandSeats(tx, [this.view(row)]))[0] : null;
+    if (!row) return null;
+    const full = this.view(row, undefined, actor);
+    if (canReadRecruitmentDemand(actor)) return (await attachRecruitmentDemandSeats(tx, [full]))[0];
+    const { id, revision, sourceKind, instanceId, deptId, departmentName, positionId, positionName, approvedHeadcount,
+      sourceState, usable, issues, approvedAt, sourceLink, lastSyncedAt } = full;
+    return (await attachRecruitmentDemandSeats(tx, [{ id, revision, sourceKind, instanceId, deptId, departmentName, positionId, positionName,
+      approvedHeadcount, sourceState, usable, issues, approvedAt, sourceLink, lastSyncedAt }]))[0];
   }
 
   private async get(tx: Prisma.TransactionClient, id: string) {
@@ -147,11 +187,97 @@ export class RecruitmentDemandsService {
     if (!Number.isInteger(expected) || row.revision !== expected) throw new ConflictException('招聘需求版本已变化，请重新核对并选择');
   }
 
+  private assertLocal(row: Demand) {
+    if (row.sourceKind !== 'local') throw new BadRequestException('只能办理系统创建的招聘需求，钉钉需求请在原流程处理');
+  }
+
+  private localFields(input: Partial<CreateLocalRecruitmentDemandDto>, row?: Demand) {
+    const deptId = input.deptId !== undefined ? input.deptId : row?.deptId;
+    const positionId = input.positionId !== undefined ? input.positionId : row?.positionId;
+    const headcount = input.headcount !== undefined ? input.headcount : row?.requestedHeadcount;
+    const reason = input.reason !== undefined ? input.reason : row?.requestReason;
+    if (typeof deptId !== 'string' || !deptId || typeof positionId !== 'string' || !positionId
+      || !Number.isInteger(headcount) || headcount! < 1 || headcount! > 2147483647
+      || typeof reason !== 'string' || !reason.trim() || reason.trim().length > 1000) throw new BadRequestException('请填写有效部门、岗位、正整数需求人数和申请原因');
+    return { deptId: deptId.toLowerCase(), positionId: positionId.toLowerCase(), headcount: headcount!, reason: reason.trim() };
+  }
+
+  private localFingerprint(fields: ReturnType<RecruitmentDemandsService['localFields']>) {
+    return createHash('sha256').update(JSON.stringify([fields.deptId, fields.positionId, fields.headcount, fields.reason])).digest('hex');
+  }
+
+  private async localCatalog(tx: Prisma.TransactionClient, fields: { deptId: string; positionId: string }) {
+    await tx.$queryRaw`SELECT id FROM departments WHERE id = ${fields.deptId}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT id FROM positions WHERE id = ${fields.positionId}::uuid FOR SHARE`;
+    const department = await tx.department.findUnique({ where: { id: fields.deptId }, select: { isActive: true } });
+    const position = await tx.position.findUnique({ where: { id: fields.positionId }, select: { isActive: true } });
+    if (!department?.isActive || !position?.isActive) throw new BadRequestException('请选择启用的HRM部门和岗位');
+  }
+
+  async createLocal(input: CreateLocalRecruitmentDemandDto, user: AuthUser) {
+    return this.prisma.$transaction(async tx => {
+      await this.lock(tx); const actor = await this.editorAfterLock(tx, user);
+      const fields = this.localFields(input), fingerprint = this.localFingerprint(fields);
+      const existing = await tx.recruitmentDemand.findUnique({ where: { localRequestId: input.requestId }, include: directoryInclude });
+      if (existing) {
+        if (existing.createdById !== actor.id) throw new ForbiddenException('本次创建请求不属于当前经办人');
+        if (existing.localCreationFingerprint !== fingerprint) throw new ConflictException('本次创建请求已用于其他需求内容，请恢复原请求或重新创建');
+        return (await attachRecruitmentDemandSeats(tx, [this.view(existing, undefined, actor)]))[0];
+      }
+      await this.localCatalog(tx, fields);
+      const row = await tx.recruitmentDemand.create({ data: { sourceKind: 'local', sourceState: 'draft', localRequestId: input.requestId,
+        localCreationFingerprint: fingerprint, sourceFingerprint: fingerprint, deptId: fields.deptId, positionId: fields.positionId,
+        requestedHeadcount: fields.headcount, requestReason: fields.reason, createdById: actor.id }, include: directoryInclude });
+      await this.record(tx, row, actor.id, 'local_create', fields.reason);
+      return (await attachRecruitmentDemandSeats(tx, [this.view(row, undefined, actor)]))[0];
+    }, transactionOptions);
+  }
+
+  async updateLocal(id: string, input: UpdateLocalRecruitmentDemandDto, user: AuthUser) {
+    return this.prisma.$transaction(async tx => {
+      await this.lock(tx); const actor = await this.editorAfterLock(tx, user);
+      const row = await this.get(tx, id); this.assertLocal(row); this.revision(row, input.expectedRevision);
+      if (!['draft', 'rejected'].includes(row.sourceState)) throw new BadRequestException('仅草稿或已退回的系统创建需求可修改，已提交或已批准的内容不可覆盖');
+      const fields = this.localFields(input, row); await this.localCatalog(tx, fields);
+      const updated = await tx.recruitmentDemand.update({ where: { id }, data: { deptId: fields.deptId, positionId: fields.positionId,
+        requestedHeadcount: fields.headcount, requestReason: fields.reason, sourceFingerprint: this.localFingerprint(fields), revision: row.revision + 1 }, include: directoryInclude });
+      await this.record(tx, updated, actor.id, 'local_update', fields.reason);
+      return (await attachRecruitmentDemandSeats(tx, [this.view(updated, undefined, actor)]))[0];
+    }, transactionOptions);
+  }
+
+  async actLocal(id: string, input: LocalRecruitmentDemandActionDto, user: AuthUser) {
+    return this.prisma.$transaction(async tx => {
+      await this.lock(tx);
+      const review = ['approve', 'return'].includes(input.action);
+      const actor = review ? await this.reviewerAfterLock(tx, user) : await this.editorAfterLock(tx, user);
+      const row = await this.get(tx, id); this.assertLocal(row); this.revision(row, input.expectedRevision);
+      if (review && row.submittedById === actor.id) throw new ForbiddenException('需由独立的需求审核人办理，不能审核本人提交的需求');
+      if (!this.localActions(row, actor).includes(input.action)) throw new BadRequestException('当前系统创建需求的状态不支持此操作');
+      const reason = input.reason?.trim() || null;
+      if ((['return', 'withdraw'].includes(input.action) && !reason) || (reason && reason.length > 1000)) throw new BadRequestException('请填写明确的退回或撤回原因，最多1000字');
+      const data: Prisma.RecruitmentDemandUncheckedUpdateInput = { revision: row.revision + 1 };
+      if (['submit', 'approve'].includes(input.action)) {
+        const fields = this.localFields({}, row); await this.localCatalog(tx, fields);
+        if (this.localFingerprint(fields) !== row.sourceFingerprint) throw new ConflictException('系统创建需求的内容版本不一致，请重新核对');
+      }
+      if (input.action === 'submit') Object.assign(data, { sourceState: 'pending', submittedById: actor.id });
+      if (input.action === 'approve') Object.assign(data, { sourceState: 'approved', approvedById: actor.id, approvedAt: new Date(),
+        approvedHeadcount: row.requestedHeadcount, mappedFingerprint: row.sourceFingerprint });
+      if (input.action === 'return') data.sourceState = 'rejected';
+      if (input.action === 'withdraw') data.sourceState = 'withdrawn';
+      const updated = await tx.recruitmentDemand.update({ where: { id }, data, include: directoryInclude });
+      await this.record(tx, updated, actor.id, `local_${input.action}`, reason);
+      return (await attachRecruitmentDemandSeats(tx, [this.view(updated, undefined, actor)]))[0];
+    }, transactionOptions);
+  }
+
   async map(id: string, input: MapRecruitmentDemandDto, user: AuthUser) {
     return this.prisma.$transaction(async tx => {
       await this.lock(tx);
       const actor = await this.editorAfterLock(tx, user);
       const row = await this.get(tx, id); this.revision(row, input.expectedRevision);
+      if (row.sourceKind === 'local') throw new BadRequestException('系统创建的招聘需求不使用钉钉来源映射，请通过系统内需求操作办理');
       this.requireSource();
       if (!this.inScope(row)) throw new BadRequestException('需求不属于当前已配置的组织和表单');
       if (row.sourceState !== 'approved' || row.syncIssue || row.supersededByInstanceId) throw new BadRequestException('请先同步并核对已批准且有效的招聘需求');
@@ -176,7 +302,17 @@ export class RecruitmentDemandsService {
     if (!id || expectedRevision === undefined) throw new BadRequestException('提交录用前请选择已批准并核对的招聘需求');
     const reference = await this.get(this.prisma, id);
     this.revision(reference, expectedRevision);
+    if (reference.sourceKind === 'local') {
+      const issues = this.issues(reference);
+      if (issues.length) throw new BadRequestException(issues.join('；'));
+      const proof: RecruitmentDemandSubmissionProof = Object.freeze({ sourceKind: 'local' as const, demandId: reference.id, revision: reference.revision,
+        sourceFingerprint: reference.sourceFingerprint, actorId: user.id, organizationKey: null, processCode: null, verifiedAt: new Date().toISOString() });
+      this.submissionProofs.add(proof);
+      return proof;
+    }
     const source = this.requireSource();
+    if (!reference.instanceId) throw new ServiceUnavailableException('钉钉来源实例标识缺失，不能提交录用');
+    const instanceId = reference.instanceId;
     if (!this.inScope(reference)) throw new BadRequestException('需求不属于当前已配置的组织和表单');
     const priorIssues = this.issues(reference);
     if (priorIssues.length) throw new BadRequestException(priorIssues.join('；'));
@@ -184,14 +320,14 @@ export class RecruitmentDemandsService {
     let verifiedAt: string;
     try {
       if (!source.verifyForSubmission) throw new Error('Fresh verification unavailable');
-      verification = await source.verifyForSubmission(reference.instanceId);
+      verification = await source.verifyForSubmission(instanceId);
       if (!verification || !Array.isArray(verification.relatedSources) || verification.relatedSources.length > 500
         || !['complete', 'unproven'].includes(verification.replacementCoverage)
         || !Number.isFinite(Date.parse(verification.checkedAt)) || Date.now() - Date.parse(verification.checkedAt) > 15000
         || Date.parse(verification.checkedAt) > Date.now()) throw new Error('Invalid verification');
       verifiedAt = verification.checkedAt;
       for (const item of [verification.source, ...verification.relatedSources]) {
-        const normalized = this.normalize(item, item === verification.source ? reference.instanceId : item.instanceId);
+        const normalized = this.normalize(item, item === verification.source ? instanceId : item.instanceId);
         if (!this.inScope(normalized)) throw new Error('Verification scope mismatch');
       }
     } catch {
@@ -207,7 +343,7 @@ export class RecruitmentDemandsService {
       await this.lock(tx); const actor = await this.editorAfterLock(tx, user);
       const row = await this.get(tx, id); this.revision(row, reference.revision);
       if (!this.inScope(row)) throw new ConflictException('招聘需求来源配置已变化，请重新核对');
-      await this.readAndStore(tx, reference.instanceId, actor.id, row, verification.source);
+      await this.readAndStore(tx, instanceId, actor.id, row, verification.source);
       for (const related of verification.relatedSources) {
         if (related.status === 'approved' && related.supersedesInstanceId) await this.readAndStore(tx, related.instanceId, actor.id, undefined, related);
       }
@@ -219,7 +355,7 @@ export class RecruitmentDemandsService {
     this.revision(current, expectedRevision);
     const issues = this.issues(current);
     if (issues.length) throw new BadRequestException(issues.join('；'));
-    const proof: RecruitmentDemandSubmissionProof = Object.freeze({ demandId: current.id, revision: current.revision,
+    const proof: RecruitmentDemandSubmissionProof = Object.freeze({ sourceKind: 'dingtalk' as const, demandId: current.id, revision: current.revision,
       sourceFingerprint: current.sourceFingerprint, actorId: user.id, organizationKey: current.organizationKey, processCode: current.processCode,
       verifiedAt });
     this.submissionProofs.add(proof);
@@ -230,24 +366,26 @@ export class RecruitmentDemandsService {
     if (!id || expectedRevision === undefined) throw new BadRequestException('提交录用前请选择已批准并核对的招聘需求');
     await this.lock(tx);
     await this.editorAfterLock(tx, user);
-    this.requireSource();
     const reference = await this.get(tx, id);
+    const local = reference.sourceKind === 'local';
+    if (!local) this.requireSource();
     if (reference.deptId) await tx.$queryRaw`SELECT id FROM departments WHERE id = ${reference.deptId}::uuid FOR SHARE`;
     if (reference.positionId) await tx.$queryRaw`SELECT id FROM positions WHERE id = ${reference.positionId}::uuid FOR SHARE`;
     const row = await this.get(tx, id);
     this.revision(row, expectedRevision);
     const issues = this.issues(row, application);
     if (issues.length) throw new BadRequestException(issues.join('；'));
-    if (!proof || !this.submissionProofs.has(proof) || proof.demandId !== id || proof.actorId !== user.id || proof.revision !== row.revision
+    if (!proof || !this.submissionProofs.has(proof) || proof.sourceKind !== (local ? 'local' : 'dingtalk')
+      || proof.demandId !== id || proof.actorId !== user.id || proof.revision !== row.revision
       || proof.sourceFingerprint !== row.sourceFingerprint || proof.organizationKey !== row.organizationKey || proof.processCode !== row.processCode
-      || Date.now() - Date.parse(proof.verifiedAt) > 15000 || Date.parse(proof.verifiedAt) > Date.now()) {
+      || (!local && (Date.now() - Date.parse(proof.verifiedAt) > 15000 || Date.parse(proof.verifiedAt) > Date.now()))) {
       throw new ConflictException('提交前需求核验已失效，请刷新核对后重新提交，填写内容已保留。');
     }
     this.submissionProofs.delete(proof);
-    const snapshot: RecruitmentDemandSubmissionSnapshot = { demandId: row.id, revision: row.revision, instanceId: row.instanceId,
+    const snapshot: RecruitmentDemandSubmissionSnapshot = { sourceKind: local ? 'local' : 'dingtalk', demandId: row.id, revision: row.revision, instanceId: row.instanceId,
       departmentId: row.deptId!, departmentName: row.department!.name, positionId: row.positionId!, positionName: row.position!.name,
       approvedHeadcount: row.approvedHeadcount!, approvedAt: row.approvedAt?.toISOString() ?? null, sourceLink: row.sourceLink,
-      syncedAt: row.lastSyncedAt.toISOString(), verifiedAt: proof.verifiedAt };
+      syncedAt: row.lastSyncedAt?.toISOString() ?? null, ...(!local ? { verifiedAt: proof.verifiedAt } : {}) };
     return { id: row.id, revision: row.revision, snapshot };
   }
 
@@ -290,6 +428,7 @@ export class RecruitmentDemandsService {
   }
 
   private async readAndStore(tx: Prisma.TransactionClient, instanceId: string, actorId: string, expected?: Demand, verifiedSource?: RecruitmentDemandSource) {
+    if (expected?.sourceKind === 'local') throw new BadRequestException('系统创建的招聘需求不读取钉钉来源');
     let source: ReturnType<RecruitmentDemandsService['normalize']>;
     try {
       source = this.normalize(verifiedSource ?? await this.requireSource().readInstance(instanceId), instanceId);
@@ -297,19 +436,19 @@ export class RecruitmentDemandsService {
       if (expected && (expected.organizationKey !== source.organizationKey || expected.processCode !== source.processCode)) throw new Error('Source scope changed');
     } catch {
       const scope = this.sourceStatus().scope;
-      const rows = expected ? [expected] : scope ? await tx.recruitmentDemand.findMany({ where: { instanceId, ...scope }, include: directoryInclude }) : [];
+      const rows = expected ? [expected] : scope ? await tx.recruitmentDemand.findMany({ where: { sourceKind: 'dingtalk', instanceId, ...scope }, include: directoryInclude }) : [];
       for (const row of rows) await this.markIssue(tx, row, actorId, 'source_unavailable');
       return null;
     }
     const row = await tx.recruitmentDemand.findUnique({ where: { organizationKey_instanceId: { organizationKey: source.organizationKey, instanceId } }, include: directoryInclude });
-    if (row && row.processCode !== source.processCode) return null;
+    if (row && (row.sourceKind === 'local' || row.processCode !== source.processCode)) return null;
     // A terminal rejection/withdrawal or verified replacement cannot be undone by an old upstream response.
     if (row && ['withdrawn', 'rejected'].includes(row.sourceState) && source.sourceState !== row.sourceState) {
       return tx.recruitmentDemand.update({ where: { id: row.id }, data: { lastSyncedAt: new Date() }, include: directoryInclude });
     }
     source.supersedesInstanceId = row?.supersedesInstanceId ?? source.supersedesInstanceId;
     const fingerprint = createHash('sha256').update(JSON.stringify(source)).digest('hex');
-    const replacement = await tx.recruitmentDemand.findFirst({ where: { organizationKey: source.organizationKey, processCode: source.processCode, supersedesInstanceId: instanceId }, include: directoryInclude });
+    const replacement = await tx.recruitmentDemand.findFirst({ where: { sourceKind: 'dingtalk', organizationKey: source.organizationKey, processCode: source.processCode, supersedesInstanceId: instanceId }, include: directoryInclude });
     const supersededByInstanceId = row?.supersededByInstanceId ?? replacement?.instanceId ?? null;
     let updated: Demand;
     if (row && row.sourceFingerprint === fingerprint && row.supersededByInstanceId === supersededByInstanceId) {
@@ -317,14 +456,14 @@ export class RecruitmentDemandsService {
         ...(row.syncIssue ? { syncIssue: null, revision: row.revision + 1 } : {}) }, include: directoryInclude });
       if (row.syncIssue) await this.record(tx, updated, actorId, 'sync');
     } else {
-      const data = { ...source, sourceFingerprint: fingerprint, supersededByInstanceId, syncIssue: null, mappedFingerprint: null, lastSyncedAt: new Date() };
+      const data = { sourceKind: 'dingtalk', ...source, sourceFingerprint: fingerprint, supersededByInstanceId, syncIssue: null, mappedFingerprint: null, lastSyncedAt: new Date() };
       updated = row ? await tx.recruitmentDemand.update({ where: { id: row.id }, data: { ...data, revision: row.revision + 1 }, include: directoryInclude })
         : await tx.recruitmentDemand.create({ data, include: directoryInclude });
       await this.record(tx, updated, actorId, 'sync');
     }
     if (source.supersedesInstanceId) {
       const predecessor = await tx.recruitmentDemand.findUnique({ where: { organizationKey_instanceId: { organizationKey: source.organizationKey, instanceId: source.supersedesInstanceId } }, include: directoryInclude });
-      if (predecessor && predecessor.processCode === source.processCode && !predecessor.supersededByInstanceId) {
+      if (predecessor && predecessor.sourceKind !== 'local' && predecessor.processCode === source.processCode && !predecessor.supersededByInstanceId) {
         const retired = await tx.recruitmentDemand.update({ where: { id: predecessor.id }, data: { supersededByInstanceId: instanceId, mappedFingerprint: null, revision: predecessor.revision + 1 }, include: directoryInclude });
         await this.record(tx, retired, actorId, 'superseded');
       }
@@ -337,8 +476,10 @@ export class RecruitmentDemandsService {
       await this.lock(tx);
       const actor = await this.editorAfterLock(tx, user);
       const current = await this.get(tx, id);
+      if (current.sourceKind === 'local') throw new BadRequestException('系统创建的招聘需求不使用钉钉刷新，请通过系统内需求操作办理');
       this.requireSource();
       if (!this.inScope(current)) throw new BadRequestException('不能刷新当前来源范围之外的历史需求');
+      if (!current.instanceId) throw new ServiceUnavailableException('钉钉来源实例标识缺失');
       return this.readAndStore(tx, current.instanceId, actor.id, current);
     }, transactionOptions);
     if (!row) throw new ServiceUnavailableException('需求来源刷新失败，旧依据已保留并标记待核对');
@@ -388,7 +529,7 @@ export class RecruitmentDemandsService {
       this.assertSyncIntent(current, input, actor.id);
       const outstanding = await tx.recruitmentDemandSyncItem.findMany({ where: { runId: run.id, state: { in: ['pending', 'failed'] } }, select: { instanceId: true, state: true } });
       const pendingIds = outstanding.filter(item => item.state === 'pending').map(item => item.instanceId);
-      for (const row of await tx.recruitmentDemand.findMany({ where: { organizationKey: current.organizationKey, processCode: current.processCode,
+      for (const row of await tx.recruitmentDemand.findMany({ where: { sourceKind: 'dingtalk', organizationKey: current.organizationKey, processCode: current.processCode,
         instanceId: { in: pendingIds }, sourceState: { notIn: ['withdrawn', 'rejected'] } }, include: directoryInclude })) await this.markIssue(tx, row, actor.id, 'incomplete_sync');
       const synced = await tx.recruitmentDemandSyncItem.count({ where: { runId: run.id, state: 'succeeded' } });
       const failed = outstanding.filter(item => item.state === 'failed').length, remaining = outstanding.length, complete = remaining === 0;
@@ -424,14 +565,14 @@ export class RecruitmentDemandsService {
       }
       const scope = { organizationKey: run.organizationKey, processCode: run.processCode };
       if (!listing.complete || !Array.isArray(listing.instanceIds) || listing.instanceIds.some(value => typeof value !== 'string' || !value || value.length > 200)) {
-        for (const row of await tx.recruitmentDemand.findMany({ where: { ...scope, sourceState: { notIn: ['withdrawn', 'rejected'] } }, include: directoryInclude })) await this.markIssue(tx, row, actor.id, 'incomplete_sync');
+        for (const row of await tx.recruitmentDemand.findMany({ where: { sourceKind: 'dingtalk', ...scope, sourceState: { notIn: ['withdrawn', 'rejected'] } }, include: directoryInclude })) await this.markIssue(tx, row, actor.id, 'incomplete_sync');
         await tx.recruitmentDemandSyncRun.update({ where: { id }, data: { state: 'listing_failed' } });
         await this.syncAudit(tx, run, 'listing_failed', { state: 'listing_failed' });
         return null;
       }
-      const existing = await tx.recruitmentDemand.findMany({ where: scope, orderBy: [{ lastSyncedAt: 'asc' }, { id: 'asc' }], select: { instanceId: true, sourceState: true } });
+      const existing = await tx.recruitmentDemand.findMany({ where: { sourceKind: 'dingtalk', ...scope }, orderBy: [{ lastSyncedAt: 'asc' }, { id: 'asc' }], select: { instanceId: true, sourceState: true } });
       const known = new Set(existing.map(row => row.instanceId));
-      const ids = [...new Set([...listing.instanceIds.filter(instanceId => !known.has(instanceId)), ...existing.filter(row => !['withdrawn', 'rejected'].includes(row.sourceState)).map(row => row.instanceId)])];
+      const ids = [...new Set([...listing.instanceIds.filter(instanceId => !known.has(instanceId)), ...existing.filter(row => row.instanceId && !['withdrawn', 'rejected'].includes(row.sourceState)).map(row => row.instanceId!)])];
       if (ids.length) await tx.recruitmentDemandSyncItem.createMany({ data: ids.map((instanceId, ordinal) => ({ runId: id, instanceId, ordinal })) });
       const ready = await tx.recruitmentDemandSyncRun.update({ where: { id }, data: { state: 'ready', listSealedAt: new Date() } });
       await this.syncAudit(tx, run, 'listed', { total: ids.length });

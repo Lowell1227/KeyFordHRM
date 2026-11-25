@@ -85,7 +85,27 @@ export class StorageService implements OnModuleInit {
     return this.uploadStoredFile(file, 'performance-review-evidence');
   }
 
-  private async uploadStoredFile(file: Express.Multer.File, purpose: UploadPurpose, uploaderId?: string): Promise<StoredFileMeta> {
+  /** Intake objects never use the generally readable talent-resume prefix. */
+  async uploadIntakeFile(file: Express.Multer.File): Promise<StoredFileMeta> {
+    return this.uploadStoredFile(file, 'talent-resume', undefined, 'recruitment-intake');
+  }
+
+  async readIntakeFile(objectKey: string): Promise<Buffer> {
+    if (!objectKey.startsWith('recruitment-intake/')) throw new BadRequestException('收件附件来源无效');
+    const stat = await this.client.statObject(this.bucket, objectKey);
+    if (stat.size <= 0 || stat.size > 10 * 1024 * 1024) throw new BadRequestException('收件附件大小无效');
+    const stream = await this.client.getObject(this.bucket, objectKey);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of stream) {
+      size += chunk.length;
+      if (size > 10 * 1024 * 1024) { stream.destroy(); throw new BadRequestException('收件附件过大'); }
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  private async uploadStoredFile(file: Express.Multer.File, purpose: UploadPurpose, uploaderId?: string, privatePrefix?: 'recruitment-intake'): Promise<StoredFileMeta> {
     const safeMimeType = await this.assertFileValid(file, purpose);
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
@@ -101,7 +121,7 @@ export class StorageService implements OnModuleInit {
               ? 'talent-resume'
               : 'uploads';
     const safeOriginalName = file.originalname.replace(/[\\/]/g, '_');
-    const objectName = `${prefix}/${today}/${randomUUID()}-${safeOriginalName}`;
+    const objectName = `${privatePrefix ?? prefix}/${today}/${randomUUID()}-${safeOriginalName}`;
 
     await this.client.putObject(this.bucket, objectName, file.buffer, file.size, {
       'Content-Type': safeMimeType,

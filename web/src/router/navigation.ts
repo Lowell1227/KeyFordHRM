@@ -56,8 +56,14 @@ export function canAccessRoute(
   if (route.meta?.navigation?.module === 'compensation' && !route.meta.payrollOnly
     && access?.enabled && access.subjects.some(subject => subject.capabilities.length)) return false;
   if (route.meta?.talentHiringOnly) return canConfirmHiring(user);
+  if (route.meta?.recruitmentEditorOnly) return !user.isAssessorOnly && (['hr', 'system_admin'].includes(user.sysRole)
+    || Boolean(user.hrCapabilities?.includes('recruitment_edit'))
+    || (user.sysRole === 'hr_user' && Boolean(user.hrCapabilities?.includes('employee_archive_edit'))));
+  if (route.meta?.recruitmentDemandOnly) return canReadTalent(user)
+    || (!user.isAssessorOnly && Boolean(user.hrCapabilities?.includes('recruitment_demand_review')));
   if (route.meta?.talentPoolOnly) return canReadTalent(user);
-  if (route.meta?.recruitmentEntry) return canReadTalent(user) || canConfirmHiring(user);
+  if (route.meta?.recruitmentEntry) return canReadTalent(user) || canConfirmHiring(user)
+    || (!user.isAssessorOnly && Boolean(user.hrCapabilities?.includes('recruitment_demand_review')));
   if (route.meta?.appealLedgerOnly) return canAccessAppealLedger(user);
   const scopedCapability = route.meta?.scopedCapability;
   if (scopedCapability && user.businessCapabilities?.[scopedCapability]) return true;

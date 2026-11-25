@@ -29,14 +29,32 @@ describe('TalentResumeService (no persistence / external calls)', () => {
   let service: TalentResumeService;
   let enabled: unknown;
   const ai = { getProviderRuntimeConfig: jest.fn() };
-  const client = { parse: jest.fn() };
+  const client = { parse: jest.fn(), parseText: jest.fn() };
   beforeEach(() => {
     enabled = undefined;
     ai.getProviderRuntimeConfig.mockReset().mockResolvedValue({ provider: 'deepseek', apiKey: 'synthetic-key', modelId: 'performance-model' });
     client.parse.mockReset().mockResolvedValue({ fields: { name: '虚构候选人' }, reviewItems: [], pageCount: 1 });
+    client.parseText.mockReset().mockResolvedValue({ fields: { name: '虚构候选人' }, reviewItems: [], pageCount: 0 });
     service = new TalentResumeService(ai as never, { get: () => enabled } as unknown as ConfigService, client as never);
   });
   afterEach(() => jest.restoreAllMocks());
+
+  it('uses the existing parser permission, enablement and field extraction for mail text', async () => {
+    enabled = true;
+    expect(await service.parseText('Name: Synthetic', hr)).toMatchObject({ fields: { name: '虚构候选人' }, source: { kind: 'text', pageCount: 0 } });
+    expect(client.parseText).toHaveBeenCalledWith('Name: Synthetic', 'synthetic-key', undefined);
+    expect(client.parse).not.toHaveBeenCalled();
+    await expect(service.parseText('Name: Synthetic', { id: 'viewer', sysRole: 'employee' } as AuthUser)).rejects.toThrow('权限');
+    enabled = false;
+    await expect(service.parseText('Name: Synthetic', hr)).rejects.toThrow('未启用');
+  });
+
+  it('keeps failed text parsing retriable and never exposes a provider response', async () => {
+    enabled = true;
+    client.parseText.mockRejectedValueOnce(new ResumeClientError('timeout'));
+    await expect(service.parseText('Name: Synthetic', hr)).rejects.toThrow('超时');
+    await expect(service.parseText('Name: Synthetic', hr)).resolves.toHaveProperty('fields');
+  });
 
   it('accepts an explicit employee operator but denies its assessor-only variant before provider access', async () => {
     enabled = true;

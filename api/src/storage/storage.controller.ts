@@ -58,6 +58,15 @@ export class StorageController {
       return;
     }
     const objectName = decodeURIComponent(key);
+    if (objectName.startsWith('recruitment-intake/')) {
+      const published = await this.prisma.talentResumeFile.findFirst({
+        where: { objectKey: objectName, candidate: { deletedAt: null } }, select: { id: true },
+      });
+      if (!published) throw new ForbiddenException({ code: 'FORBIDDEN', message: '请从简历收件中查看待核对附件' });
+      await assertRecruitmentReader(this.prisma, operator);
+      await this.storageService.pipeDownload(objectName, res);
+      return;
+    }
     if (objectName.startsWith('confirmation-internal/')) {
       throw new ForbiddenException({ code: 'FORBIDDEN', message: '请从转正申请中下载内部评议附件' });
     }

@@ -1,4 +1,5 @@
 export type RecruitmentDemandSourceState = 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'unknown';
+export type RecruitmentDemandSourceKind = 'dingtalk' | 'local';
 
 export interface RecruitmentDemandSource {
   organizationKey: string;
@@ -32,19 +33,21 @@ export interface RecruitmentDemandVerification {
 }
 
 export interface RecruitmentDemandSubmissionProof {
+  sourceKind: RecruitmentDemandSourceKind;
   demandId: string;
   revision: number;
   sourceFingerprint: string;
   actorId: string;
-  organizationKey: string;
-  processCode: string;
+  organizationKey: string | null;
+  processCode: string | null;
   verifiedAt: string;
 }
 
 export interface RecruitmentDemandSubmissionSnapshot {
+  sourceKind: RecruitmentDemandSourceKind;
   demandId: string;
   revision: number;
-  instanceId: string;
+  instanceId: string | null;
   departmentId: string;
   departmentName: string;
   positionId: string;
@@ -52,6 +55,6 @@ export interface RecruitmentDemandSubmissionSnapshot {
   approvedHeadcount: number;
   approvedAt: string | null;
   sourceLink: string | null;
-  syncedAt: string;
+  syncedAt: string | null;
   verifiedAt?: string;
 }

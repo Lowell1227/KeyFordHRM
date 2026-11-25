@@ -178,19 +178,40 @@ export class TalentResumeService {
         const result = await this.client.parse(document, runtime.apiKey, options);
         return { fields: result.fields, reviewItems: result.reviewItems, source: { fileName: file!.originalname, pageCount: result.pageCount } };
       } catch (error) {
-        if (error instanceof ResumeClientError) {
-          if (error.code === 'timeout') throw new ServiceUnavailableException('简历解析超时，请稍后重试或手工填写');
-          if (error.code === 'rate_limited') throw new HttpException('简历解析服务繁忙，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
-          if (error.code === 'document_too_large' || error.code === 'response_too_large') {
-            throw new BadRequestException('简历页数或内容超限，请使用不超过 20 页的精简材料');
-          }
-          if (error.code === 'empty_result' || error.code === 'invalid_response') {
-            throw new BadRequestException('未获得完整有效的解析结果，请检查文件或手工填写');
-          }
-        }
-        throw new ServiceUnavailableException('简历解析暂时失败，请稍后重试或手工填写');
+        this.parseFailure(error);
       }
     } finally { this.inFlightUsers.delete(user.id); }
+  }
+
+  async parseText(text: string, user: AuthUser, options?: ResumeParseOptions) {
+    this.assertMaintainer(user);
+    if (!this.enabled()) throw new ServiceUnavailableException('简历解析未启用，请手工填写');
+    this.acquire(user.id);
+    try {
+      if (typeof text !== 'string' || !text.trim() || text.includes('\0') || text.length > RESUME_LIMITS.textChars) {
+        throw new BadRequestException('正文为空或内容超限，请补充简历文件或手工填写');
+      }
+      const runtime = await this.runtime();
+      if (!runtime) throw new ServiceUnavailableException('请先保存并测试当前 DeepSeek 配置');
+      try {
+        const result = await this.client.parseText(text, runtime.apiKey, options);
+        return { fields: result.fields, reviewItems: result.reviewItems, source: { kind: 'text' as const, pageCount: result.pageCount } };
+      } catch (error) { this.parseFailure(error); }
+    } finally { this.inFlightUsers.delete(user.id); }
+  }
+
+  private parseFailure(error: unknown): never {
+    if (error instanceof ResumeClientError) {
+      if (error.code === 'timeout') throw new ServiceUnavailableException('简历解析超时，请稍后重试或手工填写');
+      if (error.code === 'rate_limited') throw new HttpException('简历解析服务繁忙，请稍后重试', HttpStatus.TOO_MANY_REQUESTS);
+      if (error.code === 'document_too_large' || error.code === 'response_too_large') {
+        throw new BadRequestException('简历页数或内容超限，请使用不超过 20 页的精简材料');
+      }
+      if (error.code === 'empty_result' || error.code === 'invalid_response') {
+        throw new BadRequestException('未获得完整有效的解析结果，请检查文件或手工填写');
+      }
+    }
+    throw new ServiceUnavailableException('简历解析暂时失败，请稍后重试或手工填写');
   }
 
   private enabled() {

@@ -296,6 +296,22 @@ export class TalentsService {
     if (duplicate) this.throwPhoneExists(duplicate.id, duplicate.name);
     try {
       const candidate = await this.prisma.$transaction(async tx => {
+        return this.createInTransaction(tx, input, operator);
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+      return { ...serializeTalentSalary(candidate), editVersion: talentEditVersion(candidate) };
+    } catch (error) {
+      if (this.isUniqueViolation(error)) {
+        const existing = await this.findByPhone(input.phone);
+        if (existing) this.throwPhoneExists(existing.id, existing.name);
+      }
+      throw error;
+    }
+  }
+
+  /** Explicit client reuse for source confirmation; never opens a nested transaction. */
+  async createInTransaction(tx: Prisma.TransactionClient, input: CreateTalentDto, operator: AuthUser) {
+        if (input.status === 'hired' || input.userId) throw new BadRequestException('新建记录不能直接标记为已入职，请先入库再办理');
+        const salary = salaryWrite(input);
         await this.assertWriter(tx, operator, 'edit');
         const ownerId = input.ownerId ?? operator.id;
         await this.assertOwner(ownerId, tx);
@@ -326,15 +342,6 @@ export class TalentsService {
           createdById: operator.id,
         },
         });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
-      return { ...serializeTalentSalary(candidate), editVersion: talentEditVersion(candidate) };
-    } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        const existing = await this.findByPhone(input.phone);
-        if (existing) this.throwPhoneExists(existing.id, existing.name);
-      }
-      throw error;
-    }
   }
 
   async update(id: string, input: UpdateTalentDto, operator: AuthUser) {

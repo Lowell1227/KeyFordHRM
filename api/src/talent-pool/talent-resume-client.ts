@@ -246,14 +246,25 @@ export class TalentResumeClient {
     await options.onStage?.('recognizing');
     const ocr = extractOcr(await this.request('https://api.deepseek.com/v1/tools/ocr', apiKey,
       form, RESUME_LIMITS.ocrTimeoutMs, RESUME_LIMITS.ocrResponseBytes, options.signal));
+    return this.extractText(ocr.text, apiKey, ocr.pageCount, options);
+  }
+
+  async parseText(text: string, apiKey: string, options: ResumeParseOptions = {}): Promise<ResumeExtraction> {
+    if (typeof apiKey !== 'string' || !/^[\x21-\x7e]{1,1024}$/.test(apiKey)) fail('invalid_config');
+    if (typeof text !== 'string' || !text.trim() || text.includes('\0')) fail('empty_result');
+    if (text.length > RESUME_LIMITS.textChars) fail('document_too_large');
+    return this.extractText(text, apiKey, 0, options);
+  }
+
+  private async extractText(text: string, apiKey: string, pageCount: number, options: ResumeParseOptions): Promise<ResumeExtraction> {
     if (options.signal?.aborted) fail('timeout');
     await options.onStage?.('extracting');
     const chat = await this.request('https://api.deepseek.com/chat/completions', apiKey, JSON.stringify({
       model: RESUME_MODEL,
-      messages: [{ role: 'system', content: PROMPT }, { role: 'user', content: JSON.stringify({ resumeText: ocr.text }) }],
+      messages: [{ role: 'system', content: PROMPT }, { role: 'user', content: JSON.stringify({ resumeText: text }) }],
       thinking: { type: 'disabled' }, stream: false, response_format: { type: 'json_object' }, max_tokens: 4096,
     }), RESUME_LIMITS.chatTimeoutMs, RESUME_LIMITS.chatResponseBytes, options.signal);
-    return { ...extractFields(chat, ocr.text), pageCount: ocr.pageCount };
+    return { ...extractFields(chat, text), pageCount };
   }
 
   private async request(url: string, apiKey: string, body: FormData | string, timeoutMs: number, limit: number, signal?: AbortSignal): Promise<unknown> {

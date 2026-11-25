@@ -25,6 +25,94 @@ async function assertFictionalDatabase(db) {
   }
 }
 
+async function payrollPreviewFingerprint(db) {
+  await assertFictionalDatabase(db);
+  const rows = await db.payrollBatch.findMany({ where: { month: '2037-01' }, orderBy: { id: 'asc' },
+    select: { id: true, subjectId: true, month: true, payMonth: true, purpose: true, status: true, version: true, updatedAt: true } });
+  return { month: '2037-01', count: rows.length,
+    sha256: require('node:crypto').createHash('sha256').update(JSON.stringify(rows)).digest('hex') };
+}
+
+async function ensureDefaultReviewer(db) {
+  await assertFictionalDatabase(db);
+  return db.$transaction(async tx => {
+    const reviewer = await tx.user.findUnique({ where: { employeeNo: 'HR001' } });
+    if (!reviewer || !reviewer.name.startsWith('测试·') || reviewer.sysRole !== 'hr'
+      || reviewer.accountType !== 'employee' || reviewer.status !== 'active' || reviewer.archivedAt || reviewer.deletedAt
+      || reviewer.dingtalkId || reviewer.dingtalkUnionId || !reviewer.passwordHash
+      || !await tx.employmentRecord.findFirst({ where: { userId: reviewer.id, sourceType: 'preview_fixture' } })) {
+      throw new Error('Default reviewer must be the existing fictional preview identity');
+    }
+    await tx.$queryRawUnsafe('SELECT id FROM users WHERE id = $1::uuid FOR UPDATE', reviewer.id);
+    const current = await tx.user.findUniqueOrThrow({ where: { id: reviewer.id }, select: { hrCapabilities: true } });
+    if (current.hrCapabilities.includes('recruitment_demand_review')) return { changed: false };
+    await tx.user.update({ where: { id: reviewer.id }, data: { hrCapabilities: { push: 'recruitment_demand_review' } } });
+    await tx.systemConfig.upsert({ where: { key: 'recruitment_local_preview_reviewer_v1' },
+      create: { key: 'recruitment_local_preview_reviewer_v1', value: { fictional: true, userId: reviewer.id,
+        capability: 'recruitment_demand_review', preparedAt: new Date().toISOString() } }, update: {} });
+    return { changed: true };
+  });
+}
+
+async function createLocalFixture(db, prefix, sign) {
+  await assertFictionalDatabase(db);
+  if (!prefixPattern.test(prefix)) throw new Error('Invalid local fixture owner');
+  const { JwtService } = require('@nestjs/jwt');
+  const mint = sign || (user => new JwtService().sign({ sub: user.id, employeeNo: user.employeeNo },
+    { secret: process.env.JWT_SECRET, expiresIn: '1h' }));
+  return db.$transaction(async tx => {
+    if (await tx.user.count({ where: { employeeNo: { startsWith: prefix + '_' } } })) throw new Error('Fixture prefix already used');
+    const department = await tx.department.create({ data: { name: `虚构本地需求部门_${prefix}` } });
+    const position = await tx.position.create({ data: { code: prefix, name: `虚构本地需求岗位_${prefix}` } });
+    const education = await tx.personnelReferenceData.create({ data: { kind: 'education', name: `虚构学历_${prefix}` } });
+    const actors = {};
+    for (const [kind, hrCapabilities] of [
+      ['operator', ['recruitment_edit', 'recruitment_view']], ['reviewer', ['recruitment_demand_review']],
+      ['confirmer', ['talent_hiring_confirm']], ['viewer', ['recruitment_view']], ['outsider', []],
+      ['dual', ['recruitment_edit', 'recruitment_view', 'recruitment_demand_review']],
+    ]) {
+      const user = await tx.user.create({ data: { name: `虚构${prefix}_${kind}`, employeeNo: `${prefix}_${kind}`,
+        deptId: department.id, accountType: 'employee', sysRole: 'employee', status: 'active', hrCapabilities,
+        isAssessorOnly: false, mustChangePassword: false } });
+      await tx.employmentRecord.create({ data: { userId: user.id, employeeNo: user.employeeNo, deptId: department.id,
+        company: 'fuede', effectiveFrom: new Date('2026-01-01'), entryDate: new Date('2026-01-01'),
+        employeeStatus: 'active', changeType: 'onboarding', sourceType: 'preview_fixture', reason: prefix } });
+      actors[kind] = { id: user.id, name: user.name, token: mint(user) };
+    }
+    await tx.systemConfig.create({ data: { key: 'recruitment_local_fixture_v1:' + prefix,
+      value: { fictional: true, prefix, actorIds: Object.values(actors).map(actor => actor.id),
+        departmentId: department.id, positionId: position.id, educationId: education.id } } });
+    return { prefix, department, position, education, actors };
+  });
+}
+
+async function archiveLocalFixture(db, prefix) {
+  await assertFictionalDatabase(db);
+  if (!prefixPattern.test(prefix)) throw new Error('Invalid local cleanup owner');
+  const key = 'recruitment_local_fixture_v1:' + prefix;
+  const owner = (await db.systemConfig.findUnique({ where: { key } }))?.value;
+  if (owner?.fictional !== true || owner.prefix !== prefix || !Array.isArray(owner.actorIds)) throw new Error('Missing local fixture ownership');
+  const actors = await db.user.findMany({ where: { id: { in: owner.actorIds }, employeeNo: { startsWith: prefix + '_' } }, select: { id: true } });
+  if (actors.length !== owner.actorIds.length) throw new Error('Local fixture ownership mismatch');
+  const candidateWhere = { createdById: { in: owner.actorIds }, name: { startsWith: '虚构' + prefix } };
+  // Local demand withdrawal is performed through HTTP before archiving its actors. Never erase events or accepted seats.
+  const liveDemands = await db.recruitmentDemand.count({ where: { sourceKind: 'local', createdById: { in: owner.actorIds }, sourceState: { not: 'withdrawn' } } });
+  if (liveDemands) throw new Error('Withdraw owned local demands through the audited action before cleanup');
+  await db.$transaction(async tx => {
+    const now = new Date();
+    await tx.talentCandidate.updateMany({ where: candidateWhere, data: { deletedAt: now } });
+    await tx.user.updateMany({ where: { id: { in: owner.actorIds }, employeeNo: { startsWith: prefix + '_' } },
+      data: { archivedAt: now, deletedAt: now, status: 'resigned' } });
+    await tx.department.updateMany({ where: { id: owner.departmentId, name: `虚构本地需求部门_${prefix}` }, data: { isActive: false } });
+    await tx.position.updateMany({ where: { id: owner.positionId, code: prefix }, data: { isActive: false } });
+    await tx.personnelReferenceData.updateMany({ where: { id: owner.educationId, name: `虚构学历_${prefix}` }, data: { isActive: false } });
+    await tx.systemConfig.delete({ where: { key } });
+  });
+  return { activeActors: await db.user.count({ where: { id: { in: owner.actorIds }, archivedAt: null } }),
+    activeCandidates: await db.talentCandidate.count({ where: { ...candidateWhere, deletedAt: null } }), activeDemands: liveDemands,
+    retainedDemandEvents: await db.recruitmentDemandEvent.count({ where: { demand: { sourceKind: 'local', createdById: { in: owner.actorIds } } } }) };
+}
+
 function fixtureGateway(db, onlyPrefix) {
   if (onlyPrefix !== undefined && !prefixPattern.test(onlyPrefix)) throw new Error('Invalid fixture owner');
   async function configurations() {
@@ -96,6 +184,7 @@ function fixtureGateway(db, onlyPrefix) {
 
 async function ensureDefaultFixture(db) {
   await assertFictionalDatabase(db);
+  await ensureDefaultReviewer(db);
   const prefix = 'RDI_5173dede', key = fixtureNamespace + prefix;
   if (await db.systemConfig.findUnique({ where: { key } })) return;
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
@@ -122,13 +211,19 @@ async function bootstrap() {
   const { ValidationPipe } = require('@nestjs/common');
   const { AppModule } = require('../../dist/src/app.module');
   const { DingtalkRecruitmentService } = require('../../dist/src/dingtalk/dingtalk-recruitment.service');
+  const { RecruitmentMailboxGateway } = require('../../dist/src/talent-pool/recruitment-mail-gateway');
+  const { TalentResumeService } = require('../../dist/src/talent-pool/talent-resume.service');
+  const { mailboxGateway, realResumeServiceWithFixtureProvider } = require('./recruitment-intake-fixtures.cjs');
   const { ResponseInterceptor } = require('../../dist/src/common/interceptors/response.interceptor');
   const { HttpExceptionFilter } = require('../../dist/src/common/filters/http-exception.filter');
   const db = new PrismaClient({ log: [], errorFormat: 'minimal' });
   await assertFictionalDatabase(db);
   await ensureDefaultFixture(db);
+  const fictionalParser = realResumeServiceWithFixtureProvider(db);
   const module = await Test.createTestingModule({ imports: [AppModule] })
-    .overrideProvider(DingtalkRecruitmentService).useValue(fixtureGateway(db)).compile();
+    .overrideProvider(DingtalkRecruitmentService).useValue(fixtureGateway(db))
+    .overrideProvider(RecruitmentMailboxGateway).useValue(mailboxGateway(db))
+    .overrideProvider(TalentResumeService).useValue(fictionalParser.service).compile();
   const app = module.createNestApplication({ logger: ['error', 'warn'] });
   app.setGlobalPrefix((process.env.API_PREFIX || '/api/v1').replace(/^\//, ''));
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false,
@@ -147,7 +242,8 @@ async function bootstrap() {
   process.stdout.write('Fictional recruitment source ready; full HRM API, notifications/calendar disabled.\n');
 }
 
-module.exports = { assertFictionalDatabase, fixtureGateway, fixtureNamespace, httpFixtureNamespace, prefixPattern, scope, fixtureRange, ensureDefaultFixture };
+module.exports = { assertFictionalDatabase, fixtureGateway, fixtureNamespace, httpFixtureNamespace, prefixPattern, scope, fixtureRange, ensureDefaultFixture,
+  payrollPreviewFingerprint, ensureDefaultReviewer, createLocalFixture, archiveLocalFixture };
 if (require.main === module) bootstrap().catch(() => {
   process.stderr.write('Guarded recruitment preview bootstrap failed; details suppressed.\n');
   process.exit(1);

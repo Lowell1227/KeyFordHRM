@@ -9,7 +9,7 @@ import { departmentsApi } from '@/api/departments.api';
 import { recruitmentError, talentRecruitmentApi } from '@/api/talent-recruitment.api';
 import { recruitmentDemandsApi } from '@/api/recruitment-demands.api';
 import type { RecruitmentDemandDirectories, RecruitmentDemandStatus, RecruitmentDemandView } from '@/types/recruitment-demand.types';
-import { demandErrorMessage } from '@/views/recruitment/demand-presentation';
+import { demandErrorMessage, demandOriginLabel, demandReference, isLocalDemand } from '@/views/recruitment/demand-presentation';
 import RecruitmentDemandSummary from '@/views/recruitment/components/RecruitmentDemandSummary.vue';
 import { canAccessRoute } from '@/router/navigation';
 import { useAuthStore } from '@/stores/auth.store';
@@ -265,7 +265,7 @@ async function refreshHiringContext() {
   if (loadFailed.value || current.value?.id !== row.id || command.value !== 'submit_hiring') return;
   await loadDemandOptions();
   const selected = selectedDemand.value;
-  if (demandLoadError.value || !demandConnection.value?.configured) return;
+  if (demandLoadError.value) return;
   if (!selected) { hiringNeedsRefresh.value = false; return; }
   const token = demandSession;
   demandLoading.value = true;
@@ -303,7 +303,7 @@ async function execute() {
     demandError.value = demandApplicationIssue.value || (!selectedDemand.value ? '请选择已批准且已核对的招聘需求单'
       : !selectedDemand.value.usable ? '所选招聘需求当前不可用，请核对后重新选择。'
         : selectedDemand.value.deptId !== row.deptId || selectedDemand.value.positionName !== row.positionName ? '所选需求不对应当前应聘的部门或岗位，请重新选择或修改当前应聘。' : '');
-    if (demandError.value || demandLoading.value || demandLoadError.value || !demandConnection.value?.configured) return;
+    if (demandError.value || demandLoading.value || demandLoadError.value) return;
   }
   if (noteError.value) return;
   const summary = row.activitySummary;
@@ -399,20 +399,20 @@ function eventLabel(action: string) { return APPLICATION_ACTION_LABELS[action as
         <template v-if="command === 'submit_hiring'">
           <el-alert v-if="hiringNeedsRefresh" title="录用意见和选单已保留，请先刷新核对应聘及需求。权限不足时联系授权经办，恢复后再手动提交。" type="warning" :closable="false"><el-button link type="primary" :disabled="demandLoading" @click="refreshHiringContext">刷新核对录用依据</el-button></el-alert>
           <el-form-item label="招聘需求单" required :error="demandError">
-            <el-select :model-value="selectedDemand?.id || ''" aria-label="招聘需求单" filterable remote clearable fit-input-width popper-class="recruitment-demand-options" :remote-method="loadDemandOptions" :loading="demandLoading" :disabled="demandLoading || !!demandApplicationIssue || !!demandLoadError || !demandConnection?.configured" placeholder="选择已批准并核对的需求单" @change="chooseDemand">
-              <el-option v-for="demand in demandOptions" :key="demand.id" :value="demand.id" :disabled="!demand.usable" :label="[demand.instanceId, demand.departmentName, demand.positionName, `批准 ${demand.approvedHeadcount ?? '待核'} 人`, `版本 ${demand.revision}`].filter(Boolean).join(' · ')"><strong>{{ demand.instanceId }}</strong><div>{{ demand.departmentName }} / {{ demand.positionName }} · 批准 {{ demand.approvedHeadcount ?? '待核' }} 人 · 版本 {{ demand.revision }}</div></el-option>
+            <el-select :model-value="selectedDemand?.id || ''" aria-label="招聘需求单" filterable remote clearable fit-input-width popper-class="recruitment-demand-options" :remote-method="loadDemandOptions" :loading="demandLoading" :disabled="demandLoading || !!demandApplicationIssue || !!demandLoadError" placeholder="选择已批准的需求单" @change="chooseDemand">
+              <el-option v-for="demand in demandOptions" :key="demand.id" :value="demand.id" :disabled="!demand.usable" :label="[demandOriginLabel(demand), demandReference(demand), demand.departmentName, demand.positionName, `批准 ${demand.approvedHeadcount ?? '待核'} 人`, `版本 ${demand.revision}`].filter(Boolean).join(' · ')"><strong>{{ demandOriginLabel(demand) }} · {{ demandReference(demand) }}</strong><div>{{ demand.departmentName }} / {{ demand.positionName }} · 批准 {{ demand.approvedHeadcount ?? '待核' }} 人 · 版本 {{ demand.revision }}</div></el-option>
             </el-select>
           </el-form-item>
           <el-alert v-if="demandApplicationIssue" :title="demandApplicationIssue" type="warning" :closable="false"><el-button link type="primary" @click="openEditor(false, true)">修改当前应聘（保留录用意见）</el-button></el-alert>
-          <el-alert v-if="demandConnection && !demandConnection.configured" title="钉钉招聘需求接入未就绪" type="warning" :closable="false">请联系应用维护人员核对正式表单及只读接入。缺项：{{ demandConnection.missing.join('、') || '配置待核实' }}。</el-alert>
+          <el-alert v-if="demandConnection && !demandConnection.configured" title="钉钉招聘需求接入未就绪" type="warning" :closable="false">钉钉来源暂不可用，系统创建且审核通过的需求仍可选用。钉钉接入缺项：{{ demandConnection.missing.join('、') || '配置待核实' }}。</el-alert>
           <el-alert v-if="demandLoadError" :title="demandLoadError" type="error" :closable="false"><el-button link type="primary" @click="loadDemandOptions()">重试需求读取</el-button></el-alert>
-          <p v-if="!demandLoading && !demandLoadError && demandConnection?.configured && !demandApplicationIssue && !demandRows.length" class="application-panel__muted">当前应聘没有匹配的可用需求。请核对原单是否已批准、已同步，并完成部门、岗位和人数核对。</p>
+          <p v-if="!demandLoading && !demandLoadError && !demandApplicationIssue && !demandRows.length" class="application-panel__muted">当前应聘没有匹配的可用需求。请核对需求是否已审核通过，并与当前应聘的部门、岗位一致。</p>
           <div class="application-panel__actions">
-            <a class="application-panel__demand-link" :href="router.resolve(demandTarget).href" target="_blank" rel="noopener noreferrer">前往招聘需求核对</a>
+            <a class="application-panel__demand-link" :href="router.resolve(demandTarget).href" target="_blank" rel="noopener noreferrer">{{ isLocalDemand(selectedDemand) ? '前往系统需求办理' : '前往招聘需求核对' }}</a>
             <el-button v-if="!demandApplicationIssue" link type="primary" :disabled="busy" @click="openEditor(false, true)">修改当前应聘（保留录用意见）</el-button>
             <template v-if="demandTotal > 20"><el-button size="small" :disabled="demandPage <= 1 || demandLoading" @click="demandPage--; loadDemandOptions()">上一页需求</el-button><span>{{ demandPage }} / {{ Math.ceil(demandTotal / 20) }}</span><el-button size="small" :disabled="demandPage * 20 >= demandTotal || demandLoading" @click="demandPage++; loadDemandOptions()">下一页需求</el-button></template>
           </div>
-          <p v-if="selectedDemand" class="application-panel__muted">已选 {{ selectedDemand.instanceId }} · 版本 {{ selectedDemand.revision }} · {{ selectedDemand.usable ? '当前可用，提交时重新核验' : '当前不可用，请重新核对' }}</p>
+          <p v-if="selectedDemand" class="application-panel__muted">已选 {{ demandOriginLabel(selectedDemand) }} · {{ demandReference(selectedDemand) }} · 版本 {{ selectedDemand.revision }} · {{ selectedDemand.usable ? '当前可用，提交时重新核验' : '当前不可用，请重新核对' }}</p>
         </template>
         <el-form-item v-if="command === 'reserve'" label="储备原因（选填，可多选）" :error="error.includes('储备原因') ? error : ''">
           <el-checkbox-group v-model="reserveReasons" class="application-panel__reason-options"><el-checkbox v-for="(label, reason) in TALENT_RESERVE_REASON_LABELS" :key="reason" :value="reason">{{ label }}</el-checkbox></el-checkbox-group>

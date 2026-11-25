@@ -168,11 +168,18 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/recruitment/intakes',
+    name: 'RecruitmentIntakes',
+    component: () => import('@/views/recruitment/RecruitmentIntakesView.vue'),
+    meta: { requiresAuth: true, title: '简历收件', recruitmentEditorOnly: true,
+      navigation: { module: 'recruitment', label: '简历收件', order: 15, group: 'recruitment-candidates', groupLabel: '人才与应聘' } },
+  },
+  {
     path: '/recruitment/demands',
     name: 'RecruitmentDemands',
     component: () => import('@/views/recruitment/RecruitmentDemandsView.vue'),
     meta: {
-      requiresAuth: true, title: '招聘需求', talentPoolOnly: true,
+      requiresAuth: true, title: '招聘需求', recruitmentDemandOnly: true,
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['recruitment_view', 'recruitment_edit', 'employee_archive_edit', 'employee_archive_review'],
       navigation: { module: 'recruitment', label: '招聘需求', order: 25, group: 'recruitment-demand', groupLabel: '招聘需求' },

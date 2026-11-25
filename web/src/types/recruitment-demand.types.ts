@@ -1,6 +1,8 @@
 import type { TalentApplicationStage } from './talent.types';
 
-export type RecruitmentDemandSourceState = 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'unknown';
+export type RecruitmentDemandSourceKind = 'dingtalk' | 'local';
+export type RecruitmentDemandSourceState = 'draft' | 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'unknown';
+export type RecruitmentDemandLocalAction = 'submit' | 'approve' | 'return' | 'withdraw';
 
 export interface RecruitmentDemandEvent {
   id: string;
@@ -14,7 +16,8 @@ export interface RecruitmentDemandEvent {
 export interface RecruitmentDemandView {
   id: string;
   revision: number;
-  instanceId: string;
+  sourceKind: RecruitmentDemandSourceKind;
+  instanceId: string | null;
   sourceState: RecruitmentDemandSourceState;
   rawDepartment: string | null;
   rawPosition: string | null;
@@ -24,6 +27,12 @@ export interface RecruitmentDemandView {
   positionId: string | null;
   positionName: string | null;
   approvedHeadcount: number | null;
+  requestedHeadcount?: number | null;
+  requestReason?: string | null;
+  createdById?: string | null;
+  submittedById?: string | null;
+  approvedById?: string | null;
+  allowedActions?: string[];
   occupiedCount?: number;
   acceptedCount?: number;
   hiredCount?: number;
@@ -33,14 +42,15 @@ export interface RecruitmentDemandView {
   issues: string[];
   approvedAt: string | null;
   sourceLink: string | null;
-  lastSyncedAt: string;
+  lastSyncedAt: string | null;
   events?: RecruitmentDemandEvent[];
 }
 
 export interface RecruitmentDemandSnapshot {
   demandId: string;
   revision: number;
-  instanceId: string;
+  sourceKind?: RecruitmentDemandSourceKind;
+  instanceId: string | null;
   departmentId: string;
   departmentName: string;
   positionId: string;
@@ -48,8 +58,13 @@ export interface RecruitmentDemandSnapshot {
   approvedHeadcount: number;
   approvedAt: string | null;
   sourceLink: string | null;
-  syncedAt: string;
+  syncedAt: string | null;
 }
+
+export interface RecruitmentDemandLocalFields { deptId: string; positionId: string; headcount: number; reason: string }
+export interface RecruitmentDemandLocalCreate extends RecruitmentDemandLocalFields { requestId: string }
+export interface RecruitmentDemandLocalUpdate extends RecruitmentDemandLocalFields { expectedRevision: number }
+export interface RecruitmentDemandLocalCommand { expectedRevision: number; action: RecruitmentDemandLocalAction; reason?: string }
 
 export interface RecruitmentDemandStatus { configured: boolean; missing: string[]; readOnly: true }
 export interface RecruitmentDemandSyncInput { from: string; to: string; requestId?: string; cursor?: string }

@@ -2249,6 +2249,130 @@ model TalentCandidate {
   @@map("talent_candidates")
 }
 
+model RecruitmentPosting {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  revision Int @default(1)
+  requestId String @unique @map("request_id") @db.Uuid
+  creationFingerprint String @map("creation_fingerprint") @db.VarChar(64)
+  demandId String @map("demand_id") @db.Uuid
+  channel String @db.VarChar(80)
+  name String @db.VarChar(200)
+  url String @db.VarChar(2000)
+  externalId String? @map("external_id") @db.VarChar(200)
+  verifiedIdentity Boolean @default(false) @map("verified_identity")
+  evidence String? @db.VarChar(2000)
+  active Boolean @default(true)
+  ownerId String @map("owner_id") @db.Uuid
+  createdById String @map("created_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  events RecruitmentPostingEvent[]
+  @@index([demandId, updatedAt])
+  @@map("recruitment_postings")
+}
+
+model RecruitmentPostingEvent {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  postingId String @map("posting_id") @db.Uuid
+  revision Int
+  action String @db.VarChar(40)
+  actorId String @map("actor_id") @db.Uuid
+  reason String? @db.VarChar(2000)
+  snapshot Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  posting RecruitmentPosting @relation(fields: [postingId], references: [id], onDelete: Restrict)
+  @@unique([postingId, revision])
+  @@map("recruitment_posting_events")
+}
+
+model RecruitmentIntake {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  revision Int @default(1)
+  state String @default("awaiting_resume") @db.VarChar(30)
+  transport String @default("manual") @db.VarChar(10)
+  requestId String? @unique @map("request_id") @db.Uuid
+  creationFingerprint String? @map("creation_fingerprint") @db.VarChar(64)
+  ownerId String @map("owner_id") @db.Uuid
+  createdById String @map("created_by_id") @db.Uuid
+  sourceChannel String? @map("source_channel") @db.VarChar(20)
+  postingId String? @map("posting_id") @db.Uuid
+  demandId String? @map("demand_id") @db.Uuid
+  postingSnapshot Json? @map("posting_snapshot")
+  positionName String? @map("position_name") @db.VarChar(100)
+  sourceNotes String? @map("source_notes") @db.VarChar(2000)
+  nextFollowUpAt DateTime? @map("next_follow_up_at") @db.Timestamptz(6)
+  candidateDraft Json? @map("candidate_draft")
+  applicationDraft Json? @map("application_draft")
+  parseStatus String @default("idle") @map("parse_status") @db.VarChar(16)
+  parseToken String? @map("parse_token") @db.Uuid
+  parseDeadlineAt DateTime? @map("parse_deadline_at") @db.Timestamptz(6)
+  parseResult Json? @map("parse_result")
+  parseMessage String? @map("parse_message") @db.VarChar(200)
+  issues String[] @default([]) @db.VarChar(80)
+  mailboxKey String? @map("mailbox_key") @db.VarChar(200)
+  messageId String? @map("message_id") @db.VarChar(500)
+  sourcePartId String? @map("source_part_id") @db.VarChar(220)
+  receivedAt DateTime? @map("received_at") @db.Timestamptz(6)
+  subject String? @db.VarChar(500)
+  bodyText String? @map("body_text") @db.Text
+  associatedToId String? @map("associated_to_id") @db.Uuid
+  closeReason String? @map("close_reason") @db.VarChar(2000)
+  confirmRequestId String? @unique @map("confirm_request_id") @db.Uuid
+  confirmFingerprint String? @map("confirm_fingerprint") @db.VarChar(64)
+  confirmedById String? @map("confirmed_by_id") @db.Uuid
+  candidateId String? @map("candidate_id") @db.Uuid
+  applicationId String? @map("application_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  files RecruitmentIntakeFile[]
+  events RecruitmentIntakeEvent[]
+  @@unique([mailboxKey, messageId, sourcePartId])
+  @@index([state, updatedAt])
+  @@index([demandId, updatedAt])
+  @@index([associatedToId])
+  @@map("recruitment_intakes")
+}
+
+model RecruitmentIntakeFile {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  intakeId String @map("intake_id") @db.Uuid
+  objectKey String @unique @map("object_key") @db.VarChar(500)
+  fileName String @map("file_name") @db.VarChar(255)
+  mimeType String @map("mime_type") @db.VarChar(100)
+  fileSize Int @map("file_size")
+  fingerprint String @db.VarChar(64)
+  uploadedById String @map("uploaded_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  intake RecruitmentIntake @relation(fields: [intakeId], references: [id], onDelete: Restrict)
+  @@unique([intakeId, fingerprint])
+  @@map("recruitment_intake_files")
+}
+
+model RecruitmentIntakeEvent {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  intakeId String @map("intake_id") @db.Uuid
+  revision Int
+  action String @db.VarChar(40)
+  actorId String @map("actor_id") @db.Uuid
+  reason String? @db.VarChar(2000)
+  metadata Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  intake RecruitmentIntake @relation(fields: [intakeId], references: [id], onDelete: Restrict)
+  @@unique([intakeId, revision])
+  @@map("recruitment_intake_events")
+}
+
+model RecruitmentMailboxState {
+  id String @id @db.VarChar(20)
+  mailboxKey String? @map("mailbox_key") @db.VarChar(200)
+  authorizedFrom DateTime? @map("authorized_from") @db.Timestamptz(6)
+  cursor String? @db.VarChar(1000)
+  leaseToken String? @map("lease_token") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(6)
+  lastSyncedAt DateTime? @map("last_synced_at") @db.Timestamptz(6)
+  @@map("recruitment_mailbox_states")
+}
+
 model TalentResumeTask {
   id                String   @id @db.Uuid
   ownerId           String   @map("owner_id") @db.Uuid
@@ -2406,9 +2530,10 @@ model TalentApplication {
 
 model RecruitmentDemand {
   id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationKey       String    @map("organization_key") @db.VarChar(200)
-  processCode           String    @map("process_code") @db.VarChar(200)
-  instanceId            String    @map("instance_id") @db.VarChar(200)
+  sourceKind            String    @default("dingtalk") @map("source_kind") @db.VarChar(20)
+  organizationKey       String?   @map("organization_key") @db.VarChar(200)
+  processCode           String?   @map("process_code") @db.VarChar(200)
+  instanceId            String?   @map("instance_id") @db.VarChar(200)
   sourceFingerprint     String    @map("source_fingerprint") @db.Char(64)
   sourceState           String    @map("source_state") @db.VarChar(20)
   rawDepartment         String?   @map("raw_department") @db.Text
@@ -2428,7 +2553,14 @@ model RecruitmentDemand {
   approvedHeadcount     Int?      @map("approved_headcount")
   mappedFingerprint     String?   @map("mapped_fingerprint") @db.Char(64)
   syncIssue             String?   @map("sync_issue") @db.VarChar(40)
-  lastSyncedAt          DateTime  @map("last_synced_at") @db.Timestamptz(6)
+  lastSyncedAt          DateTime? @map("last_synced_at") @db.Timestamptz(6)
+  localRequestId        String?   @unique @map("local_request_id") @db.Uuid
+  localCreationFingerprint String? @map("local_creation_fingerprint") @db.Char(64)
+  requestedHeadcount    Int?      @map("requested_headcount")
+  requestReason         String?   @map("request_reason") @db.Text
+  createdById           String?   @map("created_by_id") @db.Uuid
+  submittedById         String?   @map("submitted_by_id") @db.Uuid
+  approvedById          String?   @map("approved_by_id") @db.Uuid
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -2440,6 +2572,7 @@ model RecruitmentDemand {
   @@unique([organizationKey, instanceId])
   @@index([sourceState, updatedAt(sort: Desc)])
   @@index([organizationKey, supersedesInstanceId])
+  @@index([sourceKind, sourceState, updatedAt(sort: Desc)])
   @@map("recruitment_demands")
 }
 

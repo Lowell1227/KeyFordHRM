@@ -191,6 +191,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '转正管理与 HR 审批', value: 'confirmation_manage' },
   { label: '招聘查看', value: 'recruitment_view' },
   { label: '招聘经办', value: 'recruitment_edit' },
+  { label: '招聘需求审核', value: 'recruitment_demand_review' },
   { label: '人才录用确认', value: 'talent_hiring_confirm' },
 ];
 
@@ -1887,6 +1888,12 @@ function setRecruitmentEditing(enabled: string | number | boolean) {
   personSettingsDialog.value.hrCapabilities = capabilities;
 }
 
+function setRecruitmentDemandReview(enabled: string | number | boolean) {
+  const capabilities: HrCapability[] = personSettingsDialog.value.hrCapabilities.filter(item => item !== 'recruitment_demand_review');
+  if (enabled === true) capabilities.push('recruitment_demand_review');
+  personSettingsDialog.value.hrCapabilities = capabilities;
+}
+
 function toggleOrgMemberSelection(item: ManagedUser, checked: boolean) {
   selectedOrgMembers.value = checked
     ? [...selectedOrgMembers.value.filter((row) => row.id !== item.id), item]
@@ -1954,7 +1961,7 @@ async function confirmPersonSettings() {
       isSystemAdmin.value && personSettingsDialog.value.sysRole !== personSettingsDialog.value.originalSysRole;
     const nextHrCapabilities = personSettingsDialog.value.sysRole === 'hr_user'
       ? [...personSettingsDialog.value.hrCapabilities].sort()
-      : personSettingsDialog.value.hrCapabilities.filter(item => ['recruitment_view', 'recruitment_edit', 'talent_hiring_confirm'].includes(item)).sort();
+      : personSettingsDialog.value.hrCapabilities.filter(item => ['recruitment_view', 'recruitment_edit', 'recruitment_demand_review', 'talent_hiring_confirm'].includes(item)).sort();
     const hrCapabilitiesChanged = isSystemAdmin.value
       && JSON.stringify(nextHrCapabilities) !== JSON.stringify([...personSettingsDialog.value.originalHrCapabilities].sort());
     const actions: Promise<unknown>[] = [];
@@ -3171,12 +3178,14 @@ onBeforeUnmount(() => {
           </el-checkbox-group>
           <small class="dialog-tip">编辑与审核可分别赋给不同人员，也允许同一人同时拥有两项能力。</small>
         </el-form-item>
-        <el-form-item v-if="isSystemAdmin && !['hr', 'hr_user'].includes(personSettingsDialog.sysRole)" label="招聘职责">
-          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_view')"
+        <el-form-item v-if="isSystemAdmin && personSettingsDialog.sysRole !== 'hr_user'" label="招聘职责">
+          <el-checkbox v-if="personSettingsDialog.sysRole !== 'hr'" :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_view')"
             data-testid="recruitment-view-capability" @change="setRecruitmentViewing">招聘查看</el-checkbox>
-          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_edit')"
+          <el-checkbox v-if="personSettingsDialog.sysRole !== 'hr'" :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_edit')"
             data-testid="recruitment-edit-capability" @change="setRecruitmentEditing">招聘经办</el-checkbox>
-          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('talent_hiring_confirm')"
+          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_demand_review')"
+            data-testid="recruitment-demand-review-capability" @change="setRecruitmentDemandReview">招聘需求审核</el-checkbox>
+          <el-checkbox v-if="personSettingsDialog.sysRole !== 'hr'" :model-value="personSettingsDialog.hrCapabilities.includes('talent_hiring_confirm')"
             data-testid="talent-hiring-confirm-capability" @change="setTalentHiringConfirmation">人才录用确认</el-checkbox>
         </el-form-item>
         <el-form-item>

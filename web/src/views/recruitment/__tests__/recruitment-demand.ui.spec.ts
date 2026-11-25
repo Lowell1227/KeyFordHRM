@@ -27,7 +27,8 @@ async function install(page: Page, options: { viewer?: boolean; configured?: boo
     if (path === '/recruitment-demands/directories') return route.fulfill(envelope({ departments: [{ id: 'dept-A', name: demand.departmentName }], positions: [{ id: 'job-A', code: 'FIC01', name: demand.positionName }] }));
     if (path === '/recruitment-demands/options') {
       expect(url.searchParams.get('applicationId')).toBe('app-A');
-      return route.fulfill(envelope({ items: options.departmentMissing ? [] : [{ ...demand, revision }], total: options.departmentMissing ? 0 : 1 }));
+      const items = options.configured === false ? ['system-A', 'system-B'].map(id => ({ ...demand, id, sourceKind: 'local', instanceId: null, lastSyncedAt: null, sourceLink: null, revision })) : [{ ...demand, revision }];
+      return route.fulfill(envelope({ items: options.departmentMissing ? [] : items, total: options.departmentMissing ? 0 : items.length }));
     }
     if (path === '/recruitment-demands') {
       if (options.listFailure && !failed) { failed = true; return route.fulfill({ status: 503, ...envelope(null) }); }
@@ -188,15 +189,25 @@ test('sync response loss survives refresh and continues only on explicit stable-
   expect(await page.evaluate(() => localStorage.getItem('recruitment-demand-sync:operator'))).toBeNull();
 });
 
-test('unconfigured source in hiring is not represented as no matching demand', async ({ page }) => {
+test('DingTalk unconfigured does not block selecting and submitting a distinct approved system demand', async ({ page }) => {
   const writes = await install(page, { configured: false });
   await page.goto('/talents?candidateId=candidate-A&applicationId=app-A');
   const panel = page.locator('.application-panel');
   await panel.getByRole('button', { name: '提交录用', exact: true }).click();
   await expect(panel.getByText('钉钉招聘需求接入未就绪', { exact: true })).toBeVisible();
-  await expect(panel.getByRole('combobox', { name: '招聘需求单', exact: true })).toBeDisabled();
+  const select = panel.getByRole('combobox', { name: '招聘需求单', exact: true });
+  await expect(select).toBeEnabled();
+  await select.press('ArrowDown');
+  await expect(page.getByRole('option', { name: /系统创建.*系统需求 system-A/ })).toBeVisible();
+  await expect(page.getByRole('option', { name: /系统创建.*系统需求 system-B/ })).toBeVisible();
+  await page.getByRole('option', { name: /系统创建.*系统需求 system-B/ }).click();
+  await expect(panel).toContainText('已选 系统创建 · 系统需求 system-B');
+  await expect(panel.getByRole('link', { name: '前往系统需求办理', exact: true })).toHaveAttribute('href', '/recruitment/demands?candidateId=candidate-A&applicationId=app-A');
   await expect(panel.getByText(/当前应聘没有匹配的可用需求/)).toHaveCount(0);
-  expect(writes).toHaveLength(0);
+  await panel.locator('.application-panel__command textarea').fill('虚构系统需求录用意见');
+  await panel.locator('.application-panel__command').getByRole('button', { name: '提交录用', exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]?.body).toMatchObject({ recruitmentDemandId: 'system-B', expectedDemandRevision: 3 });
 });
 
 test('missing application department opens its real editor while keeping hiring opinion', async ({ page }) => {

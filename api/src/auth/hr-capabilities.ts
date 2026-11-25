@@ -10,6 +10,7 @@ export const HR_CAPABILITIES = [
   'talent_hiring_confirm',
   'recruitment_view',
   'recruitment_edit',
+  'recruitment_demand_review',
 ] as const;
 
 export type HrCapability = typeof HR_CAPABILITIES[number];
@@ -23,7 +24,7 @@ export function hasHrCapability(
   subject: HrCapabilitySubject,
   capability: HrCapability,
 ): boolean {
-  if (capability === 'recruitment_edit') return Boolean(subject.hrCapabilities?.includes(capability));
+  if (capability === 'recruitment_edit' || capability === 'recruitment_demand_review') return Boolean(subject.hrCapabilities?.includes(capability));
   if (capability === 'recruitment_view') {
     return subject.sysRole === 'hr' || subject.sysRole === 'system_admin'
       || Boolean(subject.hrCapabilities?.some(value => value === capability || value === 'recruitment_edit'));

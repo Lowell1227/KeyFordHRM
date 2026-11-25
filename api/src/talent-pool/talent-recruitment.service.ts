@@ -195,7 +195,11 @@ export class TalentRecruitmentService {
   }
 
   async create(candidateId: string, input: CreateTalentApplicationDto, user: AuthUser) {
-    return this.prisma.$transaction(async tx => {
+    return this.prisma.$transaction(tx => this.createInTransaction(tx, candidateId, input, user));
+  }
+
+  /** Source confirmation shares this transaction and the original creation/event rules. */
+  async createInTransaction(tx: Prisma.TransactionClient, candidateId: string, input: CreateTalentApplicationDto, user: AuthUser) {
       await this.lockCandidate(tx, candidateId);
       if (input.requestId) {
         // Different candidate locks cannot serialize a reused global request UUID.
@@ -230,7 +234,6 @@ export class TalentRecruitmentService {
       await this.event(tx, row, actor.id, 'create', null, null);
       await this.audit(tx, actor.id, 'create_application', 'talent_application', row.id, null, { candidateId, stage: row.stage, revision: row.revision });
       return this.reloadView(tx, row.id, actor);
-    });
   }
 
   async update(id: string, input: UpdateTalentApplicationDto, user: AuthUser) {

@@ -6,6 +6,28 @@ const hr = { id: 'hr', sysRole: 'hr', status: 'active', archivedAt: null, delete
 const application = { stage: 'hiring_review', hiringRequestedById: 'submitter', reviewReturnStage: 'interviewing' };
 
 describe('recruitment policy', () => {
+  it('limits a demand-only reviewer to demand reading and review, without candidate or hiring authority', async () => {
+    const actor = { ...hr, sysRole: 'employee', hrCapabilities: ['recruitment_demand_review'] };
+    expect(typeof (policy as any).canReviewRecruitmentDemand).toBe('function');
+    expect(typeof (policy as any).assertRecruitmentDemandReader).toBe('function');
+    expect(typeof (policy as any).assertRecruitmentDemandReviewer).toBe('function');
+    expect((policy as any).canReviewRecruitmentDemand(actor)).toBe(true);
+    expect((policy as any).canReadRecruitmentDemand(actor)).toBe(true);
+    expect(canReadRecruitment(actor)).toBe(false);
+    expect(canConfirmTalentHiring(actor, 'other')).toBe(false);
+    const tx = { user: { findUnique: jest.fn().mockResolvedValue(actor) } };
+    await expect((policy as any).assertRecruitmentDemandReader(tx, { id: actor.id })).resolves.toEqual(actor);
+    await expect((policy as any).assertRecruitmentDemandReviewer(tx, { id: actor.id })).resolves.toEqual(actor);
+    tx.user.findUnique.mockResolvedValue({ ...actor, hrCapabilities: [] });
+    await expect((policy as any).assertRecruitmentDemandReviewer(tx, { id: actor.id })).rejects.toThrow(ForbiddenException);
+  });
+  it.each(['hr', 'system_admin', 'hr_user', 'employee'])('does not infer demand approval from %s or other capabilities', sysRole => {
+    expect(typeof (policy as any).canReviewRecruitmentDemand).toBe('function');
+    expect((policy as any).canReviewRecruitmentDemand({ ...hr, sysRole, hrCapabilities: ['recruitment_edit', 'talent_hiring_confirm'] })).toBe(false);
+    for (const change of [{ status: 'resigned' }, { archivedAt: new Date() }, { deletedAt: new Date() }, { isAssessorOnly: true }]) {
+      expect((policy as any).canReviewRecruitmentDemand({ ...hr, sysRole, hrCapabilities: ['recruitment_demand_review'], ...change })).toBe(false);
+    }
+  });
   it.each(['accepted', 'withdrawn', 'screening', 'offered'])('keeps explicit termination available for an unreleased acceptance in %s without generic withdrawal', stage => {
     const state = { ...application, stage, events: [{ action: 'accept_offer', version: 3 }, { action: 'withdraw', version: 4 }] };
     const actions = allowedApplicationActions(hr, state, false);

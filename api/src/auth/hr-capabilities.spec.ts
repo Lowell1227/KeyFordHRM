@@ -1,6 +1,14 @@
 import { hasHrCapability } from './hr-capabilities';
 
 describe('hasHrCapability', () => {
+  it.each(['employee', 'hr_user', 'manager', 'hr', 'system_admin'])('requires an explicit %s recruitment demand review grant without granting candidate access', sysRole => {
+    expect(hasHrCapability({ sysRole, hrCapabilities: [] }, 'recruitment_demand_review' as never)).toBe(false);
+    const subject = { sysRole, hrCapabilities: ['recruitment_demand_review'] };
+    expect(hasHrCapability(subject, 'recruitment_demand_review' as never)).toBe(true);
+    expect(hasHrCapability(subject, 'recruitment_edit')).toBe(false);
+    if (!['hr', 'system_admin'].includes(sysRole)) expect(hasHrCapability(subject, 'recruitment_view')).toBe(false);
+    if (sysRole !== 'hr') expect(hasHrCapability(subject, 'talent_hiring_confirm')).toBe(false);
+  });
   it.each(['employee', 'hr_user', 'manager', 'hr', 'system_admin'])('keeps %s recruitment editing an explicit grant without mapping it to archive permissions', sysRole => {
     expect(hasHrCapability({ sysRole, hrCapabilities: [] }, 'recruitment_edit' as never)).toBe(false);
     const actor = { sysRole, hrCapabilities: ['recruitment_edit'] };

@@ -18,10 +18,13 @@ function setup() {
   const application = { id: 'application', deptId: department.id, positionName: ` ${position.name} `, stage: 'interviewing', candidate: { deletedAt: null } };
   const currentActor = { ...actor };
   const matches = (row: any, where: any) => !where || Object.entries(where).every(([key, value]: any) => {
+    if (key === 'AND') return (Array.isArray(value) ? value : [value]).every(condition => matches(row, condition));
+    if (key === 'OR') return value.some(condition => matches(row, condition));
     if (key === 'organizationKey_instanceId') return row.organizationKey === value.organizationKey && row.instanceId === value.instanceId;
     if (key === 'NOT') return !matches(row, value);
     if (value && typeof value === 'object' && 'equals' in value) return row[key] === row.sourceFingerprint;
     if (value && typeof value === 'object' && 'gt' in value) return row[key] > value.gt;
+    if (value && typeof value === 'object' && 'contains' in value) return typeof row[key] === 'string' && row[key].toLowerCase().includes(value.contains.toLowerCase());
     if (value && typeof value === 'object' && 'in' in value) return value.in.includes(row[key]);
     if (value && typeof value === 'object' && 'notIn' in value) return !value.notIn.includes(row[key]);
     if (value && typeof value === 'object' && 'not' in value) return row[key] !== value.not;
@@ -143,7 +146,7 @@ describe('recruitment demand ledger', () => {
     await f.sync(); await f.map(); await f.sync();
     expect(f.demands).toHaveLength(1); expect(f.events).toHaveLength(2);
     expect(f.demands[0]).toMatchObject({ revision: 2, approvedHeadcount: 2 });
-    expect((await f.gate()).snapshot).toEqual({ demandId: 'demand-1', revision: 2, instanceId: 'instance-1', departmentId: 'dept',
+    expect((await f.gate()).snapshot).toEqual({ sourceKind: 'dingtalk', demandId: 'demand-1', revision: 2, instanceId: 'instance-1', departmentId: 'dept',
       departmentName: f.department.name, positionId: 'position', positionName: f.position.name, approvedHeadcount: 2,
       approvedAt: '2026-11-24T01:00:00.000Z', sourceLink: null, syncedAt: expect.any(String), verifiedAt: expect.any(String) });
   });
@@ -362,7 +365,7 @@ describe('recruitment demand ledger', () => {
   it('permits narrow confirmers to inspect only their actionable application association, not the ledger', async () => {
     const f = setup(); await f.sync(); await f.map(); f.currentActor.hrCapabilities = ['talent_hiring_confirm'];
     const app = { recruitmentDemandId: 'demand-1', stage: 'hiring_review', hiringRequestedById: 'other' };
-    await expect(f.sut.currentForApplication(f.tx, app, f.currentActor)).resolves.toMatchObject({ id: 'demand-1' });
+    await expect(f.sut.currentForApplication(f.tx, app, f.currentActor)).resolves.toMatchObject({ id: 'demand-1', instanceId: 'instance-1' });
     await expect(f.sut.list(new RecruitmentDemandQueryDto(), user)).rejects.toThrow(ForbiddenException);
     await expect(f.sut.directories(user)).rejects.toThrow(ForbiddenException);
     await expect(f.sut.currentForApplication(f.tx, { ...app, hiringRequestedById: actor.id }, f.currentActor)).rejects.toThrow(ForbiddenException);

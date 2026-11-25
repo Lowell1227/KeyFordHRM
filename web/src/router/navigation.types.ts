@@ -55,6 +55,8 @@ declare module 'vue-router' {
     hrCapabilities?: HrCapability[];
     talentHiringOnly?: boolean;
     talentPoolOnly?: boolean;
+    recruitmentDemandOnly?: boolean;
+    recruitmentEditorOnly?: boolean;
     recruitmentEntry?: boolean;
     appealLedgerOnly?: boolean;
     payrollOnly?: boolean;

@@ -44,6 +44,14 @@ export function canEditRecruitment(actor: RecruitmentActor): boolean {
   return isCurrentRecruitmentActor(actor) && (hasHrCapability(actor, 'recruitment_edit') || hasHrCapability(actor, 'employee_archive_edit'));
 }
 
+export function canReviewRecruitmentDemand(actor: RecruitmentActor): boolean {
+  return isCurrentRecruitmentActor(actor) && hasHrCapability(actor, 'recruitment_demand_review');
+}
+
+export function canReadRecruitmentDemand(actor: RecruitmentActor): boolean {
+  return isCurrentRecruitmentActor(actor) && (canReadRecruitment(actor) || canReviewRecruitmentDemand(actor));
+}
+
 export const recruitmentActorSelect = {
   id: true, name: true, sysRole: true, deptId: true, canViewAll: true,
   hrCapabilities: true, status: true, archivedAt: true, deletedAt: true, isAssessorOnly: true,
@@ -71,6 +79,18 @@ export async function assertRecruitmentWriter(tx: Prisma.TransactionClient, user
 export async function assertRecruitmentEditor(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id'>) {
   const actor = await currentRecruitmentActor(tx, user);
   if (!canEditRecruitment(actor)) throw new ForbiddenException('无权限经办招聘资料');
+  return actor;
+}
+
+export async function assertRecruitmentDemandReader(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id'>) {
+  const actor = await currentRecruitmentActor(tx, user);
+  if (!canReadRecruitmentDemand(actor)) throw new ForbiddenException('无权限查看招聘需求');
+  return actor;
+}
+
+export async function assertRecruitmentDemandReviewer(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id'>) {
+  const actor = await currentRecruitmentActor(tx, user);
+  if (!canReviewRecruitmentDemand(actor)) throw new ForbiddenException('无权限审核招聘需求');
   return actor;
 }
 

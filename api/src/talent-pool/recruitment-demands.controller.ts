@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import type { AuthUser } from '@/common/types/auth.types';
-import { MapRecruitmentDemandDto, RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto, SyncRecruitmentDemandsDto } from './recruitment-demands.dto';
+import { CreateLocalRecruitmentDemandDto, LocalRecruitmentDemandActionDto, MapRecruitmentDemandDto, RecruitmentDemandOptionsQueryDto, RecruitmentDemandQueryDto, SyncRecruitmentDemandsDto, UpdateLocalRecruitmentDemandDto } from './recruitment-demands.dto';
 import { RecruitmentDemandsService } from './recruitment-demands.service';
 import { RecruitmentDemandApplicationsQueryDto, RecruitmentDemandApplicationsService } from './recruitment-demand-applications.service';
 
@@ -17,6 +17,9 @@ export class RecruitmentDemandsController {
   @Get(':id/applications') listApplications(@Param('id', new ParseUUIDPipe()) id: string,
     @Query() query: RecruitmentDemandApplicationsQueryDto, @CurrentUser() user: AuthUser) { return this.applications.list(id, query, user); }
   @Post('sync') sync(@Body() input: SyncRecruitmentDemandsDto, @CurrentUser() user: AuthUser) { return this.demands.sync(input, user); }
+  @Post('local') createLocal(@Body() input: CreateLocalRecruitmentDemandDto, @CurrentUser() user: AuthUser) { return this.demands.createLocal(input, user); }
+  @Patch(':id/local') updateLocal(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: UpdateLocalRecruitmentDemandDto, @CurrentUser() user: AuthUser) { return this.demands.updateLocal(id, input, user); }
+  @Post(':id/local-actions') actLocal(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: LocalRecruitmentDemandActionDto, @CurrentUser() user: AuthUser) { return this.demands.actLocal(id, input, user); }
   @Post(':id/refresh') refresh(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() user: AuthUser) { return this.demands.refresh(id, user); }
   @Patch(':id/mapping') map(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: MapRecruitmentDemandDto, @CurrentUser() user: AuthUser) { return this.demands.map(id, input, user); }
 }

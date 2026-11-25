@@ -1,10 +1,19 @@
 import http from './http';
 import type { Paginated } from '@/types/api.types';
-import type { RecruitmentDemandApplication, RecruitmentDemandApplicationQuery, RecruitmentDemandDirectories, RecruitmentDemandMapping, RecruitmentDemandQuery, RecruitmentDemandStatus, RecruitmentDemandSyncInput, RecruitmentDemandSyncResult, RecruitmentDemandView } from '@/types/recruitment-demand.types';
+import type { RecruitmentDemandApplication, RecruitmentDemandApplicationQuery, RecruitmentDemandDirectories, RecruitmentDemandLocalCreate, RecruitmentDemandLocalUpdate, RecruitmentDemandLocalCommand, RecruitmentDemandMapping, RecruitmentDemandQuery, RecruitmentDemandStatus, RecruitmentDemandSyncInput, RecruitmentDemandSyncResult, RecruitmentDemandView } from '@/types/recruitment-demand.types';
 
 const base = '/recruitment-demands';
 const localError = { skipErrorMessage: true };
 export const recruitmentDemandsApi = {
+  createLocal(body: RecruitmentDemandLocalCreate): Promise<RecruitmentDemandView> {
+    return http.post(`${base}/local`, body, localError) as unknown as Promise<RecruitmentDemandView>;
+  },
+  updateLocal(id: string, body: RecruitmentDemandLocalUpdate): Promise<RecruitmentDemandView> {
+    return http.patch(`${base}/${encodeURIComponent(id)}/local`, body, localError) as unknown as Promise<RecruitmentDemandView>;
+  },
+  localAction(id: string, body: RecruitmentDemandLocalCommand): Promise<RecruitmentDemandView> {
+    return http.post(`${base}/${encodeURIComponent(id)}/local-actions`, body, localError) as unknown as Promise<RecruitmentDemandView>;
+  },
   list(query: RecruitmentDemandQuery): Promise<Paginated<RecruitmentDemandView>> {
     return http.get(base, { params: query, ...localError }) as unknown as Promise<Paginated<RecruitmentDemandView>>;
   },

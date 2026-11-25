@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RecruitmentDemandSnapshot, RecruitmentDemandView } from '@/types/recruitment-demand.types';
-import { DEMAND_SOURCE_LABELS, safeDemandSourceLink } from '../demand-presentation';
+import { demandOriginLabel, demandReference, demandStateLabel, isLocalDemand, safeDemandSourceLink } from '../demand-presentation';
 import RecruitmentDemandSeats from './RecruitmentDemandSeats.vue';
 defineProps<{ snapshot: RecruitmentDemandSnapshot; current: RecruitmentDemandView | null }>();
 </script>
@@ -8,9 +8,9 @@ defineProps<{ snapshot: RecruitmentDemandSnapshot; current: RecruitmentDemandVie
 <template>
   <section class="demand-summary" aria-label="录用需求依据">
     <h5>提交录用时的需求快照</h5>
-    <dl><dt>需求单</dt><dd>{{ snapshot.instanceId }} · 版本 {{ snapshot.revision }}</dd><dt>部门 / 岗位</dt><dd>{{ snapshot.departmentName }} / {{ snapshot.positionName }}</dd><dt>批准人数</dt><dd>{{ snapshot.approvedHeadcount }}</dd><dt>原单</dt><dd><a v-if="safeDemandSourceLink(snapshot.sourceLink)" :href="safeDemandSourceLink(snapshot.sourceLink)" target="_blank" rel="noopener noreferrer">查看钉钉原单</a><span v-else>未提供可用链接</span></dd></dl>
+    <dl><dt>需求来源</dt><dd>{{ demandOriginLabel(snapshot) }}</dd><dt>需求单</dt><dd>{{ demandReference(snapshot) }} · 版本 {{ snapshot.revision }}</dd><dt>部门 / 岗位</dt><dd>{{ snapshot.departmentName }} / {{ snapshot.positionName }}</dd><dt>批准人数</dt><dd>{{ snapshot.approvedHeadcount }}</dd><template v-if="!isLocalDemand(snapshot)"><dt>原单</dt><dd><a v-if="safeDemandSourceLink(snapshot.sourceLink)" :href="safeDemandSourceLink(snapshot.sourceLink)" target="_blank" rel="noopener noreferrer">查看钉钉原单</a><span v-else>未提供可用链接</span></dd></template></dl>
     <h5>需求当前状态</h5>
-    <p v-if="current">版本 {{ current.revision }} · {{ DEMAND_SOURCE_LABELS[current.sourceState] }} · {{ current.usable ? '已核对，可使用' : '待核对或不可使用' }}</p>
+    <p v-if="current">{{ demandOriginLabel(current) }} · {{ demandReference(current) }} · 版本 {{ current.revision }} · {{ demandStateLabel(current) }} · {{ current.usable ? '可使用' : '待核对或不可使用' }}</p>
     <p v-else>当前需求未取得；提交时快照保留。</p>
     <RecruitmentDemandSeats :value="current" />
     <p v-if="current && current.revision !== snapshot.revision" class="changed">需求已有后续变更，以上快照为本次提交时的依据，不代表当前状态。</p>

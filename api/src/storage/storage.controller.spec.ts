@@ -11,6 +11,31 @@ describe('StorageController contract material access', () => {
     return { controller, storage, prisma };
   }
 
+  it.each(['hr', 'system_admin', 'employee'])('never exposes unconfirmed intake files via generic download to %s', async sysRole => {
+    const storage = { pipeDownload: jest.fn() };
+    const taskAccess = { assertDownload: jest.fn().mockResolvedValue(undefined) };
+    const controller = new StorageController(storage as any, taskAccess as any,
+      { talentResumeFile: { findFirst: jest.fn().mockResolvedValue(null) } } as any);
+    await expect(controller.download('recruitment-intake%2F2037%2Fpending.pdf', response() as any,
+      { id: 'actor', sysRole, hrCapabilities: ['recruitment_edit', 'recruitment_view'] } as any)).rejects.toThrow('简历收件');
+    expect(storage.pipeDownload).not.toHaveBeenCalled();
+    expect(taskAccess.assertDownload).not.toHaveBeenCalled();
+  });
+
+  it('allows an intake attachment only after atomic publication to a live candidate and current read authorization', async () => {
+    const actor = { id: 'actor', sysRole: SysRole.employee, hrCapabilities: ['recruitment_view'], isAssessorOnly: false } as any;
+    const { controller, storage, prisma } = resumeSetup(actor);
+    Object.assign(prisma, { talentResumeFile: { findFirst: jest.fn().mockResolvedValue({ id: 'published-file' }) } });
+    await expect(controller.download('recruitment-intake/2037/published.pdf', response() as any, actor)).resolves.toBeUndefined();
+    expect(storage.pipeDownload).toHaveBeenCalledTimes(1);
+    expect((prisma as any).talentResumeFile.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      objectKey: 'recruitment-intake/2037/published.pdf', candidate: { deletedAt: null },
+    } }));
+    prisma.user.findUnique.mockResolvedValue({ ...actor, status: 'active', hrCapabilities: [] });
+    await expect(controller.download('recruitment-intake/2037/published.pdf', response() as any, actor)).rejects.toThrow();
+    expect(storage.pipeDownload).toHaveBeenCalledTimes(1);
+  });
+
   it('allows recruitment-only resume upload without giving contract-material access', async () => {
     const actor = { id: 'actor', sysRole: SysRole.employee, hrCapabilities: ['recruitment_edit'] } as any;
     const { controller, storage } = resumeSetup(actor);

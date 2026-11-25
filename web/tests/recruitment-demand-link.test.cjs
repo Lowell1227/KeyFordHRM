@@ -59,8 +59,8 @@ async function panel(t, overrides = {}, props = {}, user = { sysRole: 'employee'
     '@/router/navigation': { canAccessRoute: () => false },
     '@/api/talent-recruitment.api': { talentRecruitmentApi: api, recruitmentError: error => error.response?.data?.message || error.message },
     '@/api/recruitment-demands.api': { recruitmentDemandsApi: {
-      options: async query => { queries.push(query); return { items: [demand()], total: 1 }; }, detail: async () => demand({ revision: 4 }),
-      status: async () => ({ configured: true, missing: [], readOnly: true }),
+      options: async query => { queries.push(query); return { items: options.demandRows || [demand()], total: options.demandRows?.length ?? 1 }; }, detail: async () => options.demandDetail || demand({ revision: 4 }),
+      status: async () => ({ configured: options.configured !== false, missing: [], readOnly: true }),
       directories: async () => ({ departments: [{ id: 'dept-A', name: 'Fictional department' }], positions: [{ id: 'job-A', code: 'F01', name: 'Fictional job' }] }),
     } },
   };
@@ -99,6 +99,29 @@ test('selected actual demand and revision travel only with submit_hiring', async
   await view.state.execute();
   assert.deepEqual(view.calls, [{ id: 'app-A', expectedRevision: 6, action: 'submit_hiring', note: 'Fictional opinion',
     recruitmentDemandId: 'demand-A', expectedDemandRevision: 3 }]);
+});
+
+test('two system-created approved demands have distinct option and selected labels with nullable instance IDs', async t => {
+  const localRows = ['system-A', 'system-B'].map(id => localDemand({ id, sourceState: 'approved', usable: true, approvedHeadcount: 2 }));
+  const view = await panel(t, {}, {}, undefined, { demandRows: localRows });
+  await view.state.beginAction('submit_hiring'); view.state.chooseDemand('system-B');
+  const tree = renderTemplate('views/talent/components/TalentApplicationPanel.vue', view.state, { candidateId: 'candidate-A', editable: true });
+  const options = nestedNodes(tree).filter(node => node.type?.name === 'el-option' && localRows.some(row => row.id === node.props.value));
+  assert.equal(options.length, 2);
+  assert.match(options[0].props.label, /系统创建.*系统需求 system-A/);
+  assert.match(options[1].props.label, /系统创建.*系统需求 system-B/);
+  assert.match(displayText(tree), /已选 系统创建 · 系统需求 system-B/);
+  assert.match(displayText(tree), /前往系统需求办理/);
+});
+
+test('approved system demand can be selected, refreshed and submitted without DingTalk configuration', async t => {
+  const local = localDemand({ sourceState: 'approved', usable: true, approvedHeadcount: 2 });
+  const view = await panel(t, {}, {}, undefined, { configured: false, demandRows: [local], demandDetail: { ...local, revision: 4 } });
+  await view.state.beginAction('submit_hiring'); view.state.chooseDemand(local.id); view.state.note.value = 'Keep this system demand opinion';
+  view.state.hiringNeedsRefresh.value = true; await view.state.refreshHiringContext();
+  assert.equal(view.state.hiringNeedsRefresh.value, false); assert.equal(view.state.selectedDemand.value.revision, 4);
+  await view.state.execute();
+  assert.deepEqual(view.calls, [{ id: 'app-A', expectedRevision: 6, action: 'submit_hiring', note: 'Keep this system demand opinion', recruitmentDemandId: local.id, expectedDemandRevision: 4 }]);
 });
 
 test('409 preserves opinion and demand; explicit refresh updates versions without resubmitting', async t => {
@@ -217,14 +240,14 @@ for (const status of [409, 503, 403]) {
   });
 }
 
-async function ledger(t, canEdit = true, overrides = {}, auth = vue.reactive({ user: { id: 'actor-A' } })) {
+async function ledger(t, canEdit = true, overrides = {}, auth = vue.reactive({ user: { id: 'actor-A' } }), permissions = {}) {
   const calls = [];
   const dependencies = {
     'vue-router': { useRoute: () => ({ query: { candidateId: 'candidate-A', applicationId: 'app-A' } }), useRouter: () => ({ push() {} }) },
     'element-plus': { ElMessageBox: { confirm: async () => true } },
     '@/stores/auth.store': { useAuthStore: () => auth },
     '../talent/useRecruitmentLeaveGuard': { useRecruitmentLeaveGuard: () => ({ prepareToLeave: async () => true }) },
-    '../talent/useTalentPermissions': { useTalentPermissions: () => ({ canRead: vue.ref(true), canEdit: vue.ref(canEdit) }) },
+    '../talent/useTalentPermissions': { useTalentPermissions: () => ({ canRead: vue.ref(true), canReadDemand: vue.ref(true), canReviewDemand: vue.ref(false), canEdit: vue.ref(canEdit), ...permissions }) },
     '@/api/talent-recruitment.api': { recruitmentError: error => error.message },
     '@/api/recruitment-demands.api': { recruitmentDemandsApi: {
       list: async () => ({ items: [demand()], total: 1 }), status: async () => ({ configured: false, missing: ['processCode'], readOnly: true }),
@@ -238,6 +261,148 @@ async function ledger(t, canEdit = true, overrides = {}, auth = vue.reactive({ u
   const app = renderer.createApp({ setup() { state = component.setup({}, { expose() {}, emit() {} }); return () => null; } });
   app.mount({}); t.after(() => app.unmount()); await flush(); return { state, calls, auth };
 }
+
+function localDemand(extra = {}) { return demand({ sourceKind: 'local', instanceId: null, sourceState: 'draft', lastSyncedAt: null,
+  requestedHeadcount: 2, requestReason: 'Fictional recruitment reason', createdById: 'actor-A', submittedById: null, approvedById: null,
+  approvedHeadcount: null, usable: false, allowedActions: ['edit', 'submit', 'withdraw'], ...extra }); }
+function fillLocal(state) { Object.assign(state.localForm, { deptId: 'dept-A', positionId: 'job-A', headcount: 2, reason: 'Keep this recruitment reason' }); }
+
+test('local demand creation works without DingTalk and saving a draft does not submit it', async t => {
+  const sent = [];
+  const view = await ledger(t, true, { createLocal: async body => { sent.push(body); return localDemand(); }, detail: async () => localDemand() });
+  await view.state.beginLocalCreate(); fillLocal(view.state); await view.state.saveLocal();
+  assert.equal(sent.length, 1); assert.match(sent[0].requestId, /^[0-9a-f-]{36}$/i);
+  assert.deepEqual({ ...sent[0], requestId: undefined }, { requestId: undefined, deptId: 'dept-A', positionId: 'job-A', headcount: 2, reason: 'Keep this recruitment reason' });
+  assert.equal(view.state.current.value.sourceKind, 'local'); assert.equal(view.state.current.value.sourceState, 'draft');
+  assert.match(view.state.resultMessage.value, /草稿/); assert.equal(view.state.localOpen.value, false);
+});
+
+test('correcting draft fields clears their local validation messages before the next save', async t => {
+  const view = await ledger(t); await view.state.beginLocalCreate(); await view.state.saveLocal();
+  assert.ok(view.state.localErrors.deptId); fillLocal(view.state); await flush();
+  assert.deepEqual({ ...view.state.localErrors }, { deptId: '', positionId: '', headcount: '', reason: '' });
+});
+
+test('uncertain local creation reuses the exact request and UUID on explicit retry', async t => {
+  const sent = [];
+  const view = await ledger(t, true, { createLocal: async body => { sent.push({ ...body }); if (sent.length === 1) throw new Error('transport lost'); return localDemand(); }, detail: async () => localDemand() });
+  await view.state.beginLocalCreate(); fillLocal(view.state); await view.state.saveLocal();
+  assert.equal(view.state.localOpen.value, true); assert.equal(view.state.localUnknown.value, true);
+  assert.equal(view.state.localForm.reason, 'Keep this recruitment reason');
+  await view.state.saveLocal(); assert.deepEqual(sent[1], sent[0]);
+});
+
+test('closing and reopening an uncertain draft restores the original creation intent, not a new UUID', async t => {
+  const sent = [];
+  const view = await ledger(t, true, { createLocal: async body => { sent.push({ ...body }); if (sent.length === 1) throw new Error('lost receipt'); return localDemand(); }, detail: async () => localDemand() });
+  await view.state.beginLocalCreate(); fillLocal(view.state); await view.state.saveLocal();
+  await view.state.closeLocal(); await view.state.beginLocalCreate();
+  assert.equal(view.state.localForm.reason, 'Keep this recruitment reason');
+  await view.state.saveLocal(); assert.deepEqual(sent[1], sent[0]);
+});
+
+test('local edit 409 preserves inputs and does not resend using a freshly read revision', async t => {
+  let writes = 0, reads = 0; const row = localDemand();
+  const view = await ledger(t, true, { detail: async () => localDemand({ revision: reads++ ? 9 : 3 }), updateLocal: async () => { writes++; throw { response: { status: 409 } }; } });
+  await view.state.openDetail(row); await view.state.beginLocalEdit(); fillLocal(view.state);
+  await view.state.saveLocal(); await view.state.reloadDetail(); await view.state.saveLocal();
+  assert.equal(writes, 1); assert.equal(view.state.localConflict.value, true);
+  assert.equal(view.state.localForm.reason, 'Keep this recruitment reason'); assert.equal(view.state.localRevision.value, 3);
+});
+
+test('local controls are authoritative allowedActions and never invoke DingTalk mapping or refresh', async t => {
+  const view = await ledger(t); await view.state.openDetail(localDemand()); view.state.current.value = localDemand({ allowedActions: [] });
+  await view.state.beginLocalEdit(); await view.state.beginLocalAction('approve');
+  assert.equal(view.state.localOpen.value, false); assert.equal(view.state.localAction.value, null);
+  await view.state.beginMapping(); await view.state.refreshSource(); assert.deepEqual(view.calls, []);
+});
+
+test('local return and withdrawal require reasons and use the displayed revision', async t => {
+  for (const action of ['return', 'withdraw']) {
+    const sent = []; const row = localDemand({ sourceState: 'pending', allowedActions: [action] });
+    const view = await ledger(t, true, { detail: async () => row, localAction: async (id, body) => { sent.push({ id, ...body }); return localDemand({ sourceState: action === 'return' ? 'rejected' : 'withdrawn' }); } });
+    await view.state.openDetail(row); await view.state.beginLocalAction(action); await view.state.submitLocalAction();
+    assert.equal(sent.length, 0); assert.match(view.state.localActionError.value, /原因/);
+    view.state.localActionReason.value = 'Fictional explicit reason'; await view.state.submitLocalAction();
+    assert.deepEqual(sent, [{ id: row.id, expectedRevision: 3, action, reason: 'Fictional explicit reason' }]);
+  }
+});
+
+test('review-only demand access has local review controls but does not mount candidate progress', async t => {
+  const row = localDemand({ sourceState: 'pending', allowedActions: ['approve', 'return'] });
+  const view = await ledger(t, false, { detail: async () => row }, undefined, { canRead: vue.ref(false), canReviewDemand: vue.ref(true) });
+  await view.state.openDetail(row);
+  const tree = renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state).children.detail();
+  const nodes = nestedNodes(tree);
+  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandApplications), false);
+  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandSeats), true);
+  const drawer = nodes.find(node => node.type === view.state.BusinessDetailDrawer);
+  assert.match(displayText(drawer.children.footer()), /审核通过/);
+  await view.state.beginLocalCreate(); assert.equal(view.state.localOpen.value, false);
+});
+
+test('an independent demand-only reviewer can approve using server actions with DingTalk absent', async t => {
+  const sent = [], row = localDemand({ sourceState: 'pending', submittedById: 'another-editor', allowedActions: ['approve', 'return'] });
+  const approved = localDemand({ revision: 4, sourceState: 'approved', approvedHeadcount: 2, usable: true, approvedById: 'actor-A', allowedActions: [] });
+  let reads = 0;
+  const view = await ledger(t, false, { detail: async () => reads++ ? approved : row, localAction: async (id, body) => { sent.push({ id, ...body }); return approved; } }, undefined,
+    { canRead: vue.ref(false), canReviewDemand: vue.ref(true) });
+  await view.state.openDetail(row); await view.state.beginLocalAction('approve'); await view.state.submitLocalAction();
+  assert.deepEqual(sent, [{ id: row.id, expectedRevision: 3, action: 'approve' }]);
+  assert.equal(view.state.current.value.usable, true); assert.equal(view.state.localAction.value, null);
+});
+
+test('local action conflict retains the opinion and cannot retry after a fresh detail read', async t => {
+  let attempts = 0, reads = 0;
+  const row = localDemand({ sourceState: 'pending', allowedActions: ['approve', 'return'] });
+  const view = await ledger(t, false, { detail: async () => ({ ...row, revision: reads++ ? 4 : 3 }), localAction: async () => { attempts++; throw { response: { status: 409 } }; } });
+  await view.state.openDetail(row); await view.state.beginLocalAction('return'); view.state.localActionReason.value = 'Preserve review opinion';
+  await view.state.submitLocalAction(); await view.state.reloadDetail(); await view.state.submitLocalAction();
+  assert.equal(attempts, 1); assert.equal(view.state.localActionReason.value, 'Preserve review opinion');
+  assert.equal(view.state.localActionRevision.value, 3); assert.equal(view.state.localActionBlocked.value, true);
+});
+
+test('an old local creation response cannot populate another account or leave that account busy', async t => {
+  let complete;
+  const view = await ledger(t, true, { createLocal: () => new Promise(resolve => { complete = resolve; }) });
+  await view.state.beginLocalCreate(); fillLocal(view.state); const saving = view.state.saveLocal(); await flush();
+  view.auth.user = { id: 'actor-B' }; await flush();
+  assert.equal(view.state.localOpen.value, false); assert.equal(view.state.saving.value, false);
+  complete(localDemand()); await saving;
+  assert.equal(view.state.current.value, null); assert.equal(view.state.drawerOpen.value, false);
+});
+
+test('source-correct snapshot and current labels are independent; absent legacy kind means DingTalk', () => {
+  const filename = path.join(root, 'views/recruitment/components/RecruitmentDemandSummary.vue');
+  const state = load(filename, {}).default.setup({}, { expose() {} });
+  const base = { demandId: 'demand-A', revision: 1, instanceId: null, departmentName: 'Dept', positionName: 'Job', approvedHeadcount: 2, sourceLink: 'https://aflow.dingtalk.com/not-local' };
+  let text = displayText(renderTemplate('views/recruitment/components/RecruitmentDemandSummary.vue', state, { snapshot: { ...base, sourceKind: 'local' }, current: demand({ sourceKind: 'dingtalk' }) }));
+  assert.match(text, /系统创建/); assert.match(text, /钉钉/);
+  const nodes = nestedNodes(renderTemplate('views/recruitment/components/RecruitmentDemandSummary.vue', state, { snapshot: { ...base, sourceKind: 'local' }, current: null }));
+  assert.equal(nodes.some(node => node.type === 'a'), false);
+  text = displayText(renderTemplate('views/recruitment/components/RecruitmentDemandSummary.vue', state, { snapshot: { ...base, instanceId: 'legacy-id' }, current: localDemand() }));
+  assert.match(text, /钉钉/); assert.match(text, /legacy-id/); assert.match(text, /系统创建/);
+});
+
+test('system-created demand timelines recognize the backend edit event and its update alias', () => {
+  const { demandEventLabel } = load(path.join(root, 'views/recruitment/demand-presentation.ts'), {});
+  assert.equal(demandEventLabel('local_edit'), '修改需求草稿');
+  assert.equal(demandEventLabel('local_update'), '修改需求草稿');
+  assert.equal(demandEventLabel('local_withdraw'), '撤销需求');
+});
+
+test('local API uses dedicated encoded endpoints and preserves the caller request UUID and revisions', async () => {
+  const calls = [];
+  const api = load(path.join(root, 'api/recruitment-demands.api.ts'), { './http': { __esModule: true, default: Object.fromEntries(
+    ['get', 'post', 'patch'].map(method => [method, async (...args) => { calls.push({ method, args }); return {}; }])) } }).recruitmentDemandsApi;
+  const body = { requestId: '11111111-1111-4111-8111-111111111111', deptId: 'dept-A', positionId: 'job-A', headcount: 2, reason: 'Fictional' };
+  await api.createLocal(body); await api.updateLocal('id/a', { expectedRevision: 3, ...body, requestId: undefined });
+  await api.localAction('id/a', { expectedRevision: 4, action: 'submit' });
+  assert.equal(calls[0].args[0], '/recruitment-demands/local'); assert.deepEqual(calls[0].args[1], body);
+  assert.equal(calls[1].args[0], '/recruitment-demands/id%2Fa/local'); assert.equal(calls[1].args[1].expectedRevision, 3);
+  assert.equal(calls[2].args[0], '/recruitment-demands/id%2Fa/local-actions');
+  for (const call of calls) { assert.equal(call.args.at(-1).skipErrorMessage, true); assert.equal(call.args.at(-1).timeout, undefined); }
+});
 
 test('ledger mapping sends the displayed revision, separate from upstream approval', async t => {
   let reads = 0;

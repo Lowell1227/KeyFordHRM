@@ -23,12 +23,17 @@ import { TalentWorkbenchService } from './talent-workbench.service';
 import { RecruitmentDemandsController } from './recruitment-demands.controller';
 import { RecruitmentDemandsService } from './recruitment-demands.service';
 import { RecruitmentDemandApplicationsService } from './recruitment-demand-applications.service';
+import { RecruitmentMailboxGateway } from './recruitment-mail-gateway';
+import { RecruitmentPostingsService } from './recruitment-postings.service';
+import { RecruitmentPostingsController } from './recruitment-postings.controller';
+import { RecruitmentIntakesService } from './recruitment-intakes.service';
+import { RecruitmentIntakesController } from './recruitment-intakes.controller';
 
 /** 人才库（MVP）：候选人录入 / 检索 / 跟进 / 转员工 / 单条只读转发。 */
 @Module({
   imports: [StorageModule, AiProgressModule, AuthModule],
-  controllers: [TalentsController, TalentSharesController, TalentInterviewsController, TalentRecruitmentController, TalentResumeController, TalentResumeTasksController, TalentWorkbenchController, RecruitmentDemandsController],
-  providers: [TalentsService, TalentFilesService, TalentFollowUpsService, TalentSharesService, TalentShareSessionGuard, TalentInterviewsService, TalentRecruitmentService, TalentResumeService, TalentResumeClient, TalentResumeTasksService, TalentWorkbenchService, RecruitmentDemandsService, RecruitmentDemandApplicationsService],
+  controllers: [TalentsController, TalentSharesController, TalentInterviewsController, TalentRecruitmentController, TalentResumeController, TalentResumeTasksController, TalentWorkbenchController, RecruitmentDemandsController, RecruitmentPostingsController, RecruitmentIntakesController],
+  providers: [TalentsService, TalentFilesService, TalentFollowUpsService, TalentSharesService, TalentShareSessionGuard, TalentInterviewsService, TalentRecruitmentService, TalentResumeService, TalentResumeClient, TalentResumeTasksService, TalentWorkbenchService, RecruitmentDemandsService, RecruitmentDemandApplicationsService, RecruitmentMailboxGateway, RecruitmentPostingsService, RecruitmentIntakesService],
   exports: [TalentsService, TalentInterviewsService],
 })
 export class TalentPoolModule {}
