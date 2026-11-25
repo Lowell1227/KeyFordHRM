@@ -4,6 +4,7 @@ import { selectEmploymentAt, shanghaiBusinessDate } from './employment-timeline'
 type RecordValue = Record<string, any>;
 export type ArchiveIssueKind = 'conflict' | 'identity' | 'missing' | 'invalid_date' | 'review';
 export interface ArchiveIssue {
+  details?: Array<{ title: string; records: string; reason: string; suggestion: string }>;
   origin?: 'current' | 'import'; canExplain?: boolean; fields?: string[]; contractIds?: string[]; exemptionVersion?: number;
   id: string; requestId: string; employeeId: string | null; field: string; kind: ArchiveIssueKind;
   message: string; reason: string; source: { sheetName?: string; rowNumber?: number; cell?: string; value: string | null };

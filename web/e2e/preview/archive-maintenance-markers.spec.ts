@@ -33,7 +33,7 @@ test('current marker disappears after edit; exemption can be checked and reverse
     let dialog = page.getByRole('dialog', { name: '档案待完善事项', exact: true });
     await expect(dialog.getByRole('heading', { name: '入职日期待补充', exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('pending-maintenance.png'), fullPage: true, animations: 'disabled' });
-    await dialog.locator('.el-checkbox').filter({ hasText: '豁免提醒' }).click();
+    await dialog.locator('.el-checkbox').filter({ hasText: '已核对正常，取消本项提醒' }).click();
     await expect(dialog.getByText('暂无待完善事项', { exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();await expect(marker).toHaveCount(0);
     await page.getByRole('button', { name: '查看档案', exact: true }).click();
@@ -41,7 +41,7 @@ test('current marker disappears after edit; exemption can be checked and reverse
     await drawer.getByRole('button', { name: '提醒设置', exact: true }).click();dialog = page.getByRole('dialog', { name: '档案待完善事项', exact: true });
     await expect(dialog.getByText('暂无待完善事项', { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('exempted-maintenance.png'), fullPage: true, animations: 'disabled' });
-    await dialog.getByText(/已豁免.*1项/).click();await dialog.locator('.el-checkbox:visible').filter({ hasText: '豁免提醒' }).click();
+    await dialog.getByText(/已豁免.*1项/).click();await dialog.locator('.el-checkbox:visible').filter({ hasText: '已核对正常，取消本项提醒' }).click();
     await expect(dialog.getByRole('heading', { name: '入职日期待补充', exact: true })).toBeVisible();
     const formal = await get(page, `/employee-archives/${fixture.id}`);expect(formal.entryDate).toBeNull();
     await dialog.getByRole('button', { name: '去补充', exact: true }).click();
@@ -114,4 +114,44 @@ test('real HTTP roles, stale checkbox version, filter and formal-data isolation'
     }
   `);
   expect(result).toEqual({rolesVerified:true,staleVersionRejected:true,formalFieldsPreserved:true,correctionClears:true});
+});
+
+test('contract explanations and reversible normal marker on the real isolated backend', async ({ page }, info) => {
+  const prefix = `CX${randomUUID().slice(0, 8)}`;
+  const fixture = db(`const dept=await p.department.findFirstOrThrow({where:{name:'预览业务部'}});
+    const u=await p.user.create({data:{employeeNo:'${prefix}',name:'虚构合同核对${prefix}',accountType:'employee',sysRole:'employee',status:'active',
+      entryDate:new Date('2020-01-01'),deptId:dept.id,employeeProfile:{create:{}},
+      employmentHistory:{create:{effectiveFrom:new Date('2020-01-01'),entryDate:new Date('2020-01-01'),employeeStatus:'active',deptId:dept.id,employeeNo:'${prefix}',changeType:'onboarding'}},
+      employeeContracts:{create:[{contractType:'contract',sequence:0,name:'兼职协议',signingCompany:'虚构甲公司',effectiveFrom:new Date('2025-01-01'),expiresAt:new Date('2035-12-31')},
+        {contractType:'contract',sequence:1,name:'劳动合同',signingCompany:'虚构甲公司',effectiveFrom:new Date('2025-09-01'),expiresAt:new Date('2036-08-31')}]}}});
+    console.log(JSON.stringify({id:u.id,before:JSON.stringify(await p.employeeContract.findMany({where:{userId:u.id},orderBy:{id:'asc'}}))}));`) as { id: string; before: string };
+  const errors: string[] = [];page.on('pageerror', e => errors.push(e.message));
+  try {
+    await login(page);await page.goto('/users');
+    await page.getByPlaceholder('搜索姓名、当前工号或历史工号').fill(prefix);await page.getByRole('button', { name: '查询', exact: true }).click();
+    await page.getByRole('button', { name: '待完善 1项', exact: true }).filter({ visible: true }).first().click();
+    const dialog = page.getByRole('dialog', { name: '档案待完善事项', exact: true });
+    await expect(dialog.getByRole('heading', { name: '1. 兼职转劳动合同待核对', exact: true })).toBeVisible();
+    await expect(dialog.getByText(/原兼职协议尚在记录期限内/)).toBeVisible();
+    await expect(dialog.getByText(/核对新劳动合同是否替代原协议/)).toBeVisible();
+    await expect(dialog).toHaveCSS('opacity', '1');await expect(dialog.locator('..')).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: info.outputPath('real-contract-reasons.png'), fullPage: true, animations: 'disabled' });
+    await dialog.getByPlaceholder('正常原因或核对说明（选填）').fill('虚构验收：兼职转全职正常衔接');
+    await dialog.locator('.el-checkbox').filter({ hasText: '已核对正常，取消本项提醒' }).click();
+    await expect(dialog.getByText('暂无待完善事项', { exact: true })).toBeVisible();
+    await dialog.getByText('已核对正常 / 已豁免 1项', { exact: true }).click();
+    await expect(dialog.getByText('虚构验收：兼职转全职正常衔接', { exact: true })).toBeVisible();
+    await dialog.locator('.el-checkbox').filter({ hasText: '已核对正常，取消本项提醒' }).click();
+    await expect(dialog.getByRole('heading', { name: '1. 兼职转劳动合同待核对', exact: true })).toBeVisible();
+    const opened = await get(page, '/employee-archives/issues/employee/' + fixture.id);
+    expect(opened.items[0].exemptionVersion).toBe(2);
+    expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    const checked = db(`console.log(JSON.stringify({contracts:JSON.stringify(await p.employeeContract.findMany({where:{userId:'${fixture.id}'},orderBy:{id:'asc'}})),
+      audits:await p.auditLog.count({where:{entityId:'${fixture.id}',action:'resolve_employee_archive_current_issue'}})}));`);
+    expect(checked.contracts).toBe(fixture.before);expect(checked.audits).toBe(2);expect(errors).toEqual([]);
+  } finally {
+    db(`await p.auditLog.deleteMany({where:{entityId:'${fixture.id}'}});await p.employeeArchiveIssueExemption.deleteMany({where:{userId:'${fixture.id}'}});
+      await p.employeeContract.deleteMany({where:{userId:'${fixture.id}'}});await p.employeeProfile.deleteMany({where:{userId:'${fixture.id}'}});
+      await p.employmentRecord.deleteMany({where:{userId:'${fixture.id}'}});await p.user.delete({where:{id:'${fixture.id}'}});console.log('{}');`);
+  }
 });

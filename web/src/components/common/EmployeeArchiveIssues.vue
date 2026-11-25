@@ -23,6 +23,7 @@ const savingId = ref('');
 const items = ref<EmployeeArchiveIssue[]>([]);
 const exemptions = ref<EmployeeArchiveIssueExemption[]>([]);
 const reasons = ref<Record<string, string>>({});
+const normalSelections = ref<Record<string, boolean>>({});
 const loadError = ref('');
 const actionError = ref('');
 let requestVersion = 0;
@@ -40,6 +41,10 @@ async function load() {
     if (version !== requestVersion) return;
     items.value = result.items;
     exemptions.value = result.exemptions ?? [];
+    normalSelections.value = Object.fromEntries([
+      ...result.items.map(issue => [issue.fingerprint, false]),
+      ...exemptions.value.map(issue => [issue.fingerprint, true]),
+    ]);
     count.value = result.items.length;
     emit('loaded', { employeeId: props.employeeId, items: result.items, exemptions: exemptions.value });
   } catch {
@@ -58,10 +63,12 @@ async function setExemption(issue: EmployeeArchiveIssue | EmployeeArchiveIssueEx
   const id = 'issueId' in issue ? issue.issueId : issue.id;
   savingId.value = id; actionError.value = '';
   try {
-    await employeeArchivesApi.setIssueExemption(props.employeeId, id, { fingerprint: issue.fingerprint, isExempt,
+    const result = await employeeArchivesApi.setIssueExemption(props.employeeId, id, { fingerprint: issue.fingerprint, isExempt,
       expectedVersion: 'version' in issue ? issue.version : issue.exemptionVersion ?? 0, reason: reasons.value[id]?.trim() || undefined });
     await load();emit('changed');
+    ElMessage.success(result.noLongerApplies ? '资料已更新，此项已无需提醒' : isExempt ? '已标记正常，本项提醒已取消' : '已取消正常标记，恢复按当前资料检查');
   } catch (error) {
+    normalSelections.value[issue.fingerprint] = !isExempt;
     actionError.value = isAxiosError(error) && error.response?.status === 409
       ? '资料或豁免设置已更新，请重新核对。' : '豁免设置未保存，请重试。';
     await load();
@@ -114,6 +121,7 @@ function beforeClose(done: () => void) { if (!savingId.value) done(); }
       :close-on-click-modal="false" :close-on-press-escape="!savingId" :show-close="!savingId" :before-close="beforeClose" class="employee-archive-issues-dialog">
       <div v-loading="loading" class="employee-archive-issues__body">
         <p v-if="!canWrite" class="employee-archive-issues__source">当前可查看资料，编辑或设置豁免需具备员工档案编辑权限。</p>
+        <p class="employee-archive-issues__source">待核对不代表资料一定有误。核对正常后可勾选取消提醒，保存成功立即生效，无需审核；取消勾选即可恢复检查，不会改动合同资料。</p>
         <el-alert v-if="actionError" :title="actionError" type="warning" :closable="false" />
         <div v-if="loadError" class="employee-archive-issues__error" role="alert">
           <span>{{ loadError }}</span><el-button link type="primary" :disabled="!!savingId" @click="load">重试</el-button>
@@ -121,27 +129,38 @@ function beforeClose(done: () => void) { if (!savingId.value) done(); }
         <el-empty v-if="!loading && !loadError && !items.length" description="暂无待完善事项" :image-size="64" />
         <section v-for="issue in items" :key="`${issue.requestId}:${issue.id}`" class="employee-archive-issues__item">
           <h3>{{ issue.message }}</h3>
+          <el-tag v-if="issue.origin === 'current'" type="warning" size="small">待核对</el-tag>
           <p v-if="issue.origin !== 'current' && sourcePosition(issue)" class="employee-archive-issues__source">{{ sourcePosition(issue) }}</p>
           <dl class="employee-archive-issues__values">
             <div v-if="issue.origin !== 'current'"><dt>原资料值</dt><dd>{{ issue.source.value ?? '未提供' }}</dd></div>
-            <div><dt>当前记录</dt><dd>{{ issue.current.value ?? '未提供' }}</dd></div>
+            <div v-if="!issue.details?.length"><dt>当前记录</dt><dd>{{ issue.current.value ?? '未提供' }}</dd></div>
             <div><dt>需要核实</dt><dd>{{ issue.reason }}</dd></div>
             <div v-if="issue.confirmBlockedReason"><dt>需要 HR 核实什么</dt><dd>{{ issue.confirmBlockedReason }}</dd></div>
           </dl>
+          <p v-if="issue.details && issue.details.length > 1" class="employee-archive-issues__source">本项包含{{ issue.details.length }}组交叠记录，请全部核对后再标记正常。</p>
+          <section v-for="(detail, index) in issue.details" :key="index" class="employee-archive-issues__detail">
+            <h4>{{ index + 1 }}. {{ detail.title }}</h4>
+            <dl class="employee-archive-issues__values">
+              <div><dt>涉及记录</dt><dd>{{ detail.records }}</dd></div>
+              <div><dt>提醒原因</dt><dd>{{ detail.reason }}</dd></div>
+              <div><dt>建议核对</dt><dd>{{ detail.suggestion }}</dd></div>
+            </dl>
+          </section>
           <div class="employee-archive-issues__actions">
             <el-button :disabled="!!savingId" @click="maintain(issue)">{{ canWrite ? '去补充' : '查看资料' }}</el-button>
-            <el-checkbox v-if="issue.origin === 'current'" :model-value="false" :disabled="!canWrite || !!savingId || loading" @change="setExemption(issue, true)">豁免提醒</el-checkbox>
+            <el-checkbox v-if="issue.origin === 'current'" v-model="normalSelections[issue.fingerprint]" :disabled="!canWrite || !employeeId || !!savingId || loading" @change="setExemption(issue, true)">已核对正常，取消本项提醒</el-checkbox>
             <el-button v-if="canWrite && issue.canConfirmCurrent" type="primary" :loading="savingId === issue.id" :disabled="!!savingId || loading || !!loadError" @click="confirmCurrent(issue)">确认以当前资料为准</el-button>
           </div>
-          <el-input v-if="canWrite && issue.origin === 'current'" v-model="reasons[issue.id]" class="employee-archive-issues__reason" placeholder="豁免说明（选填）" :maxlength="500" :disabled="!!savingId" />
+          <el-input v-if="canWrite && issue.origin === 'current'" v-model="reasons[issue.id]" class="employee-archive-issues__reason" placeholder="正常原因或核对说明（选填）" :maxlength="500" :disabled="!!savingId" />
         </section>
         <el-collapse v-if="exemptions.length" class="employee-archive-issues__exemptions">
-          <el-collapse-item name="exempted" :title="`已豁免 ${exemptions.length}项`">
+          <el-collapse-item name="exempted" :title="`已核对正常 / 已豁免 ${exemptions.length}项`">
             <section v-for="item in exemptions" :key="`${item.issueId}:${item.fingerprint}`" class="employee-archive-issues__item">
               <h3>{{ item.message }}</h3><p v-if="item.reason">{{ item.reason }}</p>
+              <el-tag :type="item.noLongerApplies ? 'info' : 'success'" size="small">{{ item.noLongerApplies ? '原问题已变化或消除' : '已核对正常（已豁免）' }}</el-tag>
               <p v-if="item.currentValue" class="employee-archive-issues__source">豁免时的记录：{{ item.currentValue }}</p>
               <p v-if="item.noLongerApplies" class="employee-archive-issues__source">原问题已不再存在，取消豁免也不会增加无效提示。</p>
-              <el-checkbox :model-value="true" :disabled="!canWrite || !!savingId || loading" @change="setExemption(item, false)">豁免提醒</el-checkbox>
+              <el-checkbox v-model="normalSelections[item.fingerprint]" :disabled="!canWrite || !employeeId || !!savingId || loading" @change="setExemption(item, false)">已核对正常，取消本项提醒</el-checkbox>
             </section>
           </el-collapse-item>
         </el-collapse>
@@ -156,6 +175,8 @@ function beforeClose(done: () => void) { if (!savingId.value) done(); }
 .employee-archive-issues__body { display: grid; gap: 12px; min-height: 80px; max-height: min(65dvh, 640px); overflow-y: auto; }
 .employee-archive-issues__item { border: 1px solid var(--el-border-color-lighter); border-radius: 6px; padding: 14px; min-width: 0; }
 .employee-archive-issues__item h3 { margin: 0 0 8px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.employee-archive-issues__detail { border-top: 1px solid var(--el-border-color-lighter); margin-top: 12px; padding-top: 10px; }
+.employee-archive-issues__detail h4 { margin: 0 0 8px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .employee-archive-issues__source { margin: 0 0 10px; font-size: 12px; color: var(--el-text-color-secondary); overflow-wrap: anywhere; }
 .employee-archive-issues__values { margin: 0; display: grid; gap: 10px; font-size: 13px; line-height: 1.6; }
 .employee-archive-issues__values > div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; }

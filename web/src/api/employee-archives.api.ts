@@ -49,6 +49,7 @@ export interface EmployeeReviewRevision {
 }
 
 export interface EmployeeArchiveIssue {
+  details?: Array<{ title: string; records: string; reason: string; suggestion: string }>;
   origin?: 'current' | 'import';
   canExplain?: boolean;
   contractIds?: string[];
