@@ -57,7 +57,7 @@ describe('DataScopeService', () => {
       expect(prisma.employmentRecord.findMany).not.toHaveBeenCalled();
     });
 
-    it('uses current company directory identity independently of old codes and departments', async () => {
+    it('allows all companies with the explicit confirmation capability independently of personal employment', async () => {
       jest.spyOn(prisma.employmentRecord, 'findMany').mockResolvedValue([
         { userId: 'user-1', contractSubjectId: 'company-a', company: 'fuede' },
         { userId: 'same-directory', contractSubjectId: 'company-a', company: 'fansibao' },
@@ -65,11 +65,12 @@ describe('DataScopeService', () => {
         { userId: 'no-directory', contractSubjectId: null, company: 'fuede' },
       ] as never);
       expect(await service.getConfirmationEmployeeFilter(ordinaryHr()))
-        .toEqual({ id: { in: ['user-1', 'same-directory'] } });
+        .toEqual({});
+      expect(prisma.employmentRecord.findMany).not.toHaveBeenCalled();
       expect(prisma.user.findUnique).not.toHaveBeenCalled();
     });
 
-    it('does not match an older overlapping company when the current selected record belongs elsewhere', async () => {
+    it('keeps confirmation responsibility when the handler or employee changes company', async () => {
       jest.spyOn(prisma.employmentRecord, 'findMany').mockResolvedValue([
         { userId: 'user-1', contractSubjectId: 'company-a' },
         { userId: 'moved-employee', contractSubjectId: 'company-b' },
@@ -77,16 +78,17 @@ describe('DataScopeService', () => {
         { userId: 'same-company', contractSubjectId: 'company-a' },
       ] as never);
       expect(await service.getConfirmationEmployeeFilter(ordinaryHr()))
-        .toEqual({ id: { in: ['user-1', 'same-company'] } });
+        .toEqual({});
     });
 
     it.each([{ records: [] }, { records: [
       { userId: 'user-1', contractSubjectId: null, company: 'fuede' },
       { userId: 'user-1', contractSubjectId: 'old-company', company: 'fuede' },
       { userId: 'employee', contractSubjectId: 'old-company', company: 'fuede' },
-    ] }])('fails closed without a current HR company directory ID', async ({ records }) => {
+    ] }])('does not require a personal company directory ID for an authorized HR handler', async ({ records }) => {
       jest.spyOn(prisma.employmentRecord, 'findMany').mockResolvedValue(records as never);
-      expect(await service.getConfirmationEmployeeFilter(ordinaryHr())).toEqual({ id: { in: [] } });
+      expect(await service.getConfirmationEmployeeFilter(ordinaryHr())).toEqual({});
+      expect(prisma.employmentRecord.findMany).not.toHaveBeenCalled();
     });
 
     it.each([

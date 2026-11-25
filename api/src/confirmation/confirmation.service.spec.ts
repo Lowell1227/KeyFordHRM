@@ -311,7 +311,7 @@ describe('employee confirmation draft', () => {
       .resolves.toMatchObject({ employeeId, canApprove: false, canViewInternalMeeting: true });
     await expect(service.approve('33333333-3333-4333-8333-333333333333', {
       submissionVersion: 1, voteResult: 'pass', voteComment: '评议通过', proposedRegularDate: new Date('2026-10-01T00:00:00.000Z'),
-    } as never, hrAdmin)).rejects.toThrow('仅本公司有转正办理权限的 HR');
+    } as never, hrAdmin)).rejects.toThrow('仅有转正办理权限的 HR');
   });
 
   it('does not let the company approver use HR authority on the same application', async () => {
@@ -321,7 +321,7 @@ describe('employee confirmation draft', () => {
       companyApproverId: approverId,
     });
     await expect(service.approve('33333333-3333-4333-8333-333333333333', { submissionVersion: 1 } as never,
-      { ...viewer, id: approverId, sysRole: SysRole.hr })).rejects.toThrow('仅本公司有转正办理权限的 HR');
+      { ...viewer, id: approverId, sysRole: SysRole.hr })).rejects.toThrow('仅有转正办理权限的 HR');
     expect(prisma.confirmationApplication.updateMany).not.toHaveBeenCalled();
   });
 
@@ -470,7 +470,7 @@ describe('employee confirmation draft', () => {
       submissionVersion: 1, employmentRecordId: null,
     });
     const file = { originalname: '评议依据.pdf' } as Express.Multer.File;
-    await expect(service.addMeetingAttachment(applicationId, file, viewer)).rejects.toThrow('仅本公司有转正办理权限的 HR');
+    await expect(service.addMeetingAttachment(applicationId, file, viewer)).rejects.toThrow('仅有转正办理权限的 HR');
     expect(storage.uploadFile).not.toHaveBeenCalled();
 
     storage.uploadFile.mockResolvedValue({
@@ -653,10 +653,7 @@ describe('employee confirmation draft', () => {
     }));
     expect(prisma.user.findMany.mock.calls.at(-1)?.[0]?.where).not.toHaveProperty('OR');
     expect(prisma.user.findMany.mock.calls.at(-1)?.[0]?.where).not.toHaveProperty('dept');
-    expect(prisma.employmentRecord.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ userId: { in: [employeeId] } }),
-      select: { userId: true, contractSubjectId: true },
-    }));
+    expect(prisma.employmentRecord.findMany).not.toHaveBeenCalled();
 
     prisma.confirmationApplication.findUnique.mockResolvedValueOnce({
       id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2, submissionVersion: 1,

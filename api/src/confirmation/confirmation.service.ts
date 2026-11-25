@@ -1,6 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfirmationStatus, Prisma, SysRole, UserStatus, VoteResult } from '@prisma/client';
-import { findCurrentEmploymentCompanies } from '@/common/personnel/current-employment-company';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
@@ -127,7 +126,7 @@ export class ConfirmationService {
       entryDate: employee.entryDate, plannedRegularDate: employee.plannedRegularDate };
   }
 
-  /** 本公司获授权 HR 可为待评议申请上传内部依据，上传人单独留痕。 */
+  /** 获授权 HR 可为待评议申请上传内部依据，上传人单独留痕。 */
   async addMeetingAttachment(id: string, file: Express.Multer.File, viewer: AuthUser, dto: ConfirmationMutationDto = {}) {
     const app = await this.prisma.confirmationApplication.findUnique({
       where: { id }, select: { id: true, employeeId: true, companyApproverId: true, workflowVersion: true,
@@ -137,7 +136,7 @@ export class ConfirmationService {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '转正申请不存在' });
     }
     if (!(await this.canHandleHr(app.employeeId, viewer, app.companyApproverId))) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本公司有转正办理权限的 HR 可上传内部评议附件' });
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅有转正办理权限的 HR 可上传内部评议附件' });
     }
     this.assertSubmissionVersion(app, dto.submissionVersion);
     if (app.status !== ConfirmationStatus.manager_approved) {
@@ -1034,10 +1033,7 @@ export class ConfirmationService {
       sysRole: SysRole.hr_user,
       hrCapabilities: { has: 'confirmation_manage' },
     }, select: { id: true } });
-    const companies = await findCurrentEmploymentCompanies(this.prisma, [employeeId, ...people.map(person => person.id)]);
-    const companyId = companies.get(employeeId);
-    if (!companyId) return [];
-    return people.filter(person => companies.get(person.id) === companyId).map(person => person.id);
+    return people.map(person => person.id);
   }
 
   private async assertCanView(app: ConfirmationWithRelations, viewer: AuthUser): Promise<void> {
@@ -1073,7 +1069,7 @@ export class ConfirmationService {
   ): Promise<void> {
     if (role === 'hr') {
       if (await this.canHandleHr(app.employeeId, viewer, app.companyApproverId)) return;
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本公司有转正办理权限的 HR 可操作' });
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅有转正办理权限的 HR 可操作' });
     }
     let expectedId: string | null;
     if (role === 'manager') expectedId = app.managerId;
