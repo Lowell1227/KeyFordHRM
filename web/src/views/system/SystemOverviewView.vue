@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { cyclesApi } from '@/api/cycles.api';
 
-const productVersion = '0.9.2';
+const productVersion = '0.9.3';
 
 type NotificationStatus = 'loading' | 'enabled' | 'disabled' | 'unavailable' | 'error';
 const notificationStatus = ref<NotificationStatus>('loading');
