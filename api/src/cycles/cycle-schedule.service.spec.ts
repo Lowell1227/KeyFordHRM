@@ -41,6 +41,22 @@ describe('CycleScheduleService', () => {
     expect(preview.schedules[0].selfEvalOpenAt).toBe('2026-08-03T09:00:00+08:00');
   });
 
+  it('generates monthly reviews for a probation period with partial first and last months', () => {
+    const preview = service.preview({
+      type: 'probation',
+      scoringFrequency: 'monthly',
+      startDate: new Date('2027-01-15T00:00:00.000Z'),
+      endDate: new Date('2027-03-10T00:00:00.000Z'),
+    });
+
+    expect(preview.scoringFrequency).toBe('monthly');
+    expect(preview.schedules.map(({ periodKey, periodStart, periodEnd }) => ({ periodKey, periodStart, periodEnd }))).toEqual([
+      { periodKey: '2027-01', periodStart: new Date('2027-01-15T00:00:00.000Z'), periodEnd: new Date('2027-01-31T00:00:00.000Z') },
+      { periodKey: '2027-02', periodStart: new Date('2027-02-01T00:00:00.000Z'), periodEnd: new Date('2027-02-28T00:00:00.000Z') },
+      { periodKey: '2027-03', periodStart: new Date('2027-03-01T00:00:00.000Z'), periodEnd: new Date('2027-03-10T00:00:00.000Z') },
+    ]);
+  });
+
   it('starts a partial period schedule on the following calendar month and uses third-workday deadlines', () => {
     const preview = service.preview({
       type: 'quarterly',

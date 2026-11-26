@@ -255,6 +255,17 @@ async function mockCycleLaunchPage(
     });
   });
   await page.route('**/api/v1/cycles**', (route) => {
+    if (new URL(route.request().url()).pathname.endsWith('/cycles/participant-candidates')) {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          items: [{ id: 'employee-probation', name: '孙珊', employeeNo: 'P001', deptId: 'product', deptName: '产品部', status: 'probation' }],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        })),
+      });
+    }
     if (route.request().url().endsWith('/cycles/participant-preview')) {
       const body = route.request().postDataJSON() as {
         scope: 'all' | 'custom';
@@ -311,7 +322,7 @@ async function mockCycleLaunchPage(
       };
       const scoringFrequency = body.type === 'monthly'
         ? 'monthly'
-        : body.type === 'custom' || body.type === 'probation'
+        : body.type === 'custom'
           ? 'cycle'
           : body.scoringFrequency ?? 'monthly';
       const periodKeys = scoringFrequency === 'cycle' ? ['cycle'] : coveredMonthKeys(body.startDate, body.endDate);
@@ -446,6 +457,46 @@ test.describe('cycle launch entry UX', () => {
     await expect(drawer.getByTestId('cycle-scope-preview')).toContainText('销售部');
     await expect(drawer.getByTestId('cycle-scope-preview')).toContainText('发起前仍会按周期规则完成参与与豁免预检');
     await expect(drawer.getByTestId('cycle-scope-preview')).not.toContainText('实际纳入人员');
+  });
+
+  test('lets HR select a probation employee and enable monthly reviews in a probation cycle', async ({ page }) => {
+    const createBodies: Record<string, unknown>[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-type-select').click();
+    await page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '试用期' }).click();
+
+    const monthlySwitch = page.getByTestId('cycle-monthly-review-switch');
+    await expect(monthlySwitch).not.toHaveClass(/is-disabled/);
+    await monthlySwitch.click();
+    await expect(monthlySwitch.locator('input')).toBeChecked();
+    const periodInputs = page.getByRole('dialog', { name: '新建考核周期' }).locator('.el-date-editor--daterange input');
+    await periodInputs.nth(0).fill('2027-01-15');
+    await periodInputs.nth(1).fill('2027-03-10');
+    await periodInputs.nth(1).press('Tab');
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+
+    await page.getByTestId('cycle-scope-picker-open').click();
+    const drawer = page.getByRole('dialog', { name: '选择考核对象' });
+    await drawer.getByTestId('cycle-scope-clear').click();
+    await drawer.getByRole('tab', { name: '按人员' }).click();
+    await drawer.getByTestId('cycle-scope-user-select').locator('.el-select').click();
+    await page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '孙珊 (P001)' }).click();
+    await drawer.getByRole('button', { name: '确定' }).click();
+    await expect(page.getByTestId('cycle-scope-summary')).toContainText('共 1 人');
+    await page.getByTestId('cycle-create-save-draft').click();
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies[0]).toMatchObject({
+      type: 'probation',
+      scoringFrequency: 'monthly',
+      monthlyFollowUpRequired: true,
+      participantUserIds: ['employee-probation'],
+      periodSchedules: expect.arrayContaining([
+        expect.objectContaining({ periodKey: '2027-01' }),
+        expect.objectContaining({ periodKey: '2027-03' }),
+      ]),
+    });
   });
 
   test('saves one unified department selection with no exclusion payload', async ({ page }) => {

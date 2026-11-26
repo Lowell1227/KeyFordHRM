@@ -814,6 +814,81 @@ describe('LaunchService preflight', () => {
     });
   });
 
+  it('creates normal monthly tasks for explicitly selected probation employees despite short tenure', async () => {
+    const probationEmployee = {
+      ...candidate,
+      id: '99999999-9999-4999-8999-999999999999',
+      status: 'probation',
+      entryDate: new Date('2027-03-01T00:00:00.000Z'),
+    };
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
+      type: 'probation',
+      participantUserIds: [probationEmployee.id],
+    }));
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users([probationEmployee]);
+    const calcExempt = (service as any).exemptService.calcExempt as jest.Mock;
+    calcExempt.mockReturnValue({ isExempt: true, onJobDays: 31 });
+
+    const preflight = await service.preflight(cycleId);
+    expect(preflight.participants).toContainEqual(expect.objectContaining({
+      employeeId: probationEmployee.id,
+      participantDisposition: 'active',
+      isExempt: false,
+    }));
+    expect(calcExempt).not.toHaveBeenCalled();
+
+    const launch = await service.launch(cycleId, operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: preflight.planHash!,
+    });
+    expect(launch).toEqual(expect.objectContaining({ activeTasks: 1, periodCount: 3 }));
+    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ employeeId: probationEmployee.id, status: 'indicator_drafting', isExempt: false }),
+    });
+    expect(tx.assessmentPeriod.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([expect.objectContaining({ periodKey: '2027-01' }), expect.objectContaining({ periodKey: '2027-03' })]),
+    });
+  });
+
+  it('retains explicit HR exemptions for selected probation employees', async () => {
+    const probationEmployee = { ...candidate, status: 'probation' };
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
+      type: 'probation',
+      participantUserIds: [probationEmployee.id],
+      explicitExemptUserIds: [probationEmployee.id],
+    }));
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users([probationEmployee]);
+
+    const preflight = await service.preflight(cycleId);
+    expect(preflight.participants).toContainEqual(expect.objectContaining({
+      employeeId: probationEmployee.id,
+      participantDisposition: 'cycle_exempt',
+      exemptReason: 'HR 在本周期中明确设置为豁免',
+    }));
+  });
+
+  it('retains the tenure exemption for probation employees selected in a non-probation cycle', async () => {
+    const probationEmployee = { ...candidate, status: 'probation' };
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
+      type: 'quarterly',
+      participantUserIds: [probationEmployee.id],
+    }));
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users([probationEmployee]);
+    const calcExempt = (service as any).exemptService.calcExempt as jest.Mock;
+    calcExempt.mockReturnValue({ isExempt: true, onJobDays: 20 });
+
+    const preflight = await service.preflight(cycleId);
+    expect(preflight.participants).toContainEqual(expect.objectContaining({
+      employeeId: probationEmployee.id,
+      participantDisposition: 'cycle_exempt',
+      exemptReason: '在岗20天，不足周期1/3',
+    }));
+    expect(calcExempt).toHaveBeenCalled();
+  });
+
   it('removes a stale probation exclusion when the final approver reload is active', async () => {
     const probationSnapshot = {
       ...companyFinalApprover,

@@ -850,6 +850,7 @@ export class LaunchService {
   private buildLaunchPlan(
     candidates: Candidate[],
     cycle: {
+      type: CycleType;
       startDate: Date;
       endDate: Date;
       goalSettingOpenAt: Date | null;
@@ -956,12 +957,14 @@ export class LaunchService {
   private resolveParticipantDisposition(
     candidate: Candidate,
     cycle: {
+      type: CycleType;
       startDate: Date;
       endDate: Date;
       workflowVersion?: number | null;
       companyFinalApproverId?: string | null;
       explicitExemptDeptIds: string[];
       explicitExemptUserIds: string[];
+      participantUserIds: string[];
     },
     exemptRatio: number,
   ): {
@@ -987,10 +990,12 @@ export class LaunchService {
   private resolveExemption(
     candidate: Candidate,
     cycle: {
+      type: CycleType;
       startDate: Date;
       endDate: Date;
       explicitExemptDeptIds: string[];
       explicitExemptUserIds: string[];
+      participantUserIds: string[];
     },
     exemptRatio: number,
   ): { isExempt: boolean; reason: string | null } {
@@ -999,6 +1004,11 @@ export class LaunchService {
     }
     if ((cycle.explicitExemptUserIds ?? []).includes(candidate.id)) {
       return { isExempt: true, reason: 'HR 在本周期中明确设置为豁免' };
+    }
+    if (cycle.type === CycleType.probation
+      && candidate.status === UserStatus.probation
+      && (cycle.participantUserIds ?? []).includes(candidate.id)) {
+      return { isExempt: false, reason: null };
     }
     const automatic = this.exemptService.calcExempt(candidate, cycle, exemptRatio);
     return {

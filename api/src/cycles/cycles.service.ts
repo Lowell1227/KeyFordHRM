@@ -1017,7 +1017,7 @@ export class CyclesService {
 
   private monthlyReviewEnabled(type: CycleType, scoringFrequency: ScoringFrequency): boolean {
     if (type === CycleType.monthly) return true;
-    if (type === CycleType.custom || type === CycleType.probation) return false;
+    if (type === CycleType.custom) return false;
     return scoringFrequency === ScoringFrequency.monthly;
   }
 

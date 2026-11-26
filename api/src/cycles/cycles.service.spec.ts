@@ -605,6 +605,24 @@ describe('CyclesService', () => {
     }));
   });
 
+  it('keeps monthly reviews enabled when a probation cycle selects monthly scoring', async () => {
+    await service.create(quarterlyCycle({
+      type: 'probation',
+      workflowVersion: 2,
+      scoringFrequency: ScoringFrequency.monthly,
+      participantUserIds: ['22222222-2222-4222-8222-222222222222'],
+    }), creator);
+
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        type: 'probation',
+        scoringFrequency: ScoringFrequency.monthly,
+        monthlyFollowUpRequired: true,
+        participantUserIds: ['22222222-2222-4222-8222-222222222222'],
+      }),
+    }));
+  });
+
   it('derives disabled monthly follow-up compatibility from cycle scoring for a new workflow-v2 cycle', async () => {
     await service.create(quarterlyCycle({
       workflowVersion: 2,
