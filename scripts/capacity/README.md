@@ -16,6 +16,10 @@ The generic preflight requires 4 GiB free. The isolated runner instead checks it
 explicit bounded incremental budget plus 2 GiB reserve. Neither resource check
 alone proves data ownership. The runner creates uniquely labelled data services,
 an internal-only API and a loopback Nginx gateway with private random credentials.
+When a preview pause is explicitly authorized, the process-local option
+`CAPACITY_RESOURCE_PROBE_CONTAINER=kayford-deploy-api-1` permits only a
+label-verified, read-only `/proc/meminfo` observation from that API. It cannot
+change the test target or relax the budget. Default: `hrm-api-1`.
 Do not inspect or copy its temporary manifest into logs or source.
 
 After `READY`, run these commands one at a time in the runner's stdin:

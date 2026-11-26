@@ -77,6 +77,19 @@ test('collection cannot interpret corrupt or missing Docker memory as headroom',
   }
 });
 
+test('explicit production observer only reads VM memory from the pinned API when preview is paused', () => {
+  const calls = [], output = [JSON.stringify(healthy()), JSON.stringify('npipe:////./pipe/docker_engine'),
+    'kayford-deploy|api', String(8 * 1024 ** 3), String(5 * 1024 ** 3)];
+  const value = collectResources({ platform: 'win32', env: { CAPACITY_RESOURCE_PROBE_CONTAINER: 'kayford-deploy-api-1' },
+    run: (exe, args) => { calls.push(args); return output.shift(); } });
+  assert.equal(value.dockerFreeGiB, 5);
+  assert.equal(calls[2].includes('kayford-deploy-api-1'), true);
+  assert.equal(calls[4].includes('kayford-deploy-api-1'), true);
+  assert.equal(calls[4].join(' ').includes('/proc/meminfo'), true);
+  assert.throws(() => collectResources({ platform: 'win32', env: { CAPACITY_RESOURCE_PROBE_CONTAINER: 'other-api' },
+    run: () => assert.fail('invalid observer must not execute a command') }), /resource-container-not-allowed/);
+});
+
 test('remote and unknown Docker contexts are rejected before container reads', () => {
   for (const host of ['ssh://remote', 'tcp://127.0.0.1:2375', 'unix:///var/run/docker.sock', 'npipe:////other/pipe/docker_engine', 'garbage']) {
     let calls = 0;

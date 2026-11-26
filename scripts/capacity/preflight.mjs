@@ -34,6 +34,8 @@ function readCommand(exe, args) {
 export function collectResources({ run = readCommand, platform = process.platform, env = process.env } = {}) {
   if (platform !== 'win32') throw new Error('unsupported-host');
   if (env.DOCKER_HOST) throw new Error('docker-host-override-not-allowed');
+  const observer = env.CAPACITY_RESOURCE_PROBE_CONTAINER || 'hrm-api-1';
+  if (!['hrm-api-1', 'kayford-deploy-api-1'].includes(observer)) throw new Error('resource-container-not-allowed');
   const hostScript = [
     '$ErrorActionPreference = "Stop"',
     '$os = Get-CimInstance Win32_OperatingSystem',
@@ -47,12 +49,14 @@ export function collectResources({ run = readCommand, platform = process.platfor
     throw new Error('docker-endpoint-not-local-desktop');
   }
   const docker = (args) => run('docker', ['--host', endpoint, ...args]);
-  const identity = docker(['inspect', 'hrm-api-1', '--format', '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "com.docker.compose.service" }}']);
-  if (identity.trim() !== 'hrm|api') throw new Error('preview-container-identity-invalid');
+  const identity = docker(['inspect', observer, '--format', '{{ index .Config.Labels "com.docker.compose.project" }}|{{ index .Config.Labels "com.docker.compose.service" }}']);
+  if (identity.trim() !== (observer === 'hrm-api-1' ? 'hrm|api' : 'kayford-deploy|api')) {
+    throw new Error(observer === 'hrm-api-1' ? 'preview-container-identity-invalid' : 'resource-container-identity-invalid');
+  }
   const dockerTotal = Number(docker(['info', '--format', '{{.MemTotal}}']));
   // /proc reports the shared Docker VM, not summed container working sets.
   const memoryScript = 'const s=require("node:fs").readFileSync("/proc/meminfo","utf8");const m=s.match(/^MemAvailable:\\s+(\\d+)\\s+kB$/m);if(!m)process.exit(1);process.stdout.write(String(Number(m[1])*1024));';
-  const dockerAvailable = Number(docker(['exec', 'hrm-api-1', 'node', '-e', memoryScript]));
+  const dockerAvailable = Number(docker(['exec', observer, 'node', '-e', memoryScript]));
   if (![dockerTotal, dockerAvailable].every((value) => Number.isFinite(value) && value > 0)) {
     throw new Error('docker-memory-reading-invalid');
   }
