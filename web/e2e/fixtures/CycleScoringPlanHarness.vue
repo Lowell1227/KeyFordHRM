@@ -58,6 +58,7 @@ function updateSchedules(value: CyclePeriodSchedule[]) {
         <button data-testid="cycle-type-quarterly" type="button" @click="selectType('quarterly')">季度</button>
         <button data-testid="cycle-type-semiannual" type="button" @click="selectType('semiannual')">半年</button>
         <button data-testid="cycle-type-annual" type="button" @click="selectType('annual')">年度</button>
+        <button data-testid="cycle-type-probation" type="button" @click="selectType('probation')">试用期</button>
         <button data-testid="cycle-type-custom" type="button" @click="selectType('custom')">自定义</button>
       </div>
       <CycleScoringSettings

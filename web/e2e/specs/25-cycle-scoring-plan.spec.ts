@@ -418,6 +418,19 @@ test.describe('cycle scoring plan controls', () => {
     await expect(page.getByTestId('cycle-scoring-settings')).toContainText('当前周期不支持月度自评');
   });
 
+  test('allows monthly reviews for probation cycles', async ({ page }) => {
+    await mountScoringPlanHarness(page);
+
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-type-probation').click();
+    const monthlySwitch = page.getByTestId('cycle-monthly-review-switch');
+    await expect(monthlySwitch).not.toHaveClass(/is-disabled/);
+    await expect(monthlySwitch.locator('input')).not.toBeChecked();
+    await monthlySwitch.click();
+    await expect(monthlySwitch.locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-scoring-settings')).not.toContainText('当前周期不支持月度自评');
+  });
+
   test('shows six and twelve monthly schedule rows for semiannual and annual cycles', async ({ page }) => {
     await mountScoringPlanHarness(page);
 

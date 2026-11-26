@@ -798,7 +798,7 @@ function hasIncompleteScoringSchedule(): boolean {
 
 function requiredScoringFrequency(type: CycleType): ScoringFrequency | null {
   if (type === 'monthly') return 'monthly';
-  if (type === 'custom' || type === 'probation') return 'cycle';
+  if (type === 'custom') return 'cycle';
   return null;
 }
 
@@ -1787,7 +1787,7 @@ onMounted(() => {
                   </el-tooltip>
                 </span>
               </template>
-              <el-select v-model="createForm.type" placeholder="请选择" style="width: 100%" @change="handleCreateTypeChange">
+              <el-select v-model="createForm.type" data-testid="cycle-type-select" placeholder="请选择" style="width: 100%" @change="handleCreateTypeChange">
                 <el-option v-for="opt in CYCLE_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
               </el-select>
             </el-form-item>

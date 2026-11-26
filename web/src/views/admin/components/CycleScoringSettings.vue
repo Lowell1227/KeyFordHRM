@@ -17,6 +17,7 @@ const canChooseFrequency = computed(() => (
   props.cycleType === 'quarterly'
   || props.cycleType === 'semiannual'
   || props.cycleType === 'annual'
+  || props.cycleType === 'probation'
 ));
 
 const fixedFrequency = computed<ScoringFrequency>(() => (
