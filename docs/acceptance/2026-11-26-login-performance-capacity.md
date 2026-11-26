@@ -114,6 +114,8 @@ headless `bringToFront` 没有产生真实OS焦点/可见性事件，报告明�
 
 ## 可复核材料与状态
 
+2026-11-26后续说明：原工作树自动归档时保留了本报告及脚本，但git忽略的原始`CAP_43d97f5b822d`输出未随快照恢复。下列目录是当时证据位置，不再表示当前磁盘上仍存在。第一批修复须使用[新的交付记录](2026-11-26-performance-responsiveness-release.md)及本批重新生成的结果，不沿用历史输出冒充最新验收。
+
 - 结果目录：`test-results/capacity/CAP_43d97f5b822d/`（git忽略，用户本机可读）。主要为各档`.summary.json`、`browser/browser-probe.json`、`browser-hr-recheck/browser-probe.json`、`flow.json`、`business-audit.json`、`edge.json`、`auth-contrast.json`、`resource-samples.json`、`completion.json`。
 - k6官方2.4.0 zip经GitHub发布资产SHA256验证；只放测试工具目录，不安装全局服务。纯工具测试最终46/46、浏览器守卫自检通过；这些不与业务/压力请求数相加。
 - 本轮业务源码固定；测试脚本增加过单路由指标、HR空态识别、提交前登录准备、CPU对照及报告脱敏。早期阶段没有分别保存脚本哈希，不能声称每档测试工具二进制完全相同；相关业务请求及判断差异已在上文列明，当前脚本最终哈希单独保存。补每路由阈值等测试工具改动未改API业务，不机械重跑已经可追溯的全部负载。

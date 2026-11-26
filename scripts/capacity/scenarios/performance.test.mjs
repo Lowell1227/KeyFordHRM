@@ -43,6 +43,14 @@ test('each emitted read route has its own latency gate instead of only an overal
   assert.equal(api.profileOptions('auth-only-burst').thresholds.readMyTasksMs, undefined);
 });
 const userId = uuid(201);
+test('refresh regression keeps normal per-route latency gates and proves polling coverage', () => {
+  for (const count of [10, 100]) {
+    const options = api.profileOptions(`refresh-${count}`);
+    assert.equal(options.scenarios.performance.vus, count);
+    assert.equal(JSON.stringify(options.thresholds.readMyGoalsMs), '["p(95)<=1000","p(99)<=2000"]');
+    assert.equal(options.thresholds.goalRefreshSuccess[0], `count>=${count * 5}`);
+  }
+});
 const task = () => ({
   id: participant.taskId, employeeId: userId, status: 'indicator_drafting',
   updatedAt: '2037-01-02T00:00:00.000Z',

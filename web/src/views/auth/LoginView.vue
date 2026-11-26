@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { isNavigationFailure, useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
@@ -44,6 +44,7 @@ const formErrors = reactive({ employeeNo: '', password: '' });
 const previewAccounts = ref<TestAccount[]>([]);
 const previewAccount = ref('HR001');
 const previewError = ref('');
+const navigationErrorMessage = '登录已成功，但页面打开失败，请重试';
 
 onMounted(async () => {
   if (!isLocalPreview) return;
@@ -60,11 +61,13 @@ async function onPreviewLogin() {
   if (!isLocalPreview || loading.value || !previewAccounts.value.some((item) => item.employeeNo === previewAccount.value)) return;
   loading.value = true;
   previewError.value = '';
+  let loginSucceeded = false;
   try {
     await auth.loginWithTestAccount(previewAccount.value);
-    redirectAfterLogin();
+    loginSucceeded = true;
+    await redirectAfterLogin();
   } catch {
-    previewError.value = '预览登录失败，请检查预览服务后重试';
+    previewError.value = loginSucceeded ? navigationErrorMessage : '预览登录失败，请检查预览服务后重试';
   } finally {
     loading.value = false;
   }
@@ -77,10 +80,11 @@ function isAuthFailure(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 401;
 }
 
-function redirectAfterLogin() {
+async function redirectAfterLogin(): Promise<void> {
   clearArchiveOAuthReturn();
   const target = (route.query.redirect as string) || '/dashboard';
-  router.replace(target);
+  const failure = await router.replace(target);
+  if (isNavigationFailure(failure)) throw failure;
 }
 
 function getDingTalkRedirectUri() {
@@ -96,23 +100,26 @@ async function onDingTalkLogin() {
       return;
     }
     let dingTalkJsApi;
+    loading.value = true;
     try {
       dingTalkJsApi = await loadDingTalkJsApi();
     } catch {
       ElMessage.error('钉钉 JSAPI 未加载，请在钉钉客户端内重新打开页面');
+      loading.value = false;
       return;
     }
 
-    loading.value = true;
     let authSettled = false;
     const onSuccess = async (res: { code: string }) => {
       if (authSettled) return;
       authSettled = true;
+      let loginSucceeded = false;
       try {
         await auth.loginWithDingTalk(res.code, 'internal');
-        redirectAfterLogin();
+        loginSucceeded = true;
+        await redirectAfterLogin();
       } catch (error) {
-        ElMessage.error(dingtalkLoginErrorMessage(error));
+        ElMessage.error(loginSucceeded ? navigationErrorMessage : dingtalkLoginErrorMessage(error));
       } finally {
         loading.value = false;
       }
@@ -148,23 +155,31 @@ async function onDingTalkLogin() {
 }
 
 async function onPasswordLogin() {
+  if (loading.value) return;
   formErrors.employeeNo = form.employeeNo ? '' : '请输入工号';
   formErrors.password = form.password ? '' : '请输入密码';
   if (formErrors.employeeNo || formErrors.password) return;
 
   loading.value = true;
+  let loginSucceeded = false;
   try {
     const passwordChangeRequired = await auth.loginWithPassword(form.employeeNo, form.password);
+    loginSucceeded = true;
     if (passwordChangeRequired) {
       clearArchiveOAuthReturn();
-      await router.replace({ name: 'ChangePassword' });
+      const failure = await router.replace({ name: 'ChangePassword' });
+      if (isNavigationFailure(failure)) throw failure;
     } else {
-      redirectAfterLogin();
+      await redirectAfterLogin();
     }
   } catch (err) {
     // 401 拦截器静默处理，这里把凭据错误就近显示在密码框下方。
-    if (isAuthFailure(err)) {
+    if (loginSucceeded) {
+      formErrors.password = navigationErrorMessage;
+    } else if (isAuthFailure(err)) {
       formErrors.password = '工号或密码错误';
+    } else {
+      formErrors.password = '登录失败，请稍后重试';
     }
   } finally {
     loading.value = false;

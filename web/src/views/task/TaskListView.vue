@@ -10,6 +10,7 @@ import { cyclesApi } from '@/api/cycles.api';
 import { usersApi } from '@/api/users.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { useGoalChangeEntry } from '@/composables/useGoalChangeEntry';
+import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
@@ -52,7 +53,9 @@ const auth = useAuthStore();
 const canSeeChanges = useGoalChangeEntry();
 const goalView = computed(() => ['mine','review','monitor'].includes(String(route.query.goalView)) ? route.query.goalView as GoalScope : null);
 const canMonitor = computed(() => canMonitorGoals(auth.user));
-const goalReviewTotal = ref(0);
+const goalReviewTotal = ref<number | null>(null);
+const goalReviewLabel = computed(() => goalReviewTotal.value == null ? '待我审核（待更新）'
+  : goalReviewTotal.value > 0 ? `待我审核（${goalReviewTotal.value}）` : '待我审核');
 const workspaceQuery = useTaskWorkspaceQuery();
 
 const list = ref<TaskListItem[]>([]);
@@ -445,19 +448,31 @@ function httpErrorMessage(error: unknown, fallback: string): string {
   return responseMessage || candidate.message || fallback;
 }
 
-async function loadGoalReviewTotal() {
-  if (goalView.value === 'monitor' && !canMonitor.value) {
-    goalReviewTotal.value = 0;
+async function loadGoalReviewTotal(canApply = () => true) {
+  const requestId = ++goalReviewCountRequestSerial;
+  if (!auth.user || (goalView.value === 'monitor' && !canMonitor.value)) {
+    goalReviewTotal.value = null;
     return;
   }
-  const requestId = ++goalReviewCountRequestSerial;
+  const userId = auth.user?.id;
   try {
     const response = await goalPlansApi.findAll({ scope: 'review', page: 1, pageSize: 1 });
-    if (requestId === goalReviewCountRequestSerial) goalReviewTotal.value = response.total;
+    if (requestId === goalReviewCountRequestSerial && userId === auth.user?.id && canApply()) goalReviewTotal.value = response.total;
   } catch {
-    if (requestId === goalReviewCountRequestSerial) goalReviewTotal.value = 0;
+    if (requestId === goalReviewCountRequestSerial && userId === auth.user?.id && canApply()) goalReviewTotal.value = null;
   }
 }
+function onGoalPlansRefreshed(total: number | null) {
+  goalReviewCountRequestSerial++;
+  goalReviewTotal.value = total;
+}
+useVisibleRefresh({ intervalMs: 0, enabled: () => Boolean(auth.user) && (goalView.value !== 'review'
+  || Boolean(route.query.cycleId || route.query.deptId || route.query.employeeName)),
+  refresh: loadGoalReviewTotal });
+watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => {
+  goalReviewCountRequestSerial++; goalReviewTotal.value = null;
+  if (auth.user && goalView.value !== 'review') void loadGoalReviewTotal();
+});
 
 async function hydrateSelectedTeamTask(response: TeamTaskPage) {
   const taskId = workspaceQuery.state.value.taskId;
@@ -1087,13 +1102,13 @@ watch(
   <nav v-if="goalView || isTeamTaskWorkspace" class="goal-plan-navigation" aria-label="目标计划视图">
     <el-button :type="goalView === 'mine' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
     <el-button :type="goalView === 'review' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=review')">
-      {{ goalReviewTotal > 0 ? `待我审核（${goalReviewTotal}）` : '待我审核' }}
+      {{ goalReviewLabel }}
     </el-button>
     <el-button v-if="canMonitor" :type="goalView === 'monitor' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
     <el-button v-if="goalView" @click="router.push('/tasks')">绩效待办</el-button>
     <el-button v-if="canSeeChanges && (isTeamTaskWorkspace || goalView)" @click="router.push('/goal-changes')">目标变更</el-button>
   </nav>
-  <GoalPlanList v-if="goalView" :key="goalView" :scope="goalView" :allowed="goalView !== 'monitor' || canMonitor"/>
+  <GoalPlanList v-if="goalView" :key="goalView" :scope="goalView" :allowed="goalView !== 'monitor' || canMonitor" @refreshed="onGoalPlansRefreshed"/>
   <PerformanceWorkspace v-else
     title="绩效待办"
     active-section="tasks"
@@ -1223,13 +1238,13 @@ watch(
     <nav v-if="!isTeamTaskWorkspace" class="goal-plan-navigation is-content-tabs" aria-label="目标计划视图">
       <el-button @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
       <el-button @click="router.push('/tasks?goalView=review')">
-        {{ goalReviewTotal > 0 ? `待我审核（${goalReviewTotal}）` : '待我审核' }}
+        {{ goalReviewLabel }}
       </el-button>
       <el-button v-if="canMonitor" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
     </nav>
 
     <section
-      v-if="goalReviewTotal > 0 && !isTeamTaskWorkspace"
+      v-if="(goalReviewTotal ?? 0) > 0 && !isTeamTaskWorkspace"
       class="goal-review-notice"
       data-testid="goal-review-notice"
       aria-label="目标审核待办提醒"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { approvalApi } from '@/api/approval.api';
@@ -21,6 +21,7 @@ import { departmentsApi } from '@/api/departments.api';
 import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle, Department, TaskDetail } from '@/types/api.types';
 import { resolvePerformanceCycleByCreatedAt } from '@/utils/performance-cycle';
 import { useAuthStore } from '@/stores/auth.store';
+import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import { type PerfGrade } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
 import { formatDateTime } from '@/utils/date';
@@ -47,9 +48,14 @@ const selectedTaskIds = ref<string[]>([]);
 const page = ref(1);
 const pageSize = ref(10);
 const detailDrawer = ref({ visible: false, loading: false, taskId: '', error: '', detail: null as TaskDetail | null });
-let approvalReady = false;
+const approvalReady = ref(false), accessDenied = ref(false), confirming = ref(false);
+const appliedFilters = ref('');
+const filterKey = () => JSON.stringify([deptFilter.value, keywordFilter.value.trim()]);
+const refreshBlocked = () => loading.value || submitting.value || confirming.value || hasSelection.value
+  || rejectDialog.value.visible || detailDrawer.value.visible || appliedFilters.value !== filterKey();
 let listRequest = 0;
 let detailRequest = 0;
+let initRequest = 0;
 
 const GRADES = ['A', 'B', 'C', 'D'] as const;
 
@@ -136,8 +142,7 @@ async function openDetail(taskId: string) {
   }
 }
 
-async function loadCycles() {
-  try {
+async function loadCycles(canApply = () => true) {
     // Retained records remain reachable after cycle closure; server scope stays unchanged.
     const items: AssessmentCycle[] = [];
     for (const group of ['active', 'finished'] as const) {
@@ -149,10 +154,7 @@ async function loadCycles() {
         page++;
       }
     }
-    cycles.value = [...new Map(items.map(cycle => [cycle.id, cycle])).values()];
-  } catch {
-    cycles.value = [];
-  }
+    if (canApply()) cycles.value = [...new Map(items.map(cycle => [cycle.id, cycle])).values()];
 }
 
 async function normalizeApprovalCycle() {
@@ -196,16 +198,24 @@ async function selectApprovalCycle(cycleId: string) {
 }
 
 async function loadTasks() {
+  accessDenied.value = false;
+  return fetchTasks(false);
+}
+async function fetchTasks(background: boolean, canApply = () => true) {
+  if (background && refreshBlocked()) return;
   const request = ++listRequest;
   const cycleId = selectedCycleId.value;
-  listError.value = '';
+  const filters = filterKey();
+  if (!background) { listError.value = ''; appliedFilters.value = filters; }
   if (!selectedCycleId.value) {
     tasks.value = [];
     overview.value = null;
     loading.value = false;
     return;
   }
-  loading.value = true;
+  if (!background) loading.value = true;
+  const current = () => request === listRequest && cycleId === selectedCycleId.value && filters === filterKey()
+    && (!background || (canApply() && !refreshBlocked()));
   try {
     const [list, overviewData] = await Promise.all([
       approvalApi.getApprovalList(cycleId, {
@@ -214,29 +224,32 @@ async function loadTasks() {
       }),
       approvalApi.getOverview(cycleId),
     ]);
-    if (request !== listRequest || cycleId !== selectedCycleId.value) return;
+    if (!current()) return;
     tasks.value = list;
     overview.value = overviewData;
-    page.value = Math.min(page.value, Math.max(1, Math.ceil(list.length / pageSize.value)));
+    listError.value = '';
+    if (!background) page.value = Math.min(page.value, Math.max(1, Math.ceil(list.length / pageSize.value)));
   } catch (error) {
     if (request !== listRequest || cycleId !== selectedCycleId.value) return;
-    tasks.value = [];
-    overview.value = null;
+    const status = (error as { response?: { status?: number } })?.response?.status;
+    if (status === 401 || status === 403) { accessDenied.value = true; clearApprovalState(); loading.value = false; }
+    else if (!current()) return;
+    else if (!background) { tasks.value = []; overview.value = null; }
     listError.value = readErrorMessage(error);
   } finally {
-    if (request === listRequest) loading.value = false;
+    if (!background && request === listRequest) loading.value = false;
   }
 }
 
 function refreshList() {
   selectedTaskIds.value = [];
-  loadTasks();
+  if (!approvalReady.value) void initializeApproval(); else void loadTasks();
 }
 
 watch(
   () => route.query.cycleId,
   async (cycleId) => {
-    if (!approvalReady) return;
+    if (!approvalReady.value) return;
     const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
     const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
     const canonicalCycleId = resolved.selectedCycle?.id ?? '';
@@ -257,17 +270,37 @@ watch(
   },
 );
 
-onMounted(async () => {
-  await Promise.all([
-    loadCycles(),
+async function initializeApproval() {
+  const request = ++initRequest;
+  approvalReady.value = false; accessDenied.value = false; loading.value = true;
+  const current = () => request === initRequest;
+  try {
+    await Promise.all([
+    loadCycles(current),
     departmentsApi.findAll({ isActive: true, pageSize: 1000 })
-      .then((items) => { departments.value = items; })
-      .catch(() => { departments.value = []; }),
+      .then((items) => { if (current()) departments.value = items; })
+      .catch(() => { if (current()) departments.value = []; }),
   ]);
+  if (!current()) return;
   await normalizeApprovalCycle();
-  approvalReady = true;
+  if (!current()) return;
+  approvalReady.value = true;
   await loadTasks();
+  } catch (error) {
+    if (!current()) return;
+    listError.value = `考核周期读取失败：${readErrorMessage(error)}`;
+    const status = (error as { response?: { status?: number } })?.response?.status;
+    accessDenied.value = status === 401 || status === 403;
+  } finally { if (current()) loading.value = false; }
+}
+onMounted(initializeApproval);
+onUnmounted(() => { listRequest++; detailRequest++; initRequest++; });
+watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => {
+  clearApprovalState(); cycles.value = []; departments.value = [];
+  if (auth.user) void initializeApproval(); else { initRequest++; approvalReady.value = false; loading.value = false; }
 });
+useVisibleRefresh({ enabled: () => Boolean(auth.user) && approvalReady.value && Boolean(selectedCycleId.value) && !accessDenied.value,
+  blocked: refreshBlocked, refresh: guard => fetchTasks(true, guard) });
 
 function searchApproval() {
   page.value = 1;
@@ -403,6 +436,8 @@ async function confirmReject() {
 }
 
 async function handleApproveSingleWithConfirm(taskId: string) {
+  if (confirming.value || submitting.value) return;
+  confirming.value = true;
   try {
     await ElMessageBox.confirm('确认通过该员工的绩效结果？', '确认通过', {
       confirmButtonText: '通过',
@@ -410,16 +445,21 @@ async function handleApproveSingleWithConfirm(taskId: string) {
       type: 'warning',
     });
   } catch {
+    confirming.value = false;
     return;
   }
   try {
     await handleApproveSingle(taskId);
   } catch (error) {
     ElMessage.error(readErrorMessage(error));
+  } finally {
+    confirming.value = false;
   }
 }
 
 async function handleBatchApproveWithConfirm() {
+  if (confirming.value || submitting.value) return;
+  confirming.value = true;
   try {
     await ElMessageBox.confirm(
       `确认批量通过选中的 ${selectedTaskIds.value.length} 条绩效结果？`,
@@ -429,6 +469,8 @@ async function handleBatchApproveWithConfirm() {
     await handleBatchApprove();
   } catch {
     // 用户取消，不处理
+  } finally {
+    confirming.value = false;
   }
 }
 

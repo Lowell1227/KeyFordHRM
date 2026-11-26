@@ -15,6 +15,8 @@ const network = `${prefix}-net`;
 const frontendNetwork = `${prefix}-front`;
 const names = ['pg', 'redis', 'minio', 'api', 'proxy'].map((key) => `${prefix}-${key}`);
 const image = 'kayford-deploy-api:ce618b29ec82010e54d0c879c2d24bae5834c5b8';
+const webImage = process.env.CAPACITY_WEB_IMAGE || 'kayford-deploy-web:9fc27b2aa035f5b01394c459de42d27bf8c8a83d';
+if (!/^kayford-deploy-web:[a-f0-9]{40}$/.test(webImage)) throw new Error('capacity-web-image-refused');
 const manifestPath = join(output, 'fixture-manifest.local.json');
 const snapshots = [];
 const stages = [];
@@ -132,7 +134,7 @@ try {
   const initialHealth = await health();
   if (!initialHealth.ok) throw new Error('production-initial-health-not-ok');
   const productionBefore = docker(['ps', '--filter', 'label=com.docker.compose.project=kayford-deploy', '--format', '{{.ID}}|{{.Image}}']);
-  save('baseline.json', { runId, at: new Date().toISOString(), source: '769cc99d75c1173ea0b4ce3a89ae046c3a4b5250', apiImage: image,
+  save('baseline.json', { runId, at: new Date().toISOString(), source: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), apiImage: image, webImage,
     preflight, budget, limits: BUDGET, initialHealth, productionBefore });
   docker(['network', 'create', '--internal', '--label', `hrm.capacity.run=${runId}`, network]);
   hasNetwork = true;
@@ -164,7 +166,7 @@ try {
   docker(['create', '--name', names[4], '--network', frontendNetwork, '--label', `hrm.capacity.run=${runId}`,
     '--memory', `${BUDGET.proxyMiB}m`, '--memory-swap', `${BUDGET.proxyMiB}m`, '--cpus', '0.25', '-p', '127.0.0.1::80',
     '--mount', `type=bind,source=${scripts},target=/capacity,readonly`, '--entrypoint', 'nginx',
-    'kayford-deploy-web:9fc27b2aa035f5b01394c459de42d27bf8c8a83d', '-c', '/capacity/nginx.conf', '-g', 'daemon off;']);
+    webImage, '-c', '/capacity/nginx.conf', '-g', 'daemon off;']);
   docker(['network', 'connect', network, names[4]]);
   docker(['start', names[4]]);
   for (const name of names) owned(name);
@@ -192,7 +194,7 @@ try {
   for await (const raw of input) {
     const command = raw.trim();
     if (command === 'quit') break;
-    if (['browser', 'audit', 'baseline', 'daily-10', 'daily-30', 'daily-100', 'login-burst', 'submit-burst'].includes(command)) await execute(command);
+    if (['browser', 'audit', 'baseline', 'daily-10', 'daily-30', 'daily-100', 'refresh-10', 'refresh-100', 'login-burst', 'submit-burst'].includes(command)) await execute(command);
     else console.log('UNKNOWN_COMMAND');
     if (stopped) break;
     console.log('AWAIT_COMMAND');

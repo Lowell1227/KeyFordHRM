@@ -33,6 +33,22 @@ quit
 ```
 
 The browser handoff and final submission consume synthetic workflow state.
+For the Web responsiveness regression, set `CAPACITY_WEB_IMAGE` to the fixed
+candidate `kayford-deploy-web:<40-hex-commit>` before startup. `refresh-10` (one
+minute) and `refresh-100` (two minutes) prepare authenticated sessions sequentially,
+then add a validated goal-list read every ten seconds to the existing read/save
+mix. They retain normal per-route latency gates. These profiles do not prove cold
+simultaneous login has improved. Safe summaries exclude the preparation sessions.
+
+After the base fixture, run `responsiveness-fixture.cjs` inside only the owned API
+container and merge its `responsiveness` property into the private manifest in
+memory. `responsiveness-probe.cjs` then uses real PC/mobile UI writes for employee
+confirmation and HR calibration, checks the pre-opened receiving list without
+manual reload, and checks protected input, selection, rejection notes and failed
+reads. Its `--self-test` is offline, not browser acceptance. Native visibility is
+reported separately, and the four extra employees/tasks and three cycles belong
+only to that temporary database. Never run the fixture against preview or prod.
+
 Do not repeat them on the same fixture or overwrite prior evidence. `daily-*`
 includes simultaneous initial logins, not a purely preauthenticated steady state.
 Check each scenario's business counters and individual route latency, not only

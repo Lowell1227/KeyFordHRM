@@ -7,6 +7,7 @@ import { tasksApi } from '@/api/tasks.api';
 import { improvementPlansApi } from '@/api/improvement-plans.api';
 import { goalChangesApi, type GoalChangeRow } from '@/api/goal-changes.api';
 import { useAuthStore } from '@/stores/auth.store';
+import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import { getEmployeeTaskStageState, isTerminalTaskStatus, resolveEmployeeTaskEntry } from '@/views/task/task-stage';
 import type { AssessmentCycle, TaskListItem, ImprovementPlan } from '@/types/api.types';
 import type { TeamTaskStage } from '@/types/enums';
@@ -20,7 +21,7 @@ const improvementPending = ref<ImprovementPlan[]>([]);
 const improvementError = ref(false);
 const goalChangePending = ref<GoalChangeRow[]>([]);
 const goalChangeError = ref(false);
-const goalReviewTotal = ref(0);
+const goalReviewTotal = ref<number | null>(null);
 const goalReviewError = ref(false);
 const loading = ref(false);
 const personalError = ref(false);
@@ -79,45 +80,57 @@ watch(plans, (availablePlans) => {
   }
 });
 
-async function loadPersonalTasks(requestId: number) {
+function isForbidden(error: unknown) {
+  return [401, 403].includes((error as { response?: { status?: number } })?.response?.status ?? 0);
+}
+async function loadPersonalTasks(requestId: number, canApply: () => boolean) {
   try {
     const items: TaskListItem[] = [];
     let page = 1;
     while (requestId === requestSerial) {
       const response = await tasksApi.findMine({ page, pageSize: 100 });
-      if (requestId !== requestSerial) return;
+      if (!canApply()) return;
       items.push(...response.items);
       if (!response.items.length || items.length >= response.total) break;
       page += 1;
     }
-    personalTasks.value = [...new Map(items.map((task) => [task.id, task])).values()];
-  } catch {
-    if (requestId === requestSerial) personalError.value = true;
+    if (canApply()) { personalTasks.value = [...new Map(items.map((task) => [task.id, task])).values()]; personalError.value = false; }
+  } catch (error) {
+    if (requestId !== requestSerial) return;
+    if (isForbidden(error)) personalTasks.value = [];
+    if (canApply() || isForbidden(error)) personalError.value = true;
   }
 }
 
-async function loadCycles(requestId: number) {
+async function loadCycles(requestId: number, canApply: () => boolean) {
   try {
     const response = await cyclesApi.findMine();
-    if (requestId === requestSerial) cycles.value = response;
-  } catch {
-    if (requestId === requestSerial) cyclesError.value = true;
+    if (canApply()) { cycles.value = response; cyclesError.value = false; }
+  } catch (error) {
+    if (requestId !== requestSerial) return;
+    if (isForbidden(error)) { cycles.value = []; teamCounts.value = {}; }
+    if (canApply() || isForbidden(error)) cyclesError.value = true;
   }
 }
 
-async function loadTeamCount(requestId: number, cycleId: string, stage: TeamTaskStage) {
+async function loadTeamCount(requestId: number, cycleId: string, stage: TeamTaskStage, canApply: () => boolean) {
   try {
     const response = await tasksApi.findTeam({ page: 1, pageSize: 1, cycleId, stage });
-    if (requestId !== requestSerial) return;
+    if (!canApply() || !teamCounts.value[cycleId]) return;
     teamCounts.value[cycleId]![stage] = { pending: response.counts.pending, all: response.counts.all, loading: false, error: false };
-  } catch {
-    if (requestId !== requestSerial) return;
+  } catch (error) {
+    if (requestId !== requestSerial || (!canApply() && !isForbidden(error)) || !teamCounts.value[cycleId]) return;
     teamCounts.value[cycleId]![stage] = { pending: null, all: 0, loading: false, error: true };
   }
 }
 
 async function loadEntries() {
+  return fetchEntries(false);
+}
+async function fetchEntries(background: boolean, canApply = () => true) {
   const requestId = ++requestSerial;
+  const current = () => requestId === requestSerial && Boolean(auth.user) && canApply();
+  if (!background) {
   selectedPlanId.value = '';
   cycles.value = [];
   personalTasks.value = [];
@@ -129,31 +142,42 @@ async function loadEntries() {
   personalError.value = false;
   cyclesError.value = false;
   loading.value = Boolean(auth.user);
+  goalReviewTotal.value = null; goalReviewError.value = false;
+  }
   if (!auth.user) return;
-  goalReviewTotal.value = 0; goalReviewError.value = false;
-  await Promise.all([goalPlansApi.findAll({scope:'review',page:1,pageSize:1}).then(result => {if(requestId === requestSerial) goalReviewTotal.value=result.total;}).catch(() => {if(requestId === requestSerial)goalReviewError.value=true;}), loadPersonalTasks(requestId), loadCycles(requestId),
+  await Promise.all([goalPlansApi.findAll({scope:'review',page:1,pageSize:1}).then(result => {
+    if (current()) { goalReviewTotal.value = result.total; goalReviewError.value = false; }
+  }).catch(error => {
+    if (requestId === requestSerial && (current() || isForbidden(error))) { goalReviewTotal.value = null; goalReviewError.value = true; }
+  }), loadPersonalTasks(requestId, current), loadCycles(requestId, current),
     improvementPlansApi.myPending().then((items) => {
-      if (requestId === requestSerial) improvementPending.value = items;
-    }).catch(() => { if (requestId === requestSerial) improvementError.value = true; }),
+      if (current()) { improvementPending.value = items; improvementError.value = false; }
+    }).catch(error => {
+      if (requestId !== requestSerial) return;
+      if (isForbidden(error)) improvementPending.value = [];
+      if (current() || isForbidden(error)) improvementError.value = true;
+    }),
     goalChangesApi.myPending().then((items) => {
-      if (requestId === requestSerial) goalChangePending.value = items;
-    }).catch(() => { if (requestId === requestSerial) goalChangeError.value = true; }),
+      if (current()) { goalChangePending.value = items; goalChangeError.value = false; }
+    }).catch(error => {
+      if (requestId !== requestSerial) return;
+      if (isForbidden(error)) goalChangePending.value = [];
+      if (current() || isForbidden(error)) goalChangeError.value = true;
+    }),
   ]);
-  if (requestId !== requestSerial) return;
+  if (!current()) { if (!background && requestId === requestSerial) loading.value = false; return; }
   if (auth.isManager) {
     const candidates = candidatePlans.value;
     for (const plan of candidates) {
-      teamCounts.value[plan.id] = {
+      teamCounts.value[plan.id] ??= {
         'goal-review': { pending: null, all: 0, loading: true, error: false },
         'manager-eval': { pending: null, all: 0, loading: true, error: false },
       };
     }
     // Each response belongs to a plan; selecting another plan cannot replace its counts.
-    for (const plan of candidates) {
-      for (const stage of stages) void loadTeamCount(requestId, plan.id, stage.key);
-    }
+    await Promise.all(candidates.flatMap(plan => stages.map(stage => loadTeamCount(requestId, plan.id, stage.key, current))));
   }
-  loading.value = false;
+  if (!background && requestId === requestSerial) loading.value = false;
 }
 
 function openPersonalTask(task: TaskListItem) {
@@ -190,7 +214,9 @@ function goalChangeAction(item: GoalChangeRow): string {
   return '审核目标变更';
 }
 
-watch(() => [auth.user?.id, auth.user?.sysRole, auth.isManager], () => void loadEntries(), { immediate: true });
+watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities), auth.isManager], () => void loadEntries(), { immediate: true });
+useVisibleRefresh({ intervalMs: 0, enabled: () => Boolean(auth.user), blocked: () => loading.value,
+  refresh: guard => fetchEntries(true, guard) });
 onUnmounted(() => { requestSerial += 1; });
 </script>
 
@@ -211,7 +237,7 @@ onUnmounted(() => { requestSerial += 1; });
     </header>
     <div class="goal-entry-links">
       <el-button @click="router.push('/tasks?goalView=mine')">我的目标计划</el-button>
-      <el-button @click="router.push('/tasks?goalView=review')">待我审核目标（{{goalReviewTotal}}）</el-button>
+      <el-button @click="router.push('/tasks?goalView=review')">待我审核目标（{{goalReviewTotal ?? '待更新'}}）</el-button>
       <el-button v-if="canMonitorGoals(auth.user)" @click="router.push('/tasks?goalView=monitor')">目标计划进度</el-button>
       <span v-if="goalReviewError" class="task-note">目标审核待办暂时无法加载，请进入列表重试。</span>
     </div>

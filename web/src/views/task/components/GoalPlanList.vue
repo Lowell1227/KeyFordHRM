@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   GOAL_STEP_LABELS,
@@ -9,7 +9,11 @@ import {
 } from '@/api/goal-plans.api';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
+import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
+import { useAuthStore } from '@/stores/auth.store';
 const props = defineProps<{ scope: GoalScope; allowed: boolean }>();
+const emit = defineEmits<{ refreshed: [total: number | null] }>();
+const auth = useAuthStore();
 const router = useRouter(),
   route = useRoute();
 const items = ref<GoalPlanItem[]>([]),
@@ -26,6 +30,9 @@ const options = ref<{
   departments: { id: string; name: string }[];
 }>({ cycles: [], departments: [] });
 let request = 0;
+const accessDenied = ref(false), appliedQuery = ref('');
+const queryKey = () => JSON.stringify([props.scope, cycleId.value, deptId.value, employeeName.value, page.value]);
+const refreshBlocked = () => loading.value || queryKey() !== appliedQuery.value;
 const title = computed(
   () =>
     ({ mine: '我的计划', review: '待我审核', monitor: '计划进度' })[
@@ -33,43 +40,62 @@ const title = computed(
     ],
 );
 async function load() {
+  accessDenied.value = false;
+  return fetchPlans(false);
+}
+async function fetchPlans(background: boolean, canApply = () => true) {
+  if (background && (refreshBlocked() || accessDenied.value)) return;
   const serial = ++request;
-  error.value = '';
-  items.value = [];
   if (!props.allowed) return;
-  await router.replace({
-    path: '/tasks',
-    query: {
-      ...route.query,
-      cycleId: cycleId.value || undefined,
-      deptId: deptId.value || undefined,
-      employeeName: employeeName.value || undefined,
-      page: page.value > 1 ? String(page.value) : undefined,
-    },
-  });
-  loading.value = true;
+  const key = queryKey(), scope = props.scope;
+  const unfiltered = !cycleId.value && !deptId.value && !employeeName.value;
+  if (!background) { loading.value = true; error.value = ''; appliedQuery.value = key; }
+  const current = () => serial === request && props.allowed && key === queryKey()
+    && (!background || (canApply() && !refreshBlocked()));
   try {
+    if (!background) await router.replace({
+      path: '/tasks',
+      query: { ...route.query, cycleId: cycleId.value || undefined, deptId: deptId.value || undefined,
+        employeeName: employeeName.value || undefined, page: page.value > 1 ? String(page.value) : undefined },
+    });
+    if (serial !== request || !props.allowed) return;
     const result = await goalPlansApi.findAll({
-      scope: props.scope,
+      scope,
       cycleId: cycleId.value || undefined,
       deptId: deptId.value || undefined,
       employeeName: employeeName.value || undefined,
       page: page.value,
       pageSize: 20,
     });
-    if (serial === request) {
+    if (current()) {
       items.value = result.items;
       total.value = result.total;
+      error.value = '';
+      if (scope === 'review' && unfiltered) emit('refreshed', result.total);
     }
-  } catch {
-    if (serial === request) error.value = '目标计划加载失败，请重试';
+  } catch (cause) {
+    if (serial !== request || !props.allowed) return;
+    const status = (cause as { response?: { status?: number } })?.response?.status;
+    if (status === 401 || status === 403) {
+      accessDenied.value = true; items.value = []; total.value = 0; options.value = { cycles: [], departments: [] };
+      error.value = '当前无权读取目标计划，请重新登录或联系管理员';
+    } else if (current()) {
+      if (!background) items.value = [];
+      error.value = '目标计划更新失败，请重试';
+    } else return;
+    if (scope === 'review' && (unfiltered || accessDenied.value)) emit('refreshed', null);
   } finally {
-    if (serial === request) loading.value = false;
+    if (!background && serial === request) loading.value = false;
   }
 }
+useVisibleRefresh({ enabled: () => props.allowed && !accessDenied.value,
+  blocked: refreshBlocked, refresh: guard => fetchPlans(true, guard) });
+onUnmounted(() => { request++; });
 watch(
-  () => props.scope,
+  () => [props.scope, props.allowed, auth.user],
   async () => {
+    const serial = ++request;
+    items.value = []; total.value = 0; loading.value = false; accessDenied.value = false;
     page.value = Math.max(1, Number(route.query.page) || 1);
     cycleId.value =
       typeof route.query.cycleId === 'string' ? route.query.cycleId : '';
@@ -83,11 +109,15 @@ watch(
     options.value = { cycles: [], departments: [] };
     if (props.allowed) {
       try {
-        options.value = await goalPlansApi.options(props.scope);
+        const result = await goalPlansApi.options(props.scope);
+        if (serial !== request) return;
+        options.value = result;
       } catch {
+        if (serial !== request) return;
         optionsError.value = '筛选选项加载失败，请刷新页面重试';
       }
     }
+    if (serial !== request || !props.allowed) return;
     await load();
   },
   { immediate: true },
@@ -159,7 +189,8 @@ function search() {
         title="无权查看全员目标计划"
         type="warning"
         :closable="false"
-      /><el-alert v-if="error" :title="error" type="error" :closable="false"
+      /><el-alert v-if="optionsError" :title="optionsError" type="warning" :closable="false" />
+      <el-alert v-if="error" :title="error" type="error" :closable="false"
         ><el-button @click="load">重试</el-button></el-alert
       ></template
     >

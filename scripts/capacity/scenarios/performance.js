@@ -54,6 +54,7 @@ export function profileOptions(profile) {
   const daily = {
     baseline: [1, '1m'], 'daily-10': [10, '2m'],
     'daily-30': [30, '3m'], 'daily-100': [100, '5m'],
+    'refresh-10': [10, '1m'], 'refresh-100': [100, '2m'],
   };
   const burst = profile === 'login-burst' || profile === 'submit-burst' || profile === 'auth-only-burst';
   if (!burst && !Object.prototype.hasOwnProperty.call(daily, profile)) {
@@ -67,6 +68,7 @@ export function profileOptions(profile) {
     loginMs: burst ? ['p(95)<=5000', 'max<=10000'] : ['p(95)<=2000', 'p(99)<=4000'],
     readMs: burst ? ['p(95)<=5000', 'max<=10000'] : ['p(95)<=1000', 'p(99)<=2000'],
   };
+  if (profile.startsWith('refresh-')) thresholds.goalRefreshSuccess = [`count>=${vus * 5}`];
   const routeMetrics = profile === 'submit-burst' ? ['readTaskDetailMs']
     : profile === 'auth-only-burst' ? ['readAuthMeMs']
       : ['readAuthMeMs', 'readMyTasksMs', 'readMyCyclesMs', 'readMyGoalsMs', 'readTaskDetailMs'];
@@ -194,6 +196,8 @@ const semanticFailure = new Counter('semanticFailure');
 const loginSuccess = new Counter('loginSuccess');
 const submitSuccess = new Counter('submitSuccess');
 const draftSaveSuccess = new Counter('draftSaveSuccess');
+const goalRefreshSuccess = new Counter('goalRefreshSuccess');
+let nextGoalRefresh = 0;
 const tags = { runId: manifest.runId, profile, role: 'employee' };
 const trends = { login: loginMs, read: readMs, write: writeMs };
 http.setResponseCallback(http.expectedStatuses(200));
@@ -269,10 +273,11 @@ function write(action, participant) {
 }
 
 export function setup() {
-  if (profile !== 'submit-burst') return null;
+  if (profile !== 'submit-burst' && !profile.startsWith('refresh-')) return null;
   const sessions = [];
   semanticFailure.add(0, tags);
-  for (const participant of manifest.participants.slice(0, 100)) {
+  const count = profile === 'refresh-10' ? 10 : 100;
+  for (const participant of manifest.participants.slice(0, count)) {
     const response = http.post(`${manifest.baseURL}/api/v1/auth/login`, JSON.stringify({ employeeNo: participant.employeeNo, password: participant.password }), {
       headers: { 'Content-Type': 'application/json' }, tags: { ...tags, name: '/api/v1/auth/login', phase: 'prepare-submit-burst' }, timeout: '10s', redirects: 0,
     });
@@ -297,7 +302,7 @@ export default function (prepared) {
   semanticFailure.add(0, tags);
   try {
     if (profile === 'login-burst') sleep(__VU / 10);
-    if (profile === 'submit-burst') {
+    if (profile === 'submit-burst' || profile.startsWith('refresh-')) {
       if (!prepared?.sessions?.[__VU - 1]) reject();
       token = prepared.sessions[__VU - 1].token;
       userId = prepared.sessions[__VU - 1].userId;
@@ -313,6 +318,12 @@ export default function (prepared) {
       const operation = dailyOperation(__ITER);
       if (operation === 'save') write('save', participant);
       else read(operation, participant);
+      if (profile.startsWith('refresh-')) {
+        if (nextGoalRefresh === 0) nextGoalRefresh = Date.now() + (__VU % 10) * 1000;
+        if (Date.now() >= nextGoalRefresh) {
+          read('goals', participant); goalRefreshSuccess.add(1, tags); nextGoalRefresh = Date.now() + 10000;
+        }
+      }
     }
   } finally {
     if (!burst) sleep(3);
