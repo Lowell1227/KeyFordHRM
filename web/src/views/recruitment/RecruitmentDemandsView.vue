@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Plus, Refresh } from '@element-plus/icons-vue';
@@ -404,6 +405,7 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
       <el-alert v-if="!canRead" title="当前无招聘查看权限" type="error" :closable="false" />
       <el-alert v-if="connection && !connection.configured" title="钉钉招聘需求接入未就绪" type="warning" :closable="false">
         <p>系统创建的需求可正常办理。钉钉接入缺项：{{ connection.missing.join('、') || '接入配置待核实' }}，请由应用维护人员核对；不能据空列表判断没有钉钉需求。</p>
+        <ConfigurationLink setting="recruitment-demand" />
       </el-alert>
       <el-alert v-if="statusError" :title="statusError" type="error" :closable="false"><el-button link type="primary" @click="loadConnection">重试接入检查</el-button></el-alert>
       <el-alert v-if="loadError" :title="loadError" type="error" :closable="false"><el-button link type="primary" @click="loadList">重试列表</el-button></el-alert>

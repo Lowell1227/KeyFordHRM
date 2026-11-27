@@ -1,0 +1,46 @@
+export const configurationTargets = {
+  'ai-progress-kimi': { name: 'Kimi', owner: '系统管理员', path: '/system/ai-services', query: { provider: 'kimi' },
+    guidance: '在 AI 服务配置中填写模型和 API Key，保存后测试连接，再按需启用目标进展识别。' },
+  'ai-progress-deepseek': { name: 'DeepSeek', owner: '系统管理员', path: '/system/ai-services', query: { provider: 'deepseek' },
+    guidance: '在 AI 服务配置中保存 DeepSeek 凭据并测试连接。目标进展识别使用当前启用的服务商。' },
+  'ai-progress-qwen': { name: '千问', owner: '系统管理员', path: '/system/ai-services', query: { provider: 'qwen' },
+    guidance: '在 AI 服务配置中填写模型、区域和 API Key，再测试当前配置。' },
+  'ai-resume': { name: '简历解析', owner: '系统管理员与部署管理员', path: '/system/ai-services', query: { provider: 'deepseek', feature: 'resume' },
+    guidance: '简历解析使用 DeepSeek 的已验证配置。请系统管理员保存并测试凭据，由部署管理员核对简历解析开关。核对期间仍可手工填写。' },
+  'dingtalk-login': { name: '钉钉登录与身份绑定', owner: '部署管理员', path: null,
+    guidance: '请部署管理员核对 HRM 企业应用的 AppKey、AppSecret 和企业 ID，并用获准账号验证登录。' },
+  'dingtalk-notifications': { name: '钉钉工作通知', owner: 'HR 管理员与部署管理员', path: '/cycles', query: { configuration: 'dingtalk-notifications' },
+    guidance: '请核对钉钉应用凭据、Agent ID 和部署开关。平台就绪后，在绩效周期管理核对钉钉通知总开关。' },
+  'dingtalk-calendar': { name: '钉钉面试日程', owner: '部署管理员', path: null,
+    guidance: '请核对钉钉应用权限、面试组织者绑定及日程开关。面试安排可留在 HRM，经办可人工联系候选人。' },
+  'recruitment-demand': { name: '钉钉招聘需求', owner: '部署管理员', path: null,
+    guidance: '请核对获准读取的招聘需求审批表单、部门／岗位／人数控件和读取范围。系统内创建的招聘需求可继续办理。' },
+  'recruitment-mail': { name: '招聘邮箱', owner: '部署管理员', path: null,
+    guidance: '请核对专用邮箱、获准文件夹、读取起始时间和加密凭据配置，再验证只读连接。经办可继续手工收件。' },
+  'payroll-attendance': { name: '钉钉考勤取数', owner: '部署管理员与薪酬经办', path: null,
+    guidance: '请核对钉钉应用的考勤读取权限、企业范围及同步开关。假勤类别和计薪换算由该发薪主体经办在工资资料维护。' },
+  'payroll-access': { name: '薪酬启用与授权', owner: '系统管理员', path: '/system/payroll-grants',
+    guidance: '请核对正式薪酬开关及各发薪主体的人员授权。系统管理菜单权限本身不授予工资数据访问。' },
+  'payroll-rules': { name: '发薪主体工资规则', owner: '该发薪主体的薪酬经办', path: '/payroll/standards', query: { tab: 'rules' },
+    guidance: '请经办选择当前发薪主体和月份，完善工资规则与来源资料并按原流程提交审核。' },
+  'payroll-standards': { name: '员工工资资料', owner: '该发薪主体的薪酬经办', path: '/payroll/standards',
+    guidance: '请核对当前主体和月份的工资标准、生效日期及任职信息，并提交原审批流程。' },
+  'payroll-deductions': { name: '扣缴资料', owner: '该发薪主体的薪酬经办', path: '/payroll/deductions',
+    guidance: '请核对当前主体和月份的社保、公积金及个税所需资料，并沿用原有资料审核。' },
+  'payroll-attendance-close': { name: '考勤核对与封账', owner: '该发薪主体的考勤经办', path: '/payroll/attendance',
+    guidance: '请选择当前发薪主体和归属月，核对考勤异常并办理封账。' },
+  'organization-roles': { name: '组织负责人和审批关系', owner: '组织资料管理员', path: '/organization',
+    guidance: '请核对对应组织的负责人和审批人。已发起流程的历史责任快照以原记录为准。' },
+  'personnel-manager': { name: '员工直属主管', owner: '员工档案维护人员', path: '/users',
+    guidance: '请核对该员工生效任职中的直属主管。已启动绩效周期的评价关系仍以周期快照为准。' },
+  'improvement-reviewer': { name: '改进计划 HR 确认人', owner: '系统管理员', path: '/users',
+    guidance: '请核对是否有在职且拥有改进计划确认权限的 HR。普通 HR 需同时具备绩效周期方案编辑和绩效发布权限。' },
+  'performance-reviewer': { name: '绩效任务的审核人', owner: '绩效周期管理员', path: null,
+    guidance: '请核对当前任务的周期及已冻结审核关系。启动前可维护员工直属主管和周期参与范围。已启动的任务需要核对原有交接或处理路径。' },
+} satisfies Record<string, { name: string; owner: string; path: string | null; query?: Record<string, string>; guidance: string }>;
+
+export type ConfigurationTarget = keyof typeof configurationTargets;
+
+export function isConfigurationTarget(value: unknown): value is ConfigurationTarget {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(configurationTargets, value);
+}

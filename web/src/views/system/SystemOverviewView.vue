@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { cyclesApi } from '@/api/cycles.api';
+import ConfigurationStatusPanel from './ConfigurationStatusPanel.vue';
 
 const productVersion = '0.9.3';
 
@@ -161,7 +162,10 @@ const capabilities: CapabilityItem[] = [
       <span class="read-only-tag">版本 {{ productVersion }}</span>
     </header>
 
-    <section class="capability-panel" aria-label="系统能力状态">
+    <ConfigurationStatusPanel />
+    <details class="capability-details">
+      <summary>能力清单</summary>
+      <section class="capability-panel" aria-label="系统能力状态">
       <div class="panel-heading">
         <h2>能力清单</h2>
         <span>共 {{ capabilities.length }} 项</span>
@@ -205,7 +209,8 @@ const capabilities: CapabilityItem[] = [
           </div>
         </article>
       </div>
-    </section>
+      </section>
+    </details>
   </main>
 </template>
 
@@ -260,6 +265,8 @@ h2 {
 .capability-panel {
   margin-top: 16px;
 }
+
+.capability-details summary { color: var(--el-text-color-regular); font-size: 14px; cursor: pointer; }
 
 .panel-heading {
   padding-bottom: 12px;

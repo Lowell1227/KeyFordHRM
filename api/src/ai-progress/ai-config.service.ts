@@ -141,7 +141,7 @@ export class AiConfigService {
         where: { provider, configVersion: row.configVersion },
         data: {
           testedVersion: errorCode ? null : row.configVersion,
-          testedAt: errorCode ? null : new Date(),
+          testedAt: new Date(),
         },
       });
       if (!changed.count) errorCode = 'config_changed';

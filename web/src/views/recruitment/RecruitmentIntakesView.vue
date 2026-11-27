@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
@@ -15,6 +16,7 @@ import { useTalentPermissions } from '@/views/talent/useTalentPermissions';
 import { useRecruitmentLeaveGuard } from '@/views/talent/useRecruitmentLeaveGuard';
 import { useRecruitmentIntake } from './useRecruitmentIntake';
 import { recruitmentIntakesApi } from '@/api/recruitment-intakes.api';
+import { talentResumeApi } from '@/api/talent-resume.api';
 import { recruitmentPostingsApi } from '@/api/recruitment-postings.api';
 import { recruitmentDemandsApi } from '@/api/recruitment-demands.api';
 import { talentRecruitmentApi } from '@/api/talent-recruitment.api';
@@ -32,7 +34,8 @@ function routeState(): IntakeState | '' { const value = route.query.state; retur
 function routeWorkQueue(): 'review' | 'assignment' | '' { return route.query.workQueue === 'review' || route.query.workQueue === 'assignment' ? route.query.workQueue : ''; }
 const filters = reactive({ state: routeState(), workQueue: routeWorkQueue(), keyword: '', ownerId: typeof route.query.ownerId === 'string' ? route.query.ownerId : '', sourceChannel: '' });
 const workQueueLabel = computed(() => filters.workQueue === 'assignment' ? '待归岗位' : filters.workQueue === 'review' ? '待核对简历' : '');
-const mailboxConfigured = ref(false), mailboxError = ref(''), syncing = ref(false), mailMessage = ref('');
+const mailboxConfigured = ref<boolean | null>(null), mailboxError = ref(''), syncing = ref(false), mailMessage = ref('');
+const resumeConfigurationMissing = ref(false);
 const owners = ref<TalentRecruitmentOwner[]>([]), postings = ref<RecruitmentPosting[]>([]), demands = ref<RecruitmentDemandView[]>([]);
 const directories = ref<RecruitmentDemandDirectories>({ departments: [], positions: [] });
 let listEpoch = 0, refsEpoch = 0;
@@ -152,8 +155,10 @@ async function closeDrawer(done?: () => void) {
 }
 async function readMailboxStatus() {
   mailboxError.value = '';
-  try { const status = await recruitmentIntakesApi.mailStatus(); if (canEdit.value) mailboxConfigured.value = status.configured; }
-  catch (cause) { if (canEdit.value) { mailboxConfigured.value = false; mailboxError.value = intakeError(cause); } }
+  const actorId = auth.user?.id;
+  mailboxConfigured.value = null;
+  try { const status = await recruitmentIntakesApi.mailStatus(); if (canEdit.value && auth.user?.id === actorId) mailboxConfigured.value = status.configured; }
+  catch (cause) { if (canEdit.value && auth.user?.id === actorId) mailboxError.value = intakeError(cause); }
 }
 async function syncMailbox() {
   if (!canEdit.value || !mailboxConfigured.value || syncing.value) return;
@@ -186,9 +191,21 @@ async function associate() {
   if (!row) { awaitingError.value = '请选择原待收简历记录'; return; }
   associating.value = true; try { await review.associate(row); } finally { associating.value = false; }
 }
+watch([() => current.value?.parseStatus, () => current.value?.id, opened, canEdit], async ([status, , drawerOpen, editable], _, onCleanup) => {
+  resumeConfigurationMissing.value = false;
+  if (!drawerOpen || !editable || status !== 'failed') return;
+  let currentCheck = true;
+  onCleanup(() => { currentCheck = false; });
+  try {
+    const result = await talentResumeApi.status();
+    if (currentCheck) resumeConfigurationMissing.value = result.enabled === false || result.configured === false;
+  } catch {
+    // Preserve the original parsing error when the status is unavailable.
+  }
+});
 watch([canEdit, () => auth.user?.id], () => {
   ++listEpoch; ++refsEpoch; ++selectionEpoch; ++ownerQuery; ++postingQuery; ++demandQuery; ++awaitingQuery; rows.value = []; total.value = 0; owners.value = []; postings.value = []; demands.value = []; awaitingRows.value = [];
-  page.value = 1; mailboxConfigured.value = false;
+  page.value = 1; mailboxConfigured.value = null;
   if (canEdit.value) { void loadList(); void references(); void readMailboxStatus(); }
 }, { immediate: true });
 watch(() => route.query, () => { ++selectionEpoch; filters.state = routeState(); filters.workQueue = routeWorkQueue(); filters.ownerId = typeof route.query.ownerId === 'string' ? route.query.ownerId : ''; page.value = 1; if (canEdit.value) void loadList(); });
@@ -214,7 +231,9 @@ onBeforeUnmount(() => { ++listEpoch; ++refsEpoch; ++selectionEpoch; });
     </el-form><el-tag v-if="workQueueLabel" closable aria-label="工作台收件筛选" @close="clearWorkQueue">{{ workQueueLabel }}{{ filters.ownerId === auth.user?.id ? ' · 由我经办' : '' }}</el-tag></QueryFilterPanel></template>
     <template #feedback>
       <el-alert v-if="!canEdit" title="简历收件仅供招聘经办办理" type="error" :closable="false" />
-      <el-alert v-else-if="!mailboxConfigured" title="招聘邮箱未配置，手工收件可继续办理。" type="info" :closable="false" />
+      <el-alert v-else-if="mailboxConfigured === false" title="招聘邮箱未配置，手工收件可继续办理。" type="info" :closable="false">
+        <ConfigurationLink setting="recruitment-mail" />
+      </el-alert>
       <el-alert v-if="mailboxError" :title="mailboxError" type="warning" :closable="false"><el-button link @click="readMailboxStatus">重试邮箱检查</el-button></el-alert>
       <el-alert v-if="mailMessage" :title="mailMessage" type="info" :closable="false" />
       <el-alert v-if="listError" :title="listError" type="error" :closable="false"><el-button link @click="loadList">重试列表</el-button></el-alert>
@@ -250,6 +269,7 @@ onBeforeUnmount(() => { ++listEpoch; ++refsEpoch; ++selectionEpoch; });
       <section v-if="current" aria-label="原简历资料"><h3>原简历资料</h3><ul class="files"><li v-for="file in current.files" :key="file.id"><span>{{ file.fileName }}</span><el-button :icon="Download" link :disabled="fileBusy || !canEdit" @click="download(file.id, file.fileName)">下载</el-button></li></ul><el-alert v-if="fileError" :title="fileError" type="error" :closable="false" />
         <label v-if="editable" class="file-control"><span>补传简历</span><input type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" :disabled="busy || blocked || unknown || current.parseStatus === 'processing'" aria-label="上传简历" @change="selectedFile" /></label>
         <div class="inline-actions"><span>{{ INTAKE_PARSE_LABELS[current.parseStatus] || current.parseStatus }}</span><el-select :fit-input-width="true" v-if="current.files.length > 1" v-model="uploadedFileId" clearable aria-label="选择解析附件"><el-option v-for="file in current.files" :key="file.id" :value="file.id" :label="file.fileName" /></el-select><el-button v-if="editable" :disabled="busy || blocked || unknown || current.parseStatus === 'processing' || (!current.files.length && !current.mail?.bodyText && !current.associatedFromIds.length)" @click="review.parse(uploadedFileId || undefined)">{{ current.parseStatus === 'failed' ? '重试解析' : '解析简历' }}</el-button><el-button v-if="current.parseStatus === 'processing'" link @click="review.refresh">刷新解析状态</el-button></div>
+        <el-alert v-if="resumeConfigurationMissing" title="简历解析未启用或凭据未就绪" type="info" :closable="false"><ConfigurationLink setting="ai-resume" /></el-alert>
         <el-alert v-if="current.parseMessage" :title="current.parseMessage" type="warning" :closable="false" />
         <el-collapse v-if="suggestions.length"><el-collapse-item title="解析建议（逐项核对）" name="suggestions"><el-checkbox-group v-model="chosenSuggestions" :disabled="busy || terminal || unknown || blocked"><label v-for="[field, value] in suggestions" :key="field" class="suggestion"><el-checkbox :value="field">{{ INTAKE_FIELD_LABELS[field] }}</el-checkbox><span>{{ value }}</span></label></el-checkbox-group><p v-for="(item, index) in current.parseResult?.reviewItems" :key="index" class="muted">{{ INTAKE_FIELD_LABELS[item.field] || item.field }}：{{ item.reason }}</p><el-button :disabled="!chosenSuggestions.length || terminal || unknown || blocked" @click="review.applySuggestions">采用选中的建议</el-button></el-collapse-item></el-collapse>
       </section>

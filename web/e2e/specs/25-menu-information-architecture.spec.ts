@@ -123,13 +123,14 @@ test.describe('25-menu-information-architecture system capability overview', () 
       await expect(page.getByTestId('app-route-title')).toHaveText('系统管理');
       await expect(page.getByRole('heading', { name: '系统概览', exact: true })).toBeVisible();
       await expect(page.getByRole('heading', { name: '系统能力总览', exact: true })).toHaveCount(0);
-      const overview = page.getByTestId('system-overview');
+      await page.getByTestId('system-overview').locator('summary').click();
+      const overview = page.getByRole('region', { name: '系统能力状态' });
       const requiredCapabilities = [
         '账户与系统角色', '数据权限', '钉钉登录与身份绑定',
         'OA 审批读取与事件订阅', '考勤结果读取', '站内通知',
         '钉钉工作通知', '钉钉待办', '钉钉面试日程', '钉钉日志读取',
         '审计与留痕', '人事基础资料', '系统监控', '人才库与招聘流转',
-        '招聘编制、职位发布与 Offer', '薪酬指定 HR 主管权限',
+        '招聘编制、职位发布与 Offer', '薪酬核算与独立权限',
       ];
       for (const name of requiredCapabilities) {
         await expect(overview.getByText(name, { exact: true })).toHaveCount(1);
@@ -141,7 +142,7 @@ test.describe('25-menu-information-architecture system capability overview', () 
         ['人事基础资料', '部分可用'],
         ['人才库与招聘流转', '可用'],
         ['招聘编制、职位发布与 Offer', '已暂缓'],
-        ['薪酬指定 HR 主管权限', '已暂缓'],
+        ['薪酬核算与独立权限', '隔离预览'],
       ]) {
         await expect(overview.getByTestId('system-capability-status').filter({
           has: page.getByText(name, { exact: true }),

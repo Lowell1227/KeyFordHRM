@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import { canMonitorGoals } from '@/api/goal-plans.api';
@@ -536,6 +537,7 @@ watch(() => props.cycle?.id, () => {
                 <template #default="{ row }">
                   <div class="cycle-relation-cell">
                     <strong>{{ row.managerName || '未配置' }}</strong>
+                    <ConfigurationLink v-if="isPrelaunch && !row.managerName" setting="personnel-manager" :employee-id="row.employeeId" />
                     <span v-if="isPrelaunch">{{ managerSourceLabel(row as V2PreflightParticipant) }}</span>
                   </div>
                 </template>
@@ -544,6 +546,7 @@ watch(() => props.cycle?.id, () => {
                 <template #default="{ row }">
                   <div class="cycle-relation-cell">
                     <strong>{{ row.deptHeadName || '未配置' }}</strong>
+                    <ConfigurationLink v-if="isPrelaunch && !row.deptHeadName" setting="organization-roles" />
                     <span v-if="isPrelaunch">{{ deptHeadSourceLabel(row as V2PreflightParticipant) }}</span>
                   </div>
                 </template>
@@ -555,6 +558,7 @@ watch(() => props.cycle?.id, () => {
                 <template #default="{ row }">
                   <div class="cycle-relation-cell">
                     <strong>{{ row.approverName || '未配置' }}</strong>
+                    <ConfigurationLink v-if="isPrelaunch && !row.approverName" setting="organization-roles" />
                     <span v-if="isPrelaunch">{{ approverSourceLabel(row as V2PreflightParticipant) }}</span>
                   </div>
                 </template>

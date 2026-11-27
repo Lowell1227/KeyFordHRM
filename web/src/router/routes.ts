@@ -381,6 +381,12 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/configuration-help/:setting',
+    name: 'ConfigurationHelp',
+    component: () => import('@/views/system/ConfigurationHelpView.vue'),
+    meta: { requiresAuth: true, title: '配置办理说明' },
+  },
+  {
     path: '/system/ai-services',
     name: 'AiServiceConfig',
     component: () => import('@/views/system/AiServiceConfigView.vue'),

@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessageBox } from 'element-plus';
-import { onBeforeRouteLeave, useRouter } from 'vue-router';
+import { onBeforeRouteLeave } from 'vue-router';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
@@ -19,11 +20,9 @@ import type { PayrollScopeDiff } from '@/types/payroll-recovery.types';
 import { attendanceDayReviews, attendanceRecordRows, attendanceReviewLabels, attendanceTime, pendingAbsenceProposals } from './payroll-attendance-review';
 
 const { subjects, subjectId, month, has, error, loading, refreshAccess } = usePayrollScope(['attendance_edit', 'attendance_seal'], { persistQuery: true });
-const router = useRouter();
 const snapshots = ref<PayrollAttendance[]>([]);
 const employees = ref<PayrollEmployee[]>([]);
 const scopePending = computed(() => !isLocalPreview && !!subjectId.value && !loading.value && !error.value && !employees.value.length);
-function maintainRule() { void router.push({ path: '/payroll/standards', query: { subjectId: subjectId.value, month: month.value, tab: 'rules' } }); }
 const tab = ref('summary');
 const selectedId = ref('');
 const current = computed(() => snapshots.value.find(row => row.id === selectedId.value) ?? snapshots.value[0]);
@@ -57,6 +56,10 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined, jobsSequence = 0, disp
 let sequence = 0;
 const employeeName = (id: string) => employees.value.find(person => person.id === id)?.name ?? id;
 function issueText(day: AttendanceDay) { return day.issues?.map(issue => typeof issue === 'string' ? attendanceIssueLabels[issue] || issue : attendanceIssueLabels[issue.code] || issue.message || issue.code).join('；'); }
+const needsAttendanceRule = computed(() => detail.value?.issues?.some(issue => {
+  const code = typeof issue === 'string' ? issue : issue.code;
+  return code === 'DAY_CONVERSION_REQUIRED' || code === 'APPROVAL_TYPE_UNMAPPED';
+}));
 async function load() {
   const request = ++sequence;
   snapshots.value = []; employees.value = []; selectedId.value = ''; detail.value = undefined;
@@ -261,7 +264,8 @@ async function seal() {
       <el-alert v-if="error" :title="error" type="error" :closable="false" />
       <el-alert v-else-if="scopePending" title="本月暂无已审核的发薪人员" type="info" :closable="false">
         <p>请在工资资料中核对人员范围、生效日期和任职记录，提交经办人的直属主管审核后再同步考勤。</p>
-        <el-button v-if="has('payroll_edit')" link type="primary" :disabled="busy" @click="maintainRule">维护工资规则</el-button>
+        <ConfigurationLink setting="payroll-standards" :subject-id="subjectId || undefined" :month="month" label="前往工资资料" />
+        <ConfigurationLink v-if="has('payroll_edit')" setting="payroll-rules" :subject-id="subjectId || undefined" :month="month" label="维护工资规则" />
       </el-alert>
       <el-alert v-else-if="!isLocalPreview && subjectId && !loading && !snapshots.length" title="本月尚未同步考勤" type="info" :closable="false" />
       <el-alert v-if="feedback" :title="feedback" type="success" :closable="false" />
@@ -283,7 +287,9 @@ async function seal() {
       <BusinessDetailDrawer :model-value="!!detail" :title="detail ? `${employeeName(detail.employeeId)} · ${detail.workDate}` : '考勤核对'" :saving="busy" :before-close="() => { void closeDay(); }" @update:model-value="value => { if (!value) void closeDay(); }">
         <template v-if="detail">
           <dl class="day-summary"><div><dt>应出勤天数</dt><dd>{{ detail.units ?? '待核对' }}</dd></div><div><dt>考勤要求</dt><dd>{{ detail.required === true ? '应出勤' : detail.required === false ? '无需正常出勤' : '待核对' }}</dd></div></dl>
-          <el-alert v-if="issueText(detail)" :title="issueText(detail)" type="warning" :closable="false" />
+          <el-alert v-if="issueText(detail)" :title="issueText(detail)" type="warning" :closable="false">
+            <ConfigurationLink v-if="needsAttendanceRule" setting="payroll-rules" :subject-id="subjectId || undefined" :month="month" label="维护工资规则" />
+          </el-alert>
           <el-table class="records-desktop" :data="recordRows" empty-text="尚无有效出勤记录">
             <el-table-column prop="typeLabel" label="类型" min-width="110" /><el-table-column prop="range" label="北京时间" min-width="220" />
             <el-table-column prop="hours" label="有效小时" min-width="90" /><el-table-column prop="status" label="状态" min-width="100" />

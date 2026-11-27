@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { ref, reactive, computed, nextTick, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -1598,6 +1599,9 @@ onChange(() => {
 onMounted(() => {
   loadCycles();
   loadNotificationSettings();
+  if (route.query.configuration === 'dingtalk-notifications') {
+    void nextTick(() => document.getElementById('dingtalk-notification-configuration')?.focus());
+  }
   if (typeof route.query.cycleId === 'string') void loadCycleDetail(route.query.cycleId);
   departmentsApi.findAll({ isActive: true }).then((items) => {
     departments.value = items;
@@ -1651,6 +1655,8 @@ onMounted(() => {
       <template #extra>
         <div class="cycle-header-actions">
           <div
+            id="dingtalk-notification-configuration"
+            tabindex="-1"
             data-testid="dingtalk-notification-status"
             class="dingtalk-notification-status"
             :class="{ 'is-enabled': notificationSettings?.effectiveEnabled }"
@@ -1664,6 +1670,7 @@ onMounted(() => {
               :title="canManageGlobalNotificationSettings ? '' : '仅 HR 管理员可修改总开关'"
               @change="handleDingtalkNotificationToggle"
             />
+            <ConfigurationLink v-if="notificationSettings && !notificationSettings.available" setting="dingtalk-notifications" instructions-only />
           </div>
           <el-button v-if="canEditCyclePlan" data-testid="cycle-create" type="primary" @click="openCreateDialog">新建周期</el-button>
         </div>

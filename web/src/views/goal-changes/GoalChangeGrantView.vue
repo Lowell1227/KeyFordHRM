@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { goalChangesApi, goalChangeError, type GoalChangeTask } from '@/api/goal-changes.api';
@@ -83,7 +84,7 @@ async function apply(task: GoalChangeTask, revoke = false) {
       <MobileResultCard v-for="task in pageRows" :key="task.id">
         <template #title>{{ task.employeeName }} · {{ task.employeeNo || '无工号' }}</template>
         <template #status><el-tag size="small">{{ task.grant ? grantLabels[task.grant.state] : '未开放' }}</el-tag></template>
-        <div>{{ task.cycleName }}</div><div>绩效直属上级：{{ task.managerName || '未配置' }}</div>
+        <div>{{ task.cycleName }}</div><div>绩效直属上级：{{ task.managerName || '未配置' }} <ConfigurationLink v-if="!task.managerName" setting="performance-reviewer" /></div>
         <template #actions>
           <el-button v-if="task.grant?.state === 'open'" link type="danger" :loading="busyId === task.id" @click="apply(task, true)">撤销授权</el-button>
           <el-button v-else link type="primary" :loading="busyId === task.id" :disabled="Boolean(task.requestId)" @click="apply(task)">开放变更</el-button>

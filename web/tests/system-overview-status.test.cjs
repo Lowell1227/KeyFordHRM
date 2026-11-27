@@ -65,7 +65,8 @@ function mount(t, read) {
   const loaded = new Module(filename, module);
   loaded.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = loaded.require.bind(loaded);
-  loaded.require = id => id === '@/api/cycles.api' ? { cyclesApi: api } : originalRequire(id);
+  loaded.require = id => id === '@/api/cycles.api' ? { cyclesApi: api }
+    : id === './ConfigurationStatusPanel.vue' ? { render: () => null } : originalRequire(id);
   loaded._compile(compiled, filename);
   const component = loaded.exports.default;
   const setup = component.setup;

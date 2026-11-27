@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Delete, Refresh } from '@element-plus/icons-vue';
@@ -91,6 +92,7 @@ const isEdit = computed(() => Boolean(effectiveCandidateId.value));
 const removingFileId = ref(''), fileError = ref('');
 const saveError = ref('');
 const resumeEnabled = ref(false);
+const resumeConfigurationMissing = ref(false);
 const resumeSession = useResumeTask();
 const { task: resumeTask, error: resumeConnectionError, recovered: resumeRecovered,
   checking: resumeChecking, acting: resumeActing, elapsed: resumeElapsed, busy: resumeBusy } = resumeSession;
@@ -243,6 +245,7 @@ async function onOpen() {
   saveError.value = '';
   parseError.value = '';
   resumeEnabled.value = false;
+  resumeConfigurationMissing.value = false;
   parseSummary.value = '';
   parseReview.value = [];
   parseConflicts.value = [];
@@ -252,7 +255,9 @@ async function onOpen() {
   void loadOwners();
   void resumeSession.open(candidateId ?? 'new');
   void talentResumeApi.status().then(status => {
-    if (isCurrentLoad(generation, candidateId)) resumeEnabled.value = status.enabled && status.configured;
+    if (!isCurrentLoad(generation, candidateId)) return;
+    resumeEnabled.value = status.enabled && status.configured;
+    resumeConfigurationMissing.value = status.enabled === false || status.configured === false;
   }).catch(() => { if (isCurrentLoad(generation, candidateId)) resumeEnabled.value = false; });
   if (candidateId) {
     loading.value = true;
@@ -837,7 +842,7 @@ async function submit() {
       </div>
       <div v-if="parsePreparing || (resumeActing && !resumeTask)" role="status" class="talent-form__hint">正在提交简历解析任务</div>
       <div v-if="resumeChecking && !resumeTask" role="status" class="talent-form__hint">正在读取已有解析任务</div>
-      <div v-if="!resumeEnabled" role="status" class="talent-form__hint">简历解析未启用，可手工填写</div>
+      <div v-if="resumeConfigurationMissing" role="status" class="talent-form__hint">简历解析未启用或凭据未就绪，可手工填写。<ConfigurationLink setting="ai-resume" /></div>
       <div v-if="resumeConnectionError" role="alert" class="talent-form__error">
         {{ resumeConnectionError }}
         <el-button link type="primary" :icon="Refresh" :disabled="resumeChecking || resumeActing || !formReady"

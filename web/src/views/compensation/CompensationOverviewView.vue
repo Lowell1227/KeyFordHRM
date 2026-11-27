@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 const futureScope = [
   '适用主体、人员范围、正式工资结构及计薪规则',
   '复核审批人员、财务授权、期初及入薪凭据',
@@ -22,6 +23,7 @@ const excludedScope = [
         </p>
       </div>
       <span class="status-tag">正式算薪未启用</span>
+      <ConfigurationLink setting="payroll-access" />
     </header>
 
     <section class="boundary-card boundary-card--notice">

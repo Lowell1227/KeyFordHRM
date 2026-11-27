@@ -1,6 +1,7 @@
 import { ContractSubjectsModule } from './contract-subjects/contract-subjects.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { SystemConfigurationController } from './system-configuration.controller';
 import { ScheduleModule } from '@nestjs/schedule';
 import { JwtModule } from '@nestjs/jwt';
 import { APP_GUARD } from '@nestjs/core';
@@ -108,6 +109,7 @@ import { PerformanceLifecycleModule } from './performance-lifecycle/performance-
     PerformanceLifecycleModule,
     AiProgressModule,
   ],
+  controllers: [SystemConfigurationController],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },

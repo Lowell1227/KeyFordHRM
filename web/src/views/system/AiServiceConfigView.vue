@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { aiProgressApi } from '@/api/ai-progress.api';
 import { usersApi } from '@/api/users.api';
 import type { AiConfigState, AiProvider, SaveAiProviderBody, User } from '@/types/api.types';
@@ -16,7 +17,9 @@ const regions = [
 type Draft = { modelId: string; apiKey: string; replaceKey: boolean; region: string; workspaceId: string };
 const emptyDraft = (): Draft => ({ modelId: '', apiKey: '', replaceKey: false, region: '', workspaceId: '' });
 const drafts = reactive<Record<AiProvider, Draft>>({ kimi: emptyDraft(), deepseek: emptyDraft(), qwen: emptyDraft() });
-const selected = ref<AiProvider>('kimi');
+const route = useRoute();
+const provider = route.query.provider;
+const selected = ref<AiProvider>(provider === 'deepseek' || provider === 'qwen' ? provider : 'kimi');
 const state = ref<AiConfigState>();
 const busy = ref('');
 const loading = ref(true);
@@ -185,7 +188,8 @@ onMounted(load);
     </template>
     <template v-else-if="state">
       <el-alert v-if="!state.encryptionReady" title="凭据加密尚未就绪，请联系部署管理员配置后重试。" type="warning" :closable="false" />
-      <section class="config-panel" aria-label="目标进展识别服务商">
+      <section class="config-panel" :aria-label="route.query.feature === 'resume' ? '简历解析凭据' : '目标进展识别服务商'">
+        <p v-if="route.query.feature === 'resume'" class="hint">简历解析使用 DeepSeek 的已验证凭据。保存和测试后，由部署管理员核对简历解析开关。</p>
         <div class="panel-heading"><h2>目标进展识别</h2><span>当前使用：{{ state.activeProvider ? labels[state.activeProvider] : '未启用' }}</span></div>
         <p class="hint">先保存配置，再使用样例测试连接，测试通过后启用。修改正在使用的配置会关闭机器人，需重新测试并启用。</p>
         <el-radio-group v-model="selected" aria-label="AI 服务商" :disabled="Boolean(busy)" @change="clearFeedback">
@@ -196,7 +200,8 @@ onMounted(load);
         <p class="provider-status"><el-tag :type="summary?.configured ? 'success' : 'info'">{{ summary?.configured ? '已配置' : '未配置' }}</el-tag>
           <span>{{ tested ? '当前配置测试通过' : '当前配置待测试' }}</span>
           <span v-if="summary?.configVersion">配置版本 {{ summary.configVersion }}</span>
-          <span v-if="summary?.testedAt">最近测试：{{ new Date(summary.testedAt).toLocaleString('zh-CN') }}</span>
+          <span>API 地址：系统内置 · API Key：{{ summary?.configured ? '已保存' : '未填写' }}</span>
+          <span v-if="summary?.testedAt">最近测试{{ summary.tested ? '通过' : '失败' }}：{{ new Date(summary.testedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</span>
         </p>
         <el-form label-position="top" :disabled="disabled" @submit.prevent="save">
           <el-form-item label="模型标识" :error="errors.modelId">

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
@@ -279,7 +280,7 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
       <el-tooltip content="刷新邀约"><el-button :icon="Refresh" size="small" aria-label="刷新邀约" :disabled="busy || editing" @click="load" /></el-tooltip>
       <el-button v-if="editable && !invitationId" size="small" :icon="Plus" :disabled="busy" @click="openEditor(null)">新增面试</el-button>
     </div></header>
-    <p v-if="calendarUnconfigured" class="interview-panel__link-hint" role="note">已保存的安排仅在HRM内办理，钉钉日程未开通。候选人仍需经办人工联系。</p>
+    <p v-if="calendarUnconfigured" class="interview-panel__link-hint" role="note">已保存的安排仅在HRM内办理，钉钉日程未开通。候选人仍需经办人工联系。<ConfigurationLink setting="dingtalk-calendar" /></p>
     <el-button v-if="historicalRows.length" link type="primary" :disabled="busy" @click="toggleHistory">{{ showHistory ? '返回本次应聘面试' : `查看其他应聘 / 未关联历史（${historicalRows.length}）` }}</el-button>
     <el-alert v-if="error" :title="error" type="error" :closable="false"><el-button v-if="conflict && current" link type="primary" :disabled="busy || refreshingEditor" @click="refreshEditor">刷新邀约，保留输入</el-button><el-button v-else-if="loadFailed" link type="primary" @click="load">重试</el-button></el-alert>
     <el-form v-if="editing && editable" ref="formRef" :model="form" :rules="rules" label-position="top" class="interview-panel__editor" :disabled="busy || refreshingEditor">

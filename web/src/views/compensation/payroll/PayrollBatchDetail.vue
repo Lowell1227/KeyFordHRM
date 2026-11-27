@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
+import { configurationTargets, type ConfigurationTarget } from '@/router/configuration-targets';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
@@ -35,6 +37,32 @@ onBeforeUnmount(() => { sequence++; });
 const capabilities = computed(() => subjectCapabilities(props.access, batch.value?.subjectId ?? ''));
 const readable = computed(() => capabilities.value.some(cap => ['payroll_edit', 'payroll_view', 'payroll_review', 'payroll_approve', 'payroll_export', 'payroll_settle'].includes(cap)));
 const version = computed(() => batch.value?.versions.find(value => value.version === selectedVersion.value));
+const sourceSettings = new Map<string, ConfigurationTarget>([
+  ['考勤尚未完成核对封账', 'payroll-attendance-close'],
+  ['正式发薪人员范围待配置或当月没有已审有效任职人员', 'payroll-rules'],
+  ['复核与审批路径未配置或存在冲突', 'payroll-rules'],
+  ['复核与审批身份存在重复，需核对回避规则', 'payroll-rules'],
+  ['工资标准或规则缺失/生效区间冲突', 'payroll-standards'],
+  ['固定工资须配置已确认的工作日折算依据', 'payroll-rules'],
+  ['完整月工作日日历、来源版本或确认依据待配置', 'payroll-rules'],
+  ['当月计薪单位、启用切点或舍入规则待配置', 'payroll-rules'],
+  ['统一绩效系数表版本与确认依据待配置', 'payroll-rules'],
+  ['个人绩效计薪周期未登记或存在多个来源', 'payroll-rules'],
+  ['个人绩效来源待核对：考核期间与工资归属月不一致', 'payroll-rules'],
+  ['个人绩效来源待核对：须使用正式月度考核结果，不能使用季度过程评分', 'payroll-rules'],
+  ['薪酬侧等级系数待配置', 'payroll-rules'],
+  ['工资结构待配置', 'payroll-standards'],
+  ['假勤待遇或正常计薪单位价待配置', 'payroll-rules'],
+  ['加班性质、应付小时基数或倍率待配置', 'payroll-rules'],
+]);
+const sourceIssues = computed(() => (version.value?.issues ?? []).map(message => {
+  const parts = message.replace(/^[\w-]+：/, '').split('；');
+  const settings = parts.flatMap(part => {
+    const setting = sourceSettings.get(part);
+    return setting ? [setting] : [];
+  });
+  return { message, settings: [...new Set(settings)] };
+}));
 const exportRecords = computed(() => (version.value?.exports ?? []).map(record => ({ ...record as object, action: 'exported' })));
 const reconciliation = computed(() => batch.value?.purpose === 'reconciliation');
 const scopeQuery = computed(() => ({ subjectId: batch.value?.subjectId, month: batch.value?.month }));
@@ -218,12 +246,17 @@ async function run() {
     <template v-if="batch && readable">
       <dl class="summary-grid"><div><dt>发薪主体</dt><dd>{{ access?.subjects.find(subject => subject.id === batch?.subjectId)?.name || batch.subjectId }}</dd></div><div><dt>工资归属月</dt><dd>{{ batch.month }}</dd></div><div><dt>发放月</dt><dd>{{ batch.payMonth }}</dd></div><div><dt>用途</dt><dd>{{ purposeLabels[batch.purpose] }}</dd></div><div><dt>状态</dt><dd>{{ batchStatus(batch) }}</dd></div><div><dt>{{ reconciliation ? '税前全额对账' : '本批税前待结' }}</dt><dd>{{ version?.gross ?? '待核算' }}</dd></div><div v-if="batch.status === 'pending'"><dt>当前办理人</dt><dd>{{ currentActor ? operatorName(currentActor) : '待分配' }}</dd></div></dl>
       <el-alert v-if="reconciliation" title="历史全额对账，不是待发工资" type="info" :closable="false" description="对照该归属月完整应发、实际发薪日及扣缴依据核对税后实发。对账不审批、不生成最终工资表、不确认付款、不写计税累计；仅税前结果不能完成首月签收。" />
-      <p v-if="!version && capabilities.includes('payroll_edit')" class="form-note" role="status">下一步：核对已审核工资资料和已封账考勤，再核算本月工资。<RouterLink :to="{ path: '/payroll/standards', query: scopeQuery }">工资资料</RouterLink> · <RouterLink :to="{ path: '/payroll/deductions', query: scopeQuery }">扣缴资料</RouterLink> · <RouterLink v-if="capabilities.includes('attendance_edit') || capabilities.includes('attendance_seal')" :to="{ path: '/payroll/attendance', query: scopeQuery }">考勤核对与封账</RouterLink></p>
+      <p v-if="!version && capabilities.includes('payroll_edit')" class="form-note" role="status">下一步：核对已审核工资资料和已封账考勤，再核算本月工资。<ConfigurationLink setting="payroll-standards" v-bind="scopeQuery" label="工资资料" /> · <ConfigurationLink setting="payroll-rules" v-bind="scopeQuery" label="工资规则" /> · <ConfigurationLink setting="payroll-deductions" v-bind="scopeQuery" label="扣缴资料" /> · <ConfigurationLink setting="payroll-attendance-close" v-bind="scopeQuery" label="考勤核对与封账" /></p>
       <el-alert v-if="needsUpdate(batch)" :title="batch.status === 'approved'
         ? version?.netSnapshot ? '核算来源已变化或存在归属冲突，下载和新增实发与扣缴确认已暂停。请核对来源及实际已发已扣差异，原批准记录保留。' : '核算来源已变化或存在归属冲突，下载和新增入薪已暂停。请核对原月及已入薪差异，原批准记录保留。'
         : '来源已更新，当前审批暂停。经办撤回或当前办理人退回后，重新核算并提交新版。'" type="warning" :closable="false" />
       <el-alert v-if="!isCurrent" title="历史版本，只读" type="info" :closable="false" />
-      <ul v-if="version?.issues.length" class="issue-list"><li v-for="(issue, index) in version.issues" :key="index">{{ issue }}</li></ul>
+      <ul v-if="sourceIssues.length" class="issue-list">
+        <li v-for="(issue, index) in sourceIssues" :key="index">
+          {{ issue.message }}
+          <ConfigurationLink v-for="setting in issue.settings" :key="setting" :setting="setting" v-bind="scopeQuery" :label="configurationTargets[setting].name" />
+        </li>
+      </ul>
       <el-alert v-if="cancelledNetIds.length" title="部分未付安排已撤销，原整表停止导出，其余未撤销安排保留。" type="warning" :closable="false" />
       <PayrollNetResults v-if="version?.netSnapshot" :snapshot="version.netSnapshot" :purpose="batch.purpose" :payments="version.netPayments ?? []" :cancelled-ids="cancelledNetIds" :can-pay="isCurrent && actions.includes('net-payment')" :disabled="busy || loading || !!action || paymentPending" @pay="selectNetPayment" />
       <details :key="version?.id" :open="!version?.netSnapshot" class="gross-details"><summary>税前工资明细</summary>
@@ -281,6 +314,7 @@ async function run() {
 dt { color: var(--el-text-color-secondary); font-size: 12px; } dd { margin: 5px 0 0; overflow-wrap: anywhere; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: var(--el-fill-color-light); padding: 12px; border-radius: 4px; }
 .issue-list { padding: 12px 12px 12px 30px; color: var(--el-color-warning-dark-2); overflow-wrap: anywhere; margin: 0; }
+.issue-list .configuration-link { margin-inline-start: 8px; }
 .payroll-lines-desktop { min-width: 0; } .payroll-lines-mobile { display: none; }
 .trace-details { min-width: 0; overflow-wrap: anywhere; }
 .action-form { border-top: 1px solid var(--el-border-color-light); padding-top: 12px; }

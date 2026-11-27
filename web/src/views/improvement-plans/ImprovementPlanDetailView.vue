@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
+import type { ConfigurationTarget } from '@/router/configuration-targets';
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { isAxiosError } from 'axios';
@@ -21,6 +23,13 @@ mobileQuery.addEventListener('change', updateMobile);
 withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 const emit = defineEmits<{ changed: [] }>();
 const plan = ref<ImprovementPlan | null>(null);
+const workflowSettings = new Map<string, ConfigurationTarget>([
+  ['员工未配置有效直属上级，请联系 HR', 'personnel-manager'],
+  ['员工所属组织未配置有效部门负责人，请联系 HR', 'organization-roles'],
+  ['员工所属组织未配置有效上级审批人，请联系 HR', 'organization-roles'],
+  ['未配置可办理的 HR 确认人员，请联系 HR', 'improvement-reviewer'],
+]);
+const workflowSetting = computed(() => workflowSettings.get(plan.value?.workflowIssue ?? ''));
 const cycles = ref<Array<{ id: string; name: string }>>([]);
 const loading = ref(false);
 const busy = ref(false);
@@ -400,7 +409,9 @@ function goalName(goalId: string): string {
           <el-descriptions-item label="开始执行">{{ plan.startedAt ? formatDateTime(plan.startedAt) : '待目标确认' }}</el-descriptions-item>
           <el-descriptions-item v-if="plan.workflowVersion === 3 && plan.status === 'goal_hr_review'" label="当前办理人">HR共享待办</el-descriptions-item>
         </el-descriptions>
-        <el-alert v-if="plan.workflowIssue" type="warning" :closable="false" :title="plan.workflowIssue" />
+        <el-alert v-if="plan.workflowIssue" type="warning" :closable="false" :title="plan.workflowIssue">
+          <ConfigurationLink v-if="workflowSetting" :setting="workflowSetting" :employee-id="plan.employeeId" />
+        </el-alert>
         <el-alert v-if="plan.workflowVersion === 1" type="info" :closable="false" title="历史改进计划记录，仅供查看" />
         <el-alert v-else-if="deadlineHint" type="warning" :closable="false" :title="deadlineHint" />
       </ChartCard>

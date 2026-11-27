@@ -37,6 +37,6 @@ import { RecruitmentAnalyticsService } from './recruitment-analytics.service';
   imports: [StorageModule, AiProgressModule, AuthModule],
   controllers: [TalentsController, TalentSharesController, TalentInterviewsController, TalentRecruitmentController, TalentResumeController, TalentResumeTasksController, TalentWorkbenchController, RecruitmentDemandsController, RecruitmentPostingsController, RecruitmentIntakesController, RecruitmentLifecycleController, RecruitmentAnalyticsController],
   providers: [TalentsService, TalentFilesService, TalentFollowUpsService, TalentSharesService, TalentShareSessionGuard, TalentInterviewsService, TalentRecruitmentService, TalentResumeService, TalentResumeClient, TalentResumeTasksService, TalentWorkbenchService, RecruitmentDemandsService, RecruitmentDemandApplicationsService, RecruitmentMailboxGateway, RecruitmentPostingsService, RecruitmentIntakesService, RecruitmentLifecycleService, RecruitmentAnalyticsService],
-  exports: [TalentsService, TalentInterviewsService],
+  exports: [TalentsService, TalentInterviewsService, RecruitmentMailboxGateway],
 })
 export class TalentPoolModule {}

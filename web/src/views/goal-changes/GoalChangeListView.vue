@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -195,7 +196,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
             <el-form-item label="考核任务" required><el-select v-model="selection.taskId" aria-label="考核任务" filterable :disabled="busy" placeholder="选择已开放的任务">
               <el-option v-for="task in startTasks" :key="task.id" :value="task.id" :label="`${task.employeeName} · ${task.cycleName}`" />
             </el-select></el-form-item>
-            <dl v-if="selectedTask" class="task-summary"><dt>冻结绩效直属上级</dt><dd>{{ selectedTask.managerName || '未配置' }}</dd>
+            <dl v-if="selectedTask" class="task-summary"><dt>冻结绩效直属上级</dt><dd>{{ selectedTask.managerName || '未配置' }} <ConfigurationLink v-if="!selectedTask.managerName" setting="performance-reviewer" /></dd>
               <dt>变更资格</dt><dd>{{ selectedTask.grant ? grantLabels[selectedTask.grant.state] : '未开放' }}</dd></dl>
             <div v-if="dialogError" class="request-error" role="alert">{{ dialogError }}</div>
           </el-form>
