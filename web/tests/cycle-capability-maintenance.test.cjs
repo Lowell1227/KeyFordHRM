@@ -27,3 +27,12 @@ test('ordinary HR keeps its selected granular abilities; non-HR roles cannot acq
   for (const role of ['employee', 'manager', 'vp']) assert.deepEqual(normalize(role, ['cycle_terminate', 'recruitment_view']), ['recruitment_view']);
   assert.deepEqual(selected, ['cycle_terminate', 'employee_archive_edit']);
 });
+
+test('cycle deletion is independently maintained without implicit grants or role conversion', () => {
+  const normalize = loaded.exports.maintainedHrCapabilities;
+  for (const role of ['hr', 'system_admin', 'hr_user']) {
+    assert.deepEqual(normalize(role, ['cycle_delete']), ['cycle_delete']);
+    assert.deepEqual(normalize(role, []), []);
+  }
+  for (const role of ['employee', 'manager', 'vp']) assert.deepEqual(normalize(role, ['cycle_delete']), []);
+});

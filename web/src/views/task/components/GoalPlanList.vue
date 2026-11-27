@@ -8,10 +8,11 @@ import {
   type GoalPlanItem,
 } from '@/api/goal-plans.api';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import PerformanceLifecycleActions from './PerformanceLifecycleActions.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import { useAuthStore } from '@/stores/auth.store';
-import { canViewLifecycleHistory, lifecycleLabel, lifecycleReadOnly, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
+import { applyLifecycleProjection, canViewLifecycleHistory, lifecycleLabel, lifecycleReadOnly, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
 const props = defineProps<{ scope: GoalScope; allowed: boolean }>();
 const emit = defineEmits<{ refreshed: [total: number | null] }>();
 const auth = useAuthStore();
@@ -33,9 +34,9 @@ const options = ref<{
   departments: { id: string; name: string }[];
 }>({ cycles: [], departments: [] });
 let request = 0;
-const accessDenied = ref(false), appliedQuery = ref('');
+const accessDenied = ref(false), appliedQuery = ref(''), lifecycleBusy = ref(false);
 const queryKey = () => JSON.stringify([props.scope, cycleId.value, deptId.value, employeeName.value, page.value, lifecycleStatus.value]);
-const refreshBlocked = () => loading.value || queryKey() !== appliedQuery.value;
+const refreshBlocked = () => loading.value || lifecycleBusy.value || queryKey() !== appliedQuery.value;
 const title = computed(
   () =>
     ({ mine: '我的目标', review: '目标审核', monitor: '目标台账' })[
@@ -230,14 +231,15 @@ function search() {
           prop="currentHandlerName"
           label="当前办理人"
           min-width="110"
-        /><el-table-column label="操作" width="110" fixed="right"
+        /><el-table-column label="操作" :width="scope === 'monitor' ? 210 : 110" fixed="right"
           ><template #default="{ row }"
             ><el-button
               link
               type="primary"
               @click="open(row as GoalPlanItem)"
               >{{ scope === 'review' && !lifecycleReadOnly(row) ? '办理目标' : '查看计划' }}</el-button
-            ></template
+            ><PerformanceLifecycleActions v-if="scope === 'monitor'" compact kind="task" :record="row as GoalPlanItem" :disabled="loading"
+              @state="value => applyLifecycleProjection(row, value)" @busy="value => lifecycleBusy = value" @changed="load" /></template
           ></el-table-column
         ></el-table
       ></template
@@ -259,7 +261,8 @@ function search() {
         <template #actions
           ><el-button @click="open(item)">{{
             scope === 'review' && !lifecycleReadOnly(item) ? '办理目标' : '查看计划'
-          }}</el-button></template
+          }}</el-button><PerformanceLifecycleActions v-if="scope === 'monitor'" compact kind="task" :record="item" :disabled="loading"
+            @state="value => applyLifecycleProjection(item, value)" @busy="value => lifecycleBusy = value" @changed="load" /></template
         ></MobileResultCard
       ></template
     >

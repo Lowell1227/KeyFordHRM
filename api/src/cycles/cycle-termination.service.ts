@@ -8,9 +8,9 @@ import { lifecycleTerminationProtected } from '@/performance-lifecycle/lifecycle
 import { assertCycleOperator, isGlobalCycleOperator } from './cycle-operator-scope';
 import { TerminateCycleDto } from './cycle-termination.dto';
 
-export function canTerminateCycle(actor: AuthUser, cycle: { hrOwnerId?: string | null; terminatedAt?: Date | null; status: string }) {
+export function canTerminateCycle(actor: AuthUser, cycle: { hrOwnerId?: string | null; terminatedAt?: Date | null; deletedAt?: Date | null; status: string }) {
   return !actor.isAssessorOnly && hasHrCapability(actor, 'cycle_terminate')
-    && (isGlobalCycleOperator(actor) || cycle.hrOwnerId === actor.id) && !cycle.terminatedAt
+    && (isGlobalCycleOperator(actor) || cycle.hrOwnerId === actor.id) && !cycle.terminatedAt && !cycle.deletedAt
     && !['draft', 'scheduled', 'launch_blocked', 'closed'].includes(cycle.status);
 }
 

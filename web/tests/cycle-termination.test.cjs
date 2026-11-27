@@ -38,14 +38,15 @@ test('termination API binds the preview hash and keeps field errors local', asyn
 });
 
 function mount(t, options = {}) {
-  const file = path.join(root, 'views/admin/components/CycleTerminationDialog.vue');
+  const file = path.join(root, `views/admin/components/Cycle${options.deletion ? 'Deletion' : 'Termination'}Dialog.vue`);
   assert.ok(fs.existsSync(file), 'cycle termination impact dialog is implemented');
   const reads = [], writes = [], confirmations = [], events = [];
-  const props = vue.reactive({ visible: true, cycle });
+  const props = vue.reactive({ visible: true, cycle: options.deletion ? { ...cycle, canDelete: true, terminatedAt: '2038-01-01' } : cycle });
   const api = {
     terminationPreview: async id => { reads.push(id); return options.read ? options.read(reads.length, id) : preview(); },
     terminate: async (id, body) => { writes.push({ id, body }); return options.write ? options.write(id, body) : { id, terminatedAt: '2038-01-01T00:00:00Z' }; },
   };
+  if (options.deletion) { api.deletionPreview = api.terminationPreview; api.logicalDelete = api.terminate; }
   const component = load(file, {
     '@/api/cycles.api': { cyclesApi: api },
     'element-plus': { ElMessageBox: { confirm: async () => { confirmations.push(true); if (options.cancel) throw 'cancel'; } } },
@@ -57,6 +58,49 @@ function mount(t, options = {}) {
   app.mount({}); t.after(() => app.unmount());
   return { state, props, reads, writes, confirmations, events };
 }
+
+const deletionPreview = (hash = 'delete-hash') => ({ cycle: { ...cycle, terminatedAt: '2038-01-01' },
+  canDelete: true, previewHash: hash, tasks: [{ id: 'one', disposition: 'delete', reason: 'Fictional' }],
+  summary: { total: 1, deletable: 1, blocked: 0, alreadyDeleted: 0, goalChanges: 1 } });
+test('cycle deletion API never calls the old draft DELETE path', async () => {
+  const calls = []; const http = { get: async (...a) => { calls.push(a); return deletionPreview(); }, post: async (...a) => { calls.push(a); return {}; } };
+  const { cyclesApi } = load(path.join(root, 'api/cycles.api.ts'), { './http': http });
+  await cyclesApi.deletionPreview(cycle.id);
+  await cyclesApi.logicalDelete(cycle.id, { reason: 'Fictional', expectedPreviewHash: 'fresh' });
+  assert.equal(calls[0][0], `/cycles/${cycle.id}/deletion-preview`);
+  assert.deepEqual(calls[1], [`/cycles/${cycle.id}/delete`, { reason: 'Fictional', expectedPreviewHash: 'fresh' }, { skipErrorMessage: true }]);
+});
+test('report cycle options retain deleted historical choices and read all authorized pages', async () => {
+  const calls = [];
+  const http = { get: async (...args) => { calls.push(args); return { items: [{ id: `page-${calls.length}` }], total: 2 }; } };
+  const { cyclesApi } = load(path.join(root, 'api/cycles.api.ts'), { './http': http });
+  assert.deepEqual(await cyclesApi.findAllOptions({ recordScope: 'all' }), [{ id: 'page-1' }, { id: 'page-2' }]);
+  assert.deepEqual(calls.map(call => call[1].params), [
+    { recordScope: 'all', page: 1, pageSize: 100 }, { recordScope: 'all', page: 2, pageSize: 100 },
+  ]);
+});
+test('deletion previews the whole cascade, requires reason and confirms before writing', async t => {
+  const f = mount(t, { deletion: true, read: () => deletionPreview() }); await flush();
+  await f.state.submit(); assert.match(f.state.reasonError.value, /原因/); assert.equal(f.writes.length, 0);
+  f.state.reason.value = '  Fictional deletion  '; await f.state.submit();
+  assert.equal(f.confirmations.length, 1); assert.equal(f.writes.length, 1);
+  assert.deepEqual(f.writes[0].body, { reason: 'Fictional deletion', expectedPreviewHash: 'delete-hash' });
+  assert.equal(f.events.filter(e => e[0] === 'completed').length, 1);
+});
+for (const status of [403, 409, 503]) test(`deletion ${status} preserves reason and blocks blind retry`, async t => {
+  const f = mount(t, { deletion: true, read: n => deletionPreview(`delete-${n}`), write: () => { throw failure(status); } }); await flush();
+  f.state.reason.value = 'Keep deletion reason'; await f.state.submit();
+  assert.equal(f.state.reason.value, 'Keep deletion reason'); assert.equal(f.writes.length, 1);
+  assert.equal(f.events.some(e => e[0] === 'completed'), false); assert.equal(f.state.busy.value, false);
+  if (status === 409) { assert.equal(f.reads.length, 2); assert.equal(f.state.preview.value.previewHash, 'delete-2'); }
+  else { assert.equal(f.state.maySubmit.value, false); await f.state.submit(); assert.equal(f.writes.length, 1); }
+});
+test('one unfinished task blocks the entire cascade and already deleted cycle cannot submit', async t => {
+  const f = mount(t, { deletion: true, read: () => ({ ...deletionPreview(), canDelete: false, summary: { blocked: 1 } }) }); await flush();
+  f.state.reason.value = 'Not allowed'; await f.state.submit(); assert.equal(f.writes.length, 0);
+  f.props.cycle = { ...cycle, canDelete: true, deletedAt: '2038-01-02' }; await flush();
+  await f.state.submit(); assert.equal(f.writes.length, 0);
+});
 
 test('reason is required and capped at 1000 characters before second confirmation', async t => {
   const f = mount(t); await flush();

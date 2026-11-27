@@ -7,6 +7,7 @@ import { LaunchService } from '@/cycles/launch.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
 import { FlowService } from '@/tasks/flow.service';
+import { ARCHIVE_INDICATORS, buildPerformanceArchive } from '@/reports/performance-archive';
 import {
   monthlyEmployeeReminderKind,
   monthlyReminderKind,
@@ -200,6 +201,7 @@ export class SchedulerService {
     const cycles = await this.prisma.assessmentCycle.findMany({
       where: {
         status: { in: ['published', 'appeal'] },
+        deletedAt: null,
         deadlineAppeal: { lt: today },
       },
       select: { id: true, status: true },
@@ -480,6 +482,10 @@ export class SchedulerService {
 
     await this.prisma.$transaction(
       async (tx) => {
+        await tx.$queryRaw`SELECT p.id FROM assessment_periods p JOIN assessment_tasks t ON t.id=p.task_id WHERE t.cycle_id=${cycle.id}::uuid ORDER BY p.id FOR UPDATE OF p`;
+        await tx.$queryRaw`SELECT id FROM assessment_tasks WHERE cycle_id=${cycle.id}::uuid ORDER BY id FOR UPDATE`;
+        const [current] = await tx.$queryRaw<Array<{ deletedAt: Date | null }>>`SELECT deleted_at AS "deletedAt" FROM assessment_cycles WHERE id=${cycle.id}::uuid FOR UPDATE`;
+        if (!current || current.deletedAt) return;
         const tasks = await tx.assessmentTask.findMany({
           where: {
             cycleId: cycle.id,
@@ -497,31 +503,18 @@ export class SchedulerService {
                 coefficient: true,
               },
             },
-            indicatorInstances: {
-              where: { retiredAt: null },
-              select: {
-                name: true,
-                dimensionName: true,
-                weight: true,
-                indicatorType: true,
-                targetValue: true,
-                targetValueText: true,
-                actualValue: true,
-                selfScore: true,
-                managerScore: true,
-                finalScore: true,
-              },
-            },
+            indicatorInstances: ARCHIVE_INDICATORS,
           },
         });
 
         for (const task of tasks) {
-          const grade = task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade ?? null;
-          if (!grade) {
+          const archive = buildPerformanceArchive(task, cycle.id, closedAt);
+          if (!archive) {
             this.logger.warn(
               `周期 ${cycle.id} 任务 ${task.id} 无等级，跳过 performance_archives 归档`,
             );
           } else {
+            const { employeeId, cycleId, ...values } = archive;
             await tx.performanceArchive.upsert({
               where: {
                 employeeId_cycleId: {
@@ -529,26 +522,8 @@ export class SchedulerService {
                   cycleId: cycle.id,
                 },
               },
-              create: {
-                employeeId: task.employeeId,
-                cycleId: cycle.id,
-                employeeName: task.employee?.name ?? '',
-                deptName: task.dept?.name ?? null,
-                grade,
-                totalScore: task.gradeResult?.calculatedScore ?? new Prisma.Decimal(0),
-                coefficient: task.gradeResult?.coefficient ?? null,
-                summary: this.buildArchiveSummary(task),
-                archivedAt: closedAt,
-              },
-              update: {
-                employeeName: task.employee?.name ?? '',
-                deptName: task.dept?.name ?? null,
-                grade,
-                totalScore: task.gradeResult?.calculatedScore ?? new Prisma.Decimal(0),
-                coefficient: task.gradeResult?.coefficient ?? null,
-                summary: this.buildArchiveSummary(task),
-                archivedAt: closedAt,
-              },
+              create: archive,
+              update: values,
             });
           }
 
@@ -563,51 +538,8 @@ export class SchedulerService {
           data: { status: 'closed', closedAt },
         });
       },
-      { timeout: 60000, maxWait: 10000 },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 60000, maxWait: 10000 },
     );
-  }
-
-  private buildArchiveSummary(
-    task: {
-      indicatorInstances: Array<{
-        name: string;
-        dimensionName: string | null;
-        weight: Prisma.Decimal;
-        indicatorType: string;
-        targetValue: Prisma.Decimal | null;
-        targetValueText: string | null;
-        actualValue: Prisma.Decimal | null;
-        selfScore: Prisma.Decimal | null;
-        managerScore: Prisma.Decimal | null;
-        finalScore: Prisma.Decimal | null;
-      }>;
-    } & {
-      gradeResult: {
-        calculatedScore: Prisma.Decimal | null;
-        rawGrade: string | null;
-        calibratedGrade: string | null;
-        coefficient: Prisma.Decimal | null;
-      } | null;
-    },
-  ): Prisma.InputJsonValue {
-    return {
-      indicators: task.indicatorInstances.map((ind) => ({
-        name: ind.name,
-        dimensionName: ind.dimensionName,
-        weight: ind.weight.toNumber(),
-        indicatorType: ind.indicatorType,
-        targetValue: ind.targetValue?.toNumber() ?? null,
-        targetValueText: ind.targetValueText,
-        actualValue: ind.actualValue?.toNumber() ?? null,
-        selfScore: ind.selfScore?.toNumber() ?? null,
-        managerScore: ind.managerScore?.toNumber() ?? null,
-        finalScore: ind.finalScore?.toNumber() ?? null,
-      })),
-      calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: task.gradeResult?.rawGrade ?? null,
-      calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
-      coefficient: task.gradeResult?.coefficient?.toNumber() ?? null,
-    } as Prisma.InputJsonValue;
   }
 
   private async loadDeadlineReminderDays(): Promise<number> {

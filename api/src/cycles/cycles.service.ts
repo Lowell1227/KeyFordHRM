@@ -20,6 +20,7 @@ import { ParticipantPreviewDto } from './dto/participant-preview.dto';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import { assertCycleOperator, cycleOperatorWhere, isGlobalCycleOperator } from './cycle-operator-scope';
 import { canTerminateCycle } from './cycle-termination.service';
+import { canDeleteCycle } from './cycle-deletion.service';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -309,20 +310,30 @@ export class CyclesService {
   /** DELETE /cycles/:id — 仅允许删除尚未预约或开放的草稿周期。 */
   async remove(id: string, user: AuthUser): Promise<{ id: string }> {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM assessment_cycles WHERE id=${id}::uuid FOR UPDATE`;
       const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
-      assertCycleOperator(user, cycle);
+      await tx.$queryRaw`SELECT id FROM users WHERE id=${user.id}::uuid FOR SHARE`;
+      const actor = await tx.user.findUnique({ where: { id: user.id }, select: { id: true, sysRole: true, hrCapabilities: true,
+        isAssessorOnly: true, status: true, archivedAt: true, deletedAt: true } });
+      if (!actor || actor.isAssessorOnly || actor.deletedAt || actor.archivedAt || !['active', 'probation'].includes(actor.status)
+        || !hasHrCapability(actor, 'cycle_plan_edit')) throw new ForbiddenException('当前删除草稿权限已失效');
+      assertCycleOperator({ ...user, ...actor }, cycle);
+      if (cycle.deletedAt) throw new ConflictException('本周期已删除，历史记录保留');
       if (cycle.status !== CycleStatus.draft) {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
           message: '仅草稿状态的周期可以删除',
         });
       }
-
-      const deleted = await tx.assessmentCycle.deleteMany({
-        where: { id, status: CycleStatus.draft },
+      if (cycle.openedAt || await tx.assessmentTask.count({ where: { cycleId: id } })) {
+        throw new ConflictException('草稿存在实际任务或已发起，请核查后再处理');
+      }
+      const deleted = await tx.assessmentCycle.updateMany({
+        where: { id, status: CycleStatus.draft, deletedAt: null },
+        data: { deletedAt: new Date(), deletedById: actor.id, deletionReason: '删除草稿周期', deletionVersion: 1 },
       });
       if (deleted.count !== 1) {
         throw new ConflictException({
@@ -603,16 +614,18 @@ export class CyclesService {
       || hasHrCapability(viewer, 'cycle_plan_edit')
       || hasHrCapability(viewer, 'cycle_plan_review')
       || hasHrCapability(viewer, 'cycle_terminate')
+      || hasHrCapability(viewer, 'cycle_delete')
       || forPublication;
     const visibleTaskWhere = this.visibleTaskWhere(viewer);
     const operatorScope: Prisma.AssessmentCycleWhereInput = isGlobalCycleOperator(viewer) ? {}
       : forPublication ? cycleOperatorWhere(viewer)
       : canManageCycles ? { OR: [
-        ...(hasHrCapability(viewer, 'cycle_plan_edit') || hasHrCapability(viewer, 'cycle_terminate') ? [{ hrOwnerId: viewer.id }] : []),
+        ...(hasHrCapability(viewer, 'cycle_plan_edit') || hasHrCapability(viewer, 'cycle_terminate') || hasHrCapability(viewer, 'cycle_delete') ? [{ hrOwnerId: viewer.id }] : []),
         ...(hasHrCapability(viewer, 'cycle_plan_review') ? [{ reviewerId: viewer.id }] : []),
         ...(query.purpose !== 'manage' ? [{ tasks: { some: visibleTaskWhere } }] : []),
       ] } : {};
     const where: Prisma.AssessmentCycleWhereInput = {
+      ...(query.recordScope === 'deleted' ? { deletedAt: { not: null } } : query.recordScope === 'all' ? {} : { deletedAt: null }),
       ...operatorScope,
       ...(forPublication && { tasks: { some: { OR: [
         { status: { in: ['approval', 'published', 'confirmed', 'appealing', 'closed'] } },
@@ -661,8 +674,8 @@ export class CyclesService {
     }
 
     return paginated(items.map((cycle) => {
-      const publicCycle = { ...this.withPlanFields(cycle), canTerminate: canTerminateCycle(viewer, cycle),
-        canManagePlan: !cycle.terminatedAt && (isGlobalCycleOperator(viewer)
+      const publicCycle = { ...this.withPlanFields(cycle), canTerminate: canTerminateCycle(viewer, cycle), canDelete: canDeleteCycle(viewer, cycle),
+        canManagePlan: !cycle.terminatedAt && !cycle.deletedAt && (isGlobalCycleOperator(viewer)
         || (hasHrCapability(viewer, 'cycle_plan_edit') && cycle.hrOwnerId === viewer.id)) };
       const byStatus = statusCountsByCycle.get(cycle.id);
       return byStatus
@@ -676,6 +689,7 @@ export class CyclesService {
     const visibleTaskWhere = this.visibleTaskWhere(viewer);
     const cycles = await this.prisma.assessmentCycle.findMany({
       where: {
+        deletedAt: null,
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: visibleTaskWhere },
       },
@@ -700,6 +714,7 @@ export class CyclesService {
     const cycles = await this.prisma.assessmentCycle.findMany({
       where: {
         ...(restrictedCycleIds ? { id: { in: restrictedCycleIds } } : {}),
+        deletedAt: null,
         openedAt: { not: null },
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: { employeeId: ownerId } },
@@ -801,6 +816,7 @@ export class CyclesService {
       || viewer.sysRole === SysRole.system_admin
       || (hasHrCapability(viewer, 'cycle_plan_edit') && cycle.hrOwnerId === viewer.id)
       || (hasHrCapability(viewer, 'cycle_terminate') && cycle.hrOwnerId === viewer.id)
+      || (hasHrCapability(viewer, 'cycle_delete') && cycle.hrOwnerId === viewer.id)
       || (hasHrCapability(viewer, 'cycle_plan_review') && cycle.reviewerId === viewer.id);
     if (!canManageCycles && ['draft', 'scheduled', 'launch_blocked'].includes(cycle.status)) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看尚未发起的周期' });
@@ -835,9 +851,10 @@ export class CyclesService {
     const publicCycle = Object.fromEntries(
       Object.entries(cycle).filter(([key]) => key !== 'launchPlan' && key !== 'launchPlanHash'),
     );
-    publicCycle.canManagePlan = !cycle.terminatedAt && (!viewer || isGlobalCycleOperator(viewer)
+    publicCycle.canManagePlan = !cycle.terminatedAt && !cycle.deletedAt && (!viewer || isGlobalCycleOperator(viewer)
       || (hasHrCapability(viewer, 'cycle_plan_edit') && cycle.hrOwnerId === viewer.id));
     publicCycle.canTerminate = !!viewer && canTerminateCycle(viewer, cycle);
+    publicCycle.canDelete = !!viewer && canDeleteCycle(viewer, cycle);
 
     return {
       ...publicCycle,

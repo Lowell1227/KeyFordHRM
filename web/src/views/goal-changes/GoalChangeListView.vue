@@ -14,8 +14,9 @@ import BusinessListPage from '@/components/common/business-list/BusinessListPage
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import PerformanceLifecycleActions from '@/views/task/components/PerformanceLifecycleActions.vue';
 import { grantLabels, statusLabels } from './goal-change-labels';
-import { canViewLifecycleHistory, lifecycleLabel, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
+import { applyLifecycleProjection, canViewLifecycleHistory, lifecycleLabel, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
 
 const route = useRoute(), router = useRouter(), auth = useAuthStore();
 const context = ref<GoalChangeContext | null>(null), rows = ref<GoalChangeRow[]>([]);
@@ -172,7 +173,9 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
           <el-table-column prop="creatorName" label="发起人" min-width="100" />
           <el-table-column prop="reason" label="变更原因" min-width="180" show-overflow-tooltip />
           <el-table-column label="更新时间" width="165"><template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template></el-table-column>
-          <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDetail(row.id)">查看</el-button></template></el-table-column>
+          <el-table-column label="操作" width="190" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDetail(row.id)">查看</el-button>
+            <PerformanceLifecycleActions compact kind="goal_change" :record="row as GoalChangeRow" :disabled="loading" @state="value => applyLifecycleProjection(row, value)" @changed="queueScope ? loadPending() : loadList()" />
+          </template></el-table-column>
         </el-table>
       </template>
       <template #mobile-list>
@@ -182,7 +185,9 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
             <div class="mobile-result-field"><span>考核周期</span><span>{{ row.cycleName }}</span></div>
             <div class="mobile-result-field"><span>发起人</span><span>{{ row.creatorName }}</span></div>
             <div class="mobile-result-field"><span>变更原因</span><span>{{ row.reason || '未填写' }}</span></div>
-            <template #actions><el-button link type="primary" @click="openDetail(row.id)">查看</el-button></template>
+            <template #actions><el-button link type="primary" @click="openDetail(row.id)">查看</el-button>
+              <PerformanceLifecycleActions compact kind="goal_change" :record="row" :disabled="loading" @state="value => applyLifecycleProjection(row, value)" @changed="queueScope ? loadPending() : loadList()" />
+            </template>
           </MobileResultCard>
         </div>
       </template>

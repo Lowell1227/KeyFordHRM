@@ -40,7 +40,7 @@ const TYPE_LABEL = {
 } as const;
 
 function handleMore(command: string, cycle: AssessmentCycle) {
-  if (cycle.terminatedAt) return;
+  if (cycle.terminatedAt || cycle.deletedAt) return;
   if (command === 'deadlines') emit('edit-deadlines', cycle);
   if (command === 'cancel-schedule') emit('cancel-schedule', cycle);
   if (command === 'notification-mode') emit('notification-mode', cycle);
@@ -204,9 +204,10 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       <template #default="{ row }">
         <div class="cycle-state-cell">
           <el-tag :type="(row as AssessmentCycle).terminatedAt ? 'info' : cycleBusinessState(row as AssessmentCycle).tagType" size="small">
-            {{ (row as AssessmentCycle).terminatedAt ? '已终止' : cycleBusinessState(row as AssessmentCycle).label }}
+            {{ (row as AssessmentCycle).deletedAt ? '已删除' : (row as AssessmentCycle).terminatedAt ? '已终止' : cycleBusinessState(row as AssessmentCycle).label }}
           </el-tag>
-          <small v-if="(row as AssessmentCycle).terminatedAt">{{ (row as AssessmentCycle).terminationReason || '未记录终止原因' }}</small>
+          <small v-if="(row as AssessmentCycle).deletedAt">{{ (row as AssessmentCycle).deletionReason || '未记录删除原因' }}</small>
+          <small v-else-if="(row as AssessmentCycle).terminatedAt">{{ (row as AssessmentCycle).terminationReason || '未记录终止原因' }}</small>
           <small v-else-if="(row as AssessmentCycle).status === 'launch_blocked' && (row as AssessmentCycle).launchBlockedReason">
             {{ (row as AssessmentCycle).launchBlockedReason }}
           </small>
@@ -234,7 +235,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
     <el-table-column label="操作" width="240" fixed="right">
       <template #default="{ row }">
         <div class="cycle-actions" @click.stop>
-          <template v-if="(row as AssessmentCycle).status === 'draft' && !(row as AssessmentCycle).terminatedAt">
+          <template v-if="(row as AssessmentCycle).status === 'draft' && !(row as AssessmentCycle).terminatedAt && !(row as AssessmentCycle).deletedAt">
             <el-button
               v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false && (row as AssessmentCycle).reviewStatus === 'approved'"
               :data-testid="`cycle-primary-${(row as AssessmentCycle).id}`"
@@ -256,7 +257,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
               @click="emit('edit-cycle', row as AssessmentCycle)"
             >编辑</el-button>
             <el-button
-              v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false"
+              v-if="(row as AssessmentCycle).canDelete === true && !(row as AssessmentCycle).deletedAt"
               :data-testid="`cycle-delete-${(row as AssessmentCycle).id}`"
               link
               type="danger"
@@ -272,7 +273,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
               :loading="launchingId === (row as AssessmentCycle).id"
               @click="emit('primary', row as AssessmentCycle)"
             >
-              {{ (row as AssessmentCycle).terminatedAt ? '查看记录' : cyclePrimaryActionLabel(row as AssessmentCycle) }}
+              {{ (row as AssessmentCycle).deletedAt || (row as AssessmentCycle).terminatedAt ? '查看记录' : cyclePrimaryActionLabel(row as AssessmentCycle) }}
             </el-button>
             <el-dropdown
               v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false && !(row as AssessmentCycle).terminatedAt"
@@ -307,6 +308,8 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
           </template>
           <el-button v-if="(row as AssessmentCycle).canTerminate === true && !(row as AssessmentCycle).terminatedAt"
             :data-testid="`cycle-terminate-${(row as AssessmentCycle).id}`" link type="danger" @click="emit('terminate', row as AssessmentCycle)">终止周期</el-button>
+          <el-button v-if="(row as AssessmentCycle).terminatedAt && (row as AssessmentCycle).canDelete === true && !(row as AssessmentCycle).deletedAt"
+            :data-testid="`cycle-delete-${(row as AssessmentCycle).id}`" link type="danger" @click="emit('delete', row as AssessmentCycle)">删除</el-button>
         </div>
       </template>
     </el-table-column>
@@ -332,9 +335,10 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
           <small v-if="!cycle.terminatedAt">{{ notificationLabel(cycle) }}</small>
           <small v-else>终止于 {{ dayjs(cycle.terminatedAt).format('YYYY-MM-DD HH:mm') }}</small>
         </div>
-        <el-tag :type="cycle.terminatedAt ? 'info' : cycleBusinessState(cycle).tagType" size="small">{{ cycle.terminatedAt ? '已终止' : cycleBusinessState(cycle).label }}</el-tag>
+        <el-tag :type="cycle.deletedAt || cycle.terminatedAt ? 'info' : cycleBusinessState(cycle).tagType" size="small">{{ cycle.deletedAt ? '已删除' : cycle.terminatedAt ? '已终止' : cycleBusinessState(cycle).label }}</el-tag>
       </header>
-      <p v-if="cycle.terminatedAt" class="cycle-termination-reason">终止原因：{{ cycle.terminationReason || '未记录' }}</p>
+      <p v-if="cycle.deletedAt" class="cycle-termination-reason">删除原因：{{ cycle.deletionReason || '未记录' }}</p>
+      <p v-else-if="cycle.terminatedAt" class="cycle-termination-reason">终止原因：{{ cycle.terminationReason || '未记录' }}</p>
       <div
         :data-testid="`cycle-scope-mobile-${cycle.id}`"
         class="cycle-mobile-card__scope"
@@ -347,7 +351,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
         >{{ detail }}</small>
       </div>
       <footer @click.stop>
-        <template v-if="cycle.status === 'draft' && !cycle.terminatedAt">
+        <template v-if="cycle.status === 'draft' && !cycle.terminatedAt && !cycle.deletedAt">
           <el-button
             v-if="canEdit && cycle.canManagePlan !== false && cycle.reviewStatus === 'approved'"
             :data-testid="`cycle-primary-mobile-${cycle.id}`"
@@ -369,7 +373,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
             @click="emit('edit-cycle', cycle)"
           >编辑</el-button>
           <el-button
-            v-if="canEdit && cycle.canManagePlan !== false"
+            v-if="cycle.canDelete === true && !cycle.deletedAt"
             :data-testid="`cycle-delete-mobile-${cycle.id}`"
             type="danger"
             plain
@@ -386,7 +390,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
             :loading="launchingId === cycle.id"
             @click="emit('primary', cycle)"
           >
-            {{ cycle.terminatedAt ? '查看记录' : cyclePrimaryActionLabel(cycle) }}
+            {{ cycle.deletedAt || cycle.terminatedAt ? '查看记录' : cyclePrimaryActionLabel(cycle) }}
           </el-button>
           <el-dropdown v-if="canEdit && cycle.canManagePlan !== false && !cycle.terminatedAt" trigger="click" @command="handleMore($event as string, cycle)">
             <el-button :icon="MoreFilled" text aria-label="更多操作" />
@@ -417,6 +421,8 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
         </template>
         <el-button v-if="cycle.canTerminate === true && !cycle.terminatedAt" :data-testid="`cycle-terminate-mobile-${cycle.id}`"
           type="danger" plain size="small" @click="emit('terminate', cycle)">终止周期</el-button>
+        <el-button v-if="cycle.terminatedAt && cycle.canDelete === true && !cycle.deletedAt" :data-testid="`cycle-delete-mobile-${cycle.id}`"
+          type="danger" plain size="small" @click="emit('delete', cycle)">删除</el-button>
       </footer>
     </article>
   </section>

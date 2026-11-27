@@ -163,6 +163,7 @@ export type HrCapability =
   | 'cycle_plan_edit'
   | 'cycle_plan_review'
   | 'cycle_terminate'
+  | 'cycle_delete'
   | 'performance_calibration'
   | 'performance_publish'
   | 'performance_lifecycle_view'
@@ -548,6 +549,11 @@ export interface CycleTerminationResult {
 }
 
 export interface AssessmentCycle {
+  deletedAt?: string | null;
+  deletedById?: string | null;
+  deletionReason?: string | null;
+  deletionVersion?: number;
+  canDelete?: boolean;
   terminatedAt?: string | null;
   terminatedById?: string | null;
   terminationReason?: string | null;
@@ -636,6 +642,7 @@ export interface AssessmentCycle {
 }
 
 export interface CycleQuery {
+  recordScope?: 'current' | 'deleted' | 'all';
   purpose?: 'manage' | 'publish';
   page?: number;
   pageSize?: number;
@@ -643,6 +650,21 @@ export interface CycleQuery {
   type?: CycleType;
   group?: CycleStatusGroup;
   keyword?: string;
+}
+
+export interface CycleDeletionPreview {
+  cycle: Pick<AssessmentCycle, 'id' | 'name' | 'status' | 'planVersion' | 'terminatedAt' | 'deletedAt'>;
+  canDelete: boolean;
+  previewHash: string;
+  summary: { total: number; deletable: number; blocked: number; alreadyDeleted: number; goalChanges: number };
+  tasks: Array<{
+    id: string; employeeName: string; employeeNo: string | null; status: string; lifecycleStatus: string;
+    disposition: 'delete' | 'blocked' | 'already_deleted'; reason: string;
+  }>;
+}
+
+export interface CycleDeletionResult {
+  id: string; deletedAt: string; deletedTaskCount: number; deletedGoalChangeCount: number; alreadyDeletedTaskCount: number;
 }
 
 export type CycleStatusGroup = 'attention' | 'active' | 'finished';

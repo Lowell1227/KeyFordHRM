@@ -18,6 +18,8 @@ import type {
   CycleTerminationPreview,
   CycleTerminationBody,
   CycleTerminationResult,
+  CycleDeletionPreview,
+  CycleDeletionResult,
 } from '@/types/api.types';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
@@ -104,6 +106,14 @@ export const cyclesApi = {
 
   terminationPreview(id: string): Promise<CycleTerminationPreview> {
     return apiGet(`/cycles/${id}/termination-preview`);
+  },
+
+  deletionPreview(id: string): Promise<CycleDeletionPreview> {
+    return apiGet(`/cycles/${id}/deletion-preview`);
+  },
+
+  logicalDelete(id: string, body: CycleTerminationBody): Promise<CycleDeletionResult> {
+    return http.post(`/cycles/${id}/delete`, body, { skipErrorMessage: true }) as unknown as Promise<CycleDeletionResult>;
   },
 
   terminate(id: string, body: CycleTerminationBody): Promise<CycleTerminationResult> {

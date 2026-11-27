@@ -1174,6 +1174,10 @@ model TemplateIndicator {
 }
 
 model AssessmentCycle {
+  deletedAt                DateTime?        @map("deleted_at") @db.Timestamptz(3)
+  deletedById              String?          @map("deleted_by_id") @db.Uuid
+  deletionReason           String?          @map("deletion_reason") @db.Text
+  deletionVersion          Int              @default(0) @map("deletion_version")
   terminatedAt             DateTime?        @map("terminated_at") @db.Timestamptz(3)
   terminatedById           String?          @map("terminated_by_id") @db.Uuid
   terminationReason        String?          @map("termination_reason") @db.Text

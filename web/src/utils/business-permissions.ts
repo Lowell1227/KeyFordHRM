@@ -3,7 +3,7 @@ import type { CurrentUser, HrCapability } from '@/types/api.types';
 export function maintainedHrCapabilities(role: CurrentUser['sysRole'], capabilities: readonly HrCapability[]): HrCapability[] {
   if (role === 'hr_user') return [...capabilities].sort();
   const explicit = ['recruitment_view', 'recruitment_edit', 'recruitment_demand_review', 'talent_hiring_confirm'];
-  if (role === 'hr' || role === 'system_admin') explicit.push('cycle_terminate');
+  if (role === 'hr' || role === 'system_admin') explicit.push('cycle_terminate', 'cycle_delete');
   return capabilities.filter(capability => explicit.includes(capability)).sort();
 }
 

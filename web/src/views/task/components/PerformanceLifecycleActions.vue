@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus';
 import { performanceLifecycleApi, lifecycleLabel, type LifecycleKind, type PerformanceLifecycle } from '@/api/performance-lifecycle.api';
 import { formatDateTime } from '@/utils/date';
 
-const props = defineProps<{ kind: LifecycleKind; record: { id: string } & Partial<PerformanceLifecycle>; disabled?: boolean; disabledReason?: string }>();
+const props = defineProps<{ kind: LifecycleKind; record: { id: string } & Partial<PerformanceLifecycle>; disabled?: boolean; disabledReason?: string; compact?: boolean }>();
 const emit = defineEmits<{ changed: []; state: [value: PerformanceLifecycle]; busy: [value: boolean] }>();
 const action = ref<'terminate' | 'delete' | ''>(''), reason = ref(''), fieldError = ref(''), error = ref('');
 const evidence = ref<PerformanceLifecycle | null>(null), loading = ref(false), saving = ref(false), needsReload = ref(false);
@@ -48,7 +48,10 @@ async function loadHistory() {
   } catch (cause) { if (alive && token === historySession) historyError.value = message(cause); }
   finally { if (alive && token === historySession) historyLoading.value = false; }
 }
-watch(() => [props.record.id, props.kind, props.record.lifecycleStatus], loadHistory, { immediate: true });
+watch(() => [props.record.id, props.kind, props.record.lifecycleStatus, props.compact], () => {
+  if (!props.compact) return loadHistory();
+  historySession++; history.value = null; historyError.value = ''; historyLoading.value = false;
+}, { immediate: true });
 async function refresh() {
   const token = ++session, id = props.record.id, kind = props.kind;
   loading.value = true; error.value = ''; evidence.value = null; needsReload.value = true;
@@ -89,12 +92,12 @@ async function submit() {
 </script>
 
 <template>
-  <section class="lifecycle-actions" aria-label="记录管理">
-    <el-alert v-if="lifecycleLabel(record)" :title="`${lifecycleLabel(record)} · 仅供查阅，既有业务事实保留`" type="info" :closable="false">
+  <section class="lifecycle-actions" :class="{ 'lifecycle-actions--compact': compact }" :data-record-id="record.id" aria-label="记录管理" @click.stop>
+    <el-alert v-if="!compact && lifecycleLabel(record)" :title="`${lifecycleLabel(record)} · 仅供查阅，既有业务事实保留`" type="info" :closable="false">
       <p v-if="record.terminatedAt || record.terminationReason">终止：{{ formatDateTime(record.terminatedAt) }} · {{ record.terminationReason }}</p>
       <p v-if="record.deletedAt || record.deletionReason">删除：{{ formatDateTime(record.deletedAt) }} · {{ record.deletionReason }}</p>
     </el-alert>
-    <details v-if="lifecycleLabel(record)" class="lifecycle-history">
+    <details v-if="!compact && lifecycleLabel(record)" class="lifecycle-history">
       <summary>办理记录</summary>
       <p v-if="historyLoading" role="status">正在读取办理记录</p>
       <div v-if="historyError" role="alert">{{ historyError }} <el-button link @click="loadHistory">重试</el-button></div>
@@ -105,8 +108,8 @@ async function submit() {
     </details>
     <div v-if="can('terminate') || can('delete')" class="lifecycle-buttons">
       <span v-if="disabled && disabledReason" class="disabled-reason">{{ disabledReason }}</span>
-      <el-button v-if="can('terminate')" type="danger" plain :disabled="disabled || saving || loading" @click="open('terminate')">终止流程</el-button>
-      <el-button v-if="can('delete')" type="danger" plain :disabled="disabled || saving || loading" @click="open('delete')">删除记录</el-button>
+      <el-button v-if="can('terminate')" type="danger" :link="compact" :plain="!compact" :disabled="disabled || saving || loading" @click="open('terminate')">{{ compact ? '终止' : '终止流程' }}</el-button>
+      <el-button v-if="can('delete')" type="danger" :link="compact" :plain="!compact" :disabled="disabled || saving || loading" @click="open('delete')">{{ compact ? '删除' : '删除记录' }}</el-button>
     </div>
     <el-dialog :model-value="!!action" :title="title" width="min(480px, 94vw)" append-to-body
       :close-on-click-modal="false" :close-on-press-escape="!saving && !loading" :show-close="!saving && !loading"
@@ -130,6 +133,8 @@ async function submit() {
 
 <style scoped>
 .lifecycle-actions { min-width: 0; overflow-wrap: anywhere; }
+.lifecycle-actions--compact { display: inline-block; vertical-align: middle; margin-left: 8px; }
+.lifecycle-actions--compact .lifecycle-buttons { margin: 0; justify-content: flex-start; }
 .lifecycle-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 10px 0; }
 .lifecycle-buttons :deep(.el-button) { margin-left: 0; }
 .disabled-reason { align-self: center; color: var(--el-text-color-secondary); font-size: 13px; }

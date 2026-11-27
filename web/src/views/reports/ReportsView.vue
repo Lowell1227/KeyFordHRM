@@ -217,8 +217,7 @@ function formatDate(date: string | Date | null | undefined): string {
 
 async function loadCycles() {
   try {
-    const res = await cyclesApi.findAll({});
-    cycles.value = res.items;
+    cycles.value = await cyclesApi.findAllOptions({ recordScope: 'all' });
   } catch {
     cycles.value = [];
   }

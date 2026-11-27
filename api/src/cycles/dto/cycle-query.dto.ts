@@ -10,6 +10,10 @@ export enum CycleStatusGroup {
 
 export class CycleQueryDto extends PaginationDto {
   @IsOptional()
+  @IsIn(['current', 'deleted', 'all'])
+  recordScope?: 'current' | 'deleted' | 'all';
+
+  @IsOptional()
   @IsIn(['manage', 'publish'])
   purpose?: 'manage' | 'publish';
 

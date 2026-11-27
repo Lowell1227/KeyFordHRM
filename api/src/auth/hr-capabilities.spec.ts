@@ -1,6 +1,14 @@
 import { hasHrCapability } from './hr-capabilities';
 
 describe('hasHrCapability', () => {
+  it.each(['hr_user', 'hr', 'system_admin'])('requires explicit %s cycle deletion, without granting termination or view-all', sysRole => {
+    expect(hasHrCapability({ sysRole, hrCapabilities: [] }, 'cycle_delete')).toBe(false);
+    expect(hasHrCapability({ sysRole, hrCapabilities: ['cycle_delete'] }, 'cycle_delete')).toBe(true);
+    expect(hasHrCapability({ sysRole, hrCapabilities: ['cycle_delete'] }, 'cycle_terminate')).toBe(false);
+  });
+  it.each(['employee', 'manager', 'vp'])('rejects forged %s cycle deletion grant', sysRole => {
+    expect(hasHrCapability({ sysRole, hrCapabilities: ['cycle_delete'] }, 'cycle_delete')).toBe(false);
+  });
   it.each(['hr_user', 'hr', 'system_admin'])('requires an explicit %s cycle termination grant', sysRole => {
     expect(hasHrCapability({ sysRole, hrCapabilities: [] }, 'cycle_terminate')).toBe(false);
     expect(hasHrCapability({ sysRole, hrCapabilities: ['cycle_terminate'] }, 'cycle_terminate')).toBe(true);

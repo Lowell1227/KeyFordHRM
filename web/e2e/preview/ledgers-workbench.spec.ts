@@ -56,6 +56,46 @@ async function manage(page: Page, kind: string, id: string, action: 'terminate' 
   await expect(dialog).not.toBeVisible();
 }
 
+test('list operations terminate and delete the exact four fictional records without opening a detail', async ({ page }, info) => {
+  expect(info.project.use.baseURL).toBe(origin);
+  const f = prepare(); expect(f.fictional).toBe(true);
+  const errors: string[] = []; page.on('pageerror', () => errors.push('pageerror'));
+  await login(page);
+  const records = [
+    { kind: 'task', id: f.taskId, route: `/tasks?goalView=monitor&employeeName=${encodeURIComponent(f.employeeName)}` },
+    { kind: 'goal_change', id: f.changeId, route: '/goal-changes?scope=all' },
+    { kind: 'improvement_plan', id: f.improvementId, route: '/improvement-plans' },
+    { kind: 'confirmation', id: f.confirmationId, route: '/confirmation-applications/manage' },
+  ];
+  for (const row of records) {
+    await page.goto(row.route);
+    const before = await read(page, `/performance-lifecycle/${row.kind}/${row.id}`);
+    expect(before.allowedActions).toContain('lifecycle_terminate');
+    const controls = page.locator(`.lifecycle-actions--compact[data-record-id="${row.id}"]:visible`);
+    await expect(controls.getByRole('button', { name: '终止', exact: true })).toBeVisible();
+    for (const action of ['terminate', 'delete'] as const) {
+      await controls.getByRole('button', { name: action === 'terminate' ? '终止' : '删除', exact: true }).click();
+      const title = action === 'terminate' ? '终止流程' : '删除记录';
+      const dialog = page.getByRole('dialog', { name: title, exact: true });
+      await expect(dialog).toBeVisible();
+      await dialog.getByLabel('操作原因', { exact: true }).fill('隔离虚构验收：从原列表操作列办理');
+      const response = page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/performance-lifecycle/${row.kind}/${row.id}/${action}` && r.request().method() === 'POST');
+      await dialog.getByRole('button', { name: title, exact: true }).click();
+      expect((await response).status()).toBe(201);
+      await expect(dialog).toBeHidden();
+      await expect(page).toHaveURL(origin + row.route);
+    }
+    await expect(controls).toHaveCount(0);
+    const history = await read(page, `/performance-lifecycle/${row.kind}/${row.id}`);
+    expect(history.lifecycleStatus).toBe('deleted');
+    expect(history.events.filter((event: { action: string }) => event.action === 'lifecycle_terminated')).toHaveLength(1);
+    expect(history.events.filter((event: { action: string }) => event.action === 'lifecycle_deleted')).toHaveLength(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`${row.kind}-list-after-delete.png`), fullPage: true });
+  }
+  expect(errors).toEqual([]);
+});
+
 test('HR terminates and logically removes all four record kinds; original facts and audit remain', async ({ page }, info) => {
   expect(info.project.use.baseURL).toBe(origin);
   const f = prepare(); expect(f.fictional).toBe(true);

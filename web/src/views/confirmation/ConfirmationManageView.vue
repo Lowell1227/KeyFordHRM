@@ -13,7 +13,8 @@ import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import type { ConfirmationApplication, ConfirmationWarning } from '@/types/api.types';
 import type { ConfirmationStatus } from '@/types/enums';
-import { canViewLifecycleHistory, canViewLifecycleLedger, lifecycleLabel, lifecycleReadOnly, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
+import { applyLifecycleProjection, canViewLifecycleHistory, canViewLifecycleLedger, lifecycleLabel, lifecycleReadOnly, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
+import PerformanceLifecycleActions from '@/views/task/components/PerformanceLifecycleActions.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -149,8 +150,9 @@ function handleDetailVisibility(value: boolean) {
         <el-table-column label="HR 实际经办" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).hr?.name || '尚未办理' }}</template></el-table-column>
         <el-table-column label="公司审批人" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).companyApprover?.name || '提交时确定' }}</template></el-table-column>
         <el-table-column label="实际转正日期" width="135"><template #default="{ row }">{{ formatDate((row as ConfirmationApplication).actualRegularDate) }}</template></el-table-column>
-        <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }">
+        <el-table-column label="操作" width="200" fixed="right"><template #default="{ row }">
           <el-button link type="primary" @click="openDetail((row as ConfirmationApplication).id)">{{ actionLabel(row as ConfirmationApplication) }}</el-button>
+          <PerformanceLifecycleActions compact kind="confirmation" :record="row as ConfirmationApplication" :disabled="loading" @state="value => applyLifecycleProjection(row, value)" @changed="loadList" />
         </template></el-table-column>
       </el-table>
     </template>
@@ -163,7 +165,9 @@ function handleDetailVisibility(value: boolean) {
           <div class="mobile-result-field"><span class="mobile-result-field__label">HR 实际经办</span><span class="mobile-result-field__value">{{ item.hr?.name || '尚未办理' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '提交时确定' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
-          <template #actions><el-button link type="primary" @click="openDetail(item.id)">{{ actionLabel(item) }}</el-button></template>
+          <template #actions><el-button link type="primary" @click="openDetail(item.id)">{{ actionLabel(item) }}</el-button>
+            <PerformanceLifecycleActions compact kind="confirmation" :record="item" :disabled="loading" @state="value => applyLifecycleProjection(item, value)" @changed="loadList" />
+          </template>
         </MobileResultCard>
       </div>
     </template>

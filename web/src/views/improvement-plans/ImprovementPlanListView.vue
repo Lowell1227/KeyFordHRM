@@ -12,11 +12,12 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import PerformanceLifecycleActions from '@/views/task/components/PerformanceLifecycleActions.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import type { Department, ImprovementGoal, ImprovementPlan } from '@/types/api.types';
-import { canViewLifecycleHistory, lifecycleLabel, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
+import { applyLifecycleProjection, canViewLifecycleHistory, lifecycleLabel, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
 import { useAuthStore } from '@/stores/auth.store';
 
 const route = useRoute();
@@ -108,7 +109,11 @@ async function loadList() {
       status: filters.status || undefined, keyword: filters.keyword || undefined,
       lifecycleStatus: lifecycleStatus.value || undefined,
     }));
-    if (queryCurrent('list', generation)) { list.value = result.items; total.value = result.total; }
+    if (queryCurrent('list', generation)) {
+      const lastPage = Math.max(1, Math.ceil(result.total / pageSize.value));
+      if (page.value > lastPage) { page.value = lastPage; await loadList(); return; }
+      list.value = result.items; total.value = result.total;
+    }
   } catch (error) {
     if (queryCurrent('list', generation)) queryErrors.list = queryFailure('list', error);
   } finally { if (queryCurrent('list', generation)) { loading.value = false; queryLoading.list = false; } }
@@ -216,7 +221,9 @@ function goDetail(id: string) { openDetail(id); }
           <el-table-column label="预计完成" width="120"><template #default="{ row }">{{ row.targetDate ? formatDate(row.targetDate) : '-' }}</template></el-table-column>
           <el-table-column label="综合分" width="130"><template #default="{ row }">{{ scoreLabel(row as ImprovementPlan) }}</template></el-table-column>
           <el-table-column prop="creatorName" label="发起人" min-width="100" />
-          <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="goDetail(row.id)">查看</el-button></template></el-table-column>
+          <el-table-column label="操作" width="190" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="goDetail(row.id)">查看</el-button>
+            <PerformanceLifecycleActions compact kind="improvement_plan" :record="row as ImprovementPlan" :disabled="loading" @state="value => applyLifecycleProjection(row, value)" @changed="loadList" />
+          </template></el-table-column>
         </el-table>
       </div>
       <div v-loading="loading" class="mobile-result-list">
@@ -226,7 +233,9 @@ function goDetail(id: string) { openDetail(id); }
           <div class="mobile-result-field"><span class="mobile-result-field__label">关联周期</span><span>{{ item.cycleName || '未关联' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">预计完成</span><span>{{ item.targetDate ? formatDate(item.targetDate) : '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">综合分</span><span>{{ scoreLabel(item) }}</span></div>
-          <template #actions><el-button link type="primary" @click.stop="goDetail(item.id)">查看</el-button></template>
+          <template #actions><el-button link type="primary" @click.stop="goDetail(item.id)">查看</el-button>
+            <PerformanceLifecycleActions compact kind="improvement_plan" :record="item" :disabled="loading" @state="value => applyLifecycleProjection(item, value)" @changed="loadList" />
+          </template>
         </MobileResultCard>
       </div>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" @change="loadList" />

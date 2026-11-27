@@ -18,12 +18,14 @@ export class CycleManagementGuard implements CanActivate {
     if (!viewer) return true; // Global authentication/role guards apply first.
     const required = this.reflector.getAllAndOverride<HrCapability[]>(HR_CAPABILITIES_KEY, [context.getHandler(), context.getClass()]) ?? [];
     const id = request.params?.id;
-    if (id && isUUID(id) && request.method !== 'GET' && context.getHandler().name !== 'terminate'
-      && context.getHandler().name !== 'publish') {
-      const state = await this.prisma.assessmentCycle.findUnique({ where: { id }, select: { terminatedAt: true } });
-      if (state?.terminatedAt) throw new ConflictException('本周期已终止，计划及时间安排只读；已有结果保留');
+    if (id && isUUID(id) && request.method !== 'GET') {
+      const state = await this.prisma.assessmentCycle.findUnique({ where: { id }, select: { terminatedAt: true, deletedAt: true } });
+      if (state?.deletedAt) throw new ConflictException('本周期已删除，历史记录仅供查看');
+      if (state?.terminatedAt && !['terminate', 'publish', 'deleteCycle'].includes(context.getHandler().name)) throw new ConflictException('本周期已终止，计划及时间安排只读；已有结果保留');
     }
     if (isGlobalCycleOperator(viewer)) return true;
+    // Draft/terminated deletion chooses its capability and rechecks scope in the service.
+    if (required.includes('cycle_delete')) return true;
     if (!id || !isUUID(id) || !required.some((c) => c === 'cycle_plan_edit' || c === 'cycle_plan_review')) return true;
     const cycle = await this.prisma.assessmentCycle.findUnique({ where: { id }, select: { hrOwnerId: true, reviewerId: true } });
     if (!cycle) throw new NotFoundException('考核周期不存在');

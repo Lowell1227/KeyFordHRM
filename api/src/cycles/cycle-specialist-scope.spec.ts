@@ -12,6 +12,8 @@ describe('cycle specialist scope in services', () => {
       findUnique: jest.fn().mockResolvedValue({ id: 'cycle', hrOwnerId: 'someone-else', status: 'draft' }),
       count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]), updateMany: jest.fn(), deleteMany: jest.fn(),
     } };
+    prisma.$queryRaw = jest.fn().mockResolvedValue([]);
+    prisma.user = { findUnique: jest.fn().mockResolvedValue({ ...viewer, status: 'active', archivedAt: null, deletedAt: null }) };
     prisma.$transaction = jest.fn((fn) => fn(prisma));
     service = new CyclesService(prisma, {} as any, {} as any);
   });
@@ -40,6 +42,7 @@ describe('cycle specialist scope in services', () => {
   it('cannot delete another owner draft even when creator or global reader', async () => {
     await expect(service.remove('cycle', viewer)).rejects.toThrow(ForbiddenException);
     expect(prisma.assessmentCycle.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
   });
   it('cannot edit another cycle notification settings', async () => {
     await expect(service.updateNotificationMode('cycle', 'off', viewer)).rejects.toThrow(ForbiddenException);

@@ -52,6 +52,7 @@ const emit = defineEmits<{
   'remind-review': [];
   'resolve-blocker': [code: string];
   terminate: [];
+  delete: [];
 }>();
 
 const router = useRouter();
@@ -63,17 +64,18 @@ const participantFilterOptions = [
   { key: 'exempted', label: '已豁免' },
 ] as const;
 const currentStage = computed(() => props.cycle ? cycleBusinessState(props.cycle).phaseIndex : 0);
-const nextStep = computed(() => props.cycle?.terminatedAt ? { label: '周期已终止，历史记录保留' } : props.cycle ? cycleNextStep(props.cycle) : null);
+const nextStep = computed(() => props.cycle?.deletedAt ? { label: '周期已删除，原记录保留' } : props.cycle?.terminatedAt ? { label: '周期已终止，历史记录保留' } : props.cycle ? cycleNextStep(props.cycle) : null);
 const participantFilter = ref<'all' | 'active' | 'exempted'>('all');
 const participantKeyword = ref('');
 const isPrelaunch = computed(() => Boolean(
   props.cycle
+  && !props.cycle.deletedAt
   && !props.cycle.terminatedAt
   && !props.cycle.openedAt
   && ['draft', 'scheduled', 'launch_blocked'].includes(props.cycle.status),
 ));
 const canRunLaunchAction = computed(() => Boolean(
-  props.cycle && !props.cycle.terminatedAt && props.canEdit && ['draft', 'launch_blocked'].includes(props.cycle.status),
+  props.cycle && !props.cycle.deletedAt && !props.cycle.terminatedAt && props.canEdit && ['draft', 'launch_blocked'].includes(props.cycle.status),
 ));
 const activeTaskCount = computed(() => {
   const stats = props.cycle?.taskStats;
@@ -254,7 +256,7 @@ watch(() => props.cycle?.id, () => {
               :type="cycle.terminatedAt ? 'info' : cycleBusinessState(cycle).tagType"
               size="small"
               effect="light"
-            >{{ cycle.terminatedAt ? '已终止' : cycleBusinessState(cycle).label }}</el-tag>
+            >{{ cycle.deletedAt ? '已删除' : cycle.terminatedAt ? '已终止' : cycleBusinessState(cycle).label }}</el-tag>
           </div>
           <p v-if="cycle">{{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</p>
           <div v-if="cycle" class="cycle-workspace__meta">
@@ -274,15 +276,16 @@ watch(() => props.cycle?.id, () => {
         </div>
       </div>
       <div
-        v-if="cycle && !cycle.terminatedAt && ((cycle.status === 'draft' && canEdit) || cycle.canTerminate === true)"
+        v-if="cycle && !cycle.deletedAt && ((!cycle.terminatedAt && ((cycle.status === 'draft' && canEdit) || cycle.canTerminate === true)) || cycle.canDelete === true)"
         class="cycle-workspace__header-actions"
       >
         <el-button
-          v-if="cycle?.status === 'draft' && canEdit"
+          v-if="cycle?.status === 'draft' && canEdit && !cycle.terminatedAt"
           data-testid="cycle-workspace-edit"
           @click="emit('edit')"
         >编辑</el-button>
         <el-button v-if="cycle?.canTerminate === true" type="danger" plain data-testid="cycle-workspace-terminate" @click="emit('terminate')">终止周期</el-button>
+        <el-button v-if="cycle?.canDelete === true" type="danger" plain data-testid="cycle-workspace-delete" @click="emit('delete')">删除</el-button>
       </div>
     </header>
 
@@ -298,7 +301,7 @@ watch(() => props.cycle?.id, () => {
     </el-result>
 
     <template v-else-if="cycle">
-      <nav v-if="!cycle.terminatedAt" class="cycle-stage-strip" aria-label="周期流程阶段">
+      <nav v-if="!cycle.terminatedAt && !cycle.deletedAt" class="cycle-stage-strip" aria-label="周期流程阶段">
         <div
           v-for="(stage, index) in stages"
           :key="stage"
@@ -320,8 +323,13 @@ watch(() => props.cycle?.id, () => {
         <section class="cycle-current-action" data-testid="cycle-current-action">
           <div class="cycle-current-action__heading">
             <div>
-              <span>{{ cycle.terminatedAt ? '终止记录' : '当前要做' }}</span>
+              <span>{{ cycle.deletedAt ? '删除记录' : cycle.terminatedAt ? '终止记录' : '当前要做' }}</span>
               <h2>{{ nextStep?.label }}</h2>
+              <div v-if="cycle.deletedAt" data-testid="cycle-deletion-record">
+                <p>删除时间：{{ dayjs(cycle.deletedAt).format('YYYY-MM-DD HH:mm') }}</p>
+                <p>删除原因：{{ cycle.deletionReason }}</p>
+                <p>所属任务已逻辑删除。原内容、结果和审计保留；当前不提供恢复入口。</p>
+              </div>
               <div v-if="cycle.terminatedAt" class="cycle-termination-record" data-testid="cycle-termination-record">
                 <p>终止时间：{{ dayjs(cycle.terminatedAt).format('YYYY-MM-DD HH:mm') }}</p>
                 <p>终止原因：{{ cycle.terminationReason || '未记录' }}</p>

@@ -189,11 +189,12 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '考核周期创建与编辑', value: 'cycle_plan_edit' },
   { label: '考核周期审核', value: 'cycle_plan_review' },
   { label: '考核周期终止（独立授权）', value: 'cycle_terminate' },
+  { label: '考核周期删除（独立授权）', value: 'cycle_delete' },
   { label: '绩效校准', value: 'performance_calibration' },
   { label: '结果公示', value: 'performance_publish' },
   { label: '绩效流程全局查看', value: 'performance_lifecycle_view' },
   { label: '绩效流程终止', value: 'performance_lifecycle_terminate' },
-  { label: '绩效记录移入历史', value: 'performance_lifecycle_delete' },
+  { label: '绩效记录删除', value: 'performance_lifecycle_delete' },
   { label: '转正管理与 HR 审批', value: 'confirmation_manage' },
   { label: '招聘查看', value: 'recruitment_view' },
   { label: '招聘经办', value: 'recruitment_edit' },
@@ -1907,6 +1908,12 @@ function setCycleTermination(enabled: string | number | boolean) {
   personSettingsDialog.value.hrCapabilities = capabilities;
 }
 
+function setCycleDeletion(enabled: string | number | boolean) {
+  const capabilities: HrCapability[] = personSettingsDialog.value.hrCapabilities.filter(item => item !== 'cycle_delete');
+  if (enabled === true) capabilities.push('cycle_delete');
+  personSettingsDialog.value.hrCapabilities = capabilities;
+}
+
 function toggleOrgMemberSelection(item: ManagedUser, checked: boolean) {
   selectedOrgMembers.value = checked
     ? [...selectedOrgMembers.value.filter((row) => row.id !== item.id), item]
@@ -3193,6 +3200,8 @@ onBeforeUnmount(() => {
         <el-form-item v-if="isSystemAdmin && ['hr', 'system_admin'].includes(personSettingsDialog.sysRole)" label="独立授权">
           <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('cycle_terminate')"
             data-testid="cycle-terminate-capability" @change="setCycleTermination">终止考核周期</el-checkbox>
+          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('cycle_delete')"
+            data-testid="cycle-delete-capability" @change="setCycleDeletion">删除已终止考核周期</el-checkbox>
         </el-form-item>
         <el-form-item v-if="isSystemAdmin && personSettingsDialog.sysRole !== 'hr_user'" label="招聘职责">
           <el-checkbox v-if="personSettingsDialog.sysRole !== 'hr'" :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_view')"

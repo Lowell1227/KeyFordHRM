@@ -15,6 +15,7 @@ import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
 import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
 import CycleTerminationDialog from './components/CycleTerminationDialog.vue';
+import CycleDeletionDialog from './components/CycleDeletionDialog.vue';
 import CycleMonthlyProgressPanel from './components/CycleMonthlyProgressPanel.vue';
 import CycleParticipantScopePicker, { type ParticipantScopeMode } from './components/CycleParticipantScopePicker.vue';
 import CycleScoringSettings from './components/CycleScoringSettings.vue';
@@ -38,6 +39,7 @@ import type {
   CyclePeriodSchedule,
   CycleScheduleIssue,
   CycleTerminationResult,
+  CycleDeletionResult,
 } from '@/types/api.types';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
@@ -155,6 +157,7 @@ const initialGroup = CYCLE_STATUS_GROUPS.some((item) => item.value === route.que
   : 'all';
 
 const statusGroup = ref<CycleListGroup>(initialGroup);
+const recordScope = ref<'current' | 'deleted' | 'all'>(route.query.recordScope === 'deleted' || route.query.recordScope === 'all' ? route.query.recordScope : 'current');
 const typeFilter = ref<CycleType | ''>(initialType);
 const keyword = ref(typeof route.query.keyword === 'string' ? route.query.keyword : '');
 
@@ -209,6 +212,8 @@ const detailError = ref('');
 const cycleDetail = ref<AssessmentCycle | null>(null);
 const terminationDialogVisible = ref(false);
 const terminationCycle = ref<AssessmentCycle | null>(null);
+const deletionDialogVisible = ref(false);
+const deletionCycle = ref<AssessmentCycle | null>(null);
 function openTermination(cycle: AssessmentCycle) {
   if (cycle.canTerminate !== true || cycle.terminatedAt) return;
   terminationCycle.value = cycle;
@@ -225,6 +230,16 @@ async function afterTermination(result: CycleTerminationResult, reason: string) 
   preflight.value = null;
   ElMessage.success(`周期已终止：终止${result.terminatedCount}人，保留结果${result.protectedCount}人。记录可在已结束分组查看。`);
   await loadCycles();
+  if (cycleDetail.value?.id === result.id) await loadCycleDetail(result.id);
+}
+async function afterDeletion(result: CycleDeletionResult) {
+  ElMessage.success(`周期及${result.deletedTaskCount}条任务已删除，原内容、结果和审计保留。`);
+  await loadCycles();
+  if (cycles.value.length === 0 && page.value > 1) {
+    page.value--;
+    await syncListRoute();
+    await loadCycles();
+  }
   if (cycleDetail.value?.id === result.id) await loadCycleDetail(result.id);
 }
 const isCycleWorkspace = computed(() => typeof route.query.cycleId === 'string' && route.query.cycleId.length > 0);
@@ -1382,37 +1397,9 @@ async function handleCancelSchedule(cycle: AssessmentCycle) {
 }
 
 async function handleDeleteCycle(cycle: AssessmentCycle) {
-  if (cycle.terminatedAt || cycle.status !== 'draft') return;
-  try {
-    await ElMessageBox.confirm(
-      `删除后无法恢复，确认删除「${cycle.name}」？`,
-      '删除草稿周期',
-      {
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-        type: 'warning',
-        confirmButtonClass: 'el-button--danger',
-      },
-    );
-  } catch {
-    return;
-  }
-
-  deletingId.value = cycle.id;
-  try {
-    await cyclesApi.remove(cycle.id);
-    ElMessage.success('草稿周期已删除');
-    await loadCycles();
-    if (cycles.value.length === 0 && page.value > 1) {
-      page.value -= 1;
-      await syncListRoute();
-      await loadCycles();
-    }
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '删除周期失败');
-  } finally {
-    deletingId.value = null;
-  }
+  if (cycle.canDelete !== true || cycle.deletedAt) return;
+  deletionCycle.value = cycle;
+  deletionDialogVisible.value = true;
 }
 
 async function loadCycleDetail(cycleId: string) {
@@ -1432,7 +1419,7 @@ async function loadCycleDetail(cycleId: string) {
       } finally {
         participantRecordLoading.value = false;
       }
-    } else if (!detail.terminatedAt && ['draft', 'scheduled', 'launch_blocked'].includes(detail.status)) {
+    } else if (!detail.deletedAt && !detail.terminatedAt && ['draft', 'scheduled', 'launch_blocked'].includes(detail.status)) {
       await handlePreflight(detail);
     }
   } catch (error) {
@@ -1504,7 +1491,7 @@ function handlePrimaryCycleAction(cycle: AssessmentCycle) {
 }
 
 function buildQuery(): CycleQuery {
-  const query: CycleQuery & Record<string, unknown> = { purpose: 'manage' };
+  const query: CycleQuery & Record<string, unknown> = { purpose: 'manage', recordScope: recordScope.value };
   if (statusGroup.value !== 'all') query.group = statusGroup.value;
   if (typeFilter.value) query.type = typeFilter.value;
   if (keyword.value.trim()) query.keyword = keyword.value.trim();
@@ -1513,6 +1500,8 @@ function buildQuery(): CycleQuery {
 
 async function syncListRoute() {
   const query = { ...route.query };
+  if (recordScope.value === 'current') delete query.recordScope;
+  else query.recordScope = recordScope.value;
   if (statusGroup.value === 'all') delete query.group;
   else query.group = statusGroup.value;
   delete query.status;
@@ -1547,6 +1536,7 @@ async function handleSearch() {
 }
 
 async function handleReset() {
+  recordScope.value = 'current';
   statusGroup.value = 'all';
   typeFilter.value = '';
   keyword.value = '';
@@ -1668,6 +1658,7 @@ onMounted(() => {
       @remind-review="handleRemindCycleReview"
       @resolve-blocker="handleResolvePreflightBlocker"
       @terminate="cycleDetail && openTermination(cycleDetail)"
+      @delete="cycleDetail && handleDeleteCycle(cycleDetail)"
     >
       <template #monthly-progress>
         <CycleMonthlyProgressPanel
@@ -1722,6 +1713,11 @@ onMounted(() => {
         </div>
 
         <div class="filter-row">
+        <el-select v-model="recordScope" aria-label="周期记录范围" style="width: 160px" @change="statusGroup = 'all'; handleSearch()">
+          <el-option label="正常记录" value="current" />
+          <el-option label="已删除" value="deleted" />
+          <el-option label="全部记录" value="all" />
+        </el-select>
         <el-select v-model="typeFilter" placeholder="全部类型" clearable style="width: 160px" @change="handleSearch">
           <el-option v-for="opt in CYCLE_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
         </el-select>
@@ -2145,6 +2141,7 @@ onMounted(() => {
     </el-dialog>
 
     <CycleTerminationDialog v-model:visible="terminationDialogVisible" :cycle="terminationCycle" @completed="afterTermination" />
+    <CycleDeletionDialog v-model:visible="deletionDialogVisible" :cycle="deletionCycle" @completed="afterDeletion" />
 
     <el-dialog v-model="notificationDialogVisible" title="周期通知设置" width="560px" destroy-on-close>
       <div class="notification-setting-dialog">

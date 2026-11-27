@@ -19,8 +19,8 @@ const paths: Record<Kind, string> = { task: '/tasks', goal_change: '/goal-change
 const endpoints: Record<Kind, string> = { task: '/goal-plans', goal_change: '/goal-changes/page', improvement_plan: '/improvement-plans', confirmation: '/confirmation-applications' };
 const envelope = (data: unknown) => ({ code: 0, data });
 
-async function setup(page: Page, kind: Kind, options: { list?: boolean; conflict?: boolean; denied?: boolean; ended?: boolean; editable?: boolean; revoke?: boolean; viewer?: boolean; lifecycleViewer?: boolean; mine?: boolean; direct?: 'goal' | 'employee-period' | 'manager-period' | 'result' } = {}) {
-  const writes: Array<{ path: string; body: Record<string, unknown> }> = [], queries: URLSearchParams[] = [];
+async function setup(page: Page, kind: Kind, options: { lastPage?: boolean; list?: boolean; conflict?: boolean; denied?: boolean; ended?: boolean; editable?: boolean; revoke?: boolean; viewer?: boolean; lifecycleViewer?: boolean; mine?: boolean; direct?: 'goal' | 'employee-period' | 'manager-period' | 'result' } = {}) {
+  const writes: Array<{ path: string; body: Record<string, unknown> }> = [], queries: URLSearchParams[] = [], lifecycleReads: string[] = [];
   let lifecycle = { lifecycleStatus: options.ended ? 'terminated' : 'active', lifecycleVersion: 2, updatedAt: stamp,
     terminatedAt: options.ended ? stamp : null, terminatedById: null, terminationReason: options.ended ? '虚构终止原因' : null,
     deletedAt: null as string | null, deletedById: null, deletionReason: null as string | null,
@@ -30,6 +30,7 @@ async function setup(page: Page, kind: Kind, options: { list?: boolean; conflict
   await page.route('**/api/v1/**', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname.replace('/api/v1', '');
     if (path.startsWith('/performance-lifecycle/')) {
+      if (request.method() === 'GET') lifecycleReads.push(path);
       if (request.method() === 'POST') {
         writes.push({ path, body: request.postDataJSON() }); attempts++;
         if (options.revoke) {
@@ -68,6 +69,12 @@ async function setup(page: Page, kind: Kind, options: { list?: boolean; conflict
     if (path === '/cycles/fictional-cycle') return route.fulfill({ json: envelope({ id: 'fictional-cycle', name: '虚构周期', goalWorkflowVersion: 2 }) });
     if (path === (options.mine ? '/confirmation-applications/mine' : endpoints[kind])) {
       queries.push(url.searchParams);
+      if (options.lastPage) {
+        const current = Number(url.searchParams.get('page') ?? 1), total = lifecycle.lifecycleStatus === 'deleted' ? 10 : 11;
+        const items = current === 1 ? Array.from({ length: 10 }, (_, n) => ({ ...item, id: `first-page-${n}`,
+          lifecycleStatus: 'active', deletedAt: null, allowedActions: ['lifecycle_delete'] })) : total === 11 ? [item] : [];
+        return route.fulfill({ json: envelope({ items, total, page: current, pageSize: 10 }) });
+      }
       return route.fulfill({ json: envelope({ items: [item], total: 1, page: 1, pageSize: 10 }) });
     }
     if (path.endsWith(`/${fixtures[kind].id}`)) return route.fulfill({ json: envelope(item) });
@@ -78,8 +85,61 @@ async function setup(page: Page, kind: Kind, options: { list?: boolean; conflict
   const path = (options.mine ? '/confirmation-mine' : paths[kind]) + (options.list ? '' : `/${fixtures[kind].id}`)
     + (options.direct ? `?stage=${options.direct === 'goal' ? 'goal-setting' : options.direct === 'result' ? 'result' : 'self-eval'}` : '');
   await page.goto(`/src/views/task/components/__tests__/performance-lifecycle.harness.html?path=${encodeURIComponent(path)}&role=${options.viewer ? 'viewer' : options.lifecycleViewer ? 'lifecycle-viewer' : 'manager'}${options.direct ? '&direct=true' : ''}`);
-  return { writes, queries };
+  return { writes, queries, lifecycleReads };
 }
+
+test('deleting the sole improvement plan on the last page returns to a valid page without resetting filters', async ({ page }) => {
+  const { queries } = await setup(page, 'improvement_plan', { list: true, lastPage: true });
+  await page.locator('.el-pager li').filter({ hasText: /^2$/ }).click();
+  await expect.poll(() => queries[queries.length - 1]?.get('page')).toBe('2');
+  const control = page.locator('.lifecycle-actions--compact:visible').first();
+  await control.getByRole('button', { name: '删除', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '删除记录', exact: true });
+  await dialog.getByRole('textbox', { name: '操作原因', exact: true }).fill('末页删除虚构验收');
+  await dialog.getByRole('button', { name: '删除记录', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect.poll(() => queries[queries.length - 1]?.get('page')).toBe('1');
+  await expect(page.locator('.lifecycle-actions--compact:visible')).toHaveCount(10);
+});
+
+for (const kind of Object.keys(fixtures) as Kind[]) {
+  for (const width of [1440, 1024, 390]) {
+  test(`${kind} list operation offers the authorized lifecycle action without navigating to details at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const { writes, lifecycleReads } = await setup(page, kind, { list: true });
+    const operation = ['improvement_plan', 'confirmation'].includes(kind) ? '删除' : '终止';
+    const controls = page.locator('.lifecycle-actions--compact:visible').first();
+    await expect(controls.getByRole('button', { name: operation, exact: true })).toBeVisible();
+    expect(lifecycleReads).toHaveLength(0);
+    await controls.getByRole('button', { name: operation, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: operation === '删除' ? '删除记录' : '终止流程', exact: true });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('textbox', { name: '操作原因', exact: true }).fill('列表内核定的虚构办理原因');
+    await dialog.getByRole('button', { name: operation === '删除' ? '删除记录' : '终止流程', exact: true }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0].path).toBe(`/performance-lifecycle/${kind}/${fixtures[kind].id}/${operation === '删除' ? 'delete' : 'terminate'}`);
+    expect(writes[0].body).toEqual({ expectedUpdatedAt: stamp, expectedLifecycleVersion: 2, reason: '列表内核定的虚构办理原因' });
+    await expect(dialog).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  });
+  }
+
+  test(`${kind} list hides lifecycle actions from a viewer`, async ({ page }) => {
+    const { writes, lifecycleReads } = await setup(page, kind, { list: true, denied: true });
+    await expect(page.getByRole('button', { name: /^(终止|删除)$/ })).toHaveCount(0);
+    expect(writes).toHaveLength(0); expect(lifecycleReads).toHaveLength(0);
+  });
+}
+
+test('ended list rows do not eagerly load an audit request for every compact control', async ({ page }) => {
+  const { lifecycleReads } = await setup(page, 'task', { list: true, ended: true });
+  const controls = page.locator('.lifecycle-actions--compact:visible').first();
+  await expect(controls.getByRole('button', { name: '删除', exact: true })).toBeVisible();
+  expect(lifecycleReads).toHaveLength(0);
+  await controls.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '删除记录', exact: true })).toBeVisible();
+  expect(lifecycleReads).toHaveLength(1);
+});
 
 for (const kind of Object.keys(fixtures) as Kind[]) {
   test(`${kind} list retains existing scope and adds server lifecycle filter`, async ({ page }) => {

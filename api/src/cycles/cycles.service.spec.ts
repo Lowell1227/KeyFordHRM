@@ -27,6 +27,7 @@ describe('CyclesService', () => {
   beforeEach(() => {
     prisma = {
       $transaction: jest.fn(async (callback) => callback(prisma)),
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentCycle: {
         create: jest.fn().mockImplementation(({ data }) => ({ id: 'cycle-1', ...data })),
         count: jest.fn(),
@@ -128,6 +129,17 @@ describe('CyclesService', () => {
       ],
     };
   }
+
+  it.each(['current', 'deleted', 'all'])('filters %s cycle records without widening the operator owner scope', async recordScope => {
+    const viewer = { ...creator, sysRole: SysRole.hr_user, hrCapabilities: ['cycle_delete'] };
+    prisma.assessmentCycle.findMany.mockResolvedValue([]); prisma.assessmentCycle.count.mockResolvedValue(0);
+    await service.findAll(plainToInstance(require('./dto/cycle-query.dto').CycleQueryDto, { purpose: 'manage', recordScope }), viewer);
+    const where = prisma.assessmentCycle.findMany.mock.calls[0][0].where;
+    expect(where.OR).toEqual([{ hrOwnerId: viewer.id }]);
+    if (recordScope === 'current') expect(where.deletedAt).toBeNull();
+    else if (recordScope === 'deleted') expect(where.deletedAt).toEqual({ not: null });
+    else expect(where).not.toHaveProperty('deletedAt');
+  });
 
   it('keeps department and leader goal reviews out of completed goal counts', () => {
     const stats = (service as any).buildTaskStats({}, { indicator_dept_reviewing: 2, indicator_approving: 3, goal_confirmed: 1 });
@@ -762,6 +774,7 @@ describe('CyclesService', () => {
     expect(result[0].task.manager).toEqual({ id: 'manager-frozen', name: '冻结上级' });
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
+        deletedAt: null,
         openedAt: { not: null },
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: { employeeId: owner.id } },
@@ -869,6 +882,7 @@ describe('CyclesService', () => {
       where: {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: taskScope(employee.id) },
+        deletedAt: null,
       },
       include: {
         tasks: {
@@ -904,6 +918,7 @@ describe('CyclesService', () => {
         tasks: {
           some: taskScope(manager.id),
         },
+        deletedAt: null,
       },
       include: {
         tasks: {
@@ -1028,7 +1043,7 @@ describe('CyclesService', () => {
       group: 'attention',
     } as any, creator);
 
-    const expectedWhere = { status: { in: ['draft', 'scheduled', 'launch_blocked'] }, terminatedAt: null };
+    const expectedWhere = { status: { in: ['draft', 'scheduled', 'launch_blocked'] }, terminatedAt: null, deletedAt: null };
     expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({ where: expectedWhere });
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expectedWhere,
@@ -1039,7 +1054,7 @@ describe('CyclesService', () => {
     prisma.assessmentCycle.count.mockResolvedValue(0);
     prisma.assessmentCycle.findMany.mockResolvedValue([]);
     await service.findAll({ page: 1, pageSize: 20, skip: 0, take: 20, group: 'finished' } as any, creator);
-    const where = { AND: [{ OR: [{ status: { in: ['closed'] } }, { terminatedAt: { not: null } }] }] };
+    const where = { deletedAt: null, AND: [{ OR: [{ status: { in: ['closed'] } }, { terminatedAt: { not: null } }] }] };
     expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({ where });
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({ where }));
   });
@@ -1058,7 +1073,7 @@ describe('CyclesService', () => {
     } as any, creator);
 
     expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({
-      where: { status: 'scheduled' },
+      where: { status: 'scheduled', deletedAt: null },
     });
   });
 
@@ -1097,7 +1112,8 @@ describe('CyclesService', () => {
     });
   });
 
-  it('deletes a draft cycle and records who deleted it', async () => {
+  it('logically deletes a draft cycle, never physically removes it, and records the operator', async () => {
+    prisma.user.findUnique.mockResolvedValue({ ...creator, status: 'active', isAssessorOnly: false });
     prisma.assessmentCycle.findUnique.mockResolvedValue({
       id: 'cycle-1',
       name: '2027年第一季度',
@@ -1106,9 +1122,11 @@ describe('CyclesService', () => {
     });
 
     await expect(service.remove('cycle-1', creator)).resolves.toEqual({ id: 'cycle-1' });
-    expect(prisma.assessmentCycle.deleteMany).toHaveBeenCalledWith({
-      where: { id: 'cycle-1', status: CycleStatus.draft },
-    });
+    expect(prisma.assessmentCycle.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 'cycle-1', status: CycleStatus.draft, deletedAt: null }),
+      data: expect.objectContaining({ deletedById: creator.id, deletionVersion: 1 }),
+    }));
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         userId: creator.id,
@@ -1120,6 +1138,7 @@ describe('CyclesService', () => {
   });
 
   it('rejects deletion after a cycle leaves draft status', async () => {
+    prisma.user.findUnique.mockResolvedValue({ ...creator, status: 'active', isAssessorOnly: false });
     prisma.assessmentCycle.findUnique.mockResolvedValue({
       id: 'cycle-1',
       name: '2027年第一季度',
@@ -1134,13 +1153,14 @@ describe('CyclesService', () => {
   });
 
   it('rejects deletion when the draft status changes during the request', async () => {
+    prisma.user.findUnique.mockResolvedValue({ ...creator, status: 'active', isAssessorOnly: false });
     prisma.assessmentCycle.findUnique.mockResolvedValue({
       id: 'cycle-1',
       name: '2027年第一季度',
       type: 'quarterly',
       status: CycleStatus.draft,
     });
-    prisma.assessmentCycle.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.assessmentCycle.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(service.remove('cycle-1', creator)).rejects.toMatchObject({
       response: { message: expect.stringContaining('状态已变化') },

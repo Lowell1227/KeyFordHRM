@@ -1,4 +1,4 @@
-import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { ExecutionContext, ForbiddenException, ConflictException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { CycleManagementGuard } from './cycle-management.guard';
 import { CyclesController } from './cycles.controller';
@@ -28,5 +28,15 @@ describe('CycleManagementGuard', () => {
   it('retains personal task-based detail reads without management permission', async () => {
     await expect(guard.canActivate(context(CyclesController.prototype.findOne, 'GET'))).resolves.toBe(true);
     expect(findUnique).not.toHaveBeenCalled();
+  });
+  it('lets the deletion service select and recheck the explicit capability, not plan-edit', async () => {
+    findUnique.mockResolvedValue({ terminatedAt: new Date(), deletedAt: null });
+    await expect(guard.canActivate(context(CyclesController.prototype.deleteCycle, 'POST', { ...viewer, hrCapabilities: ['cycle_delete'] }))).resolves.toBe(true);
+    expect(findUnique).toHaveBeenCalledTimes(1);
+  });
+  it('blocks every write to a deleted cycle before invoking its handler', async () => {
+    findUnique.mockResolvedValue({ deletedAt: new Date() });
+    await expect(guard.canActivate(context(CyclesController.prototype.deleteCycle))).rejects.toThrow(ConflictException);
+    await expect(guard.canActivate(context(CyclesController.prototype.updateDeadlines))).rejects.toThrow(ConflictException);
   });
 });

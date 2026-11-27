@@ -38,7 +38,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '周期与计划',
       roles: ['hr', 'system_admin'],
-      hrCapabilities: ['cycle_plan_edit', 'cycle_plan_review', 'cycle_terminate'],
+      hrCapabilities: ['cycle_plan_edit', 'cycle_plan_review', 'cycle_terminate', 'cycle_delete'],
       navigation: { module: 'performance', label: '周期与计划', order: 20, group: 'performance', groupLabel: '绩效运营' },
     },
   },

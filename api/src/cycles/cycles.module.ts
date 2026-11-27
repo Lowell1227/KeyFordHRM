@@ -8,11 +8,12 @@ import { NotificationsModule } from '@/notifications/notifications.module';
 import { CycleScheduleService } from './cycle-schedule.service';
 import { CycleManagementGuard } from './cycle-management.guard';
 import { CycleTerminationService } from './cycle-termination.service';
+import { CycleDeletionService } from './cycle-deletion.service';
 
 @Module({
   imports: [PrismaModule, NotificationsModule],
   controllers: [CyclesController],
-  providers: [CyclesService, LaunchService, ExemptService, CycleScheduleService, CycleManagementGuard, CycleTerminationService],
+  providers: [CyclesService, LaunchService, ExemptService, CycleScheduleService, CycleManagementGuard, CycleTerminationService, CycleDeletionService],
   exports: [LaunchService, CycleScheduleService],
 })
 export class CyclesModule {}

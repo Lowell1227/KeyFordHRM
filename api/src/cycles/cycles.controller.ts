@@ -20,6 +20,7 @@ import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.
 import { ParticipantPreviewDto } from './dto/participant-preview.dto';
 import { CycleManagementGuard } from './cycle-management.guard';
 import { CycleTerminationService } from './cycle-termination.service';
+import { CycleDeletionService } from './cycle-deletion.service';
 import { TerminateCycleDto } from './cycle-termination.dto';
 import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 
@@ -32,6 +33,7 @@ export class CyclesController {
     private readonly launchService: LaunchService,
     private readonly cycleScheduleService: CycleScheduleService,
     private readonly termination: CycleTerminationService,
+    private readonly deletion: CycleDeletionService,
   ) {}
 
   @Post()
@@ -110,6 +112,20 @@ export class CyclesController {
   @UseFilters(PerformanceLifecycleExceptionFilter)
   terminate(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TerminateCycleDto, @CurrentUser() user: AuthUser) {
     return this.termination.terminate(id, dto, user);
+  }
+
+  @Get(':id/deletion-preview')
+  @HrCapabilities('cycle_plan_edit', 'cycle_delete')
+  @UseFilters(PerformanceLifecycleExceptionFilter)
+  deletionPreview(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.deletion.preview(id, user);
+  }
+
+  @Post(':id/delete')
+  @HrCapabilities('cycle_plan_edit', 'cycle_delete')
+  @UseFilters(PerformanceLifecycleExceptionFilter)
+  deleteCycle(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TerminateCycleDto, @CurrentUser() user: AuthUser) {
+    return this.deletion.remove(id, dto, user);
   }
 
   @Patch(':id')

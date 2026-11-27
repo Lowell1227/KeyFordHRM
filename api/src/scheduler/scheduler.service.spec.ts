@@ -271,6 +271,15 @@ describe('SchedulerService', () => {
   });
 
   describe('runAutoCloseCycles', () => {
+    it('rechecks a deleted cycle after acquiring locks and leaves all task and result facts untouched', async () => {
+      prisma.assessmentCycle.findMany.mockResolvedValue([{ id: 'cycle', status: 'published' }]);
+      prisma.$queryRaw.mockResolvedValue([{ deletedAt: new Date() }]);
+      await service.runAutoCloseCycles();
+      expect(prisma.assessmentTask.findMany).not.toHaveBeenCalled();
+      expect(prisma.performanceArchive.upsert).not.toHaveBeenCalled();
+      expect(prisma.assessmentTask.update).not.toHaveBeenCalled();
+      expect(prisma.assessmentCycle.update).not.toHaveBeenCalled();
+    });
     it('archives only current targets without changing the stored grade or historical periods', async () => {
       const current = {
         name: 'Current target', dimensionName: 'KPI', weight: new Prisma.Decimal(1),
@@ -351,6 +360,7 @@ describe('SchedulerService', () => {
       expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith({
         where: {
           status: { in: ['published', 'appeal'] },
+          deletedAt: null,
           deadlineAppeal: { lt: expect.any(Date) },
         },
         select: { id: true, status: true },
