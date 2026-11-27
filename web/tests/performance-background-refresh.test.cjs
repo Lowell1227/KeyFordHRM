@@ -169,6 +169,32 @@ test('initial goal reads do not replace an unchanged URL and cancel navigation t
   view.state.employeeName.value = 'new filter'; await view.state.load();
   assert.equal(view.replacements.at(-1).query.employeeName, 'new filter');
 });
+
+for (const navigation of ['committed goal view', 'pending goal navigation', 'leaving task workspace']) {
+  test(`late task initialization cannot undo ${navigation}`, async t => {
+    const pending = deferred(), replacements = [], hooks = {};
+    const route = vue.reactive({ path: '/tasks', fullPath: '/tasks', query: {} });
+    let taskReads = 0;
+    const view = mount(t, 'views/task/TaskListView.vue', {}, {
+      'vue-router': { useRoute: () => route, useRouter: () => ({ replace: async target => replacements.push(target) }),
+        onBeforeRouteUpdate: fn => { hooks.update = fn; }, onBeforeRouteLeave: fn => { hooks.leave = fn; } },
+      '@/api/cycles.api': { cyclesApi: { findMine: () => pending.promise } },
+      '@/api/tasks.api': { tasksApi: { findMine: async () => { taskReads++; return { items: [], total: 0 }; } } },
+    });
+    if (navigation === 'committed goal view') {
+      route.query = { goalView: 'mine' }; await flush();
+    } else if (navigation === 'pending goal navigation') {
+      hooks.update?.({ path: '/tasks', query: { goalView: 'mine' } }, route);
+    } else {
+      hooks.leave?.({ path: '/goal-changes', query: {} }, route);
+    }
+    pending.resolve([{ id: 'late-cycle', status: 'active', createdAt: '2026-11-26' }]);
+    await flush(); await flush();
+    assert.deepEqual(replacements, [], 'an obsolete initialization must not replace the new navigation');
+    assert.equal(taskReads, 0, 'do not start old-view task requests after navigation');
+    assert.equal(view.state.selectedCycleId.value, '');
+  });
+}
 test('goal permission loss invalidates in-flight rows and options, including scope changes', async t => {
   const pending = deferred(); let first = true;
   const view = mount(t, 'views/task/components/GoalPlanList.vue', { scope: 'review', allowed: true }, {

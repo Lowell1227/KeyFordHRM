@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, onMounted, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, nextTick, ref, onMounted, onBeforeUnmount, watch } from 'vue';
+import { useRoute, useRouter, onBeforeRouteUpdate, onBeforeRouteLeave } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
 import GoalPlanList from './components/GoalPlanList.vue';
@@ -89,6 +89,7 @@ let personalRequestSerial = 0;
 let singleOperationSerial = 0;
 let saveRequestSerial = 0;
 let taskWorkspaceReady = false;
+let workspaceInitializationSerial = 0;
 let goalReviewCountRequestSerial = 0;
 const latestSaveRequestByTask = new Map<string, {
   requestId: number;
@@ -273,21 +274,25 @@ function sortTasksByCycleDesc(items: TaskListItem[]) {
   });
 }
 
-async function loadCycles() {
+async function loadCycles(canApply = () => true) {
   try {
-    cycles.value = await cyclesApi.findMine();
+    const response = await cyclesApi.findMine();
+    if (canApply()) cycles.value = response;
   } catch {
-    cycles.value = [];
+    if (canApply()) cycles.value = [];
   }
 }
 
-async function loadTeamRoster() {
+async function loadTeamRoster(canApply = () => true) {
   if (!isManagerCapable.value || !auth.user?.id) return;
   teamRosterError.value = '';
   try {
-    teamRoster.value = await usersApi.getSubordinates(auth.user.id);
+    const response = await usersApi.getSubordinates(auth.user.id);
+    if (!canApply()) return;
+    teamRoster.value = response;
     teamPage.value = withRosterFacets(teamPage.value);
   } catch {
+    if (!canApply()) return;
     teamRoster.value = [];
     teamRosterError.value = '直属下属加载失败';
   }
@@ -481,6 +486,7 @@ useVisibleRefresh({ intervalMs: 0, enabled: () => Boolean(auth.user) && (goalVie
   || Boolean(route.query.cycleId || route.query.deptId || route.query.employeeName)),
   refresh: loadGoalReviewTotal });
 watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => {
+  invalidateWorkspaceInitialization();
   goalReviewCountRequestSerial++; goalReviewTotal.value = null; goalReviewError.value = false; goalReviewLoading.value = false;
   if (auth.user && goalView.value !== 'review') void loadGoalReviewTotal();
 });
@@ -999,13 +1005,32 @@ function handleManagerEvaluationTaskUpdated(detail: TaskDetail) {
   if (previousStageState && previousStageState !== mapped.stageState) void loadTeam();
 }
 
+function invalidateWorkspaceInitialization() {
+  workspaceInitializationSerial++;
+  taskWorkspaceReady = false;
+  personalRequestSerial++;
+  teamRequestSerial++;
+  teamDetailRequestSerial++;
+  teamStageSummaryRequestSerial++;
+}
+onBeforeRouteUpdate((to, from) => {
+  if (to.query.goalView !== from.query.goalView) invalidateWorkspaceInitialization();
+});
+onBeforeRouteLeave(invalidateWorkspaceInitialization);
+onBeforeUnmount(invalidateWorkspaceInitialization);
+
 async function initializeWorkspace() {
   if (goalView.value) return;
+  const requestId = ++workspaceInitializationSerial;
+  const userId = auth.user?.id;
+  const canApply = () => requestId === workspaceInitializationSerial && !goalView.value && userId === auth.user?.id;
   await Promise.all([
-    loadCycles(),
-    isManagerCapable.value ? loadTeamRoster() : Promise.resolve(),
+    loadCycles(canApply),
+    isManagerCapable.value ? loadTeamRoster(canApply) : Promise.resolve(),
   ]);
+  if (!canApply()) return;
   await normalizeTaskCycle();
+  if (!canApply()) return;
   taskWorkspaceReady = true;
   if (activeScope.value === 'team') {
     await Promise.all([
@@ -1025,6 +1050,7 @@ onMounted(() => {
   void initializeWorkspace();
 });
 watch(goalView, (value) => {
+  invalidateWorkspaceInitialization();
   void loadGoalReviewTotal();
   if (!value) void initializeWorkspace();
 });
