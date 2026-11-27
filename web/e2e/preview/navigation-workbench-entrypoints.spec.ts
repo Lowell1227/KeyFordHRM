@@ -7,6 +7,37 @@ test.use({ trace: 'off', video: 'off', screenshot: 'off' });
 type Actor = { sysRole: string; hrCapabilities?: string[]; payrollAccess?: { enabled: boolean;
   subjects: { capabilities: string[] }[] } };
 
+async function expectQuickCards(page: Page) {
+  const section = page.getByTestId('dashboard-quick-actions');
+  const cards = section.locator('.quick-action');
+  await expect(cards.first()).toBeVisible();
+  const count = await cards.count();
+  expect(count).toBeGreaterThan(0);
+  await expect(section.locator('.quick-action__description')).toHaveCount(count);
+  await expect(section.locator('.quick-action__link')).toHaveCount(count);
+  for (const card of await cards.all()) {
+    await expect(card.locator('.quick-action__description')).not.toHaveText('');
+    await expect(card.locator('.quick-action__link')).toHaveText('进入');
+    await expect(card).toHaveAccessibleName((await card.locator('.quick-action__label').innerText()).trim());
+    const layout = await card.evaluate(element => {
+      const label = element.querySelector('.quick-action__label')!.getBoundingClientRect();
+      const description = element.querySelector('.quick-action__description')!.getBoundingClientRect();
+      const link = element.querySelector('.quick-action__link')!.getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      return { stacked: label.bottom <= description.top && description.bottom <= link.top,
+        contained: [label, description, link].every(row => row.left >= box.left && row.right <= box.right), height: box.height };
+    });
+    expect(layout.stacked).toBe(true);
+    expect(layout.contained).toBe(true);
+    expect(layout.height).toBeGreaterThan(90);
+  }
+  expect(await section.evaluate(element => {
+    const style = getComputedStyle(element);
+    return style.borderTopStyle !== 'none' && parseFloat(style.borderTopWidth) > 0
+      && style.backgroundColor !== 'rgba(0, 0, 0, 0)';
+  })).toBe(true);
+}
+
 async function login(page: Page, account: string): Promise<Actor> {
   await page.goto('/login');
   await expect(page.getByTestId('preview-login')).toBeEnabled();
@@ -75,6 +106,7 @@ for (const account of ['HR001', 'MGR001', 'EMP001']) {
     await expect.poll(() => entries.length).toBe(1);
     const quick = page.getByTestId('dashboard-quick-actions');
     if (account === 'HR001') {
+      await expectQuickCards(page);
       for (const label of ['员工档案', '入离职', '人才库', '简历收件', '应聘与面试', '招聘需求']) {
         await expect(quick.getByRole('button', { name: label, exact: true })).toBeVisible();
       }
@@ -148,6 +180,7 @@ test.describe('private fixture personnel operator', () => {
     expect(actor.hrCapabilities).toContain('employee_archive_edit');
     expect(actor.hrCapabilities).not.toContain('employee_archive_review');
     const quick = page.getByTestId('dashboard-quick-actions');
+    await expectQuickCards(page);
     for (const label of ['员工档案', '入离职', '人才库', '简历收件', '招聘需求', '应聘与面试']) {
       await expect(quick.getByRole('button', { name: label, exact: true })).toBeVisible();
     }
@@ -158,5 +191,8 @@ test.describe('private fixture personnel operator', () => {
     await expect(page).toHaveURL(/\/entry-exit$/);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     expect(writes).toEqual([]);
+    await page.getByTestId('nav-module-workbench').click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.screenshot({ path: info.outputPath('personnel-quick-cards.png'), fullPage: true });
   });
 });

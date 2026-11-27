@@ -224,9 +224,10 @@ function avatarColor(name: string): string {
       <header class="quick-actions__header"><h2>常用工作入口</h2></header>
       <div class="quick-actions__grid">
         <button v-for="action in roleQuickActions" :key="action.path" class="quick-action" type="button"
-          :title="action.description" @click="openRoute(action.path)">
+          :aria-label="action.label" @click="openRoute(action.path)">
           <span class="quick-action__label">{{ action.label }}</span>
-          <el-icon aria-hidden="true"><ArrowRight /></el-icon>
+          <span class="quick-action__description">{{ action.description }}</span>
+          <span class="quick-action__link">进入 <el-icon aria-hidden="true"><ArrowRight /></el-icon></span>
         </button>
       </div>
     </section>
@@ -368,8 +369,11 @@ function avatarColor(name: string): string {
 }
 
 .quick-actions {
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--app-border-color);
+  padding: 18px 20px 20px;
+  background: var(--app-card-bg);
+  border: 1px solid var(--app-border-color, var(--el-border-color-light));
+  border-radius: var(--app-radius);
+  box-shadow: var(--app-shadow);
 }
 
 .quick-actions__header {
@@ -377,7 +381,7 @@ function avatarColor(name: string): string {
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 }
 
 .quick-actions__header h2 {
@@ -394,16 +398,11 @@ function avatarColor(name: string): string {
 
 .quick-action {
   min-width: 0;
-  min-height: 44px;
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  padding: 14px;
   text-align: left;
   background: #f8faff;
   border: 1px solid #e4eaf4;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
   transition: border-color var(--app-transition), transform var(--app-transition), box-shadow var(--app-transition);
 }
@@ -416,11 +415,34 @@ function avatarColor(name: string): string {
   transform: translateY(-1px);
 }
 
-.quick-action__label {
+.quick-action__label,
+.quick-action__description {
+  display: block;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.quick-action__label {
   color: var(--app-text-primary);
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.quick-action__description {
+  min-height: 36px;
+  margin-top: 6px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quick-action__link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  color: var(--el-color-primary);
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -549,7 +571,7 @@ function avatarColor(name: string): string {
 
 @media (max-width: 560px) {
   .quick-actions__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .quick-actions__header {

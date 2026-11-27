@@ -273,3 +273,17 @@ test('common work entries are the first dashboard section, ahead of greetings an
   assert.equal(first.tag, 'section');
   assert.ok(first.props.some(prop => prop.name === 'data-testid' && prop.value?.content === 'dashboard-quick-actions'));
 });
+
+test('common entries retain business descriptions and an enter affordance inside individually named cards', () => {
+  const { descriptor } = parse(fs.readFileSync(path.join(root, 'views/dashboard/DashboardView.vue'), 'utf8'));
+  const { baseParse } = require('@vue/compiler-dom');
+  const ast = baseParse(descriptor.template.content);
+  const section = ast.children.find(row => row.type === 1).children.find(row => row.type === 1);
+  const grid = section.children.find(row => row.type === 1 && row.props.some(prop => prop.name === 'class' && prop.value?.content === 'quick-actions__grid'));
+  const card = grid.children.find(row => row.type === 1);
+  const child = className => card.children.find(row => row.type === 1 && row.props.some(prop => prop.name === 'class' && prop.value?.content === className));
+  assert.equal(card.tag, 'button');
+  assert.ok(card.props.some(prop => prop.name === 'bind' && prop.arg?.content === 'aria-label' && prop.exp?.content === 'action.label'));
+  assert.ok(child('quick-action__description')?.children.some(row => row.type === 5 && row.content.content === 'action.description'));
+  assert.ok(child('quick-action__link'));
+});
