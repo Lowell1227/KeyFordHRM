@@ -50,8 +50,11 @@ function prepareGoalLedgerOperator(f: Demo) {
       const employee=await db.user.findUniqueOrThrow({where:{id:${JSON.stringify(f.employeeId)}}});
       if(marker?.value?.fictional!==true||!employee.name.startsWith('LC_')||employee.dingtalkId||employee.dingtalkUnionId)throw Error('fixture guard');
       const operator=await db.user.create({data:{name:${JSON.stringify(f.prefix + ' 虚构目标专员')},
-        sysRole:'hr_user',status:'active',canViewAll:false,isAssessorOnly:false,
+        employeeNo:${JSON.stringify(f.prefix + '_HR')},sysRole:'hr_user',status:'active',canViewAll:false,isAssessorOnly:false,
         hrCapabilities:['cycle_plan_edit','performance_publish','performance_lifecycle_terminate','performance_lifecycle_delete']}});
+      await db.employmentRecord.create({data:{userId:operator.id,employeeNo:operator.employeeNo,
+        effectiveFrom:new Date('2026-11-01'),entryDate:new Date('2026-11-01'),employeeStatus:'active',
+        changeType:'onboarding',sourceType:'preview_fixture'}});
       process.stdout.write(JSON.stringify({id:operator.id}));
     })().finally(()=>db.$disconnect()).catch(()=>{process.exitCode=1});`;
   try { return JSON.parse(execFileSync('docker', ['exec', '-i', 'hrm-api-1', 'node'], { input: code,
@@ -143,7 +146,10 @@ test('goal-only HR opens lifecycle modal and terminates/deletes without full ass
     await expect(dialog.getByRole('alert')).toHaveCount(0);
     await dialog.getByLabel('操作原因', { exact: true }).fill('隔离虚构验收：窄目标台账权限办理');
     await expect(dialog.getByRole('button', { name: title, exact: true })).toBeEnabled();
-    if (action === 'terminate') await page.screenshot({ path: info.outputPath('goal-only-hr-modal.png'), fullPage: true });
+    if (action === 'terminate') {
+      await expect(dialog).toHaveCSS('opacity', '1');
+      await page.screenshot({ path: info.outputPath('goal-only-hr-modal.png'), fullPage: true, animations: 'disabled' });
+    }
     const saved = page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/performance-lifecycle/task/${f.taskId}/${action}`
       && r.request().method() === 'POST');
     await dialog.getByRole('button', { name: title, exact: true }).click();
