@@ -187,6 +187,7 @@ export class LaunchService {
     if (!cycle) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
     }
+    if (cycle.terminatedAt) throw new ConflictException('本周期已终止，不能重新发起');
     if (!(['draft', 'scheduled', 'launch_blocked'] as string[]).includes(cycle.status)) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前周期已发起，不能重新执行发起检查' });
     }
@@ -397,6 +398,7 @@ export class LaunchService {
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
+      if (cycle.terminatedAt) throw new ConflictException('本周期已终止，不能重新发起');
       if (!(['draft', 'scheduled', 'launch_blocked'] as const).includes(
         cycle.status as 'draft' | 'scheduled' | 'launch_blocked',
       )) {

@@ -19,17 +19,25 @@ function setup(input = {}) {
   return { props, state: loaded.exports.default.setup(props, { expose() {} }) };
 }
 
-test('fixed task entries keep the legacy URLs and explicit capability visibility', () => {
+test('task-local entries keep legacy URLs without duplicating the promoted peer menus', () => {
   const view = setup();
   assert.deepEqual(view.state.entries.value.map(item => [item.key, item.label, item.to]), [
     ['mine', '我的目标', '/tasks?goalView=mine'], ['review', '目标审核', '/tasks?goalView=review'], ['tasks', '绩效待办', '/tasks'],
   ]);
   view.props.canMonitor = true; view.props.canSeeChanges = true;
-  assert.deepEqual(view.state.entries.value.map(item => item.key), ['mine', 'review', 'monitor', 'tasks', 'changes']);
+  assert.deepEqual(view.state.entries.value.map(item => item.key), ['mine', 'review', 'tasks']);
   view.props.canMonitor = false; view.props.canSeeChanges = false;
   assert.deepEqual(view.state.entries.value.map(item => item.key), ['mine', 'review', 'tasks']);
   view.props.active = 'changes';
-  assert.deepEqual(view.state.entries.value.map(item => item.key), ['mine', 'review', 'tasks', 'changes']);
+  assert.deepEqual(view.state.entries.value.map(item => item.key), ['mine', 'review', 'tasks']);
+});
+
+test('peer ledger and change pages do not display the task-local tab bar', () => {
+  const view = setup();
+  assert.equal(view.state.showTaskViews?.value, true);
+  view.props.active = 'monitor'; assert.equal(view.state.showTaskViews.value, false);
+  view.props.active = 'changes'; assert.equal(view.state.showTaskViews.value, false);
+  view.props.active = 'review'; assert.equal(view.state.showTaskViews.value, true);
 });
 
 test('review badge distinguishes unknown and failed counts without changing the entry label', () => {

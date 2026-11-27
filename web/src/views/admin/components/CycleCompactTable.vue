@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { MoreFilled } from '@element-plus/icons-vue';
 import { computed } from 'vue';
+import dayjs from 'dayjs';
 import type { AssessmentCycle, Department } from '@/types/api.types';
 import { formatDate } from '@/utils/date';
 import { cycleBusinessState, cyclePrimaryActionLabel } from '../cycle-management';
@@ -26,6 +27,7 @@ const emit = defineEmits<{
   'notification-mode': [cycle: AssessmentCycle];
   delete: [cycle: AssessmentCycle];
   review: [cycle: AssessmentCycle];
+  terminate: [cycle: AssessmentCycle];
 }>();
 
 const TYPE_LABEL = {
@@ -38,6 +40,7 @@ const TYPE_LABEL = {
 } as const;
 
 function handleMore(command: string, cycle: AssessmentCycle) {
+  if (cycle.terminatedAt) return;
   if (command === 'deadlines') emit('edit-deadlines', cycle);
   if (command === 'cancel-schedule') emit('cancel-schedule', cycle);
   if (command === 'notification-mode') emit('notification-mode', cycle);
@@ -191,7 +194,8 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
           <small :data-testid="`cycle-scoring-summary-${(row as AssessmentCycle).id}`">
             {{ scoringSummary(row as AssessmentCycle) }}
           </small>
-          <small>{{ notificationLabel(row as AssessmentCycle) }}</small>
+          <small v-if="!(row as AssessmentCycle).terminatedAt">{{ notificationLabel(row as AssessmentCycle) }}</small>
+          <small v-else>终止于 {{ dayjs((row as AssessmentCycle).terminatedAt).format('YYYY-MM-DD HH:mm') }}</small>
         </button>
       </template>
     </el-table-column>
@@ -199,10 +203,11 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
     <el-table-column label="当前状态" min-width="170">
       <template #default="{ row }">
         <div class="cycle-state-cell">
-          <el-tag :type="cycleBusinessState(row as AssessmentCycle).tagType" size="small">
-            {{ cycleBusinessState(row as AssessmentCycle).label }}
+          <el-tag :type="(row as AssessmentCycle).terminatedAt ? 'info' : cycleBusinessState(row as AssessmentCycle).tagType" size="small">
+            {{ (row as AssessmentCycle).terminatedAt ? '已终止' : cycleBusinessState(row as AssessmentCycle).label }}
           </el-tag>
-          <small v-if="(row as AssessmentCycle).status === 'launch_blocked' && (row as AssessmentCycle).launchBlockedReason">
+          <small v-if="(row as AssessmentCycle).terminatedAt">{{ (row as AssessmentCycle).terminationReason || '未记录终止原因' }}</small>
+          <small v-else-if="(row as AssessmentCycle).status === 'launch_blocked' && (row as AssessmentCycle).launchBlockedReason">
             {{ (row as AssessmentCycle).launchBlockedReason }}
           </small>
         </div>
@@ -226,10 +231,10 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       </template>
     </el-table-column>
 
-    <el-table-column label="操作" width="190" fixed="right">
+    <el-table-column label="操作" width="240" fixed="right">
       <template #default="{ row }">
         <div class="cycle-actions" @click.stop>
-          <template v-if="(row as AssessmentCycle).status === 'draft'">
+          <template v-if="(row as AssessmentCycle).status === 'draft' && !(row as AssessmentCycle).terminatedAt">
             <el-button
               v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false && (row as AssessmentCycle).reviewStatus === 'approved'"
               :data-testid="`cycle-primary-${(row as AssessmentCycle).id}`"
@@ -267,10 +272,10 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
               :loading="launchingId === (row as AssessmentCycle).id"
               @click="emit('primary', row as AssessmentCycle)"
             >
-              {{ cyclePrimaryActionLabel(row as AssessmentCycle) }}
+              {{ (row as AssessmentCycle).terminatedAt ? '查看记录' : cyclePrimaryActionLabel(row as AssessmentCycle) }}
             </el-button>
             <el-dropdown
-              v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false"
+              v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false && !(row as AssessmentCycle).terminatedAt"
               trigger="click"
               @command="handleMore($event as string, row as AssessmentCycle)"
             >
@@ -300,6 +305,8 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
               </template>
             </el-dropdown>
           </template>
+          <el-button v-if="(row as AssessmentCycle).canTerminate === true && !(row as AssessmentCycle).terminatedAt"
+            :data-testid="`cycle-terminate-${(row as AssessmentCycle).id}`" link type="danger" @click="emit('terminate', row as AssessmentCycle)">终止周期</el-button>
         </div>
       </template>
     </el-table-column>
@@ -322,10 +329,12 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
           <strong>{{ cycle.name }}</strong>
           <span>{{ TYPE_LABEL[cycle.type] }} · {{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</span>
           <small :data-testid="`cycle-scoring-summary-mobile-${cycle.id}`">{{ scoringSummary(cycle) }}</small>
-          <small>{{ notificationLabel(cycle) }}</small>
+          <small v-if="!cycle.terminatedAt">{{ notificationLabel(cycle) }}</small>
+          <small v-else>终止于 {{ dayjs(cycle.terminatedAt).format('YYYY-MM-DD HH:mm') }}</small>
         </div>
-        <el-tag :type="cycleBusinessState(cycle).tagType" size="small">{{ cycleBusinessState(cycle).label }}</el-tag>
+        <el-tag :type="cycle.terminatedAt ? 'info' : cycleBusinessState(cycle).tagType" size="small">{{ cycle.terminatedAt ? '已终止' : cycleBusinessState(cycle).label }}</el-tag>
       </header>
+      <p v-if="cycle.terminatedAt" class="cycle-termination-reason">终止原因：{{ cycle.terminationReason || '未记录' }}</p>
       <div
         :data-testid="`cycle-scope-mobile-${cycle.id}`"
         class="cycle-mobile-card__scope"
@@ -338,7 +347,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
         >{{ detail }}</small>
       </div>
       <footer @click.stop>
-        <template v-if="cycle.status === 'draft'">
+        <template v-if="cycle.status === 'draft' && !cycle.terminatedAt">
           <el-button
             v-if="canEdit && cycle.canManagePlan !== false && cycle.reviewStatus === 'approved'"
             :data-testid="`cycle-primary-mobile-${cycle.id}`"
@@ -377,9 +386,9 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
             :loading="launchingId === cycle.id"
             @click="emit('primary', cycle)"
           >
-            {{ cyclePrimaryActionLabel(cycle) }}
+            {{ cycle.terminatedAt ? '查看记录' : cyclePrimaryActionLabel(cycle) }}
           </el-button>
-          <el-dropdown v-if="canEdit && cycle.canManagePlan !== false" trigger="click" @command="handleMore($event as string, cycle)">
+          <el-dropdown v-if="canEdit && cycle.canManagePlan !== false && !cycle.terminatedAt" trigger="click" @command="handleMore($event as string, cycle)">
             <el-button :icon="MoreFilled" text aria-label="更多操作" />
             <template #dropdown>
               <el-dropdown-menu>
@@ -406,6 +415,8 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
             </template>
           </el-dropdown>
         </template>
+        <el-button v-if="cycle.canTerminate === true && !cycle.terminatedAt" :data-testid="`cycle-terminate-mobile-${cycle.id}`"
+          type="danger" plain size="small" @click="emit('terminate', cycle)">终止周期</el-button>
       </footer>
     </article>
   </section>
@@ -462,6 +473,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
 
 .cycle-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
@@ -469,6 +481,9 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
 .cycle-mobile-list {
   display: none;
 }
+
+.cycle-termination-reason { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
+.cycle-state-cell small { overflow-wrap: anywhere; }
 
 @media (max-width: 767px) {
   .cycle-compact-table {
@@ -504,6 +519,9 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
     display: grid;
     gap: 4px;
   }
+
+  .cycle-mobile-card > header > div { min-width: 0; overflow-wrap: anywhere; }
+  .cycle-mobile-card > footer { flex-wrap: wrap; }
 
   .cycle-mobile-card > header span,
   .cycle-mobile-card__scope span,

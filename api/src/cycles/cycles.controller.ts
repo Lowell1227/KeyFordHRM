@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe, HttpCode, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe, HttpCode, UseGuards, UseFilters } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -19,6 +19,9 @@ import { TrackingContextQueryDto } from './dto/tracking-context-query.dto';
 import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.dto';
 import { ParticipantPreviewDto } from './dto/participant-preview.dto';
 import { CycleManagementGuard } from './cycle-management.guard';
+import { CycleTerminationService } from './cycle-termination.service';
+import { TerminateCycleDto } from './cycle-termination.dto';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 
 // 管理员可以查看全量周期；其他角色只能读取已开放周期，避免草稿和预约信息泄露。
 @Controller('cycles')
@@ -28,6 +31,7 @@ export class CyclesController {
     private readonly cyclesService: CyclesService,
     private readonly launchService: LaunchService,
     private readonly cycleScheduleService: CycleScheduleService,
+    private readonly termination: CycleTerminationService,
   ) {}
 
   @Post()
@@ -92,6 +96,20 @@ export class CyclesController {
   @HrCapabilities('cycle_plan_edit')
   remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
     return this.cyclesService.remove(id, user);
+  }
+
+  @Get(':id/termination-preview')
+  @HrCapabilities('cycle_terminate')
+  @UseFilters(PerformanceLifecycleExceptionFilter)
+  terminationPreview(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.termination.preview(id, user);
+  }
+
+  @Post(':id/terminate')
+  @HrCapabilities('cycle_terminate')
+  @UseFilters(PerformanceLifecycleExceptionFilter)
+  terminate(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TerminateCycleDto, @CurrentUser() user: AuthUser) {
+    return this.termination.terminate(id, dto, user);
   }
 
   @Patch(':id')

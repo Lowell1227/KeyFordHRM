@@ -124,13 +124,13 @@ export class FlowService {
     // Serialize aggregation for concurrent task submissions. Read the task counts only
     // after the preceding transaction commits, including when no stage write is needed.
     // NO KEY UPDATE remains compatible with cycle FK checks from new flow records.
-    const [cycle] = await tx.$queryRaw<Array<{ status: CycleStatus }>>`
-      SELECT "status" FROM "assessment_cycles"
+    const [cycle] = await tx.$queryRaw<Array<{ status: CycleStatus; terminatedAt?: Date | null }>>`
+      SELECT "status", terminated_at AS "terminatedAt" FROM "assessment_cycles"
       WHERE "id" = ${cycleId}::uuid
       FOR NO KEY UPDATE
     `;
     const guard: CycleStatus[] = ['indicator_setting', 'self_eval', 'manager_score', 'hr_calibration', 'approval'];
-    if (!cycle || !guard.includes(cycle.status)) return;
+    if (!cycle || cycle.terminatedAt || !guard.includes(cycle.status)) return;
 
     const agg = await tx.assessmentTask.groupBy({
       by: ['status'],

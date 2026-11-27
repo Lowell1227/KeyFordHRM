@@ -147,7 +147,7 @@ export class SchedulerService {
     await this.runMonthlyPeriodReminders(now);
 
     const cycles = await this.prisma.assessmentCycle.findMany({
-      where: { status: { in: ACTIVE_CYCLE_STATUSES } },
+      where: { status: { in: ACTIVE_CYCLE_STATUSES }, terminatedAt: null },
       select: {
         id: true,
         status: true,
@@ -222,6 +222,7 @@ export class SchedulerService {
     const cycles = await this.prisma.assessmentCycle.findMany({
       where: {
         status: 'scheduled',
+        terminatedAt: null,
         goalSettingOpenAt: { lte: now },
       },
       select: { id: true, scheduledById: true, hrOwnerId: true },
@@ -281,6 +282,7 @@ export class SchedulerService {
     const cycles = await this.prisma.assessmentCycle.findMany({
       where: {
         status: 'indicator_setting',
+        terminatedAt: null,
         selfEvalOpenAt: { lte: now },
         workflowVersion: 1,
       },
@@ -293,8 +295,8 @@ export class SchedulerService {
           where: { cycleId: cycle.id, status: 'goal_confirmed', ...APPROVED_GOAL_WHERE },
           data: { status: 'self_eval' },
         });
-        await tx.assessmentCycle.update({
-          where: { id: cycle.id },
+        await tx.assessmentCycle.updateMany({
+          where: { id: cycle.id, terminatedAt: null, status: 'indicator_setting' },
           data: { status: 'self_eval' },
         });
       });
@@ -309,7 +311,7 @@ export class SchedulerService {
         status: 'unopened',
         indicatorVersionId: { not: null },
         selfEvalOpenAt: { lte: now },
-        task: { cycle: { workflowVersion: 2 }, ...APPROVED_GOAL_WHERE },
+        task: { cycle: { workflowVersion: 2, terminatedAt: null }, ...APPROVED_GOAL_WHERE },
       },
       select: {
         id: true,
@@ -369,7 +371,7 @@ export class SchedulerService {
   private async runMonthlyPeriodReminders(now: Date): Promise<void> {
     const periods = await this.prisma.assessmentPeriod.findMany({
       where: {
-        task: { lifecycleStatus: 'active', cycle: { workflowVersion: 2, scoringFrequency: 'monthly' } },
+        task: { lifecycleStatus: 'active', cycle: { workflowVersion: 2, scoringFrequency: 'monthly', terminatedAt: null } },
         OR: [
           { status: 'self_eval', employeeSubmittedAt: null },
           {

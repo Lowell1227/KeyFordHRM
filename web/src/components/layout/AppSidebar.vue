@@ -5,6 +5,8 @@ import { ArrowDown, Briefcase, Coin, HomeFilled, Search, Tools, UserFilled } fro
 import { useAuthStore } from '@/stores/auth.store';
 import { buildNavigation, navigationTarget } from '@/router/navigation';
 import { routes } from '@/router/routes';
+import { canMonitorGoals } from '@/api/goal-plans.api';
+import { useGoalChangeEntry } from '@/composables/useGoalChangeEntry';
 import type { NavigationGroup, NavigationModule, NavigationModuleKey } from '@/router/navigation.types';
 
 const COLLAPSED_GROUPS_KEY = 'kayford.sidebar.collapsedGroups';
@@ -12,6 +14,7 @@ const COLLAPSED_GROUPS_KEY = 'kayford.sidebar.collapsedGroups';
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+const canSeeGoalChanges = useGoalChangeEntry();
 
 const moduleIcons: Record<NavigationModuleKey, Component> = {
   workbench: HomeFilled,
@@ -41,7 +44,9 @@ function saveCollapsedGroups(value: Record<string, boolean>) {
 }
 
 const collapsedGroups = ref<Record<string, boolean>>(readCollapsedGroups());
-const navigation = computed(() => (auth.user ? buildNavigation(routes, auth.user) : []));
+const navigation = computed(() => (auth.user ? buildNavigation(routes, auth.user, {
+  canMonitorGoals: canMonitorGoals(auth.user), canSeeGoalChanges: canSeeGoalChanges.value,
+}) : []));
 const activeNavigationRoute = computed(() =>
   router.resolve(route.meta.activeNavigationPath ?? route.path),
 );
@@ -93,7 +98,10 @@ function navigate(path: string) {
 }
 
 function isMenuActive(path: string): boolean {
-  return router.resolve(path).path === activeNavigationRoute.value.path;
+  const target = router.resolve(path);
+  if (target.path !== activeNavigationRoute.value.path) return false;
+  if (target.path === '/tasks') return (target.query.goalView === 'monitor') === (route.query.goalView === 'monitor');
+  return true;
 }
 </script>
 
@@ -145,9 +153,10 @@ function isMenuActive(path: string): boolean {
           <div v-show="!isCollapsed(group)" class="menu-group__items">
             <button
               v-for="item in group.items"
-              :key="String(item.name)"
+              :key="item.path"
               class="menu-link"
               :class="{ 'is-active': isMenuActive(item.path) }"
+              :aria-current="isMenuActive(item.path) ? 'page' : undefined"
               type="button"
               @click="navigate(item.path)"
             >

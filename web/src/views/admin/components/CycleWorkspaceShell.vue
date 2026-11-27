@@ -51,6 +51,7 @@ const emit = defineEmits<{
   review: [];
   'remind-review': [];
   'resolve-blocker': [code: string];
+  terminate: [];
 }>();
 
 const router = useRouter();
@@ -62,16 +63,17 @@ const participantFilterOptions = [
   { key: 'exempted', label: '已豁免' },
 ] as const;
 const currentStage = computed(() => props.cycle ? cycleBusinessState(props.cycle).phaseIndex : 0);
-const nextStep = computed(() => props.cycle ? cycleNextStep(props.cycle) : null);
+const nextStep = computed(() => props.cycle?.terminatedAt ? { label: '周期已终止，历史记录保留' } : props.cycle ? cycleNextStep(props.cycle) : null);
 const participantFilter = ref<'all' | 'active' | 'exempted'>('all');
 const participantKeyword = ref('');
 const isPrelaunch = computed(() => Boolean(
   props.cycle
+  && !props.cycle.terminatedAt
   && !props.cycle.openedAt
   && ['draft', 'scheduled', 'launch_blocked'].includes(props.cycle.status),
 ));
 const canRunLaunchAction = computed(() => Boolean(
-  props.cycle && ['draft', 'launch_blocked'].includes(props.cycle.status),
+  props.cycle && !props.cycle.terminatedAt && props.canEdit && ['draft', 'launch_blocked'].includes(props.cycle.status),
 ));
 const activeTaskCount = computed(() => {
   const stats = props.cycle?.taskStats;
@@ -249,10 +251,10 @@ watch(() => props.cycle?.id, () => {
             <h2>{{ cycle?.name || '周期详情' }}</h2>
             <el-tag
               v-if="cycle"
-              :type="cycleBusinessState(cycle).tagType"
+              :type="cycle.terminatedAt ? 'info' : cycleBusinessState(cycle).tagType"
               size="small"
               effect="light"
-            >{{ cycleBusinessState(cycle).label }}</el-tag>
+            >{{ cycle.terminatedAt ? '已终止' : cycleBusinessState(cycle).label }}</el-tag>
           </div>
           <p v-if="cycle">{{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</p>
           <div v-if="cycle" class="cycle-workspace__meta">
@@ -272,13 +274,15 @@ watch(() => props.cycle?.id, () => {
         </div>
       </div>
       <div
-        v-if="cycle?.status === 'draft' && canEdit"
+        v-if="cycle && !cycle.terminatedAt && ((cycle.status === 'draft' && canEdit) || cycle.canTerminate === true)"
         class="cycle-workspace__header-actions"
       >
         <el-button
+          v-if="cycle?.status === 'draft' && canEdit"
           data-testid="cycle-workspace-edit"
           @click="emit('edit')"
         >编辑</el-button>
+        <el-button v-if="cycle?.canTerminate === true" type="danger" plain data-testid="cycle-workspace-terminate" @click="emit('terminate')">终止周期</el-button>
       </div>
     </header>
 
@@ -294,7 +298,7 @@ watch(() => props.cycle?.id, () => {
     </el-result>
 
     <template v-else-if="cycle">
-      <nav class="cycle-stage-strip" aria-label="周期流程阶段">
+      <nav v-if="!cycle.terminatedAt" class="cycle-stage-strip" aria-label="周期流程阶段">
         <div
           v-for="(stage, index) in stages"
           :key="stage"
@@ -316,8 +320,13 @@ watch(() => props.cycle?.id, () => {
         <section class="cycle-current-action" data-testid="cycle-current-action">
           <div class="cycle-current-action__heading">
             <div>
-              <span>当前要做</span>
+              <span>{{ cycle.terminatedAt ? '终止记录' : '当前要做' }}</span>
               <h2>{{ nextStep?.label }}</h2>
+              <div v-if="cycle.terminatedAt" class="cycle-termination-record" data-testid="cycle-termination-record">
+                <p>终止时间：{{ dayjs(cycle.terminatedAt).format('YYYY-MM-DD HH:mm') }}</p>
+                <p>终止原因：{{ cycle.terminationReason || '未记录' }}</p>
+                <p>已保存、已提交数据及历史保留。已审批结果的公示、申诉继续按原流程办理；不影响转正、改进计划或薪酬。</p>
+              </div>
               <p v-if="nextStep?.time">计划时间：{{ formatDateTime(nextStep.time) }}</p>
             </div>
             <div
@@ -343,7 +352,7 @@ watch(() => props.cycle?.id, () => {
             </div>
           </div>
 
-          <div v-if="cycle.taskStats && cycleBusinessState(cycle).code === 'goal_preparation'" class="cycle-stat-grid cycle-stat-grid--progress">
+          <div v-if="!cycle.terminatedAt && cycle.taskStats && cycleBusinessState(cycle).code === 'goal_preparation'" class="cycle-stat-grid cycle-stat-grid--progress">
             <div><span>目标已生效</span><strong>{{ cycle.taskStats.goalCompleted }}/{{ activeTaskCount }}</strong></div>
             <div><span>待主管审核</span><strong>{{ cycle.taskStats.pendingManagerReview }}人</strong></div>
             <div><span>待部门负责人审核</span><strong>{{cycle.taskStats.byStatus.indicator_dept_reviewing || 0}}人</strong></div>
@@ -590,6 +599,7 @@ watch(() => props.cycle?.id, () => {
 </template>
 
 <style scoped>
+.cycle-termination-record { overflow-wrap: anywhere; }
 .cycle-workspace {
   min-width: 0;
   min-height: 100%;

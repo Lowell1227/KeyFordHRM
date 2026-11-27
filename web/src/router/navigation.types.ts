@@ -18,7 +18,8 @@ export interface NavigationMeta {
   order: number;
   group?: string;
   groupLabel?: string;
-  audience?: 'recruitment';
+  audience?: 'recruitment' | 'goal-monitor' | 'goal-changes';
+  path?: string;
 }
 
 export interface NavigationItem {
@@ -62,6 +63,7 @@ declare module 'vue-router' {
     payrollOnly?: boolean;
     payrollCapabilities?: PayrollCapability[];
     navigation?: NavigationMeta;
+    navigationViews?: NavigationMeta[];
     activeNavigationPath?: string;
   }
 }

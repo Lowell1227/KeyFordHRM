@@ -29,6 +29,7 @@ import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import EmployeeArchiveIssues from '@/components/common/EmployeeArchiveIssues.vue';
 import { archiveMaintenanceHint } from '@/utils/employee-archive-maintenance';
+import { maintainedHrCapabilities } from '@/utils/business-permissions';
 import type { EmployeeArchiveIssueExemption } from '@/api/employee-archives.api';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
@@ -187,6 +188,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '组织架构编辑', value: 'organization_edit' },
   { label: '考核周期创建与编辑', value: 'cycle_plan_edit' },
   { label: '考核周期审核', value: 'cycle_plan_review' },
+  { label: '考核周期终止（独立授权）', value: 'cycle_terminate' },
   { label: '绩效校准', value: 'performance_calibration' },
   { label: '结果公示', value: 'performance_publish' },
   { label: '绩效流程全局查看', value: 'performance_lifecycle_view' },
@@ -1899,6 +1901,12 @@ function setRecruitmentDemandReview(enabled: string | number | boolean) {
   personSettingsDialog.value.hrCapabilities = capabilities;
 }
 
+function setCycleTermination(enabled: string | number | boolean) {
+  const capabilities: HrCapability[] = personSettingsDialog.value.hrCapabilities.filter(item => item !== 'cycle_terminate');
+  if (enabled === true) capabilities.push('cycle_terminate');
+  personSettingsDialog.value.hrCapabilities = capabilities;
+}
+
 function toggleOrgMemberSelection(item: ManagedUser, checked: boolean) {
   selectedOrgMembers.value = checked
     ? [...selectedOrgMembers.value.filter((row) => row.id !== item.id), item]
@@ -1964,9 +1972,7 @@ async function confirmPersonSettings() {
       personSettingsDialog.value.directManagerId !== personSettingsDialog.value.originalDirectManagerId;
     const systemRoleChanged =
       isSystemAdmin.value && personSettingsDialog.value.sysRole !== personSettingsDialog.value.originalSysRole;
-    const nextHrCapabilities = personSettingsDialog.value.sysRole === 'hr_user'
-      ? [...personSettingsDialog.value.hrCapabilities].sort()
-      : personSettingsDialog.value.hrCapabilities.filter(item => ['recruitment_view', 'recruitment_edit', 'recruitment_demand_review', 'talent_hiring_confirm'].includes(item)).sort();
+    const nextHrCapabilities = maintainedHrCapabilities(personSettingsDialog.value.sysRole, personSettingsDialog.value.hrCapabilities);
     const hrCapabilitiesChanged = isSystemAdmin.value
       && JSON.stringify(nextHrCapabilities) !== JSON.stringify([...personSettingsDialog.value.originalHrCapabilities].sort());
     const actions: Promise<unknown>[] = [];
@@ -3183,6 +3189,10 @@ onBeforeUnmount(() => {
             </el-checkbox>
           </el-checkbox-group>
           <small class="dialog-tip">编辑与审核可分别赋给不同人员，也允许同一人同时拥有两项能力。</small>
+        </el-form-item>
+        <el-form-item v-if="isSystemAdmin && ['hr', 'system_admin'].includes(personSettingsDialog.sysRole)" label="独立授权">
+          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('cycle_terminate')"
+            data-testid="cycle-terminate-capability" @change="setCycleTermination">终止考核周期</el-checkbox>
         </el-form-item>
         <el-form-item v-if="isSystemAdmin && personSettingsDialog.sysRole !== 'hr_user'" label="招聘职责">
           <el-checkbox v-if="personSettingsDialog.sysRole !== 'hr'" :model-value="personSettingsDialog.hrCapabilities.includes('recruitment_view')"

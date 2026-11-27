@@ -469,12 +469,16 @@ describe('SchedulerService', () => {
       await (service as unknown as { runSelfEvalOpenings: () => Promise<void> })
         .runSelfEvalOpenings();
 
+      expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ terminatedAt: null }),
+      }));
+
       expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({
         where: { cycleId: 'cycle-q1', status: 'goal_confirmed', lifecycleStatus: 'active', OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
         data: { status: 'self_eval' },
       });
-      expect(prisma.assessmentCycle.update).toHaveBeenCalledWith({
-        where: { id: 'cycle-q1' },
+      expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-q1', terminatedAt: null, status: 'indicator_setting' },
         data: { status: 'self_eval' },
       });
       jest.useRealTimers();
@@ -502,7 +506,7 @@ describe('SchedulerService', () => {
           status: 'unopened',
           indicatorVersionId: { not: null },
           selfEvalOpenAt: { lte: now },
-          task: { cycle: { workflowVersion: 2 }, lifecycleStatus: 'active', OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
+          task: { cycle: { workflowVersion: 2, terminatedAt: null }, lifecycleStatus: 'active', OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
         }),
       }));
       expect(prisma.assessmentPeriod.updateMany).toHaveBeenCalledWith({

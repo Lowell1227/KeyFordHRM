@@ -14,6 +14,7 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
 import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
+import CycleTerminationDialog from './components/CycleTerminationDialog.vue';
 import CycleMonthlyProgressPanel from './components/CycleMonthlyProgressPanel.vue';
 import CycleParticipantScopePicker, { type ParticipantScopeMode } from './components/CycleParticipantScopePicker.vue';
 import CycleScoringSettings from './components/CycleScoringSettings.vue';
@@ -36,6 +37,7 @@ import type {
   DingtalkNotificationSettings,
   CyclePeriodSchedule,
   CycleScheduleIssue,
+  CycleTerminationResult,
 } from '@/types/api.types';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
@@ -205,6 +207,26 @@ const reviewCycleError = ref('');
 const detailLoading = ref(false);
 const detailError = ref('');
 const cycleDetail = ref<AssessmentCycle | null>(null);
+const terminationDialogVisible = ref(false);
+const terminationCycle = ref<AssessmentCycle | null>(null);
+function openTermination(cycle: AssessmentCycle) {
+  if (cycle.canTerminate !== true || cycle.terminatedAt) return;
+  terminationCycle.value = cycle;
+  terminationDialogVisible.value = true;
+}
+async function afterTermination(result: CycleTerminationResult, reason: string) {
+  const project = (cycle: AssessmentCycle) => ({ ...cycle, terminatedAt: result.terminatedAt, terminationReason: reason, canTerminate: false });
+  cycles.value = cycles.value.map(cycle => cycle.id === result.id ? project(cycle) : cycle);
+  if (cycleDetail.value?.id === result.id) cycleDetail.value = project(cycleDetail.value);
+  createDialogVisible.value = false;
+  editDialogVisible.value = false;
+  notificationDialogVisible.value = false;
+  reviewCycleDialogVisible.value = false;
+  preflight.value = null;
+  ElMessage.success(`周期已终止：终止${result.terminatedCount}人，保留结果${result.protectedCount}人。记录可在已结束分组查看。`);
+  await loadCycles();
+  if (cycleDetail.value?.id === result.id) await loadCycleDetail(result.id);
+}
 const isCycleWorkspace = computed(() => typeof route.query.cycleId === 'string' && route.query.cycleId.length > 0);
 const hasListFilters = computed(() => Boolean(typeFilter.value || keyword.value.trim()));
 const emptyStateDescription = computed(() => {
@@ -583,6 +605,7 @@ function openCreateDialog() {
 }
 
 function openEditCycle(cycle: AssessmentCycle) {
+  if (cycle.terminatedAt) return;
   resetCreateForm();
   editingCycleId.value = cycle.id;
   editingWorkflowVersion.value = cycle.workflowVersion === 2 ? 2 : 1;
@@ -749,13 +772,14 @@ async function handleDingtalkNotificationToggle(value: string | number | boolean
 }
 
 function openNotificationModeDialog(cycle: AssessmentCycle) {
+  if (cycle.terminatedAt) return;
   notificationCycle.value = cycle;
   notificationModeDraft.value = cycle.notificationMode ?? 'off';
   notificationDialogVisible.value = true;
 }
 
 async function saveNotificationMode() {
-  if (!notificationCycle.value) return;
+  if (!notificationCycle.value || notificationCycle.value.terminatedAt) return;
   submitting.value = true;
   try {
     const updated = await cyclesApi.updateNotificationMode(notificationCycle.value.id, notificationModeDraft.value);
@@ -1034,6 +1058,7 @@ function buildCreateBody(): CreateCycleBody {
 }
 
 async function handleCreate(openWorkspace = false) {
+  if (editingCycleOriginal.value?.terminatedAt) return;
   if (!createFormRef.value) return;
   if (isEditMode.value && createFormSnapshot() === createInitialSnapshot.value) {
     const unchangedCycle = editingCycleOriginal.value;
@@ -1144,6 +1169,7 @@ async function handleCreate(openWorkspace = false) {
 }
 
 function openEditDeadlines(cycle: AssessmentCycle) {
+  if (cycle.terminatedAt) return;
   editingCycle.value = cycle;
   DEADLINE_FIELDS.forEach(({ key }) => {
     editForm[key] = toDate(cycle[key]);
@@ -1178,7 +1204,7 @@ function getDeadlineValidationMessage(): string | null {
 }
 
 async function handleUpdateDeadlines() {
-  if (!editFormRef.value || !editingCycle.value) return;
+  if (!editFormRef.value || !editingCycle.value || editingCycle.value.terminatedAt) return;
   try {
     await editFormRef.value.validate();
   } catch {
@@ -1210,7 +1236,7 @@ async function handleUpdateDeadlines() {
 }
 
 async function handleLaunch(cycle: AssessmentCycle) {
-  if (launchActionMode.value) return;
+  if (cycle.terminatedAt || launchActionMode.value) return;
   launchActionMode.value = 'launch';
   try {
     const result = await handlePreflight(cycle);
@@ -1281,6 +1307,7 @@ async function handleLaunch(cycle: AssessmentCycle) {
 }
 
 async function handlePreflight(cycle: AssessmentCycle): Promise<LaunchPreflightResult | null> {
+  if (cycle.terminatedAt) return null;
   preflight.value = null;
   preflightError.value = '';
   preflightLoading.value = true;
@@ -1297,7 +1324,7 @@ async function handlePreflight(cycle: AssessmentCycle): Promise<LaunchPreflightR
 }
 
 async function handleSchedule(cycle: AssessmentCycle) {
-  if (launchActionMode.value) return;
+  if (cycle.terminatedAt || launchActionMode.value) return;
   launchActionMode.value = 'schedule';
   try {
     const result = await handlePreflight(cycle);
@@ -1333,6 +1360,7 @@ async function handleSchedule(cycle: AssessmentCycle) {
 }
 
 async function handleCancelSchedule(cycle: AssessmentCycle) {
+  if (cycle.terminatedAt) return;
   try {
     await ElMessageBox.confirm(
       `确认取消「${cycle.name}」的自动发起预约？`,
@@ -1354,7 +1382,7 @@ async function handleCancelSchedule(cycle: AssessmentCycle) {
 }
 
 async function handleDeleteCycle(cycle: AssessmentCycle) {
-  if (cycle.status !== 'draft') return;
+  if (cycle.terminatedAt || cycle.status !== 'draft') return;
   try {
     await ElMessageBox.confirm(
       `删除后无法恢复，确认删除「${cycle.name}」？`,
@@ -1404,7 +1432,7 @@ async function loadCycleDetail(cycleId: string) {
       } finally {
         participantRecordLoading.value = false;
       }
-    } else if (['draft', 'scheduled', 'launch_blocked'].includes(detail.status)) {
+    } else if (!detail.terminatedAt && ['draft', 'scheduled', 'launch_blocked'].includes(detail.status)) {
       await handlePreflight(detail);
     }
   } catch (error) {
@@ -1536,7 +1564,7 @@ async function selectStatusGroup(group: CycleListGroup) {
 }
 
 function handleReviewCycle(cycle: AssessmentCycle) {
-  if (reviewActionMode.value) return;
+  if (cycle.terminatedAt || reviewActionMode.value) return;
   reviewCycleTarget.value = cycle;
   reviewCycleComment.value = '';
   reviewCycleError.value = '';
@@ -1545,7 +1573,7 @@ function handleReviewCycle(cycle: AssessmentCycle) {
 
 async function submitCycleReview(action: 'approve' | 'reject') {
   const cycle = reviewCycleTarget.value;
-  if (!cycle || reviewActionMode.value) return;
+  if (!cycle || cycle.terminatedAt || reviewActionMode.value) return;
   if (action === 'reject' && !reviewCycleComment.value.trim()) {
     reviewCycleError.value = '请填写退回原因';
     return;
@@ -1572,7 +1600,7 @@ async function submitCycleReview(action: 'approve' | 'reject') {
 
 async function handleRemindCycleReview() {
   const cycle = cycleDetail.value;
-  if (!cycle || reviewActionMode.value) return;
+  if (!cycle || cycle.terminatedAt || reviewActionMode.value) return;
   reviewActionMode.value = 'remind';
   try {
     const result = await cyclesApi.remindReview(cycle.id);
@@ -1628,9 +1656,9 @@ onMounted(() => {
       :participant-record-error="participantRecordError"
       :launch-action="launchActionMode"
       :review-action="reviewActionMode"
-      :can-edit="canEditCyclePlan && cycleDetail?.canManagePlan !== false"
-      :can-review="canReviewCyclePlan"
-      :can-remind-review="canRemindCycleReview"
+      :can-edit="canEditCyclePlan && cycleDetail?.canManagePlan !== false && !cycleDetail?.terminatedAt"
+      :can-review="canReviewCyclePlan && !cycleDetail?.terminatedAt"
+      :can-remind-review="canRemindCycleReview && !cycleDetail?.terminatedAt"
       @back="closeCycleWorkspace"
       @retry="retryCycleDetail"
       @launch="handleWorkspaceLaunch"
@@ -1639,13 +1667,14 @@ onMounted(() => {
       @review="cycleDetail && handleReviewCycle(cycleDetail)"
       @remind-review="handleRemindCycleReview"
       @resolve-blocker="handleResolvePreflightBlocker"
+      @terminate="cycleDetail && openTermination(cycleDetail)"
     >
       <template #monthly-progress>
         <CycleMonthlyProgressPanel
           v-if="cycleDetail?.openedAt && cycleDetail.workflowVersion === 2 && cycleDetail.scoringFrequency === 'monthly'"
           :cycle-id="cycleDetail.id"
           :period-keys="cycleDetail.periodSchedules?.map((schedule) => schedule.periodKey) ?? []"
-          :can-edit="canEditCyclePlan && cycleDetail?.canManagePlan !== false"
+          :can-edit="canEditCyclePlan && cycleDetail?.canManagePlan !== false && !cycleDetail?.terminatedAt"
         />
       </template>
     </CycleWorkspaceShell>
@@ -1725,6 +1754,7 @@ onMounted(() => {
         @open="handleView"
         @primary="handlePrimaryCycleAction"
         @edit-cycle="openEditCycle"
+        @terminate="openTermination"
         @edit-deadlines="openEditDeadlines"
         @cancel-schedule="handleCancelSchedule"
         @notification-mode="openNotificationModeDialog"
@@ -2113,6 +2143,8 @@ onMounted(() => {
         </div>
       </template>
     </el-dialog>
+
+    <CycleTerminationDialog v-model:visible="terminationDialogVisible" :cycle="terminationCycle" @completed="afterTermination" />
 
     <el-dialog v-model="notificationDialogVisible" title="周期通知设置" width="560px" destroy-on-close>
       <div class="notification-setting-dialog">

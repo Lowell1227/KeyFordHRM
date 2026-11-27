@@ -34,7 +34,7 @@ for (const sysRole of ['employee', 'manager', 'dept_head', 'vp', 'hr_user']) {
     for (const action of ['canDelete', 'canShare', 'canOnboard', 'canExport']) assert.equal(permissions[action]?.value, false, action);
     assert.equal(canAccessRoute(route('TalentPool'), user), true);
     assert.equal(route('TalentPool').meta.hrCapabilities.includes('recruitment_edit'), true);
-    assert.deepEqual(buildNavigation(routes, user).find(item => item.key === 'recruitment').groups.flatMap(group => group.items.map(item => item.name)), ['TalentPool', 'TalentInterviews', 'RecruitmentDemands']);
+    assert.deepEqual(buildNavigation(routes, user).find(item => item.key === 'recruitment').groups.flatMap(group => group.items.map(item => item.name)), ['TalentPool', 'RecruitmentIntakes', 'TalentInterviews', 'RecruitmentDemands']);
     for (const name of ['Users', 'Organization', 'EntryExit', 'TalentHiringReview']) {
       const target = route(name);
       if (target) assert.equal(canAccessRoute(target, user), false, name);

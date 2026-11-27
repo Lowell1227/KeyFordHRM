@@ -104,37 +104,44 @@ function groupKey(meta: NavigationMeta, route: RouteRecordRaw): string {
   return meta.group ?? `${meta.module}:${String(route.name)}`;
 }
 
-export function buildNavigation(routes: readonly RouteRecordRaw[], user: NavigationUser): NavigationModule[] {
+export function buildNavigation(
+  routes: readonly RouteRecordRaw[], user: NavigationUser,
+  visibility: { canMonitorGoals?: boolean; canSeeGoalChanges?: boolean } = {},
+): NavigationModule[] {
   const modules = new Map<NavigationModuleKey, NavigationModule>();
 
   for (const route of routes) {
-    const meta = navigationMeta(route);
-    if (!meta || !canAccessRoute(route, user)) continue;
-    if (meta.audience === 'recruitment' && !canReadTalent(user)) continue;
+    const primary = navigationMeta(route);
+    if (!primary || !canAccessRoute(route, user)) continue;
+    for (const meta of [primary, ...(route.meta?.navigationViews ?? [])]) {
+      if (meta.audience === 'recruitment' && !canReadTalent(user)) continue;
+      if (meta.audience === 'goal-monitor' && !visibility.canMonitorGoals) continue;
+      if (meta.audience === 'goal-changes' && !visibility.canSeeGoalChanges) continue;
 
-    const moduleDefinition = moduleDefinitions[meta.module];
-    const module = modules.get(meta.module) ?? {
-      key: meta.module,
-      ...moduleDefinition,
-      defaultPath: route.path,
-      groups: [],
-    };
-    const key = groupKey(meta, route);
-    let group = module.groups.find((candidate) => candidate.key === key);
-    if (!group) {
-      group = { key, label: meta.groupLabel ?? '', items: [] };
-      module.groups.push(group);
+      const moduleDefinition = moduleDefinitions[meta.module];
+      const module = modules.get(meta.module) ?? {
+        key: meta.module,
+        ...moduleDefinition,
+        defaultPath: route.path,
+        groups: [],
+      };
+      const key = groupKey(meta, route);
+      let group = module.groups.find((candidate) => candidate.key === key);
+      if (!group) {
+        group = { key, label: meta.groupLabel ?? '', items: [] };
+        module.groups.push(group);
+      }
+      if (group.items.some((item) => item.label === meta.label)) continue;
+
+      const item: NavigationItem = {
+        name: route.name as NavigationItem['name'],
+        path: meta.path ?? route.path,
+        label: meta.label,
+        order: meta.order,
+      };
+      group.items.push(item);
+      modules.set(meta.module, module);
     }
-    if (group.items.some((item) => item.label === meta.label)) continue;
-
-    const item: NavigationItem = {
-      name: route.name as NavigationItem['name'],
-      path: route.path,
-      label: meta.label,
-      order: meta.order,
-    };
-    group.items.push(item);
-    modules.set(meta.module, module);
   }
 
   return [...modules.values()]

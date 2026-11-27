@@ -15,6 +15,9 @@ import type {
   DingtalkNotificationSettings,
   CyclePeriodSchedule,
   PerformanceCycleContext,
+  CycleTerminationPreview,
+  CycleTerminationBody,
+  CycleTerminationResult,
 } from '@/types/api.types';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
@@ -97,6 +100,14 @@ export const cyclesApi = {
   /** GET /cycles/:id — 周期详情 */
   findOne(id: string): Promise<AssessmentCycle> {
     return apiGet(`/cycles/${id}`);
+  },
+
+  terminationPreview(id: string): Promise<CycleTerminationPreview> {
+    return apiGet(`/cycles/${id}/termination-preview`);
+  },
+
+  terminate(id: string, body: CycleTerminationBody): Promise<CycleTerminationResult> {
+    return http.post(`/cycles/${id}/terminate`, body, { skipErrorMessage: true }) as unknown as Promise<CycleTerminationResult>;
   },
 
   previewSchedule(body: {

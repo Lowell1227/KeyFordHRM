@@ -1,6 +1,13 @@
 import { hasHrCapability } from './hr-capabilities';
 
 describe('hasHrCapability', () => {
+  it.each(['hr_user', 'hr', 'system_admin'])('requires an explicit %s cycle termination grant', sysRole => {
+    expect(hasHrCapability({ sysRole, hrCapabilities: [] }, 'cycle_terminate')).toBe(false);
+    expect(hasHrCapability({ sysRole, hrCapabilities: ['cycle_terminate'] }, 'cycle_terminate')).toBe(true);
+  });
+  it.each(['employee', 'manager', 'vp'])('does not turn %s into a cycle administrator through a capability list', sysRole => {
+    expect(hasHrCapability({ sysRole, hrCapabilities: ['cycle_terminate'] }, 'cycle_terminate')).toBe(false);
+  });
   it.each(['employee', 'hr_user', 'manager', 'hr', 'system_admin'])('requires an explicit %s recruitment demand review grant without granting candidate access', sysRole => {
     expect(hasHrCapability({ sysRole, hrCapabilities: [] }, 'recruitment_demand_review' as never)).toBe(false);
     const subject = { sysRole, hrCapabilities: ['recruitment_demand_review'] };

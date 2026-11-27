@@ -162,6 +162,7 @@ export type HrCapability =
   | 'organization_edit'
   | 'cycle_plan_edit'
   | 'cycle_plan_review'
+  | 'cycle_terminate'
   | 'performance_calibration'
   | 'performance_publish'
   | 'performance_lifecycle_view'
@@ -516,7 +517,42 @@ export interface CycleSchedulePreview {
   warnings: CycleScheduleIssue[];
 }
 
+export interface CycleTerminationPreview {
+  cycle: Pick<AssessmentCycle, 'id' | 'name' | 'status' | 'planVersion' | 'terminatedAt'>;
+  canTerminate: boolean;
+  previewHash: string;
+  summary: { total: number; terminable: number; protected: number; alreadyEnded: number; goalChanges: number; reminders: number };
+  tasks: Array<{
+    id: string;
+    employeeName: string;
+    employeeNo: string | null;
+    status: string;
+    lifecycleStatus: string;
+    disposition: 'terminate' | 'protected' | 'already_ended';
+    reason: string;
+  }>;
+}
+
+export interface CycleTerminationBody {
+  reason: string;
+  expectedPreviewHash: string;
+}
+
+export interface CycleTerminationResult {
+  id: string;
+  terminatedAt: string;
+  terminatedCount: number;
+  protectedCount: number;
+  alreadyEndedCount: number;
+  cancelledGoalChangeCount: number;
+}
+
 export interface AssessmentCycle {
+  terminatedAt?: string | null;
+  terminatedById?: string | null;
+  terminationReason?: string | null;
+  terminationVersion?: number;
+  canTerminate?: boolean;
   goalWorkflowVersion?: number;
   canManagePlan?: boolean;
   id: string;

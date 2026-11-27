@@ -12,6 +12,7 @@ import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { useTaskFlow } from '@/composables/useTaskFlow';
 import { usePermission } from '@/composables/usePermission';
+import { useTaskWriteGuard } from '@/composables/useTaskWriteGuard';
 import IndicatorSnapshot, { type ActualValueItem } from './components/IndicatorSnapshot.vue';
 import PerformanceReferencePanel from './components/PerformanceReferencePanel.vue';
 import PerformanceFormWorkspace from './components/PerformanceFormWorkspace.vue';
@@ -65,6 +66,8 @@ const canApproveGoal = computed(() => Boolean(task.value && !lifecycleEnded.valu
 const task = computed(() => route.name === 'TaskDetail' && !isGoalMonitor.value && !taskStore.loading
   && taskStore.detail?.id === route.params.id ? taskStore.detail : null);
 const lifecycleEnded = computed(() => !!task.value && lifecycleReadOnly(task.value));
+const writeGuard = useTaskWriteGuard(() => task.value?.id, () => task.value);
+const { blocked: writeBlocked, notice: writeNotice, ended: writeEnded, preventBlockedInteraction } = writeGuard;
 const loading = computed(() => taskStore.loading || cycleLoading.value);
 const workflowContext = computed(() => {
   const current = task.value;
@@ -351,7 +354,8 @@ function goBack() {
 
 async function handleConfirmIndicators() {
   const currentTask = task.value;
-  if (!currentTask || lifecycleEnded.value) return;
+  if (!currentTask || lifecycleEnded.value || writeBlocked.value || actionLoading.value) return;
+  const context = writeGuard.capture();
   const isFiveStep = goalVersion.value >= 2;
   if (isFiveStep && !currentTask.updatedAt) {
     ElMessage.warning('请刷新目标计划后重新确认');
@@ -366,33 +370,38 @@ async function handleConfirmIndicators() {
       await tasksApi.confirmIndicators(currentTask.id, isFiveStep
         ? { expectedUpdatedAt: currentTask.updatedAt! } : undefined);
     }
+    if (!context.isCurrent()) return;
     ElMessage.success(isFiveStep ? '已办理，请查看当前目标审批进度' : '目标确认成功');
     await loadDetail();
   } catch (error) {
-    // HTTP already displays the conflict; refresh the current round before another action.
-    if (isAxiosError(error) && error.response?.status === 409) await loadDetail();
+    await writeGuard.handleFailure(error, context);
   } finally {
-    actionLoading.value = false;
+    if (context.isCurrent()) actionLoading.value = false;
   }
 }
 
 async function handleRejectIndicators(reason: string) {
   const id = task.value?.id;
-  if (!id || lifecycleEnded.value) return;
+  if (!id || lifecycleEnded.value || writeBlocked.value || actionLoading.value) return;
+  const context = writeGuard.capture();
   actionLoading.value = true;
   try {
     await tasksApi.rejectIndicators(id, { comment: reason, expectedUpdatedAt: task.value?.updatedAt });
+    if (!context.isCurrent()) return;
     ElMessage.success('指标已退回');
     await loadDetail();
+  } catch (error) {
+    await writeGuard.handleFailure(error, context);
   } finally {
-    actionLoading.value = false;
+    if (context.isCurrent()) actionLoading.value = false;
   }
 }
 
 async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>, addNext = false) {
   const currentTask = task.value;
   const id = currentTask?.id;
-  if (!id || lifecycleEnded.value || !currentTask.updatedAt) return;
+  if (!id || lifecycleEnded.value || writeBlocked.value || actionLoading.value || !currentTask.updatedAt) return;
+  const context = writeGuard.capture();
   if (!body.instances.length) {
     ElMessage.warning('请至少保留一条指标');
     return;
@@ -405,6 +414,7 @@ async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdate
       ...body,
       expectedUpdatedAt: currentTask.updatedAt,
     });
+    if (!context.isCurrent()) return;
     if (body.action === 'save') {
       ElMessage.success('目标已保存');
       await loadDetail();
@@ -423,14 +433,19 @@ async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdate
           : '指标已提交',
     );
     await loadDetail();
+  } catch (error) {
+    if (!(await writeGuard.handleFailure(error, context)) && context.isCurrent()) {
+      ElMessage.error('目标尚未保存，当前页面输入仍保留，请核对后重试');
+    }
   } finally {
-    actionLoading.value = false;
+    if (context.isCurrent()) actionLoading.value = false;
   }
 }
 
 async function handleWithdrawIndicators() {
   const currentTask = task.value;
-  if (!currentTask?.id || lifecycleEnded.value || !currentTask.updatedAt) return;
+  if (!currentTask?.id || lifecycleEnded.value || writeBlocked.value || actionLoading.value || !currentTask.updatedAt) return;
+  const context = writeGuard.capture();
   try {
     await ElMessageBox.confirm(
       '撤回后可继续修改目标，修改完成需重新提交主管审核。',
@@ -440,24 +455,28 @@ async function handleWithdrawIndicators() {
   } catch {
     return;
   }
-  if (task.value !== currentTask || lifecycleEnded.value) return;
+  if (!context.isCurrent() || task.value !== currentTask || lifecycleEnded.value || writeBlocked.value) return;
   actionLoading.value = true;
   try {
     await tasksApi.withdrawIndicators(currentTask.id, { expectedUpdatedAt: currentTask.updatedAt });
+    if (!context.isCurrent()) return;
     ElMessage.success('目标已撤回，可继续编辑');
     await loadDetail();
+  } catch (error) {
+    await writeGuard.handleFailure(error, context);
   } finally {
-    actionLoading.value = false;
+    if (context.isCurrent()) actionLoading.value = false;
   }
 }
 async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: ActualValueItem[]) {
   const currentTask = task.value;
-  if (!currentTask || lifecycleEnded.value || actionLoading.value) return;
+  if (!currentTask || lifecycleEnded.value || writeBlocked.value || actionLoading.value) return;
+  const context = writeGuard.capture();
   const id = currentTask.id;
   let expectedUpdatedAt = currentTask.updatedAt;
   const session = detailSession;
   const form = indicatorSnapshotRef.value;
-  const isCurrent = () => session === detailSession && task.value === currentTask
+  const isCurrent = () => context.isCurrent() && session === detailSession && task.value === currentTask
     && indicatorSnapshotRef.value === form;
   actionLoading.value = true;
   let actualValuesSaved = false;
@@ -474,7 +493,9 @@ async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: Actu
     form?.clearSelfEvalDraft();
     ElMessage.success('自评提交成功');
     await loadDetail();
-  } catch {
+  } catch (error) {
+    if (!isCurrent()) return;
+    if (await writeGuard.handleFailure(error, context)) return;
     if (!isCurrent()) return;
     ElMessage.error(
       actualValuesSaved
@@ -686,6 +707,7 @@ async function handleRemind() {
           <ManagerPeriodReviewWorkspace
             v-else-if="isPeriodReviewPage && activePerformancePeriod && isManagerPeriodReview"
             :period-id="activePerformancePeriod.id"
+            :task-id="task.id"
             :read-only="lifecycleEnded"
             @submitted="loadDetail"
             @returned="loadDetail"
@@ -694,12 +716,22 @@ async function handleRemind() {
           <EmployeePeriodReviewWorkspace
             v-else-if="isPeriodReviewPage && activePerformancePeriod"
             :period-id="activePerformancePeriod.id"
+            :task-id="task.id"
             :read-only="lifecycleEnded"
             @submitted="loadDetail"
           />
 
+          <div v-else-if="requestedPerformanceStage !== 'result'" class="task-preserved-workspace">
+          <el-alert v-if="writeNotice" data-testid="task-write-notice" :title="writeNotice" type="warning" :closable="false" show-icon />
+          <a v-if="writeEnded" :href="route.fullPath" target="_blank" rel="noopener noreferrer" data-testid="task-saved-records">另页查看已保存记录</a>
+          <fieldset
+            class="task-input-preserver"
+            data-testid="task-preserved-form"
+            :disabled="writeBlocked"
+            @click.capture="preventBlockedInteraction"
+            @keydown.capture="preventBlockedInteraction"
+          >
           <IndicatorSnapshot
-            v-else-if="requestedPerformanceStage !== 'result'"
             ref="indicatorSnapshotRef"
             :task-id="task.id"
             :cycle-id="task.cycleId"
@@ -735,6 +767,8 @@ async function handleRemind() {
             @save-self-eval-draft="goBack"
             @withdraw="handleWithdrawIndicators"
           />
+          </fieldset>
+          </div>
 
           <ChartCard v-if="showResultView" class="result-view">
             <template #title>结果信息</template>
@@ -840,6 +874,8 @@ async function handleRemind() {
 </template>
 
 <style scoped>
+.task-input-preserver { min-width: 0; margin: 0; padding: 0; border: 0; }
+.task-preserved-workspace > .el-alert { margin-bottom: 12px; overflow-wrap: anywhere; }
 .result-view { min-width: 0; }
 .result-confirmation-stage { margin-bottom: 12px; }
 .result-objection-hint { margin: 0 0 16px; color: var(--el-text-color-secondary); line-height: 1.6; }

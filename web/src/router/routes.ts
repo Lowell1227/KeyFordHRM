@@ -38,7 +38,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '周期与计划',
       roles: ['hr', 'system_admin'],
-      hrCapabilities: ['cycle_plan_edit', 'cycle_plan_review'],
+      hrCapabilities: ['cycle_plan_edit', 'cycle_plan_review', 'cycle_terminate'],
       navigation: { module: 'performance', label: '周期与计划', order: 20, group: 'performance', groupLabel: '绩效运营' },
     },
   },
@@ -435,6 +435,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '绩效任务',
       navigation: { module: 'performance', label: '绩效任务', order: 10, group: 'performance-tasks', groupLabel: '绩效任务' },
+      navigationViews: [{ module: 'performance', label: '目标台账', order: 11, group: 'performance-tasks', groupLabel: '绩效任务', path: '/tasks?goalView=monitor', audience: 'goal-monitor' }],
     },
   },
   {
@@ -459,12 +460,13 @@ export const routes: RouteRecordRaw[] = [
     path: '/goal-changes',
     name: 'GoalChanges',
     component: () => import('@/views/goal-changes/GoalChangeListView.vue'),
-    meta: { requiresAuth: true, title: '目标变更', activeNavigationPath: '/tasks' },
+    meta: { requiresAuth: true, title: '目标变更',
+      navigation: { module: 'performance', label: '目标变更', order: 12, group: 'performance-tasks', groupLabel: '绩效任务', audience: 'goal-changes' } },
     children: [{
       path: ':id',
       name: 'GoalChangeDetail',
       component: () => import('@/views/goal-changes/GoalChangeDetailView.vue'),
-      meta: { requiresAuth: true, title: '目标变更详情', activeNavigationPath: '/tasks' },
+      meta: { requiresAuth: true, title: '目标变更详情', activeNavigationPath: '/goal-changes' },
     }],
   },
   {

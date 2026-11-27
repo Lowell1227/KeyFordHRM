@@ -2,6 +2,7 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { periodReviewsApi } from '@/api/period-reviews.api';
+import { useTaskWriteGuard } from '@/composables/useTaskWriteGuard';
 import type {
   EmployeePeriodReviewItemBody,
   GoalTrackingHealthStatus,
@@ -26,10 +27,12 @@ interface ReviewFormItem {
   selfScore: number | null;
 }
 
-const props = defineProps<{ periodId: string; readOnly?: boolean }>();
+const props = defineProps<{ periodId: string; taskId?: string; readOnly?: boolean }>();
 const emit = defineEmits<{ submitted: [] }>();
 
 const detail = ref<PeriodReviewDetail>();
+const writeGuard = useTaskWriteGuard(() => props.taskId ?? detail.value?.period.taskId, () => props.periodId);
+const { blocked: writeBlocked, notice: writeNotice, ended: writeEnded, preventBlockedInteraction } = writeGuard;
 const loading = ref(false);
 const error = ref('');
 const saving = ref(false);
@@ -46,6 +49,7 @@ const summaryPreview = ref<{
   item: ReviewFormItem; periodId: string; summary: PeriodProgressSummary; content: string;
 } | null>(null);
 const summaryTooLong = computed(() => [...(summaryPreview.value?.content ?? '')].length > 10_000);
+let reviewLoadSequence = 0;
 
 const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> = [
   { value: 'on_track', label: '正常推进' },
@@ -54,7 +58,8 @@ const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> =
   { value: 'completed', label: '已经完成' },
 ];
 
-const canEdit = computed(() => !props.readOnly && Boolean(detail.value?.permissions.canEditEmployee));
+const canEdit = computed(() => !props.readOnly && !loading.value && detail.value?.period.id === props.periodId
+  && Boolean(detail.value?.permissions.canEditEmployee));
 const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
 const scoreExcludedCount = computed(() => (detail.value?.indicators.length ?? 0) - scoreRequiredCount.value);
 const completedCount = computed(() => formItems.filter((item, index) => (
@@ -138,15 +143,28 @@ function updateAttachments(attachments: PeriodReviewDetail['period']['attachment
 }
 
 async function loadReview() {
+  const sequence = ++reviewLoadSequence;
+  const context = writeGuard.capture();
+  const periodId = props.periodId;
+  const taskId = props.taskId;
   loading.value = true;
   error.value = '';
   try {
-    replaceForm(await periodReviewsApi.findOne(props.periodId));
+    const next = await periodReviewsApi.findOne(periodId);
+    if (!context.isCurrent() || sequence !== reviewLoadSequence || periodId !== props.periodId || taskId !== props.taskId) return;
+    if (next.period.id !== periodId || (taskId && next.period.taskId !== taskId)) {
+      detail.value = undefined;
+      error.value = '该月份不属于当前员工的绩效任务';
+      return;
+    }
+    loading.value = false;
+    replaceForm(next);
   } catch (loadError) {
+    if (!context.isCurrent() || sequence !== reviewLoadSequence) return;
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
     error.value = candidate.response?.data?.message || candidate.message || `${followUpName.value}加载失败`;
   } finally {
-    loading.value = false;
+    if (context.isCurrent() && sequence === reviewLoadSequence) loading.value = false;
   }
 }
 
@@ -161,7 +179,7 @@ function bodyItems(): EmployeePeriodReviewItemBody[] {
 }
 
 function summarizeProgressReference(index: number) {
-  if (!canEdit.value || saving.value || submitting.value || attachmentBusy.value || !detail.value) return;
+  if (!canEdit.value || writeBlocked.value || saving.value || submitting.value || attachmentBusy.value || !detail.value) return;
   const item = formItems[index];
   const indicator = detail.value.indicators[index];
   if (!item || !indicator) return;
@@ -187,7 +205,7 @@ function fillProgressSummary(item: ReviewFormItem, summary: PeriodProgressSummar
 function confirmProgressSummary() {
   const preview = summaryPreview.value;
   if (!preview || summaryTooLong.value || preview.periodId !== props.periodId
-    || !canEdit.value || saving.value || submitting.value || attachmentBusy.value || !formItems.includes(preview.item)) return;
+    || !canEdit.value || writeBlocked.value || saving.value || submitting.value || attachmentBusy.value || !formItems.includes(preview.item)) return;
   fillProgressSummary(preview.item, preview.summary, preview.content);
   summaryPreview.value = null;
 }
@@ -231,7 +249,8 @@ function validateForSubmit(): boolean {
 }
 
 async function saveDraft() {
-  if (!canEdit.value || saving.value || submitting.value || attachmentBusy.value) return;
+  if (!canEdit.value || writeBlocked.value || saving.value || submitting.value || attachmentBusy.value) return;
+  const context = writeGuard.capture();
   saving.value = true;
   try {
     const result = await periodReviewsApi.saveEmployeeDraft(props.periodId, {
@@ -239,10 +258,13 @@ async function saveDraft() {
       selfGrade: overallGrade.value,
       indicators: bodyItems(),
     });
+    if (!context.isCurrent()) return;
     draftVersion.value = result.draftVersion;
     ElMessage.success('草稿已保存');
+  } catch (error) {
+    if (!(await writeGuard.handleFailure(error, context)) && context.isCurrent()) ElMessage.error('草稿尚未保存，当前页面输入仍保留');
   } finally {
-    saving.value = false;
+    if (context.isCurrent()) saving.value = false;
   }
 }
 
@@ -256,7 +278,8 @@ function newIdempotencyKey(): string {
 }
 
 async function submitReview() {
-  if (!canEdit.value || saving.value || submitting.value || attachmentBusy.value || !validateForSubmit()) return;
+  if (!canEdit.value || writeBlocked.value || saving.value || submitting.value || attachmentBusy.value || !validateForSubmit()) return;
+  const context = writeGuard.capture();
   const selfGrade = overallGrade.value;
   if (!selfGrade) return;
   if (isEarlySubmission.value) {
@@ -274,6 +297,7 @@ async function submitReview() {
       return;
     }
   }
+  if (!context.isCurrent() || writeBlocked.value || !canEdit.value) return;
   const body: SubmitEmployeePeriodReviewBody = {
     expectedVersion: draftVersion.value,
     idempotencyKey: newIdempotencyKey(),
@@ -283,6 +307,7 @@ async function submitReview() {
   submitting.value = true;
   try {
     const result = await periodReviewsApi.submitEmployeeReview(props.periodId, body);
+    if (!context.isCurrent()) return;
     draftVersion.value = result.draftVersion;
     if (detail.value) {
       detail.value.period.status = result.status;
@@ -292,12 +317,19 @@ async function submitReview() {
     }
     ElMessage.success(`${followUpName.value}已提交`);
     emit('submitted');
+  } catch (error) {
+    if (!(await writeGuard.handleFailure(error, context)) && context.isCurrent()) ElMessage.error('自评尚未提交，当前页面输入仍保留');
   } finally {
-    submitting.value = false;
+    if (context.isCurrent()) submitting.value = false;
   }
 }
 
-watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview(); }, { immediate: true });
+watch(() => [props.periodId, props.taskId], () => {
+  summaryPreview.value = null;
+  saving.value = false;
+  submitting.value = false;
+  void loadReview();
+}, { immediate: true });
 </script>
 
 <template>
@@ -307,6 +339,9 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
       <template #extra><el-button @click="loadReview">重新加载</el-button></template>
     </el-result>
     <template v-else-if="detail">
+      <el-alert v-if="writeNotice" data-testid="employee-period-write-notice" :title="writeNotice" type="warning" :closable="false" show-icon />
+      <a v-if="writeEnded" data-testid="employee-period-saved-records" :href="`/tasks/${detail.period.taskId}?stage=self-eval&periodId=${periodId}`" target="_blank" rel="noopener noreferrer">另页查看已保存记录</a>
+      <fieldset class="monthly-review__preserved-form" data-testid="employee-period-preserved-form" :disabled="writeBlocked" @click.capture="preventBlockedInteraction" @keydown.capture="preventBlockedInteraction">
       <PeriodReviewToolbar
         :title="reviewTitle"
         :status-label="detail.context.statusLabel"
@@ -359,7 +394,7 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
       <PeriodReviewAttachments
         :period-id="detail.period.id"
         :attachments="detail.period.attachments ?? []"
-        :editable="canEdit"
+        :editable="canEdit && !writeBlocked"
         :period-noun="periodNoun"
         @update:attachments="updateAttachments"
         @busy-change="attachmentBusy = $event"
@@ -460,6 +495,7 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
           </div>
         </template>
       </PerformanceFormWorkspace>
+      </fieldset>
     </template>
     <el-dialog
       :model-value="Boolean(summaryPreview)"
@@ -481,7 +517,7 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
       </div>
       <template #footer>
         <el-button @click="summaryPreview = null">保留当前填写</el-button>
-        <el-button type="primary" :disabled="summaryTooLong || !canEdit || saving || submitting" @click="confirmProgressSummary">替换并填入</el-button>
+        <el-button type="primary" :disabled="summaryTooLong || !canEdit || writeBlocked || saving || submitting" @click="confirmProgressSummary">替换并填入</el-button>
       </template>
     </el-dialog>
   </section>
@@ -489,6 +525,7 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
 
 <style scoped>
 .monthly-review { min-width: 0; display: grid; gap: 14px; }
+.monthly-review__preserved-form { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 14px; }
 .progress-summary-preview { display: grid; gap: 12px; }
 .progress-summary-preview__facts { display: flex; flex-wrap: wrap; gap: 6px 18px; color: #697487; font-size: 12px; }
 .progress-summary-preview p { margin: 0; color: #8993a3; font-size: 12px; }

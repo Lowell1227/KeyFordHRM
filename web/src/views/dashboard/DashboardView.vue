@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { ArrowRight } from '@element-plus/icons-vue';
 import { cyclesApi } from '@/api/cycles.api';
 import { reportsApi } from '@/api/reports.api';
 import { useAuthStore } from '@/stores/auth.store';
-import { canAccessAppealLedger } from '@/router/navigation';
+import { buildNavigation } from '@/router/navigation';
+import { routes } from '@/router/routes';
 import ChartCard from '@/components/common/ChartCard.vue';
 import DashboardTaskEntries from './DashboardTaskEntries.vue';
 import DashboardRecruitment from './DashboardRecruitment.vue';
@@ -58,7 +60,6 @@ useVisibleRefresh({ intervalMs: 0, enabled: () => Boolean(auth.user) && !auth.us
 onBeforeUnmount(() => { ++operationSerial; });
 
 const userRole = computed(() => auth.user?.sysRole ?? '');
-const isDirectManager = computed(() => auth.isManager);
 const canViewReports = computed(() => Boolean(auth.user?.businessCapabilities?.canViewReports));
 const canOpenManagementTask = computed(() => Boolean(
   canViewReports.value
@@ -117,30 +118,34 @@ interface DashboardQuickAction {
 }
 
 const roleQuickActions = computed<DashboardQuickAction[]>(() => {
-  const actions: DashboardQuickAction[] = [];
+  if (!auth.user) return [];
+  const permittedPaths = new Set(buildNavigation(routes, auth.user)
+    .flatMap(module => module.groups.flatMap(group => group.items.map(item => item.path))));
+  const actions: DashboardQuickAction[] = [
+    { label: '员工档案', description: '查询和维护人员档案', path: '/users' },
+    { label: '入离职', description: '办理人员入职与离职', path: '/entry-exit' },
+    { label: '人才库', description: '候选人资料与跟进', path: '/talents' },
+    { label: '简历收件', description: '核对简历并确认入库', path: '/recruitment/intakes' },
+    { label: '应聘与面试', description: '跟进应聘和面试安排', path: '/talent-interviews' },
+    { label: '招聘需求', description: '查看和办理招聘需求', path: '/recruitment/demands' },
+    { label: '录用确认', description: '独立确认录用申请', path: '/talent-hiring' },
+    { label: '工资资料', description: '维护工资规则与标准', path: '/payroll/standards' },
+    { label: '扣缴资料', description: '维护个人扣缴依据', path: '/payroll/deductions' },
+    { label: '资料审核', description: '提交和审核工资资料', path: '/payroll/parameter-reviews' },
+    { label: '考勤与封账', description: '核对考勤并封账', path: '/payroll/attendance' },
+    { label: '试算与核算', description: '办理月度工资试算与核算', path: '/payroll/batches' },
+    { label: '复核与审批', description: '复核和审批工资批次', path: '/payroll/approvals' },
+    { label: '结果与补差', description: '查询批准结果和补差', path: '/payroll/results' },
+    { label: '周期与计划', description: '发起周期、检查节点与参与范围', path: '/cycles' },
+    { label: '绩效校准', description: '核对等级分布并完成校准', path: '/calibration' },
+    { label: '结果公示', description: '确认审批状态并公示结果', path: '/publish' },
+    { label: '申诉记录', description: '记录和查询员工绩效申诉', path: '/appeals' },
+    { label: '结果审批', description: '处理待审批的绩效结果', path: '/approval' },
+    { label: '报表分析', description: '查看分管范围结果与重点关注', path: '/reports' },
+  ].filter(action => permittedPaths.has(action.path));
   if (['hr', 'system_admin'].includes(userRole.value)
     || (userRole.value === 'hr_user' && auth.user?.hrCapabilities?.includes('employee_archive_review'))) {
     actions.push({ label: '待我审核', description: '人员资料与入离职申请', path: '/entry-exit?tab=reviews' });
-  }
-  if (userRole.value === 'hr' || userRole.value === 'system_admin') {
-    actions.push(
-      { label: '周期与计划', description: '发起周期、检查节点与参与范围', path: '/cycles' },
-      { label: '绩效校准', description: '核对等级分布并完成校准', path: '/calibration' },
-      { label: '结果公示', description: '确认审批状态并公示结果', path: '/publish' },
-    );
-  }
-  if (auth.user && canAccessAppealLedger(auth.user)) {
-    actions.push({ label: '申诉记录', description: '记录和查询员工绩效申诉', path: '/appeals' });
-  }
-  if (auth.canAccessPerformanceApproval) {
-    actions.push(
-      { label: '结果审批', description: '处理待审批的绩效结果', path: '/approval' },
-    );
-  }
-  if (canViewReports.value) {
-    actions.push(
-      { label: '报表分析', description: '查看分管范围结果与重点关注', path: '/reports' },
-    );
   }
   return actions;
 });
@@ -215,6 +220,16 @@ function avatarColor(name: string): string {
 
 <template>
   <div class="dashboard">
+    <section v-if="roleQuickActions.length" class="quick-actions" data-testid="dashboard-quick-actions">
+      <header class="quick-actions__header"><h2>常用工作入口</h2></header>
+      <div class="quick-actions__grid">
+        <button v-for="action in roleQuickActions" :key="action.path" class="quick-action" type="button"
+          :title="action.description" @click="openRoute(action.path)">
+          <span class="quick-action__label">{{ action.label }}</span>
+          <el-icon aria-hidden="true"><ArrowRight /></el-icon>
+        </button>
+      </div>
+    </section>
     <template v-if="isEmployee">
       <section class="employee-hero">
         <div>
@@ -239,29 +254,7 @@ function avatarColor(name: string): string {
       <div v-if="operationsError && !operations" role="alert" class="dashboard-work__error">{{ operationsError }} <el-button link type="primary" @click="() => loadOperations()">重试</el-button></div>
     </div>
 
-    <template v-if="!isEmployee || isDirectManager || roleQuickActions.length">
-      <div v-loading="dashboardLoading" class="dashboard-admin">
-      <section v-if="roleQuickActions.length" class="quick-actions" data-testid="dashboard-quick-actions">
-        <header class="quick-actions__header">
-          <h2>常用工作入口</h2>
-          <p>按当前系统权限和实际业务职责展示高频工作。</p>
-        </header>
-        <div class="quick-actions__grid">
-          <button
-            v-for="action in roleQuickActions"
-            :key="action.path"
-            class="quick-action"
-            type="button"
-            @click="openRoute(action.path)"
-          >
-            <span class="quick-action__label">{{ action.label }}</span>
-            <span class="quick-action__description">{{ action.description }}</span>
-            <span class="quick-action__link">进入 →</span>
-          </button>
-        </div>
-      </section>
-
-      <template v-if="canViewReports">
+    <div v-if="canViewReports" v-loading="dashboardLoading" class="dashboard-admin">
       <section class="result-summary" data-testid="dashboard-result-summary">
         <div class="result-summary__heading">
           <div>
@@ -332,9 +325,7 @@ function avatarColor(name: string): string {
           </el-table-column>
         </el-table>
       </ChartCard>
-      </template>
-      </div>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -377,11 +368,8 @@ function avatarColor(name: string): string {
 }
 
 .quick-actions {
-  padding: 18px 20px 20px;
-  background: var(--app-card-bg);
-  border: 1px solid var(--app-border-color);
-  border-radius: var(--app-radius);
-  box-shadow: var(--app-shadow);
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--app-border-color);
 }
 
 .quick-actions__header {
@@ -389,19 +377,13 @@ function avatarColor(name: string): string {
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .quick-actions__header h2 {
   margin: 0;
   color: var(--app-text-primary);
   font-size: 17px;
-}
-
-.quick-actions__header p {
-  margin: 0;
-  color: var(--app-text-secondary);
-  font-size: 12px;
 }
 
 .quick-actions__grid {
@@ -412,11 +394,16 @@ function avatarColor(name: string): string {
 
 .quick-action {
   min-width: 0;
-  padding: 14px;
+  min-height: 44px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   text-align: left;
   background: #f8faff;
   border: 1px solid #e4eaf4;
-  border-radius: 10px;
+  border-radius: 6px;
   cursor: pointer;
   transition: border-color var(--app-transition), transform var(--app-transition), box-shadow var(--app-transition);
 }
@@ -429,30 +416,11 @@ function avatarColor(name: string): string {
   transform: translateY(-1px);
 }
 
-.quick-action__label,
-.quick-action__description,
-.quick-action__link {
-  display: block;
-}
-
 .quick-action__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--app-text-primary);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.quick-action__description {
-  min-height: 36px;
-  margin-top: 6px;
-  color: var(--app-text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.quick-action__link {
-  margin-top: 10px;
-  color: var(--el-color-primary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -581,7 +549,7 @@ function avatarColor(name: string): string {
 
 @media (max-width: 560px) {
   .quick-actions__grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .quick-actions__header {

@@ -7,6 +7,7 @@ import { CyclesController } from './cycles.controller';
 import { CyclesService } from './cycles.service';
 import { LaunchService } from './launch.service';
 import { CycleScheduleService } from './cycle-schedule.service';
+import { CycleTerminationService } from './cycle-termination.service';
 import { CycleManagementGuard } from './cycle-management.guard';
 import { RolesGuard } from '@/common/guards/roles.guard';
 
@@ -34,6 +35,7 @@ describe('cycle participant candidates', () => {
         { provide: CyclesService, useValue: service },
         { provide: LaunchService, useValue: {} },
         { provide: CycleScheduleService, useValue: {} },
+        { provide: CycleTerminationService, useValue: {} },
       ],
     })
       .overrideGuard(CycleManagementGuard)

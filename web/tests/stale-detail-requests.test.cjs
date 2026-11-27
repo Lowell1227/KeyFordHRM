@@ -267,6 +267,11 @@ function taskView(t, options = {}) {
     '@/stores/auth.store': { useAuthStore: () => ({ user: { id: 'employee', sysRole: 'employee' } }) },
     '@/api/tasks.api': { tasksApi: api },
     '@/api/upload.api': { uploadApi: {} },
+    '@/api/performance-lifecycle.api': {
+      lifecycleReadOnly: record => !!record.lifecycleStatus && record.lifecycleStatus !== 'active',
+      lifecycleLabel: () => '已终止',
+      performanceLifecycleApi: { detail: async () => ({ lifecycleStatus: 'active' }) },
+    },
     '@/api/cycles.api': { cyclesApi: { findOne: id => {
       cycleRequests.push(id);
       return options.cycle ? options.cycle(id) : Promise.resolve({ id, name: id });

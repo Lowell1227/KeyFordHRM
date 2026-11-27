@@ -1174,6 +1174,10 @@ model TemplateIndicator {
 }
 
 model AssessmentCycle {
+  terminatedAt             DateTime?        @map("terminated_at") @db.Timestamptz(3)
+  terminatedById           String?          @map("terminated_by_id") @db.Uuid
+  terminationReason        String?          @map("termination_reason") @db.Text
+  terminationVersion       Int              @default(0) @map("termination_version")
   id                       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                     String           @db.VarChar(100)
   type                     CycleType        @default(quarterly)

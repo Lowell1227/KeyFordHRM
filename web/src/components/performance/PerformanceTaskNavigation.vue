@@ -5,12 +5,11 @@ const props = withDefaults(defineProps<{
   active: TaskView; canMonitor: boolean; canSeeChanges?: boolean;
   reviewTotal?: number | null; reviewError?: boolean;
 }>(), { canSeeChanges: false, reviewError: false });
+const showTaskViews = computed(() => props.active !== 'monitor' && props.active !== 'changes');
 const entries = computed(() => [
   { key: 'mine', label: '我的目标', to: '/tasks?goalView=mine' },
   { key: 'review', label: '目标审核', to: '/tasks?goalView=review' },
-  ...(props.canMonitor ? [{ key: 'monitor', label: '目标台账', to: '/tasks?goalView=monitor' }] : []),
   { key: 'tasks', label: '绩效待办', to: '/tasks' },
-  ...(props.canSeeChanges || props.active === 'changes' ? [{ key: 'changes', label: '目标变更', to: '/goal-changes' }] : []),
 ]);
 const reviewBadge = computed(() => {
   if (props.reviewError) return { text: '!', title: '目标审核数量暂不可用' };
@@ -21,7 +20,7 @@ const reviewBadge = computed(() => {
 </script>
 
 <template>
-  <nav class="performance-task-navigation" aria-label="绩效任务视图">
+  <nav v-if="showTaskViews" class="performance-task-navigation" aria-label="绩效任务视图">
     <RouterLink v-for="entry in entries" :key="entry.key" :to="entry.to" :data-section="entry.key"
       :class="{ 'is-active': active === entry.key }" :aria-current="active === entry.key ? 'page' : undefined">
       <span>{{ entry.label }}</span>

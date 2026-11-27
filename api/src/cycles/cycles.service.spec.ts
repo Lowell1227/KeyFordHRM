@@ -1028,11 +1028,20 @@ describe('CyclesService', () => {
       group: 'attention',
     } as any, creator);
 
-    const expectedWhere = { status: { in: ['draft', 'scheduled', 'launch_blocked'] } };
+    const expectedWhere = { status: { in: ['draft', 'scheduled', 'launch_blocked'] }, terminatedAt: null };
     expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({ where: expectedWhere });
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expectedWhere,
     }));
+  });
+
+  it('keeps terminated cycles in the finished group without changing their business status', async () => {
+    prisma.assessmentCycle.count.mockResolvedValue(0);
+    prisma.assessmentCycle.findMany.mockResolvedValue([]);
+    await service.findAll({ page: 1, pageSize: 20, skip: 0, take: 20, group: 'finished' } as any, creator);
+    const where = { AND: [{ OR: [{ status: { in: ['closed'] } }, { terminatedAt: { not: null } }] }] };
+    expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({ where });
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({ where }));
   });
 
   it('uses an exact cycle status instead of the broader status group', async () => {
@@ -1277,6 +1286,13 @@ describe('CyclesService', () => {
     });
   });
 
+  it('refuses deadline edits for an already terminated cycle before any write', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ ...storedDraft(), status: 'self_eval', terminatedAt: new Date() });
+    await expect(service.updateDeadlines('cycle-1', { expectedPlanVersion: 3 }, creator)).rejects.toThrow(ConflictException);
+    expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
   it('uses a status CAS so concurrent scheduling cannot race a deadline update', async () => {
     prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
       deadlineIndicatorSetting: new Date('2026-12-20T00:00:00.000Z'),
@@ -1290,7 +1306,7 @@ describe('CyclesService', () => {
       response: { message: expect.stringContaining('刷新后重试') },
     });
     expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'cycle-1', status: 'draft', planVersion: 3 },
+      where: { id: 'cycle-1', status: 'draft', planVersion: 3, terminatedAt: null },
     }));
   });
 
@@ -1306,7 +1322,7 @@ describe('CyclesService', () => {
     }, creator);
 
     expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
-      where: { id: 'cycle-1', status: 'draft', planVersion: 3 },
+      where: { id: 'cycle-1', status: 'draft', planVersion: 3, terminatedAt: null },
       data: { planVersion: { increment: 0 } },
     });
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
@@ -1340,7 +1356,7 @@ describe('CyclesService', () => {
     }, creator);
 
     expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
-      where: { id: 'cycle-1', status: 'draft', planVersion: 3 },
+      where: { id: 'cycle-1', status: 'draft', planVersion: 3, terminatedAt: null },
       data: expect.objectContaining({
         deadlineIndicatorSetting: updated.deadlineIndicatorSetting,
         planVersion: { increment: 1 },

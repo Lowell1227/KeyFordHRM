@@ -4,6 +4,7 @@ export const HR_CAPABILITIES = [
   'organization_edit',
   'cycle_plan_edit',
   'cycle_plan_review',
+  'cycle_terminate',
   'performance_calibration',
   'performance_publish',
   'performance_lifecycle_view',
@@ -27,6 +28,8 @@ export function hasHrCapability(
   subject: HrCapabilitySubject,
   capability: HrCapability,
 ): boolean {
+  if (capability === 'cycle_terminate') return ['hr_user', 'hr', 'system_admin'].includes(subject.sysRole)
+    && Boolean(subject.hrCapabilities?.includes(capability));
   if (capability === 'recruitment_edit' || capability === 'recruitment_demand_review') return Boolean(subject.hrCapabilities?.includes(capability));
   if (capability === 'recruitment_view') {
     return subject.sysRole === 'hr' || subject.sysRole === 'system_admin'

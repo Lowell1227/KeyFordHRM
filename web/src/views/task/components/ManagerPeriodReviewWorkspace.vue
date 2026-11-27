@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { periodReviewsApi } from '@/api/period-reviews.api';
+import { useTaskWriteGuard } from '@/composables/useTaskWriteGuard';
 import type { PeriodReviewDetail } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
@@ -19,6 +20,8 @@ interface ManagerFormItem {
 const props = defineProps<{ periodId: string; taskId?: string; readOnly?: boolean }>();
 const emit = defineEmits<{ submitted: []; returned: [] }>();
 const detail = ref<PeriodReviewDetail>();
+const writeGuard = useTaskWriteGuard(() => props.taskId ?? detail.value?.period.taskId, () => props.periodId);
+const { blocked: writeBlocked, notice: writeNotice, ended: writeEnded, preventBlockedInteraction } = writeGuard;
 const loading = ref(false);
 const error = ref('');
 const saving = ref(false);
@@ -108,25 +111,27 @@ function replaceForm(next: PeriodReviewDetail) {
 
 async function loadReview() {
   const sequence = ++reviewLoadSequence;
+  const context = writeGuard.capture();
   const periodId = props.periodId;
   const taskId = props.taskId;
   loading.value = true;
   error.value = '';
   try {
     const next = await periodReviewsApi.findOne(periodId);
-    if (sequence !== reviewLoadSequence || periodId !== props.periodId || taskId !== props.taskId) return;
-    if (taskId && next.period.taskId !== taskId) {
+    if (!context.isCurrent() || sequence !== reviewLoadSequence || periodId !== props.periodId || taskId !== props.taskId) return;
+    if (next.period.id !== periodId || (taskId && next.period.taskId !== taskId)) {
       detail.value = undefined;
       error.value = '该月份不属于当前员工的绩效任务';
       return;
     }
+    loading.value = false;
     replaceForm(next);
   } catch (loadError) {
-    if (sequence !== reviewLoadSequence) return;
+    if (!context.isCurrent() || sequence !== reviewLoadSequence) return;
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
     error.value = candidate.response?.data?.message || candidate.message || '直属上级评分加载失败';
   } finally {
-    if (sequence === reviewLoadSequence) loading.value = false;
+    if (context.isCurrent() && sequence === reviewLoadSequence) loading.value = false;
   }
 }
 
@@ -178,7 +183,8 @@ function validate(): boolean {
 }
 
 async function saveDraft() {
-  if (!canEdit.value || saving.value || submitting.value) return;
+  if (!canEdit.value || writeBlocked.value || saving.value || returning.value || submitting.value) return;
+  const context = writeGuard.capture();
   saving.value = true;
   try {
     const result = await periodReviewsApi.saveManagerDraft(props.periodId, {
@@ -186,15 +192,19 @@ async function saveDraft() {
       managerGrade: managerGrade.value,
       indicators: bodyItems(),
     });
+    if (!context.isCurrent()) return;
     draftVersion.value = result.draftVersion;
     ElMessage.success('直属上级评分草稿已保存');
+  } catch (error) {
+    if (!(await writeGuard.handleFailure(error, context)) && context.isCurrent()) ElMessage.error('评分草稿尚未保存，当前页面输入仍保留');
   } finally {
-    saving.value = false;
+    if (context.isCurrent()) saving.value = false;
   }
 }
 
 async function returnReview() {
-  if (!canEdit.value || saving.value || returning.value || submitting.value || !detail.value) return;
+  if (!canEdit.value || writeBlocked.value || saving.value || returning.value || submitting.value || !detail.value) return;
+  const context = writeGuard.capture();
   const current = detail.value;
   const action = { taskId: current.period.taskId, periodId: current.period.id, label: periodLabel(current.period), action: 'returned' as const };
   let reason = '';
@@ -206,7 +216,7 @@ async function returnReview() {
   } catch {
     return;
   }
-  if (detail.value !== current || !canEdit.value) return;
+  if (!context.isCurrent() || detail.value !== current || !canEdit.value || writeBlocked.value) return;
   returning.value = true;
   try {
     await periodReviewsApi.returnManagerReview(action.periodId, {
@@ -214,18 +224,22 @@ async function returnReview() {
       idempotencyKey: newIdempotencyKey(),
       reason: reason.trim() || null,
     });
+    if (!context.isCurrent()) return;
     ElMessage.success(`${current.context.cycleName} · ${action.label}已退回员工补充`);
     if (detail.value !== current || props.periodId !== action.periodId) return;
     lastAction.value = action;
     await loadReview();
     emit('returned');
+  } catch (error) {
+    if (!(await writeGuard.handleFailure(error, context)) && context.isCurrent()) ElMessage.error('退回未完成，当前页面输入仍保留');
   } finally {
-    returning.value = false;
+    if (context.isCurrent()) returning.value = false;
   }
 }
 
 async function submitReview() {
-  if (!canEdit.value || saving.value || returning.value || submitting.value || !validate() || !detail.value) return;
+  if (!canEdit.value || writeBlocked.value || saving.value || returning.value || submitting.value || !validate() || !detail.value) return;
+  const context = writeGuard.capture();
   const current = detail.value;
   const action = { taskId: current.period.taskId, periodId: current.period.id, label: periodLabel(current.period), action: 'submitted' as const };
   const selectedGrade = managerGrade.value;
@@ -238,6 +252,7 @@ async function submitReview() {
       managerGrade: selectedGrade,
       indicators: bodyItems(),
     });
+    if (!context.isCurrent()) return;
     ElMessage.success(`${current.context.cycleName} · ${action.label}评分已提交`);
     if (detail.value !== current || props.periodId !== action.periodId) return;
     lastAction.value = action;
@@ -250,12 +265,19 @@ async function submitReview() {
       detail.value.context.statusLabel = '评分已完成';
     }
     emit('submitted');
+  } catch (error) {
+    if (!(await writeGuard.handleFailure(error, context)) && context.isCurrent()) ElMessage.error('评分尚未提交，当前页面输入仍保留');
   } finally {
-    submitting.value = false;
+    if (context.isCurrent()) submitting.value = false;
   }
 }
 
-watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
+watch(() => [props.periodId, props.taskId], () => {
+  saving.value = false;
+  submitting.value = false;
+  returning.value = false;
+  void loadReview();
+}, { immediate: true });
 </script>
 
 <template>
@@ -265,6 +287,9 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
       <template #extra><el-button @click="loadReview">重新加载</el-button></template>
     </el-result>
     <template v-else-if="detail">
+      <el-alert v-if="writeNotice" data-testid="manager-period-write-notice" :title="writeNotice" type="warning" :closable="false" show-icon />
+      <a v-if="writeEnded" data-testid="manager-period-saved-records" :href="`/tasks/${detail.period.taskId}?stage=self-eval&periodId=${periodId}`" target="_blank" rel="noopener noreferrer">另页查看已保存记录</a>
+      <fieldset class="manager-review__preserved-form" data-testid="manager-period-preserved-form" :disabled="writeBlocked" @click.capture="preventBlockedInteraction" @keydown.capture="preventBlockedInteraction">
       <p v-if="actionNotice" class="manager-review__notice" role="status" data-testid="manager-period-action-notice">{{ actionNotice }}</p>
       <PeriodReviewToolbar
         :title="periodTitle"
@@ -401,12 +426,14 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
           </div>
         </template>
       </PerformanceFormWorkspace>
+      </fieldset>
     </template>
   </section>
 </template>
 
 <style scoped>
 .manager-review { min-width: 0; display: grid; gap: 14px; }
+.manager-review__preserved-form { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 14px; }
 .manager-review__notice { margin: 0; padding: 10px 14px; border-radius: 8px; background: #edf4ff; color: #426095; font-size: 13px; overflow-wrap: anywhere; }
 .manager-review__totals { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 12px; }
 .manager-review__total-card { min-width: 0; display: grid; gap: 8px; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
