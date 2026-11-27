@@ -29,6 +29,8 @@ function makeTask(overrides: Record<string, unknown> = {}) {
     managerId: 'mgr-1',
     approverId: 'vp-1',
     status: TaskStatus.hr_calibration as TaskStatus,
+    lifecycleStatus: 'active',
+    terminatedAt: null as Date | null,
     isExempt: false,
     employee: { id: 'emp-1', name: '张三', employeeNo: 'E001', position: '工程师' },
     dept: { name: '研发部' },
@@ -135,6 +137,17 @@ describe('ReportsService', () => {
         tasks.filter((task) => matchesReportWhere(task, where))
       ));
     }
+
+    it('retains ended published facts in reports after logical removal but excludes terminated unfinished work', async () => {
+      const archived = resultTask('archived-final', 'another-employee', TaskStatus.closed, 'B');
+      const abandoned = resultTask('terminated-unfinished', 'another-employee', TaskStatus.self_eval, 'A');
+      useTasks([{ ...archived, lifecycleStatus: 'deleted' },
+        { ...abandoned, lifecycleStatus: 'deleted', terminatedAt: new Date('2026-11-26') }]);
+      const result = await service.getCycleSummary('cycle-1', {}, makeViewer()) as ReportSummary;
+      expect(result.items.map(item => item.taskId)).toEqual(['archived-final']);
+      expect(result.stats).toMatchObject({ total: 1, resulted: 1, pending: 0 });
+      expect(result.stats.grades.B.count).toBe(1);
+    });
 
     it.each([SysRole.employee, SysRole.hr, SysRole.system_admin, SysRole.chairman])(
       'excludes own unpublished result before statistics without enlarging the %s viewer scope',
@@ -301,7 +314,7 @@ describe('ReportsService', () => {
       expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            AND: [{
+            AND: [{ OR: [{ lifecycleStatus: 'active' }, { lifecycleStatus: 'deleted', terminatedAt: null }] }, {
               OR: [
                 { employee: { id: 'vp-1' } },
                 { managerId: 'vp-1' },

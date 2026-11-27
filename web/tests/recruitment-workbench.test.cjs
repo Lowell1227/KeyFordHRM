@@ -15,6 +15,8 @@ function mount(t, read) {
   const original = loaded.require.bind(loaded), pushes = [];
   const auth = vue.reactive({ user: { id: 'user', isAssessorOnly: false } });
   loaded.require = id => {
+    if (id.endsWith('.vue')) return {};
+    if (id === '@/composables/useVisibleRefresh') return { useVisibleRefresh() {} };
     if (id === 'vue-router') return { useRouter: () => ({ push: target => pushes.push(target) }) };
     if (id === '@/stores/auth.store') return { useAuthStore: () => auth };
     if (id === '@/api/talent-recruitment.api') return { talentRecruitmentApi: { workbench: read } };

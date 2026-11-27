@@ -40,6 +40,7 @@ import { getManagerStageState, TeamStageState } from './team-task-stage';
 import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
 import { canViewTask } from './task-access-policy';
 import { LegacyTaskAttachmentsService } from '@/storage/legacy-task-attachments.service';
+import { ACTIVE_LIFECYCLE, assertLifecycleActive, canManageLifecycle, lifecycleProjection, lifecycleWhere } from '@/performance-lifecycle/lifecycle-policy';
 
 type IndicatorBaselineSource = IndicatorInstance & {
   visibleDepartments: Array<{ departmentId: string }>;
@@ -51,6 +52,15 @@ type IndicatorBaselineSource = IndicatorInstance & {
 
 /** 任务列表项。 */
 export interface TaskListItem {
+  lifecycleStatus?: string;
+  lifecycleVersion?: number;
+  terminatedAt?: Date | null;
+  terminatedById?: string | null;
+  terminationReason?: string | null;
+  deletedAt?: Date | null;
+  deletedById?: string | null;
+  deletionReason?: string | null;
+  allowedActions?: string[];
   publishedAt?: Date | null;
   employeeConfirmedAt?: Date | null;
   approvedAt?: Date | null;
@@ -243,9 +253,9 @@ export class TasksService {
 
   /** GET /tasks — 角色过滤 + 分页。 */
   async findAll(dto: TaskQueryDto, viewer: AuthUser): Promise<Paginated<TaskListItem>> {
-    const scopeFilter = await this.dataScope.getVisibleEmployeeFilter(viewer);
+    const scopeFilter = canManageLifecycle(viewer, 'view') ? {} : await this.dataScope.getVisibleEmployeeFilter(viewer);
 
-    const where: Prisma.AssessmentTaskWhereInput = {};
+    const where: Prisma.AssessmentTaskWhereInput = lifecycleWhere(dto.lifecycleStatus, viewer);
     const employeeConditions: Prisma.UserWhereInput[] = [];
 
     if (Object.keys(scopeFilter).length > 0) {
@@ -296,6 +306,7 @@ export class TasksService {
     ]);
 
     const items: TaskListItem[] = tasks.map((t) => ({
+      ...lifecycleProjection('task', t, viewer),
       id: t.id,
       cycleId: t.cycleId,
       cycleName: t.cycle?.name ?? '',
@@ -322,6 +333,7 @@ export class TasksService {
   async findDepartmentReviews(dto: TaskQueryDto, viewer: AuthUser) {
     const keyword = dto.keyword?.trim();
     const scopeWhere: Prisma.AssessmentTaskWhereInput = {
+      ...ACTIVE_LIFECYCLE,
       deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false,
       ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
       ...(dto.deptId ? { deptId: dto.deptId } : {}),
@@ -381,7 +393,7 @@ export class TasksService {
 
   /** GET /tasks/mine — 仅查看当前用户自己的考核任务。 */
   async findMine(dto: TaskQueryDto, viewer: AuthUser): Promise<Paginated<TaskListItem>> {
-    const where: Prisma.AssessmentTaskWhereInput = { employeeId: viewer.id };
+    const where: Prisma.AssessmentTaskWhereInput = { employeeId: viewer.id, ...lifecycleWhere(dto.lifecycleStatus, viewer) };
 
     if (dto.cycleId) {
       where.cycleId = dto.cycleId;
@@ -438,9 +450,9 @@ export class TasksService {
       rawGrade: this.isOwnUnpublishedResult(t, viewer) || (t.employeeId === viewer.id && !this.parsePublishVisibleFields(t.cycle?.publishVisibleFields).grade) ? null : t.gradeResult?.rawGrade ?? null,
       publishedAt: t.publishedAt ?? null,
       employeeConfirmedAt: t.employeeConfirmedAt ?? null,
-      updatedAt: t.updatedAt,
       workflowVersion: t.cycle?.workflowVersion ?? 1,
       periods: t.periods,
+      ...lifecycleProjection('task', t, viewer),
     }));
 
     return paginated(items, total, dto);
@@ -567,6 +579,10 @@ export class TasksService {
     );
     detail.resultEvidence = buildResultEvidence(task.periods);
     detail.workflowContext = await this.buildWorkflowContext(task, viewer);
+    Object.assign(detail, lifecycleProjection('task', task, viewer));
+    if (task.lifecycleStatus && task.lifecycleStatus !== 'active') {
+      detail.workflowContext = { ...detail.workflowContext, currentHandler: null, canRemind: false, reminderNodeType: null };
+    }
 
     // 员工本人在批准后可查看结果，仍遵守周期字段可见配置。
     const isEmployee = viewer.id === task.employeeId;
@@ -903,7 +919,7 @@ export class TasksService {
       : 'goal_confirmed';
     const result = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.assessmentTask.updateMany({
-        where: { id: task.id, status: TaskStatus.indicator_confirming },
+        where: { id: task.id, status: TaskStatus.indicator_confirming, ...ACTIVE_LIFECYCLE },
         data: { indicatorConfirmedAt: now },
       });
       if (claimed.count !== 1) {
@@ -1122,7 +1138,7 @@ export class TasksService {
         });
       }
 
-      await tx.assessmentTask.update({
+      const withdrawn = await tx.assessmentTask.update({
         where: { id: task.id },
         data: {
           status: 'indicator_drafting',
@@ -1141,7 +1157,7 @@ export class TasksService {
           extraData: { type: 'indicator_employee_withdrawn' },
         },
       });
-      return claimedUpdatedAt;
+      return new Date(Math.max(withdrawn.updatedAt.getTime(), claimedUpdatedAt.getTime()));
     });
 
     if (task.managerId) {
@@ -1200,7 +1216,7 @@ export class TasksService {
     }
 
     const record = await this.prisma.$transaction(async (tx) => {
-      if (newGoalWorkflow) await claimTaskVersion(tx, task.id, task.updatedAt.toISOString(), task.status);
+      await claimTaskVersion(tx, task.id, task.updatedAt.toISOString(), task.status);
       await this.replaceIndicatorInstances(tx, task.id, validItems);
       await tx.assessmentTask.update({
         where: { id: task.id },
@@ -1876,7 +1892,7 @@ export class TasksService {
         });
       }
 
-      await tx.assessmentTask.update({
+      const withdrawn = await tx.assessmentTask.update({
         where: { id: task.id },
         data: {
           status: 'manager_scoring',
@@ -1898,7 +1914,7 @@ export class TasksService {
           extraData: { type: 'manager_score_withdrawn' },
         },
       });
-      return claimedUpdatedAt;
+      return new Date(Math.max(withdrawn.updatedAt.getTime(), claimedUpdatedAt.getTime()));
     });
 
     return { id: task.id, status: 'manager_scoring', updatedAt: claimedUpdatedAt.toISOString() };
@@ -1970,6 +1986,7 @@ export class TasksService {
       await tx.$queryRaw`SELECT "id" FROM "assessment_tasks" WHERE "id" = ${id}::uuid FOR NO KEY UPDATE`;
       const task = await tx.assessmentTask.findUnique({ where: { id }, include: { gradeResult: true } });
       if (!task) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核任务不存在' });
+      assertLifecycleActive(task);
       this.assertEmployee(task, viewer);
       const legacy = task.status === 'published' && isResultPublished(task);
       if (task.isExempt || task.employeeConfirmedAt || task.gradeResult?.employeeConfirmedAt || (!legacy && (
@@ -2011,6 +2028,7 @@ export class TasksService {
       await tx.$queryRaw`SELECT "id" FROM "assessment_tasks" WHERE "id" = ${id}::uuid FOR NO KEY UPDATE`;
       const task = await tx.assessmentTask.findUnique({ where: { id }, include: { gradeResult: true } });
       if (!task) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核任务不存在' });
+      assertLifecycleActive(task);
       if (task.employeeId !== viewer.id || viewer.isAssessorOnly) {
         throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '只能对本人的绩效结果提出异议' });
       }
@@ -2057,6 +2075,7 @@ export class TasksService {
     if (!task) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核任务不存在' });
     }
+    assertLifecycleActive(task);
     return task as AssessmentTask & { snapshot?: { snapshotData: Prisma.JsonValue } };
   }
 

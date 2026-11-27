@@ -1,4 +1,6 @@
 import { hasApprovedGoalBaseline } from '@/tasks/goal-workflow';
+import { assertLifecycleActive } from '@/performance-lifecycle/lifecycle-policy';
+import { lockActiveTask } from '@/performance-lifecycle/lifecycle-lock';
 import {
   BadRequestException,
   ConflictException,
@@ -123,6 +125,8 @@ export interface GoalTrackingItem {
 export interface GoalTrackingResult {
   taskId?: string | null;
   taskStatus?: TaskStatus | null;
+  lifecycleStatus?: string;
+  readOnlyReason?: string | null;
   canEdit?: boolean;
   monthlyFollowUpRequired?: boolean;
   summary?: {
@@ -157,6 +161,14 @@ export interface IndicatorAlignmentTaskContext {
   employeeId: string;
   managerId: string | null;
   deptId: string | null;
+  lifecycleStatus?: string;
+}
+
+function lifecycleReadOnlyReason(task: { lifecycleStatus?: string }): string | null {
+  if (!task.lifecycleStatus || task.lifecycleStatus === 'active') return null;
+  return task.lifecycleStatus === 'terminated'
+    ? '该考核任务已终止，仅可查看历史，不能继续办理'
+    : '该考核任务已移入历史，仅可查看，不能继续办理';
 }
 
 function activeGoalTrackingBusinessPeriodKey(
@@ -788,6 +800,8 @@ export class ObjectivesService {
     return {
       taskId: task.id,
       taskStatus: task.status,
+      lifecycleStatus: task.lifecycleStatus ?? 'active',
+      readOnlyReason: lifecycleReadOnlyReason(task),
       canEdit,
       monthlyFollowUpRequired: task.cycle.monthlyFollowUpRequired,
       summary: {
@@ -826,6 +840,7 @@ export class ObjectivesService {
         employeeId: true,
         managerId: true,
         deptId: true,
+        lifecycleStatus: true,
         manager: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
@@ -836,6 +851,8 @@ export class ObjectivesService {
       });
     }
     this.assertCanMaintainIndicatorAlignment(task, viewer);
+    const readOnlyReason = lifecycleReadOnlyReason(task);
+    if (readOnlyReason) return { items: [], owners: [], reason: readOnlyReason };
     if (!task.managerId) {
       return { items: [], owners: [], reason: '本周期未设置绩效直属上级' };
     }
@@ -871,7 +888,7 @@ export class ObjectivesService {
         relation: 'performance_manager' as const,
         items,
       }],
-      reason: indicators.length ? null : '绩效直属上级暂无对你可见的指标',
+      reason: indicators.length ? null : '绩效直属上级暂无对你可见且可引用的有效指标',
     };
   }
 
@@ -881,6 +898,7 @@ export class ObjectivesService {
     viewer: AuthUser,
   ): Promise<void> {
     this.assertCanMaintainIndicatorAlignment(task, viewer);
+    assertLifecycleActive(task);
     const ids = [...new Set(submittedIds ?? [])];
     if (ids.length === 0) return;
     if (!task.managerId) this.throwAlignmentForbidden();
@@ -934,7 +952,7 @@ export class ObjectivesService {
     return {
       retiredAt: null,
       AND: [
-        { task: { cycleId: task.cycleId, employeeId: task.managerId! } },
+        { task: { cycleId: task.cycleId, employeeId: task.managerId!, lifecycleStatus: 'active' } },
         { OR: visibility },
       ],
     };
@@ -967,10 +985,6 @@ export class ObjectivesService {
     viewer: AuthUser,
     options?: { aiDraftId: string; aiAssisted: true },
   ) {
-    if (options) {
-      const saved = await this.findAiDraftProgress(options.aiDraftId, viewer.id, indicatorId);
-      if (saved) return saved;
-    }
     const indicatorQuery = {
       where: { id: indicatorId },
       include: {
@@ -981,6 +995,7 @@ export class ObjectivesService {
             status: true,
             isExempt: true,
             participantDisposition: true,
+            lifecycleStatus: true,
             indicatorConfirmedAt: true, goalApprovedAt: true,
             closedAt: true,
             selfEvalSubmittedAt: true,
@@ -1026,6 +1041,11 @@ export class ObjectivesService {
         code: ERROR_CODE.FORBIDDEN,
         message: '只能更新本人的考核指标进展',
       });
+    }
+    assertLifecycleActive(indicator.task);
+    if (options) {
+      const saved = await this.findAiDraftProgress(options.aiDraftId, viewer.id, indicatorId);
+      if (saved) return saved;
     }
     if (indicator.retiredAt) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '已移除的目标不能更新进展' });
@@ -1073,6 +1093,7 @@ export class ObjectivesService {
             throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: reason ?? '该月份已不可更新，请刷新后重试' });
           }
         }
+        await lockActiveTask(tx, indicator.task.id);
         await tx.$queryRaw<Array<{ id: string }>>`
           SELECT "id" FROM "indicator_instances"
           WHERE "id" = ${indicatorId}::uuid
@@ -1407,11 +1428,14 @@ export class ObjectivesService {
       cycleId: indicator.task.cycle.id,
       cycleName: indicator.task.cycle.name,
       taskStatus: indicator.task.status,
+      lifecycleStatus: indicator.task.lifecycleStatus ?? 'active',
+      readOnlyReason: lifecycleReadOnlyReason(indicator.task),
       canEdit: this.canSubmitActiveProgress(indicator.task, viewer, undefined, indicatorId),
       progressPeriods: (indicator.task.periods ?? []).filter(period => period.id && isMonthlyProgressPeriod(period)).map(period => {
         const canEdit = this.canSubmitActiveProgress(indicator.task, viewer, period, indicatorId);
         return { id: period.id, periodKey: period.periodKey, canEdit,
-          reason: canEdit ? null : progressPeriodBlockReason(period, indicatorId) ?? '当前考核阶段不允许更新进展' };
+          reason: canEdit ? null : lifecycleReadOnlyReason(indicator.task)
+            ?? progressPeriodBlockReason(period, indicatorId) ?? '当前考核阶段不允许更新进展' };
       }),
       activeBusinessPeriodKey: activeGoalTrackingBusinessPeriodKey(indicator.task.periods),
       alignedObjectives: indicator.objectiveAlignments.map(({ objective }) => objective),
@@ -1457,6 +1481,7 @@ export class ObjectivesService {
       orderBy: [{ cycle: { openedAt: 'desc' } }, { id: 'asc' }],
       select: {
         employeeId: true, isExempt: true, participantDisposition: true, indicatorConfirmedAt: true, goalApprovedAt: true,
+        lifecycleStatus: true,
         closedAt: true, publishedAt: true,
         cycle: { select: { workflowVersion: true, goalWorkflowVersion: true, openedAt: true, publishedAt: true, closedAt: true } },
         periods: {
@@ -1474,7 +1499,12 @@ export class ObjectivesService {
         },
       },
     });
-    const participating = tasks.filter(task => task.employeeId === viewer.id && !task.isExempt && task.participantDisposition === 'active');
+    const participating = tasks.filter(task => task.employeeId === viewer.id && !task.isExempt
+      && task.participantDisposition === 'active' && !lifecycleReadOnlyReason(task));
+    if (!participating.length) {
+      const ended = tasks.find(task => task.employeeId === viewer.id && !task.isExempt && lifecycleReadOnlyReason(task));
+      if (ended) return { kind: 'month_locked', message: lifecycleReadOnlyReason(ended)! };
+    }
     if (!participating.length) return {
       kind: 'not_participant',
       message: '你当前没有可更新的绩效目标。如果你认为自己应参加本期考核，请联系绩效管理员核对参与范围。',
@@ -1515,6 +1545,7 @@ export class ObjectivesService {
   private canSubmitActiveProgress(
     task: {
       employeeId: string;
+      lifecycleStatus?: string;
       isExempt: boolean;
       participantDisposition: string;
       indicatorConfirmedAt: Date | null;
@@ -1535,6 +1566,7 @@ export class ObjectivesService {
     indicatorId?: string,
   ): boolean {
     const baseEditable = task.employeeId === viewer.id
+      && lifecycleReadOnlyReason(task) == null
       && task.cycle.workflowVersion === 2
       && task.cycle.openedAt != null
       && hasApprovedGoalBaseline(task)

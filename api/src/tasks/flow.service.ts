@@ -2,6 +2,7 @@ import { ConflictException, Injectable } from '@nestjs/common';
 import { AssessmentTask, CycleStatus, FlowAction, FlowNodeType, Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
+import { lockActiveTask } from '@/performance-lifecycle/lifecycle-lock';
 
 /** 流程转换定义。 */
 export interface FlowTransition {
@@ -133,7 +134,7 @@ export class FlowService {
 
     const agg = await tx.assessmentTask.groupBy({
       by: ['status'],
-      where: { cycleId, isExempt: false },
+      where: { cycleId, isExempt: false, lifecycleStatus: 'active' },
       _count: { _all: true },
     });
     const has = (...statuses: TaskStatus[]) => agg.some((g) => statuses.includes(g.status));
@@ -181,6 +182,7 @@ export class FlowService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await lockActiveTask(tx, task.id);
       const updatedTask = await tx.assessmentTask.update({
         where: { id: task.id },
         data: {
@@ -229,6 +231,7 @@ export class FlowService {
       });
     }
 
+    await lockActiveTask(tx, task.id);
     const updatedTask = await tx.assessmentTask.update({
       where: { id: task.id },
       data: {
@@ -278,6 +281,7 @@ export class FlowService {
       });
     }
 
+    await lockActiveTask(tx, input.task.id);
     await tx.assessmentTask.update({
       where: { id: input.task.id },
       data: {

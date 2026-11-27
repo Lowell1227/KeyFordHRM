@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { calibrationApi } from '@/api/calibration.api';
 import { useCycleStore } from '@/stores/cycle.store';
+import { useAuthStore } from '@/stores/auth.store';
 import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
@@ -30,6 +31,7 @@ type SortOrder = 'asc' | 'desc';
 type StatusFilter = '' | 'pending' | 'dept_review' | 'final_grading' | 'inApproval' | 'done';
 
 const cycleStore = useCycleStore();
+const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
@@ -39,9 +41,18 @@ const candidates = ref<CalibrationCandidate[]>([]);
 const summary = ref<CalibrationSummary | null>(null);
 const loading = ref(false);
 const acting = ref(false);
+const confirming = ref(false);
+const listError = ref('');
+const appliedFilters = ref('');
+const filterKey = () => JSON.stringify([deptFilter.value, keywordFilter.value.trim()]);
+const deepLinkMessage = ref('');
+const deepLinkHistoryPath = computed(() => typeof route.query.taskId === 'string' && route.query.taskId.trim()
+  && route.query.taskId.length <= 100 ? `/tasks/${encodeURIComponent(route.query.taskId)}` : '');
 let calibrationReady = false;
 let listRequest = 0;
 let detailRequest = 0;
+let routeRequest = 0;
+let initRequest = 0;
 
 const selectedTaskIds = ref<string[]>([]);
 const departmentOptions = ref<Department[]>([]);
@@ -99,13 +110,16 @@ watch([statusFilter, sortField, sortOrder, pageSize], () => {
 });
 
 function canCalibrate(candidate: CalibrationCandidate): boolean {
-  return candidate.status === 'hr_calibration' && candidate.canCalibrate !== false;
+  const lifecycle = (candidate as CalibrationCandidate & { lifecycleStatus?: string }).lifecycleStatus;
+  return (!lifecycle || lifecycle === 'active') && candidate.status === 'hr_calibration' && candidate.canCalibrate !== false;
 }
 
 const pendingCandidates = computed(() => candidates.value.filter(canCalibrate));
 const drawerCanCalibrate = computed(() => {
   const candidate = candidates.value.find(item => item.taskId === drawer.value.detail?.taskId);
-  return candidate ? canCalibrate(candidate) : false;
+  const detail = drawer.value.detail as (CalibrationCandidateDetail & { lifecycleStatus?: string }) | null;
+  return !!candidate && detail?.status === 'hr_calibration'
+    && (!detail.lifecycleStatus || detail.lifecycleStatus === 'active') && canCalibrate(candidate);
 });
 
 /** 分布仅统计已进入评定链路的任务（与后端口径一致）。 */
@@ -173,48 +187,86 @@ function fmtScore(s: number | null | undefined): string {
   return s == null ? '—' : s.toFixed(2);
 }
 
-async function loadCycles() {
-  try {
-    cycles.value = await calibrationApi.listCycles();
-  } catch (e) {
-    cycles.value = [];
-    ElMessage.error(e instanceof Error ? e.message : '获取可校准周期失败');
-  }
+function readErrorMessage(error: unknown): string {
+  const message = (error as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
+  return Array.isArray(message) ? message.join('；') : message || (error instanceof Error ? error.message : '读取失败，请重试');
 }
 
-async function normalizeCalibrationCycle() {
-  const requestedCycleId = typeof route.query.cycleId === 'string'
-    ? route.query.cycleId
-    : undefined;
+const calibrationRouteKey = (query = route.query) => JSON.stringify([query.cycleId, query.taskId]);
+async function applyCalibrationRoute() {
+  const request = ++routeRequest, key = calibrationRouteKey();
+  const current = () => request === routeRequest && key === calibrationRouteKey();
+  clearCalibrationState();
+  deepLinkMessage.value = '';
+  const requestedCycleId = typeof route.query.cycleId === 'string' ? route.query.cycleId : undefined;
+  const taskId = typeof route.query.taskId === 'string' ? route.query.taskId : undefined;
+  if ([route.query.cycleId, route.query.taskId].some(value => value !== undefined
+    && (typeof value !== 'string' || !value.trim() || value !== value.trim() || value.length > 100))
+    || taskId && !requestedCycleId) {
+    selectedCycleId.value = '';
+    deepLinkMessage.value = '任务链接的考核周期或任务标识不明确，未打开其他记录。';
+    return;
+  }
   const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
   cycles.value = resolved.orderedCycles;
-  selectedCycleId.value = resolved.selectedCycle?.id ?? '';
-
-  if (selectedCycleId.value && requestedCycleId !== selectedCycleId.value) {
-    await router.replace({ query: { ...route.query, cycleId: selectedCycleId.value } });
-  } else if (!selectedCycleId.value && requestedCycleId) {
-    const query = { ...route.query };
-    delete query.cycleId;
-    await router.replace({ query });
+  selectedCycleId.value = requestedCycleId && !resolved.requestedCycleIsValid ? '' : resolved.selectedCycle?.id ?? '';
+  cycleStore.setCurrent(selectedCycle.value);
+  if (requestedCycleId && !selectedCycleId.value) {
+    deepLinkMessage.value = '指定考核周期当前不可查看，未切换到其他周期。';
+    return;
+  }
+  if (taskId) { deptFilter.value = ''; keywordFilter.value = ''; statusFilter.value = ''; }
+  await loadCandidates();
+  if (!current() || !taskId || appliedFilters.value !== filterKey()) return;
+  if (listError.value) { deepLinkMessage.value = '指定任务读取未完成，请核对读取提示后重新定位。'; return; }
+  const index = filteredCandidates.value.findIndex(row => row.taskId === taskId && row.canViewDetail !== false);
+  if (index < 0) {
+    deepLinkMessage.value = '指定任务已不在当前可查看的校准记录中，可能已结束、移入历史或权限变化，未打开其他任务。';
+    return;
+  }
+  page.value = Math.floor(index / pageSize.value) + 1;
+  await openDetail(taskId);
+  if (current() && drawer.value.detail && !drawerCanCalibrate.value) {
+    deepLinkMessage.value = '该任务不是当前可由你办理的校准项，当前仅查看原记录。';
   }
 }
 
-function clearCalibrationState() {
-  listRequest++;
+function closeDetail() {
   detailRequest++;
   drawer.value = { visible: false, loading: false, taskId: '', error: '', detail: null };
+}
+function clearCalibrationState() {
+  listRequest++;
+  loading.value = false;
+  closeDetail();
   rejectDialog.value = { visible: false, taskIds: [], reason: '', error: '' };
   candidates.value = [];
   summary.value = null;
   selectedTaskIds.value = [];
+  listError.value = '';
   statusFilter.value = '';
   page.value = 1;
 }
 
 async function selectCalibrationCycle(cycleId: string) {
   if (!cycleId || cycleId === selectedCycleId.value) return;
-  await router.push({ query: { ...route.query, cycleId } });
+  const query = { ...route.query }; query.cycleId = cycleId; delete query.taskId;
+  await router.push({ query });
 }
+
+async function mayLeaveCalibration() {
+  if (acting.value || confirming.value) return false;
+  if (!selectedTaskIds.value.length && !rejectDialog.value.visible && !rejectDialog.value.reason.trim()
+    && appliedFilters.value === filterKey()) return true;
+  try {
+    await ElMessageBox.confirm('当前选择、筛选或校准意见尚未提交，是否放弃并离开？', '离开绩效校准',
+      { confirmButtonText: '放弃并离开', cancelButtonText: '继续办理' });
+    return !acting.value && !confirming.value;
+  } catch { return false; }
+}
+onBeforeRouteLeave(mayLeaveCalibration);
+onBeforeRouteUpdate((to, from) => calibrationRouteKey(to.query) === calibrationRouteKey(from.query) ? true : mayLeaveCalibration());
+async function retryCalibrationTarget() { if (await mayLeaveCalibration()) await applyCalibrationRoute(); }
 
 async function loadCandidates() {
   if (!selectedCycleId.value) {
@@ -222,6 +274,9 @@ async function loadCandidates() {
     return;
   }
   loading.value = true;
+  listError.value = '';
+  const filters = filterKey();
+  appliedFilters.value = filters;
   const cycleId = selectedCycleId.value;
   const request = ++listRequest;
   try {
@@ -229,7 +284,7 @@ async function loadCandidates() {
       deptId: deptFilter.value || undefined,
       keyword: keywordFilter.value.trim() || undefined,
     });
-    if (request !== listRequest || cycleId !== selectedCycleId.value) return;
+    if (request !== listRequest || cycleId !== selectedCycleId.value || filters !== filterKey()) return;
     candidates.value = res.items;
     summary.value = {
       gradeDistribution: res.gradeDistribution,
@@ -239,7 +294,8 @@ async function loadCandidates() {
     selectedTaskIds.value = [];
   } catch (e) {
     if (request !== listRequest || cycleId !== selectedCycleId.value) return;
-    ElMessage.error(e instanceof Error ? e.message : '获取校准名单失败');
+    listError.value = readErrorMessage(e);
+    closeDetail();
     candidates.value = [];
     summary.value = null;
   } finally {
@@ -255,11 +311,17 @@ async function openDetail(taskId: string) {
   drawer.value = { visible: true, loading: true, taskId, error: '', detail: null };
   try {
     const detail = await calibrationApi.getCandidateDetail(cycleId, taskId);
-    if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
+    if (request !== detailRequest || cycleId !== selectedCycleId.value || !drawer.value.visible) return;
+    if (detail.taskId !== taskId) throw new Error('任务详情与当前校准记录不一致，请重试');
+    const lifecycleStatus = (detail as CalibrationCandidateDetail & { lifecycleStatus?: string }).lifecycleStatus;
+    candidates.value = candidates.value.map(row => row.taskId === taskId ? { ...row, status: detail.status,
+      approvedAt: detail.approvedAt, ...(lifecycleStatus ? { lifecycleStatus } : {}),
+      ...(lifecycleStatus && lifecycleStatus !== 'active'
+        ? { canCalibrate: false, actionHint: '记录已终止或移入历史，仅可查看' } : {}) } : row);
     drawer.value.detail = detail;
   } catch (e) {
     if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
-    drawer.value.error = e instanceof Error ? e.message : '获取详情失败';
+    drawer.value.error = readErrorMessage(e);
   } finally {
     if (request === detailRequest) drawer.value.loading = false;
   }
@@ -267,9 +329,10 @@ async function openDetail(taskId: string) {
 
 /** 确认（单人或批量）。 */
 async function handleConfirm(taskIds: string[]) {
-  if (!selectedCycleId.value || !areActionable(taskIds) || acting.value) return;
+  if (!selectedCycleId.value || !areActionable(taskIds) || acting.value || confirming.value) return;
   const cycleId = selectedCycleId.value;
   const requestedTaskIds = [...taskIds];
+  confirming.value = true;
   try {
     await ElMessageBox.confirm(
       `确认后 ${taskIds.length} 人将进入结果审批并通知审批人，是否继续？`,
@@ -278,7 +341,7 @@ async function handleConfirm(taskIds: string[]) {
     );
   } catch {
     return;
-  }
+  } finally { confirming.value = false; }
   if (cycleId !== selectedCycleId.value || !areActionable(requestedTaskIds)) return;
   acting.value = true;
   try {
@@ -331,42 +394,31 @@ function areActionable(taskIds: string[]): boolean {
   return taskIds.length > 0 && taskIds.every((id) => candidates.value.some((c) => c.taskId === id && canCalibrate(c)));
 }
 
-watch(
-  () => route.query.cycleId,
-  async (cycleId) => {
-    if (!calibrationReady) return;
-    const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
-    const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
-    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
-    if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
-      await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
-      return;
-    }
-    if (!canonicalCycleId && requestedCycleId) {
-      const query = { ...route.query };
-      delete query.cycleId;
-      await router.replace({ query });
-      return;
-    }
-    if (selectedCycleId.value === canonicalCycleId) return;
-    clearCalibrationState();
-    selectedCycleId.value = canonicalCycleId;
-    cycleStore.setCurrent(selectedCycle.value);
-    await loadCandidates();
-  },
-);
+watch(calibrationRouteKey, async () => { if (calibrationReady) await applyCalibrationRoute(); });
 
-onMounted(async () => {
-  await Promise.all([
-    loadCycles(),
+async function initializeCalibration() {
+  const request = ++initRequest;
+  calibrationReady = false; loading.value = true;
+  const current = () => request === initRequest;
+  try {
+    await Promise.all([
+    calibrationApi.listCycles().then(items => { if (current()) cycles.value = items; }),
     departmentsApi.findAll({ isActive: true, pageSize: 1000 })
-      .then((items) => { departmentOptions.value = items; })
-      .catch(() => { departmentOptions.value = []; }),
+      .then((items) => { if (current()) departmentOptions.value = items; })
+      .catch(() => { if (current()) departmentOptions.value = []; }),
   ]);
-  await normalizeCalibrationCycle();
+  if (!current()) return;
   calibrationReady = true;
-  cycleStore.setCurrent(selectedCycle.value);
-  await loadCandidates();
+  await applyCalibrationRoute();
+  } catch (error) {
+    if (current()) listError.value = `考核周期读取失败：${readErrorMessage(error)}`;
+  } finally { if (current()) loading.value = false; }
+}
+onMounted(initializeCalibration);
+onUnmounted(() => { initRequest++; listRequest++; detailRequest++; routeRequest++; });
+watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => {
+  routeRequest++; clearCalibrationState(); cycles.value = []; departmentOptions.value = []; deepLinkMessage.value = '';
+  if (auth.user) void initializeCalibration(); else { initRequest++; calibrationReady = false; loading.value = false; }
 });
 
 function searchCalibration() {
@@ -375,22 +427,27 @@ function searchCalibration() {
 }
 
 async function resetCalibrationFilters() {
+  const latestCycleId = cycles.value[0]?.id ?? '';
+  if (latestCycleId && latestCycleId !== selectedCycleId.value) {
+    await selectCalibrationCycle(latestCycleId);
+    if (route.query.cycleId !== latestCycleId) return;
+  }
   deptFilter.value = '';
   keywordFilter.value = '';
   statusFilter.value = '';
   page.value = 1;
-  const latestCycleId = cycles.value[0]?.id ?? '';
-  if (latestCycleId && latestCycleId !== selectedCycleId.value) {
-    await selectCalibrationCycle(latestCycleId);
-  } else {
-    await loadCandidates();
-  }
+  await loadCandidates();
 }
 </script>
 
 <template>
   <BusinessListPage variant="workflow" :loading="loading" scrollable class="calibration-view performance-result-page">
     <template #workspace>
+    <el-alert v-if="deepLinkMessage" :title="deepLinkMessage" type="warning" :closable="false" data-testid="calibration-link-feedback">
+      <el-button v-if="deepLinkHistoryPath" link type="primary" @click="router.push(deepLinkHistoryPath)">查看原任务记录</el-button>
+      <el-button link type="primary" :disabled="loading || acting || confirming" @click="retryCalibrationTarget">重新定位</el-button>
+    </el-alert>
+    <el-alert v-if="listError" :title="listError" type="error" :closable="false" />
     <ChartCard :padded="true">
       <PerformanceRecordFilters
         :cycle-id="selectedCycleId"
@@ -596,6 +653,7 @@ async function resetCalibrationFilters() {
       v-model="drawer.visible"
       :title="drawer.detail ? `${drawer.detail.employeeName} · 绩效校准` : '绩效校准详情'"
       data-testid="calibration-detail-drawer"
+      @close="closeDetail"
     >
       <div v-loading="drawer.loading">
         <div v-if="drawer.error" role="alert" class="calibration-detail-error">{{ drawer.error }} <el-button link type="primary" @click="openDetail(drawer.taskId)">重试</el-button></div>

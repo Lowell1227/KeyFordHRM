@@ -7,6 +7,9 @@ import { PaginationDto, paginated } from '@/common/dto/pagination.dto';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { buildEffectiveApproverMap, DepartmentRelationRecord } from '@/departments/department-relations';
 import { ImprovementGoal, ImprovementEvaluation, validateEvaluation, validateGoals } from './improvement-plan-rules';
+import { ACTIVE_LIFECYCLE, assertLifecycleActive, canManageLifecycle, LifecycleFilter, lifecycleProjection, lifecycleWhere } from '@/performance-lifecycle/lifecycle-policy';
+import { lockLifecycleRow } from '@/performance-lifecycle/lifecycle-lock';
+import { resolveLifecycleEmployment } from '@/performance-lifecycle/lifecycle-employment';
 
 const planInclude = {
   employee: { select: { id: true, name: true, employeeNo: true, deptId: true, directManagerId: true,
@@ -29,7 +32,7 @@ export interface PlanGoalDecisionInput extends PlanDecisionInput {
 }
 export interface PlanEvaluationInput { items: Array<{ goalId: string; score: number; comment: string }>; overallComment: string; expectedRevision: number }
 export interface PlanEvaluationDraftInput { items: Array<{ goalId: string; score: number | null; comment: string }>; overallComment: string; expectedRevision: number }
-export interface PlanQuery { employeeId?: string; cycleId?: string; deptId?: string; keyword?: string; status?: ImprovementPlanStatus }
+export interface PlanQuery { employeeId?: string; cycleId?: string; deptId?: string; keyword?: string; status?: ImprovementPlanStatus; lifecycleStatus?: LifecycleFilter }
 
 interface OrgContext {
   employee: { id: string; name: string; deptId: string | null; directManagerId: string | null; status: string; deletedAt: Date | null; archivedAt: Date | null };
@@ -56,7 +59,7 @@ export class ImprovementWorkflowService {
   }
 
   private isGlobalViewer(viewer: AuthUser): boolean {
-    return this.hasHrReviewRole(viewer) || viewer.sysRole === SysRole.system_admin || viewer.canViewAll;
+    return this.hasHrReviewRole(viewer) || viewer.sysRole === SysRole.system_admin || viewer.canViewAll || canManageLifecycle(viewer, 'view');
   }
 
   private async org(employeeId: string, creatorId?: string | null, db: Prisma.TransactionClient = this.prisma): Promise<OrgContext> {
@@ -170,6 +173,7 @@ export class ImprovementWorkflowService {
   }
 
   private actions(plan: Plan, org: OrgContext, viewer: AuthUser): string[] {
+    if (plan.lifecycleStatus && plan.lifecycleStatus !== 'active') return [];
     if (![2, 3].includes(plan.workflowVersion) || this.workflowIssue(plan, org)) return [];
     if (plan.workflowVersion === 3 && plan.status === 'goal_hr_review') {
       return !viewer.isAssessorOnly && this.hasHrReviewRole(viewer) && org.hrReviewerIds.includes(viewer.id) ? ['decide_goals'] : [];
@@ -199,14 +203,17 @@ export class ImprovementWorkflowService {
       finalScore: hidePendingResult ? null : plan.finalScore, status: plan.status,
       workflowVersion: plan.workflowVersion, revision: plan.revision, workflowIssue: this.workflowIssue(plan, org),
       startedAt: plan.startedAt, completedAt: plan.completedAt,
-      createdAt: plan.createdAt, updatedAt: plan.updatedAt,
-      currentOwnerId: this.owner(plan, org), allowedActions: this.actions(plan, org, viewer),
+      createdAt: plan.createdAt,
+      ...lifecycleProjection('improvement_plan', plan, viewer),
+      currentOwnerId: !plan.lifecycleStatus || plan.lifecycleStatus === 'active' ? this.owner(plan, org) : null,
+      allowedActions: [...this.actions(plan, org, viewer), ...lifecycleProjection('improvement_plan', plan, viewer).allowedActions],
     };
   }
 
   async findAll(query: PlanQuery, pagination: PaginationDto, viewer: AuthUser) {
     const keyword = query.keyword?.trim();
     const where: Prisma.ImprovementPlanWhereInput = {
+      ...lifecycleWhere(query.lifecycleStatus, viewer),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
       ...(query.cycleId ? { cycleId: query.cycleId } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -253,13 +260,13 @@ export class ImprovementWorkflowService {
 
   async myPending(viewer: AuthUser) {
     const plans = await this.prisma.improvementPlan.findMany({
-      where: { workflowVersion: { in: [2, 3] }, status: { not: 'completed' } }, include: planInclude,
+      where: { ...ACTIVE_LIFECYCLE, workflowVersion: { in: [2, 3] }, status: { not: 'completed' } }, include: planInclude,
       orderBy: { updatedAt: 'desc' },
     });
     const result: Array<ReturnType<typeof this.map>> = [];
     for (const plan of plans) {
       const org = await this.org(plan.employeeId, plan.creatorId);
-      if (this.actions(plan, org, viewer).length) result.push(this.map(plan, org, viewer));
+      if ((!plan.lifecycleStatus || plan.lifecycleStatus === 'active') && this.actions(plan, org, viewer).length) result.push(this.map(plan, org, viewer));
     }
     return result;
   }
@@ -300,9 +307,11 @@ export class ImprovementWorkflowService {
       throw new BadRequestException('所选绩效周期不存在');
     }
     const plan = await this.prisma.$transaction(async (tx) => {
+      const employmentRecordId = await resolveLifecycleEmployment(tx, input.employeeId);
       assertCreation(await this.org(input.employeeId, viewer.id, tx));
       const created = await tx.improvementPlan.create({ data: {
         employeeId: input.employeeId, cycleId: input.cycleId || null, taskId: null, creatorId: viewer.id,
+        employmentRecordId,
         workflowVersion: 3, revision: 0, status: 'draft', improvementNeed: input.improvementNeed?.trim() || null,
         targetDate: input.targetDate ? new Date(input.targetDate) : null,
         goals: (input.goals ?? []) as unknown as Prisma.InputJsonValue,
@@ -474,6 +483,9 @@ export class ImprovementWorkflowService {
     previousOrg?: OrgContext) {
     this.assertRevision(expectedRevision, plan.revision);
     await this.prisma.$transaction(async (tx) => {
+      const current = await lockLifecycleRow(tx, 'improvement_plan', plan.id);
+      if (!current) throw new NotFoundException('改进计划不存在');
+      assertLifecycleActive(current);
       const org = await this.org(plan.employeeId, plan.creatorId, tx);
       this.assertWorkflow(plan, org);
       if (previousOrg && (previousOrg.headId !== org.headId || previousOrg.approverId !== org.approverId
@@ -485,7 +497,7 @@ export class ImprovementWorkflowService {
         : action.endsWith('_goals') ? 'decide_goals' : action.endsWith('_final') ? 'decide_final' : 'evaluate';
       if (!allowed.includes(required)) throw new ForbiddenException('当前不是你的改进计划待办');
       const updated = await tx.improvementPlan.updateMany({
-        where: { id: plan.id, status: plan.status, workflowVersion: plan.workflowVersion, revision: expectedRevision },
+        where: { id: plan.id, ...ACTIVE_LIFECYCLE, status: plan.status, workflowVersion: plan.workflowVersion, revision: expectedRevision },
         data: { ...data, revision: { increment: 1 } },
       });
       if (updated.count !== 1) throw new ConflictException('计划状态已变化，请刷新后重试');

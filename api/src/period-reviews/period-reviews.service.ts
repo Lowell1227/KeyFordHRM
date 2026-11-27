@@ -36,6 +36,8 @@ import type {
   PeriodReviewDetail,
 } from './period-review.types';
 import { StorageService } from '@/storage/storage.service';
+import { assertLifecycleActive } from '@/performance-lifecycle/lifecycle-policy';
+import { lockLifecycleRow } from '@/performance-lifecycle/lifecycle-lock';
 
 interface StoredPeriodReviewAttachment extends PeriodReviewAttachment {
   objectKey: string;
@@ -179,6 +181,7 @@ export class PeriodReviewsService {
         viewerRole: period.task.employeeId === viewer.id ? 'employee' : period.managerId === viewer.id ? 'manager' : 'observer',
         canEditEmployee: this.canEditEmployee(period, viewer),
         canEditManager: period.managerId === viewer.id
+          && (!period.task.lifecycleStatus || period.task.lifecycleStatus === 'active')
           && period.status === 'manager_scoring'
           && period.employeeSubmittedAt != null
           && !period.managerSubmittedAt,
@@ -765,6 +768,11 @@ export class PeriodReviewsService {
     const reopenedAt = new Date();
 
     const context = await this.prisma.$transaction(async (tx) => {
+      const identity = await tx.assessmentPeriod.findUnique({ where: { id: periodId }, select: { taskId: true } });
+      if (!identity) throw new NotFoundException('月度自评不存在');
+      const task = await lockLifecycleRow(tx, 'task', identity.taskId);
+      if (!task) throw new NotFoundException('绩效任务不存在');
+      assertLifecycleActive(task);
       const period = await tx.assessmentPeriod.findUnique({
         where: { id: periodId },
         include: periodInclude,
@@ -960,7 +968,7 @@ export class PeriodReviewsService {
   }
 
   private canEditEmployee(period: PeriodWithContext, viewer: AuthUser): boolean {
-    return period.task.employeeId === viewer.id
+    return (!period.task.lifecycleStatus || period.task.lifecycleStatus === 'active') && period.task.employeeId === viewer.id
       && ['self_eval', 'manager_scoring'].includes(period.status)
       && !period.employeeSubmittedAt
       && !period.managerSubmittedAt;
@@ -993,6 +1001,7 @@ export class PeriodReviewsService {
     viewer: AuthUser,
     requireEmployeeSubmission: boolean,
   ): void {
+    assertLifecycleActive(period.task);
     if (period.managerId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本期冻结的绩效直属上级可评分' });
     }
@@ -1009,6 +1018,9 @@ export class PeriodReviewsService {
     period: PeriodWithContext,
     expectedVersion: number,
   ): Promise<number> {
+    const currentTask = await lockLifecycleRow(tx, 'task', period.taskId);
+    if (!currentTask) throw new NotFoundException('绩效任务不存在');
+    assertLifecycleActive(currentTask);
     if (expectedVersion !== period.draftVersion) {
       throw new ConflictException('读取版本与提交版本不一致，请刷新后继续');
     }
@@ -1037,6 +1049,9 @@ export class PeriodReviewsService {
     period: PeriodWithContext,
     expectedVersion: number,
   ): Promise<number> {
+    const currentTask = await lockLifecycleRow(tx, 'task', period.taskId);
+    if (!currentTask) throw new NotFoundException('绩效任务不存在');
+    assertLifecycleActive(currentTask);
     if (expectedVersion !== period.draftVersion) {
       throw new ConflictException('读取版本与提交版本不一致，请刷新后继续');
     }
@@ -1168,6 +1183,7 @@ export class PeriodReviewsService {
     }
     const period = await this.getPeriod(periodId);
     const currentActorId = stage === 'employee' ? period.task.employeeId : period.managerId;
+    assertLifecycleActive(period.task);
     if (currentActorId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '当前已无权处理本期复盘' });
     }

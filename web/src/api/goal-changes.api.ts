@@ -1,5 +1,6 @@
 import { isAxiosError } from 'axios';
 import http from './http';
+import type { LifecycleFilter, LifecycleMetadata } from './performance-lifecycle.api';
 
 export type GoalChangeStatus = 'draft' | 'revision' | 'indicator_reviewing' | 'indicator_dept_reviewing'
   | 'indicator_confirming' | 'indicator_approving' | 'active' | 'revoked';
@@ -32,7 +33,7 @@ export interface GoalChangeTask {
   canStart: boolean;
 }
 export interface GoalChangeContext { canGrant: boolean; tasks: GoalChangeTask[] }
-export interface GoalChangeRow {
+export interface GoalChangeRow extends LifecycleMetadata {
   id: string;
   taskId: string;
   employeeId: string;
@@ -57,7 +58,7 @@ export interface GoalChangeDetail extends GoalChangeRow {
   protectedPeriodKeys: string[];
 }
 export interface GoalChangePage { items: GoalChangeRow[]; total: number; page: number; pageSize: number }
-export interface GoalChangeListQuery { scope: 'self' | 'team' | 'review' | 'all'; page: number; pageSize: number; status?: string; keyword?: string }
+export interface GoalChangeListQuery { scope: 'self' | 'team' | 'review' | 'all'; page: number; pageSize: number; status?: string; keyword?: string; lifecycleStatus?: LifecycleFilter }
 
 // The shared HTTP interceptor unwraps the API envelope.
 export const goalChangesApi = {

@@ -16,9 +16,14 @@ import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilte
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import type { Department, ImprovementGoal, ImprovementPlan } from '@/types/api.types';
+import { canViewLifecycleHistory, lifecycleLabel, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
+import { useAuthStore } from '@/stores/auth.store';
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
+const canViewHistory = computed(() => canViewLifecycleHistory(auth.user));
+const lifecycleStatus = ref<LifecycleFilter | ''>(parseLifecycleFilter(route.query.lifecycleStatus));
 const list = ref<ImprovementPlan[]>([]);
 const cycles = ref<Array<{ id: string; name: string }>>([]);
 const departments = ref<Department[]>([]);
@@ -101,6 +106,7 @@ async function loadList() {
     const result = await improvementPlansApi.findAll(withParams({
       cycleId: filters.cycleId || undefined, deptId: filters.deptId || undefined,
       status: filters.status || undefined, keyword: filters.keyword || undefined,
+      lifecycleStatus: lifecycleStatus.value || undefined,
     }));
     if (queryCurrent('list', generation)) { list.value = result.items; total.value = result.total; }
   } catch (error) {
@@ -108,7 +114,7 @@ async function loadList() {
   } finally { if (queryCurrent('list', generation)) { loading.value = false; queryLoading.list = false; } }
 }
 function search() { resetPagination(); void loadList(); }
-function reset() { Object.assign(filters, { cycleId: '', deptId: '', status: '', keyword: '' }); search(); }
+function reset() { lifecycleStatus.value = ''; Object.assign(filters, { cycleId: '', deptId: '', status: '', keyword: '' }); search(); }
 function openCreate() {
   if (!eligibilityLoaded.value || queryLoading['eligible-employees'] || queryErrors['eligible-employees'] || !eligibleEmployees.value.length) return;
   Object.assign(draft, { employeeId: '', cycleId: '', improvementNeed: '', targetDate: '', goals: [] });
@@ -182,6 +188,10 @@ function goDetail(id: string) { openDetail(id); }
         v-model:keyword="filters.keyword" :cycles="cycles" :departments="departments" :loading="loading"
         allow-all-cycles @search="search" @reset="reset">
         <div class="performance-record-filter-extra">
+          <el-select v-model="lifecycleStatus" aria-label="记录范围" style="width: 200px">
+            <el-option label="当前记录" value="" /><el-option label="未终止" value="active" /><el-option label="已终止" value="terminated" />
+            <el-option v-if="canViewHistory" label="历史记录（含已删除）" value="all" /><el-option v-if="canViewHistory" label="已删除" value="deleted" />
+          </el-select>
           <el-select v-model="filters.status" aria-label="状态" placeholder="全部状态" clearable style="width: 160px">
             <el-option v-for="status in statuses" :key="status" :label="statusLabel(status)" :value="status" />
           </el-select>
@@ -202,7 +212,7 @@ function goDetail(id: string) { openDetail(id); }
           <el-table-column label="员工" min-width="150"><template #default="{ row }">{{ row.employeeName }} <small>{{ row.employeeNo }}</small></template></el-table-column>
           <el-table-column prop="deptName" label="部门" min-width="120" />
           <el-table-column label="关联周期" min-width="160"><template #default="{ row }">{{ row.cycleName || '未关联' }}</template></el-table-column>
-          <el-table-column label="状态" min-width="180"><template #default="{ row }"><el-tag :type="IMPROVEMENT_PLAN_STATUS_META[row.status as ImprovementPlanStatus]?.type as any" size="small">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="状态" min-width="180"><template #default="{ row }"><el-tag v-if="lifecycleLabel(row)" type="info" size="small">{{ lifecycleLabel(row) }}</el-tag> <el-tag :type="IMPROVEMENT_PLAN_STATUS_META[row.status as ImprovementPlanStatus]?.type as any" size="small">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
           <el-table-column label="预计完成" width="120"><template #default="{ row }">{{ row.targetDate ? formatDate(row.targetDate) : '-' }}</template></el-table-column>
           <el-table-column label="综合分" width="130"><template #default="{ row }">{{ scoreLabel(row as ImprovementPlan) }}</template></el-table-column>
           <el-table-column prop="creatorName" label="发起人" min-width="100" />
@@ -212,7 +222,7 @@ function goDetail(id: string) { openDetail(id); }
       <div v-loading="loading" class="mobile-result-list">
         <MobileResultCard v-for="item in list" :key="item.id" @click="goDetail(item.id)">
           <template #title>{{ item.employeeName }}</template>
-          <template #status><el-tag :type="IMPROVEMENT_PLAN_STATUS_META[item.status]?.type as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
+          <template #status><el-tag :type="IMPROVEMENT_PLAN_STATUS_META[item.status]?.type as any" size="small">{{ lifecycleLabel(item) || statusLabel(item.status) }}</el-tag></template>
           <div class="mobile-result-field"><span class="mobile-result-field__label">关联周期</span><span>{{ item.cycleName || '未关联' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">预计完成</span><span>{{ item.targetDate ? formatDate(item.targetDate) : '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">综合分</span><span>{{ scoreLabel(item) }}</span></div>

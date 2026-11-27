@@ -263,6 +263,7 @@ export class BusinessCapabilitiesService {
     return this.prisma.assessmentTask.count({
       where: {
         [relation]: userId,
+        lifecycleStatus: 'active',
         employeeId: { not: userId },
         status: { in: ['confirmed', 'closed'] },
         AND: [PUBLISHED_RESULT_WHERE],
@@ -293,6 +294,7 @@ export class BusinessCapabilitiesService {
       by: [relation],
       where: {
         [relation]: { in: userIds },
+        lifecycleStatus: 'active',
         status: { notIn: TERMINAL_TASK_STATUSES },
         NOT: { status: 'confirmed', AND: [PUBLISHED_RESULT_WHERE] },
         isExempt: false,

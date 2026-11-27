@@ -11,7 +11,7 @@ describe('department review task records', () => {
 
   function setup() {
     const row = (id: string, status: string, overrides = {}) => ({
-      id, status, cycleId: 'cycle-1', deptHeadId: viewer.id, employeeId: `employee-${id}`,
+      id, status, lifecycleStatus: 'active', cycleId: 'cycle-1', deptHeadId: viewer.id, employeeId: `employee-${id}`,
       employee: { name: `虚拟员工 ${id}`, employeeNo: `E-${id}`, position: '测试岗位' }, cycle: { name: '测试周期' }, dept: { name: '测试部门' }, deptId: 'dept-1',
       managerId: 'manager-1', isExempt: false, exemptReason: null, updatedAt: latest,
       gradeResult: { calculatedScore: new Prisma.Decimal(85), rawGrade: 'B', calibratedGrade: 'A' }, flowRecords: [] as ReturnType<typeof review>[], ...overrides,
@@ -27,8 +27,11 @@ describe('department review task records', () => {
       row('self', 'dept_review', { employeeId: viewer.id }),
       row('unrelated', 'dept_review', { deptHeadId: 'head-2' }),
       row('exempt', 'dept_review', { isExempt: true }),
+      row('terminated', 'dept_review', { lifecycleStatus: 'terminated' }),
+      row('deleted', 'dept_review', { lifecycleStatus: 'deleted' }),
     ];
     const matches = (where: any, task: any) => (!where.deptHeadId || task.deptHeadId === where.deptHeadId)
+      && (!where.lifecycleStatus || task.lifecycleStatus === where.lifecycleStatus)
       && task.employeeId !== where.employeeId?.not
       && (where.isExempt === undefined || task.isExempt === where.isExempt)
       && (!where.status || task.status === where.status)
@@ -57,7 +60,7 @@ describe('department review task records', () => {
     expect(result.items.map(item => item.id)).toEqual(['pending', 'approved', 'combined', 'returned', 'not-started', 'legacy', 'other-cycle']);
     expect(result).toMatchObject({ total: 7, pendingTotal: 2 });
     expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
-      deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false,
+      lifecycleStatus: 'active', deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false,
     }, orderBy: [{ cycle: { startDate: 'desc' } }, { updatedAt: 'desc' }, { id: 'asc' }] }));
   });
 
@@ -81,6 +84,7 @@ describe('department review task records', () => {
 
     expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
+        lifecycleStatus: 'active',
         deptHeadId: viewer.id,
         employeeId: { not: viewer.id },
         isExempt: false,
@@ -121,7 +125,7 @@ describe('department review task records', () => {
       calibratedGrade: 'A',
     });
     expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false },
+      where: { lifecycleStatus: 'active', deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false },
       include: expect.objectContaining({
         employee: { select: { name: true, employeeNo: true, position: true } },
         gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true } },

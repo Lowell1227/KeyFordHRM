@@ -195,7 +195,7 @@ export class IndicatorVisibilityService {
     query: ReferenceIndicatorQueryDto,
     viewer: AuthUser,
   ): Promise<Paginated<IndicatorReferenceItem>> {
-    const conditions: Prisma.IndicatorInstanceWhereInput[] = [await this.buildReferenceWhere(viewer)];
+    const conditions: Prisma.IndicatorInstanceWhereInput[] = [await this.buildReferenceWhere(viewer), { task: { lifecycleStatus: 'active' } }];
     if (query.cycleId) conditions.push({ task: { cycleId: query.cycleId } });
     if (query.ownerId) conditions.push({ task: { employeeId: query.ownerId } });
     if (query.keyword?.trim()) {

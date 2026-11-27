@@ -155,7 +155,7 @@ describe('CalibrationService（确认/驳回）', () => {
       approvedAt: new Date('2026-09-09T03:00:00.000Z'),
     });
     expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { cycleId: 'cycle-1', isExempt: false },
+      where: { cycleId: 'cycle-1', isExempt: false, lifecycleStatus: 'active' },
       include: expect.objectContaining({ employee: { select: { name: true, employeeNo: true, position: true } } }),
     }));
   });
@@ -210,7 +210,7 @@ describe('CalibrationService（确认/驳回）', () => {
     const result = await service.confirm('cycle-1', { taskIds: [task.id] }, hrViewer);
 
     expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-      where: { id: task.id, updatedAt: task.updatedAt, status: 'hr_calibration' },
+      where: { id: task.id, updatedAt: task.updatedAt, status: 'hr_calibration', lifecycleStatus: 'active' },
       data: { updatedAt: expect.any(Date) },
     });
     expect(transactionClient.gradeResult.updateMany).toHaveBeenCalledWith({

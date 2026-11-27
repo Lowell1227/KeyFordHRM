@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, TaskStatus } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { FlowService } from '@/tasks/flow.service';
+import { assertLifecycleActive } from '@/performance-lifecycle/lifecycle-policy';
 
 export interface PeriodAggregationResult {
   complete: boolean;
@@ -51,6 +52,7 @@ export class PeriodAggregationService {
     if (!task) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '绩效任务不存在' });
     }
+    assertLifecycleActive(task);
 
     const completePeriods = task.periods.filter((period) => (
       period.status === 'completed'

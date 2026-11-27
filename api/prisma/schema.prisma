@@ -864,6 +864,8 @@ model EmployeeContract {
 }
 
 model EmploymentRecord {
+  lifecycleTasks AssessmentTask[]
+  lifecycleImprovementPlans ImprovementPlan[]
   confirmationApplications ConfirmationApplication[]
   id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId             String         @map("user_id") @db.Uuid
@@ -1264,6 +1266,18 @@ model AssessmentTemplateSnapshot {
 }
 
 model AssessmentTask {
+  lifecycleStatus    String    @default("active") @map("lifecycle_status") @db.VarChar(20)
+  lifecycleVersion   Int       @default(0) @map("lifecycle_version")
+  terminatedAt       DateTime? @map("terminated_at") @db.Timestamptz(3)
+  terminatedById     String?   @map("terminated_by_id") @db.Uuid
+  terminationReason  String?   @map("termination_reason") @db.Text
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  deletedById        String?   @map("deleted_by_id") @db.Uuid
+  deletionReason     String?   @map("deletion_reason") @db.Text
+  @@index([lifecycleStatus])
+  employmentRecordId String? @map("employment_record_id") @db.Uuid
+  employmentRecord EmploymentRecord? @relation(fields: [employmentRecordId], references: [id], onDelete: Restrict)
+  @@index([employmentRecordId])
   id                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   cycleId                String                 @map("cycle_id") @db.Uuid
   snapshotId             String?                @map("snapshot_id") @db.Uuid
@@ -1336,6 +1350,15 @@ model GoalChangeGrant {
 }
 
 model GoalChangeRequest {
+  lifecycleStatus    String    @default("active") @map("lifecycle_status") @db.VarChar(20)
+  lifecycleVersion   Int       @default(0) @map("lifecycle_version")
+  terminatedAt       DateTime? @map("terminated_at") @db.Timestamptz(3)
+  terminatedById     String?   @map("terminated_by_id") @db.Uuid
+  terminationReason  String?   @map("termination_reason") @db.Text
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  deletedById        String?   @map("deleted_by_id") @db.Uuid
+  deletionReason     String?   @map("deletion_reason") @db.Text
+  @@index([lifecycleStatus])
   id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   taskId             String   @map("task_id") @db.Uuid
   creatorId          String   @map("creator_id") @db.Uuid
@@ -1842,6 +1865,18 @@ model PerformanceInterview {
 }
 
 model ImprovementPlan {
+  lifecycleStatus    String    @default("active") @map("lifecycle_status") @db.VarChar(20)
+  lifecycleVersion   Int       @default(0) @map("lifecycle_version")
+  terminatedAt       DateTime? @map("terminated_at") @db.Timestamptz(3)
+  terminatedById     String?   @map("terminated_by_id") @db.Uuid
+  terminationReason  String?   @map("termination_reason") @db.Text
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  deletedById        String?   @map("deleted_by_id") @db.Uuid
+  deletionReason     String?   @map("deletion_reason") @db.Text
+  @@index([lifecycleStatus])
+  employmentRecordId String? @map("employment_record_id") @db.Uuid
+  employmentRecord EmploymentRecord? @relation(fields: [employmentRecordId], references: [id], onDelete: Restrict)
+  @@index([employmentRecordId])
   id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   employeeId           String                @map("employee_id") @db.Uuid
   cycleId              String?               @map("cycle_id") @db.Uuid
@@ -1931,6 +1966,15 @@ model ProbationReviewIndicator {
 }
 
 model ConfirmationApplication {
+  lifecycleStatus    String    @default("active") @map("lifecycle_status") @db.VarChar(20)
+  lifecycleVersion   Int       @default(0) @map("lifecycle_version")
+  terminatedAt       DateTime? @map("terminated_at") @db.Timestamptz(3)
+  terminatedById     String?   @map("terminated_by_id") @db.Uuid
+  terminationReason  String?   @map("termination_reason") @db.Text
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  deletedById        String?   @map("deleted_by_id") @db.Uuid
+  deletionReason     String?   @map("deletion_reason") @db.Text
+  @@index([lifecycleStatus])
   employmentRecordId String? @map("employment_record_id") @db.Uuid
   employmentRecord EmploymentRecord? @relation(fields: [employmentRecordId], references: [id], onDelete: Restrict)
   @@index([employmentRecordId])

@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import {
   Body,
   Controller,
@@ -33,6 +35,7 @@ export const TRACKING_INDICATOR_UUID_PIPE = new ParseUUIDPipe();
  * 目标地图接口。改为「管理者+」可见：读对所有非 employee 角色开放，
  * 写权限由服务按实际业务关系校验，不再由遗留系统角色决定。
  */
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('objectives')
 export class ObjectivesController {
   constructor(private readonly objectivesService: ObjectivesService) {}

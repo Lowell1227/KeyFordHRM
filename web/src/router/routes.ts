@@ -571,8 +571,8 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '转正管理',
-      roles: ['hr'],
-      hrCapabilities: ['confirmation_manage'],
+      roles: ['hr', 'system_admin'],
+      hrCapabilities: ['confirmation_manage', 'performance_lifecycle_view'],
       scopedCapability: 'canHandleConfirmationApprovals',
       navigation: { module: 'performance', label: '转正管理', order: 90, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
@@ -588,8 +588,8 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '转正管理',
-      roles: ['hr'],
-      hrCapabilities: ['confirmation_manage'],
+      roles: ['hr', 'system_admin'],
+      hrCapabilities: ['confirmation_manage', 'performance_lifecycle_view'],
       scopedCapability: 'canHandleConfirmationApprovals',
     },
   },

@@ -72,6 +72,7 @@ export class PeriodMonitoringService {
       where: {
         task: {
           cycleId,
+          lifecycleStatus: 'active',
           participantDisposition: 'active',
           employee: employeeWhere,
         },

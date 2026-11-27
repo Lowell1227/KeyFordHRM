@@ -30,7 +30,7 @@ describe('claimTaskVersion', () => {
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
 
     await claimTaskVersion(
-      { assessmentTask: { updateMany } } as any,
+      { $queryRaw: jest.fn().mockResolvedValue([]), assessmentTask: { updateMany } } as any,
       'task-1',
       '2026-08-08T08:00:00.000Z',
       'dept_review',
@@ -39,6 +39,7 @@ describe('claimTaskVersion', () => {
     expect(updateMany).toHaveBeenCalledWith({
       where: {
         id: 'task-1',
+        lifecycleStatus: 'active',
         updatedAt: new Date('2026-08-08T08:00:00.000Z'),
         status: 'dept_review',
       },

@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
@@ -12,6 +14,7 @@ import { CalibrationQueryDto } from './dto/calibration-query.dto';
  * HR 在校准环节不修改绩效结果，仅执行 确认/驳回；
  * 每个接口由服务校验全局校准能力或该周期 hrOwnerId；不能仅按菜单放行。
  */
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('cycles/:id')
 export class CalibrationController {
   constructor(private readonly calibrationService: CalibrationService) {}

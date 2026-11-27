@@ -16,7 +16,7 @@ interface ManagerFormItem {
   managerComment: string;
 }
 
-const props = defineProps<{ periodId: string; taskId?: string }>();
+const props = defineProps<{ periodId: string; taskId?: string; readOnly?: boolean }>();
 const emit = defineEmits<{ submitted: []; returned: [] }>();
 const detail = ref<PeriodReviewDetail>();
 const loading = ref(false);
@@ -34,7 +34,7 @@ const gradeOptions: PerfGrade[] = ['A', 'B', 'C', 'D'];
 let reviewLoadSequence = 0;
 const lastAction = ref<{ taskId: string; periodId: string; label: string; action: 'returned' | 'submitted' }>();
 
-const canEdit = computed(() => Boolean(!loading.value && detail.value?.period.id === props.periodId && detail.value?.permissions.canEditManager));
+const canEdit = computed(() => !props.readOnly && Boolean(!loading.value && detail.value?.period.id === props.periodId && detail.value?.permissions.canEditManager));
 function periodLabel(period: PeriodReviewDetail['period']): string {
   if (period.periodType === 'cycle') return '整周期';
   const [year, month] = period.periodKey.split('-');

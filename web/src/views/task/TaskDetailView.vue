@@ -6,6 +6,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { useTaskStore } from '@/stores/task.store';
 import GoalMonitorDetail from './components/GoalMonitorDetail.vue';
+import PerformanceLifecycleActions from './components/PerformanceLifecycleActions.vue';
+import { applyLifecycleProjection, lifecycleLabel, lifecycleReadOnly } from '@/api/performance-lifecycle.api';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { useTaskFlow } from '@/composables/useTaskFlow';
@@ -59,9 +61,10 @@ const indicatorSnapshotRef = ref<{ clearSelfEvalDraft: () => void; addGoal: () =
 const isGoalMonitor = computed(() => route.query.goalView === 'monitor');
 const goalVersion = computed(() => task.value?.goalWorkflowVersion ?? cycle.value?.goalWorkflowVersion ?? 1);
 const goalReviewerId = computed(() => task.value?.status === 'indicator_dept_reviewing' ? task.value.deptHeadId : task.value?.status === 'indicator_approving' ? task.value.approverId : task.value?.status === 'indicator_reviewing' ? task.value.managerId : null);
-const canApproveGoal = computed(() => Boolean(task.value && !task.value.isExempt && goalVersion.value >= 2 && goalReviewerId.value === authStore.user?.id && task.value.employeeId !== authStore.user?.id));
+const canApproveGoal = computed(() => Boolean(task.value && !lifecycleEnded.value && !task.value.isExempt && goalVersion.value >= 2 && goalReviewerId.value === authStore.user?.id && task.value.employeeId !== authStore.user?.id));
 const task = computed(() => route.name === 'TaskDetail' && !isGoalMonitor.value && !taskStore.loading
   && taskStore.detail?.id === route.params.id ? taskStore.detail : null);
+const lifecycleEnded = computed(() => !!task.value && lifecycleReadOnly(task.value));
 const loading = computed(() => taskStore.loading || cycleLoading.value);
 const workflowContext = computed(() => {
   const current = task.value;
@@ -83,7 +86,7 @@ const objectionStep = ref<'reason' | 'confirm'>('reason');
 const objectionReason = ref('');
 const objectionError = ref('');
 const objectionTaskId = ref('');
-const canDisagreeResult = computed(() => permission.canConfirmResult.value
+const canDisagreeResult = computed(() => !lifecycleEnded.value && permission.canConfirmResult.value
   && task.value?.status === 'approval' && !permission.isPublished.value && Boolean(task.value?.managerId));
 
 const flowActions = computed(() => flow.actions.value);
@@ -190,6 +193,7 @@ const performanceStageState = computed<TaskStageState>(() => {
     : 'not-started';
 });
 const performanceStageStateLabel = computed(() => {
+  if (task.value && lifecycleEnded.value) return lifecycleLabel(task.value);
   if (task.value?.isExempt) return '已豁免';
   return {
     pending: '待处理',
@@ -213,12 +217,12 @@ const allPeriodsCompleted = computed(() => {
     && periods.every((p) => p.status === 'completed' && p.managerSubmittedAt);
 });
 const showFinalGradeEntry = computed(() => (
-  Boolean(task.value)
+  Boolean(task.value) && !lifecycleEnded.value
   && task.value!.status === 'manager_scoring'
   && (permission.isTaskManager.value || permission.isAdminLike.value)
 ));
 function goFinalGrade() {
-  if (!task.value) return;
+  if (!task.value || lifecycleEnded.value) return;
   router.push({ path: `/tasks/${task.value.id}/final-grade` });
 }const employeeInitial = computed(() => (task.value?.employeeName || '绩').slice(0, 1));
 const employeeMeta = computed(() => {
@@ -235,6 +239,7 @@ const canEditIndicators = computed(() => {
   const t = task.value;
   if (
     !t
+    || lifecycleEnded.value
     || t.isExempt
     || requestedPerformanceStage.value !== 'goal-setting'
     || !isCurrentPerformanceStage.value
@@ -263,7 +268,7 @@ const indicatorSubmitLabel = computed(() => indicatorSaveLabel.value);
 const splitIndicatorSaveActions = computed(() => canEditIndicators.value);
 const canRejectIndicators = computed(() => {
   const t = task.value;
-  if (!t || t.isExempt || !isCurrentPerformanceStage.value) return false;
+  if (!t || lifecycleEnded.value || t.isExempt || !isCurrentPerformanceStage.value) return false;
   if (goalVersion.value >= 2) return canApproveGoal.value || (t.status === 'indicator_confirming' && permission.isTaskSelf.value);
   if (t.status === 'indicator_reviewing') return permission.isTaskManager.value || permission.isAdminLike.value;
   if (t.status === 'indicator_confirming') return permission.isTaskSelf.value;
@@ -271,6 +276,7 @@ const canRejectIndicators = computed(() => {
 });
 const canWithdrawIndicators = computed(() => (
   Boolean(task.value)
+  && !lifecycleEnded.value
   && permission.isTaskSelf.value
   && isCurrentPerformanceStage.value
   && employeeCanWithdrawIndicators(task.value?.status, task.value?.flowRecords ?? [])
@@ -345,7 +351,7 @@ function goBack() {
 
 async function handleConfirmIndicators() {
   const currentTask = task.value;
-  if (!currentTask) return;
+  if (!currentTask || lifecycleEnded.value) return;
   const isFiveStep = goalVersion.value >= 2;
   if (isFiveStep && !currentTask.updatedAt) {
     ElMessage.warning('请刷新目标计划后重新确认');
@@ -372,7 +378,7 @@ async function handleConfirmIndicators() {
 
 async function handleRejectIndicators(reason: string) {
   const id = task.value?.id;
-  if (!id) return;
+  if (!id || lifecycleEnded.value) return;
   actionLoading.value = true;
   try {
     await tasksApi.rejectIndicators(id, { comment: reason, expectedUpdatedAt: task.value?.updatedAt });
@@ -386,7 +392,7 @@ async function handleRejectIndicators(reason: string) {
 async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>, addNext = false) {
   const currentTask = task.value;
   const id = currentTask?.id;
-  if (!id || !currentTask.updatedAt) return;
+  if (!id || lifecycleEnded.value || !currentTask.updatedAt) return;
   if (!body.instances.length) {
     ElMessage.warning('请至少保留一条指标');
     return;
@@ -424,7 +430,7 @@ async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdate
 
 async function handleWithdrawIndicators() {
   const currentTask = task.value;
-  if (!currentTask?.id || !currentTask.updatedAt) return;
+  if (!currentTask?.id || lifecycleEnded.value || !currentTask.updatedAt) return;
   try {
     await ElMessageBox.confirm(
       '撤回后可继续修改目标，修改完成需重新提交主管审核。',
@@ -434,7 +440,7 @@ async function handleWithdrawIndicators() {
   } catch {
     return;
   }
-  if (task.value !== currentTask) return;
+  if (task.value !== currentTask || lifecycleEnded.value) return;
   actionLoading.value = true;
   try {
     await tasksApi.withdrawIndicators(currentTask.id, { expectedUpdatedAt: currentTask.updatedAt });
@@ -446,7 +452,7 @@ async function handleWithdrawIndicators() {
 }
 async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: ActualValueItem[]) {
   const currentTask = task.value;
-  if (!currentTask || actionLoading.value) return;
+  if (!currentTask || lifecycleEnded.value || actionLoading.value) return;
   const id = currentTask.id;
   let expectedUpdatedAt = currentTask.updatedAt;
   const session = detailSession;
@@ -482,7 +488,7 @@ async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: Actu
 
 async function handleConfirmResult() {
   const id = task.value?.id;
-  if (!id || actionLoading.value || objectionVisible.value || !permission.canConfirmResult.value) return;
+  if (!id || lifecycleEnded.value || actionLoading.value || objectionVisible.value || !permission.canConfirmResult.value) return;
   actionLoading.value = true;
   try {
     await tasksApi.confirmResult(id);
@@ -541,7 +547,7 @@ function closeResultObjection(done: () => void) {
 
 async function handleRemind() {
   const id = task.value?.id;
-  if (!id) return;
+  if (!id || lifecycleEnded.value) return;
   reminding.value = true;
   try {
     await tasksApi.remindCurrentHandler(id);
@@ -585,7 +591,7 @@ async function handleRemind() {
             {{ goalSettingMode === 'simple' ? '完整模式' : '简洁模式' }}
           </el-button>
           <el-button
-            v-if="workflowContext.canRemind && isCurrentPerformanceStage"
+            v-if="!lifecycleEnded && workflowContext.canRemind && isCurrentPerformanceStage"
             plain
             :loading="reminding"
             :disabled="reminderOnCooldown"
@@ -616,6 +622,9 @@ async function handleRemind() {
         </div>
       </section>
 
+      <PerformanceLifecycleActions v-if="lifecycleEnded" kind="task" :record="task"
+        @state="value => { if (task) applyLifecycleProjection(task, value); }" @changed="loadDetail" />
+
       <el-alert
         v-if="showFinalGradeEntry && allPeriodsCompleted"
         class="final-grade-entry"
@@ -640,7 +649,7 @@ async function handleRemind() {
       <el-alert v-if="showGoalSettingReference" data-testid="goal-stage-status" :title="TASK_STATUS_META[task.status].label" type="info" :closable="false">
         <template v-if="goalVersion >= 2">员工提交 → 绩效上级审核 → 部门负责人审核 → 员工确认 → 分管领导审核 → 目标生效</template>
       </el-alert>
-      <p v-if="showGoalSettingReference && workflowContext.currentHandler" data-testid="goal-current-handler">当前办理人：{{ workflowContext.currentHandler.name }}</p>
+      <p v-if="!lifecycleEnded && showGoalSettingReference && workflowContext.currentHandler" data-testid="goal-current-handler">当前办理人：{{ workflowContext.currentHandler.name }}</p>
       <PerformanceFormWorkspace
         :show-reference="showGoalSettingReference"
         reference-title="参考信息"
@@ -660,7 +669,7 @@ async function handleRemind() {
           <DepartmentReviewWorkspace
             v-else-if="isDepartmentReviewView"
             :task="task"
-            :can-review="flowActions.canDeptReview"
+            :can-review="!lifecycleEnded && flowActions.canDeptReview"
             @reviewed="loadDetail"
           />
           <ChartCard
@@ -677,6 +686,7 @@ async function handleRemind() {
           <ManagerPeriodReviewWorkspace
             v-else-if="isPeriodReviewPage && activePerformancePeriod && isManagerPeriodReview"
             :period-id="activePerformancePeriod.id"
+            :read-only="lifecycleEnded"
             @submitted="loadDetail"
             @returned="loadDetail"
           />
@@ -684,6 +694,7 @@ async function handleRemind() {
           <EmployeePeriodReviewWorkspace
             v-else-if="isPeriodReviewPage && activePerformancePeriod"
             :period-id="activePerformancePeriod.id"
+            :read-only="lifecycleEnded"
             @submitted="loadDetail"
           />
 
@@ -695,7 +706,7 @@ async function handleRemind() {
             :title="performanceStageCardTitle"
             :instances="task.indicatorInstances"
             :can-edit="canEditIndicators"
-            :can-confirm="canApproveGoal && !canEditIndicators || requestedPerformanceStage === 'goal-confirmation' && isCurrentPerformanceStage && flowActions.canConfirmIndicator && !canEditIndicators"
+            :can-confirm="!lifecycleEnded && (canApproveGoal && !canEditIndicators || requestedPerformanceStage === 'goal-confirmation' && isCurrentPerformanceStage && flowActions.canConfirmIndicator && !canEditIndicators)"
             :can-reject="canRejectIndicators"
             :confirm-message="goalVersion >= 2 ? (canApproveGoal ? '审核通过后，目标将进入下一审批节点；分管领导终审通过后目标生效。' : '员工确认后仍需分管领导审核，终审通过后目标才会生效。') : undefined"
             :confirm-label="canApproveGoal ? '目标审核通过' : '确认指标'"
@@ -710,7 +721,7 @@ async function handleRemind() {
             :submit-label="indicatorSubmitLabel"
             :split-save-actions="splitIndicatorSaveActions"
             :self-eval-mode="requestedPerformanceStage === 'self-eval'"
-            :self-eval-readonly="!isCurrentPerformanceStage || !permission.canEditSelfEval.value"
+            :self-eval-readonly="lifecycleEnded || !isCurrentPerformanceStage || !permission.canEditSelfEval.value"
             :self-eval-summary="task.selfEvalSummary"
             :self-eval-user-id="authStore.user?.id"
             :task-status="task.status"
@@ -727,7 +738,7 @@ async function handleRemind() {
 
           <ChartCard v-if="showResultView" class="result-view">
             <template #title>结果信息</template>
-            <template #extra v-if="permission.canConfirmResult.value && isCurrentPerformanceStage">
+            <template #extra v-if="!lifecycleEnded && permission.canConfirmResult.value && isCurrentPerformanceStage">
               <el-button v-if="canDisagreeResult" :disabled="actionLoading" @click="openResultObjection">不同意</el-button>
               <el-button type="primary" :loading="actionLoading" @click="handleConfirmResult">
                 确认结果

@@ -17,6 +17,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { CreateSignatureDto } from './dto/create-signature.dto';
 import { SignatureQueryDto } from './dto/signature-query.dto';
+import { lockActiveTask } from '@/performance-lifecycle/lifecycle-lock';
 
 /** 签字视图项（前端展示用）。 */
 export interface SignatureItem {
@@ -64,6 +65,7 @@ export class SignaturesService {
     const idempotencyKey = dto.idempotencyKey ?? this.buildIdempotencyKey(dto);
 
     const result = await this.prisma.$transaction(async (tx) => {
+      if (dto.businessType === SignatureBusinessType.assessment_task) await lockActiveTask(tx, dto.businessRecordId);
       // 先查：已存在则直接返回，保证幂等（不产生第二条，也不重复写 AuditLog）
       const existing = await tx.signature.findUnique({
         where: {

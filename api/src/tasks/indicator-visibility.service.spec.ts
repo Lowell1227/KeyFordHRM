@@ -276,6 +276,7 @@ describe('IndicatorVisibilityService', () => {
         where: {
           AND: expect.arrayContaining([
             expect.objectContaining({ retiredAt: null, OR: expect.any(Array) }),
+            { task: { lifecycleStatus: 'active' } },
             { task: { cycleId: 'cycle-1' } },
             { task: { employeeId: 'owner-1' } },
             {

@@ -55,6 +55,7 @@ export class ApprovalService {
 
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
+      lifecycleStatus: 'active',
       isExempt: false,
       ...(query.deptId ? { deptId: query.deptId } : {}),
       ...(keyword ? { employee: { OR: [
@@ -92,7 +93,7 @@ export class ApprovalService {
   async getOverview(cycleId: string, viewer: AuthUser) {
     const cycle = await this.getCycleOrThrow(cycleId);
     const allTasks = await this.prisma.assessmentTask.findMany({
-      where: { cycleId, isExempt: false },
+      where: { cycleId, isExempt: false, lifecycleStatus: 'active' },
       include: { gradeResult: { select: { calibratedGrade: true, rawGrade: true } } },
     });
     if (!this.canViewAll(viewer) && !allTasks.some(task => task.approverId === viewer.id && task.employeeId !== viewer.id)) {
@@ -298,6 +299,7 @@ export class ApprovalService {
     const claimed = await tx.assessmentTask.updateMany({
       where: {
         id: task.id,
+        lifecycleStatus: 'active',
         cycleId: task.cycleId,
         status: 'approval',
         approvedAt: null,
@@ -326,6 +328,7 @@ export class ApprovalService {
   private async findApprovalTasksByIds(cycleId: string, taskIds: string[], viewer: AuthUser) {
     const where: Prisma.AssessmentTaskWhereInput = {
       id: { in: taskIds },
+      lifecycleStatus: 'active',
       cycleId,
       status: 'approval',
       approvedAt: null,

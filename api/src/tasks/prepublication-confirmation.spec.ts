@@ -11,11 +11,16 @@ const hr = { id: 'hr', sysRole: 'hr' } as any;
 const approvedAt = new Date('2026-09-01');
 
 function fixture() {
-  const task: any = { appeals: [], id: 'task', employeeId: 'employee', cycleId: 'cycle', status: 'approval',
+  const task: any = { appeals: [], id: 'task', employeeId: 'employee', cycleId: 'cycle', status: 'approval', lifecycleStatus: 'active',
     managerId: 'manager', approvedAt, publishedAt: null, employeeConfirmedAt: null, isExempt: false,
     gradeResult: { approvedAt, calibratedGrade: 'B', rawGrade: 'A' }, cycle: {} };
   const tx: any = {
-    $queryRaw: jest.fn().mockResolvedValue([]),
+    $queryRaw: jest.fn(async (query: TemplateStringsArray | { sql: string }) => {
+      const sql = Array.isArray(query) ? query.join('') : (query as { sql: string }).sql;
+      if (/FROM "?assessment_tasks"?/.test(sql)) return [{ id: task.id, lifecycleStatus: task.lifecycleStatus }];
+      if (/FROM "?assessment_(periods|cycles)"?/.test(sql)) return [];
+      throw new Error('Unexpected prepublication confirmation lock query');
+    }),
     assessmentTask: { findUnique: jest.fn(async () => task), update: jest.fn(async ({ data }) => Object.assign(task, data)), groupBy: jest.fn().mockResolvedValue([]), findMany: jest.fn(async () => [task]), count: jest.fn().mockResolvedValue(0) },
     assessmentCycle: { findUnique: jest.fn().mockResolvedValue({ id: 'cycle', name: '测试周期', hrOwnerId: 'hr' }), update: jest.fn() },
     gradeResult: { updateMany: jest.fn(async ({ data }) => { Object.assign(task.gradeResult, data); return { count: 1 }; }), update: jest.fn(async ({ data }) => Object.assign(task.gradeResult, data)) },

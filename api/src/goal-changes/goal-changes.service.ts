@@ -6,6 +6,7 @@ import { NotificationsService } from '@/notifications/notifications.service';
 import { hasApprovedGoalBaseline } from '@/tasks/goal-workflow';
 import { ChangeGoal, canGrantChanges, changeOwner, nextChangeStage, validateChangeGoals } from './goal-change-rules';
 import { GoalChangeListQueryDto } from './dto/goal-change-list-query.dto';
+import { ACTIVE_LIFECYCLE, assertLifecycleActive, canManageLifecycle, lifecycleProjection, lifecycleWhere } from '@/performance-lifecycle/lifecycle-policy';
 
 const actor = { select: { id: true, name: true, status: true, deletedAt: true, archivedAt: true } } as const;
 const taskInclude = {
@@ -25,7 +26,7 @@ export class GoalChangesService {
   constructor(private readonly prisma: PrismaService, private readonly notifications: NotificationsService) {}
 
   private canView(task: Task, viewer: AuthUser): boolean {
-    return viewer.sysRole === 'system_admin' || canGrantChanges(viewer, task.cycle)
+    return viewer.sysRole === 'system_admin' || canManageLifecycle(viewer, 'view') || canGrantChanges(viewer, task.cycle)
       || [task.employeeId, task.managerId, task.deptHeadId, task.approverId].includes(viewer.id);
   }
 
@@ -52,6 +53,7 @@ export class GoalChangesService {
   }
 
   private assertEligible(task: Task) {
+    assertLifecycleActive(task);
     if (!this.available(task.employee) || task.isExempt || task.participantDisposition !== 'active') {
       throw new ConflictException('员工已不在本周期有效参与范围');
     }
@@ -74,6 +76,7 @@ export class GoalChangesService {
   private goalArray(value: Prisma.JsonValue): ChangeGoal[] { return value as unknown as ChangeGoal[]; }
 
   private actions(request: Request, task: Task, viewer: AuthUser): string[] {
+    if ((request.lifecycleStatus && request.lifecycleStatus !== 'active') || (task.lifecycleStatus && task.lifecycleStatus !== 'active')) return [];
     if (viewer.isAssessorOnly) return [];
     const result: string[] = [];
     if (canGrantChanges(viewer, task.cycle) && !['active', 'revoked'].includes(request.status)) result.push('revoke');
@@ -95,17 +98,19 @@ export class GoalChangesService {
     }
     return { ...request, employeeId: task.employeeId, managerId: task.managerId, employeeName: task.employee.name,
       cycleName: task.cycle.name, creatorName: creator?.name ?? '', canGrant: canGrantChanges(viewer, task.cycle), workflowIssue,
-      currentOwnerId: ['draft', 'revision'].includes(request.status) ? request.creatorId : changeOwner(task, request.status),
-      allowedActions: this.actions(request, task, viewer) };
+      ...lifecycleProjection('goal_change', request, viewer),
+      currentOwnerId: (!request.lifecycleStatus || request.lifecycleStatus === 'active') && (!task.lifecycleStatus || task.lifecycleStatus === 'active')
+        ? (['draft', 'revision'].includes(request.status) ? request.creatorId : changeOwner(task, request.status)) : null,
+      allowedActions: [...this.actions(request, task, viewer), ...lifecycleProjection('goal_change', request, viewer).allowedActions] };
   }
 
   async context(viewer: AuthUser) {
-    const tasks = await this.prisma.assessmentTask.findMany({ where: this.scope(viewer), include: taskInclude, orderBy: { createdAt: 'desc' } });
+    const tasks = await this.prisma.assessmentTask.findMany({ where: { AND: [this.scope(viewer), ACTIVE_LIFECYCLE] }, include: taskInclude, orderBy: { createdAt: 'desc' } });
     const result: Array<Record<string, unknown>> = [];
     for (const task of tasks) {
       if (!this.canView(task, viewer)) continue;
       try { this.assertEligible(task); } catch { continue; }
-      const request = await this.prisma.goalChangeRequest.findFirst({ where: { taskId: task.id, status: ongoing }, select: { id: true } });
+      const request = await this.prisma.goalChangeRequest.findFirst({ where: { taskId: task.id, status: ongoing, ...ACTIVE_LIFECYCLE }, select: { id: true } });
       result.push({ id: task.id, cycleId: task.cycleId, cycleName: task.cycle.name, employeeId: task.employeeId,
         employeeName: task.employee.name, employeeNo: task.employee.employeeNo, managerId: task.managerId,
         managerName: task.manager?.name ?? '', grant: task.goalChangeGrant, requestId: request?.id ?? null,
@@ -130,7 +135,7 @@ export class GoalChangesService {
   }
 
   async findAll(viewer: AuthUser) {
-    const requests = await this.prisma.goalChangeRequest.findMany({ where: { task: this.scope(viewer) }, orderBy: { updatedAt: 'desc' } });
+    const requests = await this.prisma.goalChangeRequest.findMany({ where: { task: this.scope(viewer), lifecycleStatus: { not: 'deleted' } }, orderBy: { updatedAt: 'desc' } });
     const result: Array<Awaited<ReturnType<GoalChangesService['map']>>> = [];
     for (const request of requests) {
       const task = await this.prisma.assessmentTask.findUnique({ where: { id: request.taskId }, include: taskInclude });
@@ -156,6 +161,7 @@ export class GoalChangesService {
     const keyword = query.keyword?.trim();
     const where: Prisma.GoalChangeRequestWhereInput = { AND: [
       { task: this.scope(viewer) }, scoped,
+      lifecycleWhere(query.lifecycleStatus, viewer),
       ...(query.status ? [{ status: query.status }] : []),
       ...(keyword ? [{ OR: [
         { task: { employee: { name: { contains: keyword, mode: 'insensitive' } } } },
@@ -178,7 +184,7 @@ export class GoalChangesService {
     if (viewer.isAssessorOnly) return [];
     const id = viewer.id;
     const requests = await this.prisma.goalChangeRequest.findMany({
-      where: { OR: [
+      where: { ...ACTIVE_LIFECYCLE, task: ACTIVE_LIFECYCLE, OR: [
         { status: { in: ['draft', 'revision'] }, creatorId: id, task: { OR: [{ employeeId: id }, { managerId: id }] } },
         { status: 'indicator_reviewing', task: { managerId: id } },
         { status: 'indicator_dept_reviewing', task: { deptHeadId: id } },
@@ -197,7 +203,7 @@ export class GoalChangesService {
   }
 
   private scope(viewer: AuthUser): Prisma.AssessmentTaskWhereInput {
-    if (viewer.sysRole === 'system_admin' || viewer.sysRole === 'hr') return {};
+    if (viewer.sysRole === 'system_admin' || viewer.sysRole === 'hr' || canManageLifecycle(viewer, 'view')) return {};
     return { OR: [{ employeeId: viewer.id }, { managerId: viewer.id }, { deptHeadId: viewer.id }, { approverId: viewer.id },
       ...(viewer.sysRole === 'hr_user' && viewer.hrCapabilities?.includes('cycle_plan_edit')
         ? [{ cycle: { hrOwnerId: viewer.id } }] : [])] };
@@ -223,6 +229,7 @@ export class GoalChangesService {
     await tx.$queryRaw`SELECT id FROM assessment_tasks WHERE id=${taskId}::uuid FOR UPDATE`;
     const task = await tx.assessmentTask.findUnique({ where: { id: taskId }, include: taskInclude });
     if (!task) throw new NotFoundException('考核任务不存在');
+    assertLifecycleActive(task);
     return task;
   }
 
@@ -236,7 +243,7 @@ export class GoalChangesService {
       const task = await this.lockTask(tx, input.taskId);
       this.assertGrant(task, viewer);
       this.assertEligible(task);
-      if (await tx.goalChangeRequest.count({ where: { taskId: task.id, status: ongoing } })) throw new ConflictException('该员工已有进行中的目标变更');
+      if (await tx.goalChangeRequest.count({ where: { taskId: task.id, status: ongoing, ...ACTIVE_LIFECYCLE } })) throw new ConflictException('该员工已有进行中的目标变更');
       const grant = await tx.goalChangeGrant.findUnique({ where: { taskId: task.id } });
       if (grant) {
         this.assertRevision(grant.revision, input.expectedRevision);
@@ -259,7 +266,7 @@ export class GoalChangesService {
       if (!grant || grant.state !== 'open') throw new ConflictException('变更资格已关闭');
       this.assertRevision(grant.revision, input.expectedRevision);
       await tx.goalChangeGrant.update({ where: { taskId }, data: { state: 'revoked', revision: { increment: 1 }, updatedAt: new Date() } });
-      const requests = await tx.goalChangeRequest.findMany({ where: { taskId, status: ongoing } });
+      const requests = await tx.goalChangeRequest.findMany({ where: { taskId, status: ongoing, ...ACTIVE_LIFECYCLE } });
       for (const request of requests) {
         await tx.goalChangeRequest.update({ where: { id: request.id }, data: { status: 'revoked', revision: { increment: 1 }, updatedAt: new Date() } });
         await this.audit(tx, request.id, viewer, 'revoke', { status: 'revoked' });
@@ -276,7 +283,7 @@ export class GoalChangesService {
       this.assertEligible(task);
       const grant = await tx.goalChangeGrant.findUnique({ where: { taskId: task.id } });
       if (grant?.state !== 'open') throw new ForbiddenException('请先由HR开放本人的目标变更');
-      if (await tx.goalChangeRequest.count({ where: { taskId: task.id, status: ongoing } })) throw new ConflictException('该任务已有进行中的变更');
+      if (await tx.goalChangeRequest.count({ where: { taskId: task.id, status: ongoing, ...ACTIVE_LIFECYCLE } })) throw new ConflictException('该任务已有进行中的变更');
       const beforeGoals = this.baseline(task);
       const request = await tx.goalChangeRequest.create({ data: { taskId: task.id, creatorId: viewer.id,
         beforeGoals: beforeGoals as unknown as Prisma.InputJsonValue, goals: beforeGoals as unknown as Prisma.InputJsonValue,
@@ -295,6 +302,7 @@ export class GoalChangesService {
       const task = await this.lockTask(tx, identity.taskId);
       const request = await tx.goalChangeRequest.findUnique({ where: { id } });
       if (!request) throw new NotFoundException('目标变更不存在');
+      assertLifecycleActive(request);
       this.assertView(task, viewer);
       this.assertRevision(request.revision, expected);
       if (viewer.isAssessorOnly) throw new ForbiddenException('当前账号不能办理变更');
@@ -308,7 +316,7 @@ export class GoalChangesService {
 
   private async write(tx: Prisma.TransactionClient, request: Request, viewer: AuthUser, action: string,
     data: Prisma.GoalChangeRequestUpdateManyMutationInput, extra: Record<string, unknown> = {}) {
-    const result = await tx.goalChangeRequest.updateMany({ where: { id: request.id, revision: request.revision, status: request.status },
+    const result = await tx.goalChangeRequest.updateMany({ where: { id: request.id, ...ACTIVE_LIFECYCLE, revision: request.revision, status: request.status },
       data: { ...data, revision: { increment: 1 }, updatedAt: new Date() } });
     if (result.count !== 1) throw new ConflictException('变更已由其他人处理，请刷新');
     await this.audit(tx, request.id, viewer, action, { previousStatus: request.status, status: data.status ?? request.status, ...extra });
@@ -414,8 +422,8 @@ export class GoalChangesService {
   }
 
   private async notifyTaskActors(taskId: string, viewer: AuthUser, title: string) {
-    const task = await this.prisma.assessmentTask.findUnique({ where: { id: taskId }, select: { employeeId: true, managerId: true } });
-    if (task) await Promise.allSettled([...new Set([task.employeeId, task.managerId].filter((id): id is string => Boolean(id)))].map((id) => this.notify(id, viewer.id, title, '/goal-changes')));
+    const task = await this.prisma.assessmentTask.findUnique({ where: { id: taskId, ...ACTIVE_LIFECYCLE }, select: { employeeId: true, managerId: true } });
+    if (task) await Promise.allSettled([...new Set([task.employeeId, task.managerId].filter((id): id is string => Boolean(id)))].map((id) => this.notify(id, viewer.id, title, '/goal-changes', taskId)));
   }
 
   private async notifyOwner(request: { id: string; currentOwnerId: string | null; status: string; taskId: string }, viewer: AuthUser) {
@@ -423,9 +431,10 @@ export class GoalChangesService {
     if (request.currentOwnerId) await this.notify(request.currentOwnerId, viewer.id, '目标变更待处理', `/goal-changes/${request.id}`);
   }
 
-  private async notify(userId: string, senderId: string, title: string, path: string) {
+  private async notify(userId: string, senderId: string, title: string, path: string, taskId?: string) {
     if (userId === senderId) return;
-    try { await this.notifications.create({ userId, senderId, type: 'goal_change', title, content: '请在目标变更中查看。', extraData: { path } }); }
+    const goalChangeId = path.startsWith('/goal-changes/') ? path.slice('/goal-changes/'.length) : undefined;
+    try { await this.notifications.create({ userId, senderId, taskId, type: 'goal_change', title, content: '请在目标变更中查看。', extraData: { path, ...(goalChangeId ? { goalChangeId } : {}) } }); }
     catch { /* 通知不影响事务；待办以申请状态为准。 */ }
   }
 }

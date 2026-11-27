@@ -15,7 +15,7 @@ export const recruitmentDemandsApi = {
   localAction(id: string, body: RecruitmentDemandLocalCommand): Promise<RecruitmentDemandView> {
     return http.post(`${base}/${encodeURIComponent(id)}/local-actions`, body, localError) as unknown as Promise<RecruitmentDemandView>;
   },
-  list(query: RecruitmentDemandQuery): Promise<Paginated<RecruitmentDemandView>> {
+  list(query: RecruitmentDemandQuery & { workQueue?: 'review' | 'returned' }): Promise<Paginated<RecruitmentDemandView>> {
     return http.get(base, { params: query, ...localError }) as unknown as Promise<Paginated<RecruitmentDemandView>>;
   },
   status(): Promise<RecruitmentDemandStatus> {

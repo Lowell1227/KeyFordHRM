@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { cyclesApi } from '@/api/cycles.api';
 import { reportsApi } from '@/api/reports.api';
@@ -8,6 +8,10 @@ import { canAccessAppealLedger } from '@/router/navigation';
 import ChartCard from '@/components/common/ChartCard.vue';
 import DashboardTaskEntries from './DashboardTaskEntries.vue';
 import DashboardRecruitment from './DashboardRecruitment.vue';
+import DashboardSection from './DashboardSection.vue';
+import DashboardOperationRows from './DashboardOperationRows.vue';
+import { workbenchApi, type OperationsSummary, type OperationGroup } from '@/api/workbench.api';
+import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import type { AssessmentCycle, ReportSummary } from '@/types/api.types';
@@ -15,6 +19,43 @@ import type { PerfGrade } from '@/types/enums';
 
 const auth = useAuthStore();
 const router = useRouter();
+type OperationKey = 'performance' | 'personnel' | 'payroll';
+const operations = ref<OperationsSummary['groups'] | null>(null);
+const operationsLoading = ref(false), operationsError = ref('');
+let operationSerial = 0;
+const operationLabels = { personnel: '人事事项', payroll: '薪酬事项' } as const;
+function operationCount(group?: OperationGroup | null): number | null {
+  if (operationsError.value || !group || group.status === 'error' || group.actionable.total === null || group.attention.total === null) return null;
+  return group.actionable.total + group.attention.total;
+}
+async function loadOperations(page?: number, only?: OperationKey) {
+  const serial = ++operationSerial, userId = auth.user?.id;
+  if (!userId || auth.user?.isAssessorOnly) { operations.value = null; operationsLoading.value = false; return; }
+  const keys: OperationKey[] = only && operations.value ? [only] : ['performance', 'personnel', 'payroll'];
+  const pages = Object.fromEntries(keys.map(key => [key, page ?? operations.value?.[key]?.actionable?.page ?? 1]));
+  operationsLoading.value = true; operationsError.value = '';
+  try {
+    // Share equal-page reads without resetting independently paged sections.
+    const reads = await Promise.all([...new Set(keys.map(key => pages[key] as number))].map(async currentPage =>
+      [currentPage, (await workbenchApi.operations(currentPage)).groups] as const));
+    if (serial !== operationSerial || userId !== auth.user?.id) return;
+    const byPage = new Map(reads), groups = { ...reads[0]![1], ...operations.value };
+    for (const key of keys) Object.assign(groups, { [key]: byPage.get(pages[key])![key] });
+    operations.value = groups;
+  } catch (error) {
+    if (serial === operationSerial && userId === auth.user?.id) {
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      if (status === 401 || status === 403) operations.value = null;
+      operationsError.value = '办理事项暂时无法读取，请重试';
+    }
+  } finally { if (serial === operationSerial) operationsLoading.value = false; }
+}
+watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => {
+  ++operationSerial; operations.value = null; void loadOperations();
+}, { immediate: true });
+useVisibleRefresh({ intervalMs: 0, enabled: () => Boolean(auth.user) && !auth.user?.isAssessorOnly,
+  refresh: () => loadOperations() });
+onBeforeUnmount(() => { ++operationSerial; });
 
 const userRole = computed(() => auth.user?.sysRole ?? '');
 const isDirectManager = computed(() => auth.isManager);
@@ -183,8 +224,20 @@ function avatarColor(name: string): string {
       </section>
     </template>
 
-    <DashboardTaskEntries />
-    <DashboardRecruitment />
+    <div class="dashboard-work">
+      <DashboardTaskEntries @refresh="() => loadOperations(undefined, 'performance')" :extra-count="operations?.performance ? operationCount(operations.performance) : 0"
+        :extra-loading="operationsLoading" :extra-error="operations?.performance?.error?.message || operationsError">
+        <DashboardOperationRows v-if="operations?.performance?.visible" :group="operations.performance" :loading="operationsLoading" @page="page => loadOperations(page, 'performance')"/>
+      </DashboardTaskEntries>
+      <DashboardRecruitment />
+      <template v-for="(title, key) in operationLabels" :key="key">
+        <DashboardSection v-if="operations?.[key]?.visible" :section-id="key" :title="title"
+          :count="operationCount(operations[key])" :loading="operationsLoading" :error="operations[key]?.error?.message || operationsError" @refresh="() => loadOperations(undefined, key)">
+          <DashboardOperationRows :group="operations[key] ?? null" :loading="operationsLoading" @page="page => loadOperations(page, key)"/>
+        </DashboardSection>
+      </template>
+      <div v-if="operationsError && !operations" role="alert" class="dashboard-work__error">{{ operationsError }} <el-button link type="primary" @click="() => loadOperations()">重试</el-button></div>
+    </div>
 
     <template v-if="!isEmployee || isDirectManager || roleQuickActions.length">
       <div v-loading="dashboardLoading" class="dashboard-admin">
@@ -286,6 +339,8 @@ function avatarColor(name: string): string {
 </template>
 
 <style scoped>
+.dashboard-work { display:flex; flex-direction:column; min-width:0; }
+.dashboard-work__error { color:var(--el-color-danger); padding:10px 0; font-size:13px; order:0; }
 .dashboard {
   display: flex;
   flex-direction: column;

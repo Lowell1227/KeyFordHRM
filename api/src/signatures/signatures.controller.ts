@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
@@ -5,6 +7,7 @@ import { SignaturesService } from './signatures.service';
 import { CreateSignatureDto } from './dto/create-signature.dto';
 import { SignatureQueryDto } from './dto/signature-query.dto';
 
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('signatures')
 export class SignaturesController {
   constructor(private readonly signaturesService: SignaturesService) {}

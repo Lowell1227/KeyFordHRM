@@ -9,6 +9,7 @@ import { assertRecruitmentDemandReader, assertRecruitmentDemandReviewer, assertR
 import { type RecruitmentDemandGateway, type RecruitmentDemandSource, type RecruitmentDemandSubmissionSnapshot, type RecruitmentDemandSubmissionProof, type RecruitmentDemandVerification } from './recruitment-demands.types';
 import { attachRecruitmentDemandSeats } from './recruitment-demand-seats';
 import { isUUID } from 'class-validator';
+import { recruitmentDemandWorkbenchWhere } from './talent-workbench.service';
 
 const directoryInclude = {
   department: { select: { id: true, name: true, isActive: true } },
@@ -121,7 +122,9 @@ export class RecruitmentDemandsService {
 
   async list(query: RecruitmentDemandQueryDto, user: AuthUser) {
     const actor = await assertRecruitmentDemandReader(this.prisma, user);
-    const where: Prisma.RecruitmentDemandWhereInput = { ...this.keyword(query.keyword), ...(query.status ? { sourceState: query.status } : {}) };
+    const filters: Prisma.RecruitmentDemandWhereInput = { ...this.keyword(query.keyword), ...(query.status ? { sourceState: query.status } : {}) };
+    const where: Prisma.RecruitmentDemandWhereInput = query.workQueue
+      ? { AND: [filters, recruitmentDemandWorkbenchWhere(query.workQueue, actor)] } : filters;
     const [rows, total] = await Promise.all([
       this.prisma.recruitmentDemand.findMany({ where, include: directoryInclude, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
       this.prisma.recruitmentDemand.count({ where }),

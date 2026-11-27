@@ -6,6 +6,8 @@ import { paginated, Paginated } from '@/common/dto/pagination.dto';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { MESSAGE_PUSH_PROVIDER, MessagePushProvider } from './message-push.provider';
 import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
+import { isPerformanceNotificationActive } from '@/performance-lifecycle/lifecycle-notifications';
+import { lockActiveTask } from '@/performance-lifecycle/lifecycle-lock';
 
 const notificationInboxInclude = {
   sender: { select: { name: true } },
@@ -175,6 +177,7 @@ export class NotificationsService {
    * 推送失败不抛异常，避免阻断业务。
    */
   async create(params: CreateNotificationParams): Promise<string | null> {
+    if (!await isPerformanceNotificationActive(this.prisma, params)) return null;
     const {
       dedupeKey = null,
       userId,
@@ -266,10 +269,15 @@ export class NotificationsService {
 
   private async deliver(
     logId: string,
-    params: Pick<CreateNotificationParams, 'userId' | 'cycleId' | 'type' | 'title' | 'content' | 'extraData'>,
+    params: Pick<CreateNotificationParams, 'userId' | 'taskId' | 'cycleId' | 'type' | 'title' | 'content' | 'extraData'>,
     dingtalkId: string | null,
   ): Promise<void> {
     const { userId, cycleId = null, type, title, content, extraData } = params;
+    if (!await isPerformanceNotificationActive(this.prisma, params)) {
+      await this.prisma.notificationLog.updateMany({ where: { id: logId, status: { in: ['pending', 'failed'] } },
+        data: { status: 'cancelled', errorMsg: 'performance_lifecycle_ended' } });
+      return;
+    }
     try {
       const result = await this.pushProvider.push({
         userId,
@@ -509,6 +517,7 @@ export class NotificationsService {
     const tasks = await this.prisma.assessmentTask.findMany({
       where: {
         cycleId,
+        lifecycleStatus: 'active',
         status: { in: statuses },
         ...(nodeType === 'approver' ? { approvedAt: null } : {}),
       },
@@ -566,6 +575,7 @@ export class NotificationsService {
     const nodeType = params.extraData.nodeType;
     const lockKey = `task-reminder:${params.taskId}:${nodeType}:${params.userId}`;
     const log = await this.prisma.$transaction(async (tx) => {
+      await lockActiveTask(tx, params.taskId);
       await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
       const existing = await tx.notificationLog.findFirst({
         where: {

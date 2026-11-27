@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { approvalApi } from '@/api/approval.api';
 import { cyclesApi } from '@/api/cycles.api';
@@ -50,12 +50,16 @@ const pageSize = ref(10);
 const detailDrawer = ref({ visible: false, loading: false, taskId: '', error: '', detail: null as TaskDetail | null });
 const approvalReady = ref(false), accessDenied = ref(false), confirming = ref(false);
 const appliedFilters = ref('');
+const deepLinkMessage = ref('');
+const deepLinkHistoryPath = computed(() => typeof route.query.taskId === 'string' && route.query.taskId.trim()
+  && route.query.taskId.length <= 100 ? `/tasks/${encodeURIComponent(route.query.taskId)}` : '');
 const filterKey = () => JSON.stringify([deptFilter.value, keywordFilter.value.trim()]);
 const refreshBlocked = () => loading.value || submitting.value || confirming.value || hasSelection.value
   || rejectDialog.value.visible || detailDrawer.value.visible || appliedFilters.value !== filterKey();
 let listRequest = 0;
 let detailRequest = 0;
 let initRequest = 0;
+let routeRequest = 0;
 
 const GRADES = ['A', 'B', 'C', 'D'] as const;
 
@@ -157,25 +161,48 @@ async function loadCycles(canApply = () => true) {
     if (canApply()) cycles.value = [...new Map(items.map(cycle => [cycle.id, cycle])).values()];
 }
 
-async function normalizeApprovalCycle() {
-  const requestedCycleId = typeof route.query.cycleId === 'string'
-    ? route.query.cycleId
-    : undefined;
+const approvalRouteKey = (query = route.query) => JSON.stringify([query.cycleId, query.taskId]);
+
+async function applyApprovalRoute() {
+  const request = ++routeRequest, key = approvalRouteKey();
+  const current = () => request === routeRequest && key === approvalRouteKey();
+  clearApprovalState();
+  deepLinkMessage.value = '';
+  const requestedCycleId = typeof route.query.cycleId === 'string' ? route.query.cycleId : undefined;
+  const taskId = typeof route.query.taskId === 'string' ? route.query.taskId : undefined;
+  if ([route.query.cycleId, route.query.taskId].some(value => value !== undefined
+    && (typeof value !== 'string' || !value.trim() || value !== value.trim() || value.length > 100))
+    || taskId && !requestedCycleId) {
+    selectedCycleId.value = '';
+    deepLinkMessage.value = '任务链接的考核周期或任务标识不明确，未打开其他记录。';
+    return;
+  }
   const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
   cycles.value = resolved.orderedCycles;
-  selectedCycleId.value = resolved.selectedCycle?.id ?? '';
-
-  if (selectedCycleId.value && requestedCycleId !== selectedCycleId.value) {
-    await router.replace({ query: { ...route.query, cycleId: selectedCycleId.value } });
-  } else if (!selectedCycleId.value && requestedCycleId) {
-    const query = { ...route.query };
-    delete query.cycleId;
-    await router.replace({ query });
+  selectedCycleId.value = requestedCycleId && !resolved.requestedCycleIsValid ? '' : resolved.selectedCycle?.id ?? '';
+  if (requestedCycleId && !selectedCycleId.value) {
+    deepLinkMessage.value = '指定考核周期当前不可查看，未切换到其他周期。';
+    return;
+  }
+  if (taskId) { deptFilter.value = ''; keywordFilter.value = ''; }
+  await loadTasks();
+  if (!current() || !taskId || appliedFilters.value !== filterKey()) return;
+  if (listError.value) { deepLinkMessage.value = '指定任务读取未完成，请核对读取提示后重新定位。'; return; }
+  const index = tasks.value.findIndex(row => row.id === taskId);
+  if (index < 0 || !canViewTaskDetail(tasks.value[index]!)) {
+    deepLinkMessage.value = '指定任务已不在当前可查看的审批记录中，可能已结束、移入历史或权限变化，未打开其他任务。';
+    return;
+  }
+  page.value = Math.floor(index / pageSize.value) + 1;
+  await openDetail(taskId);
+  if (current() && detailDrawer.value.detail && !canOperateTask(detailDrawer.value.detail)) {
+    deepLinkMessage.value = '该任务不是当前可由你办理的审批项，当前仅查看原记录。';
   }
 }
 
 function clearApprovalState() {
   listRequest++;
+  loading.value = false;
   closeDetail();
   tasks.value = [];
   overview.value = null;
@@ -194,8 +221,23 @@ function clearApprovalState() {
 
 async function selectApprovalCycle(cycleId: string) {
   if (!cycleId || cycleId === selectedCycleId.value) return;
-  await router.push({ query: { ...route.query, cycleId } });
+  const query = { ...route.query }; query.cycleId = cycleId; delete query.taskId;
+  await router.push({ query });
 }
+
+async function mayLeaveApproval() {
+  if (submitting.value || confirming.value) return false;
+  if (!selectedTaskIds.value.length && !rejectDialog.value.visible && !rejectDialog.value.comment.trim()
+    && appliedFilters.value === filterKey()) return true;
+  try {
+    await ElMessageBox.confirm('当前选择、筛选或审批意见尚未提交，是否放弃并离开？', '离开结果审批',
+      { confirmButtonText: '放弃并离开', cancelButtonText: '继续办理' });
+    return !submitting.value && !confirming.value;
+  } catch { return false; }
+}
+onBeforeRouteLeave(mayLeaveApproval);
+onBeforeRouteUpdate((to, from) => approvalRouteKey(to.query) === approvalRouteKey(from.query) ? true : mayLeaveApproval());
+async function retryApprovalTarget() { if (await mayLeaveApproval()) await applyApprovalRoute(); }
 
 async function loadTasks() {
   accessDenied.value = false;
@@ -246,29 +288,7 @@ function refreshList() {
   if (!approvalReady.value) void initializeApproval(); else void loadTasks();
 }
 
-watch(
-  () => route.query.cycleId,
-  async (cycleId) => {
-    if (!approvalReady.value) return;
-    const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
-    const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
-    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
-    if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
-      await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
-      return;
-    }
-    if (!canonicalCycleId && requestedCycleId) {
-      const query = { ...route.query };
-      delete query.cycleId;
-      await router.replace({ query });
-      return;
-    }
-    if (selectedCycleId.value === canonicalCycleId) return;
-    clearApprovalState();
-    selectedCycleId.value = canonicalCycleId;
-    await loadTasks();
-  },
-);
+watch(approvalRouteKey, async () => { if (approvalReady.value) await applyApprovalRoute(); });
 
 async function initializeApproval() {
   const request = ++initRequest;
@@ -282,10 +302,8 @@ async function initializeApproval() {
       .catch(() => { if (current()) departments.value = []; }),
   ]);
   if (!current()) return;
-  await normalizeApprovalCycle();
-  if (!current()) return;
   approvalReady.value = true;
-  await loadTasks();
+  await applyApprovalRoute();
   } catch (error) {
     if (!current()) return;
     listError.value = `考核周期读取失败：${readErrorMessage(error)}`;
@@ -294,9 +312,9 @@ async function initializeApproval() {
   } finally { if (current()) loading.value = false; }
 }
 onMounted(initializeApproval);
-onUnmounted(() => { listRequest++; detailRequest++; initRequest++; });
+onUnmounted(() => { listRequest++; detailRequest++; initRequest++; routeRequest++; });
 watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => {
-  clearApprovalState(); cycles.value = []; departments.value = [];
+  routeRequest++; clearApprovalState(); cycles.value = []; departments.value = []; deepLinkMessage.value = '';
   if (auth.user) void initializeApproval(); else { initRequest++; approvalReady.value = false; loading.value = false; }
 });
 useVisibleRefresh({ enabled: () => Boolean(auth.user) && approvalReady.value && Boolean(selectedCycleId.value) && !accessDenied.value,
@@ -308,15 +326,15 @@ function searchApproval() {
 }
 
 async function resetApprovalFilters() {
-  deptFilter.value = '';
-  keywordFilter.value = '';
-  page.value = 1;
   const latestCycleId = cycles.value[0]?.id ?? '';
   if (latestCycleId && latestCycleId !== selectedCycleId.value) {
     await selectApprovalCycle(latestCycleId);
-  } else {
-    await loadTasks();
+    if (route.query.cycleId !== latestCycleId) return;
   }
+  deptFilter.value = '';
+  keywordFilter.value = '';
+  page.value = 1;
+  await loadTasks();
 }
 
 function onSelectionChange(rows: ApprovalTaskView[]) {
@@ -331,9 +349,11 @@ function toggleMobileSelection(item: ApprovalTaskView, checked: boolean) {
 }
 
 function canOperateTask(task: unknown): boolean {
-  const approvalTask = task as ApprovalTaskView;
+  const approvalTask = task as ApprovalTaskView & { lifecycleStatus?: string };
   return Boolean(
     auth.user
+    && approvalTask.employeeId !== auth.user.id
+    && (!approvalTask.lifecycleStatus || approvalTask.lifecycleStatus === 'active')
     && approvalTask.status === 'approval'
     && !approvalTask.approvedAt
     && canOperatePerformanceApprovalTask(auth.user, approvalTask.approverId),
@@ -487,6 +507,10 @@ function handleBatchReject() {
 <template>
   <BusinessListPage variant="workflow" :loading="loading" class="approval-view performance-result-page">
     <template #workspace>
+    <el-alert v-if="deepLinkMessage" :title="deepLinkMessage" type="warning" :closable="false" data-testid="approval-link-feedback">
+      <el-button v-if="deepLinkHistoryPath" link type="primary" @click="router.push(deepLinkHistoryPath)">查看原任务记录</el-button>
+      <el-button link type="primary" :disabled="loading || submitting || confirming" @click="retryApprovalTarget">重新定位</el-button>
+    </el-alert>
     <ChartCard :padded="true" class="list-result-card">
       <PerformanceRecordFilters
         :cycle-id="selectedCycleId"

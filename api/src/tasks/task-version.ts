@@ -24,8 +24,9 @@ export async function claimTaskVersion(
 ): Promise<Date> {
   const expected = new Date(expectedUpdatedAt);
   const claimedUpdatedAt = new Date(Math.max(Date.now(), expected.getTime() + 1));
+  await tx.$queryRaw`SELECT id FROM assessment_periods WHERE task_id=${taskId}::uuid ORDER BY id FOR UPDATE`;
   const claimed = await tx.assessmentTask.updateMany({
-    where: { id: taskId, updatedAt: expected, ...(expectedStatus ? { status: expectedStatus } : {}) },
+    where: { id: taskId, lifecycleStatus: 'active', updatedAt: expected, ...(expectedStatus ? { status: expectedStatus } : {}) },
     data: { updatedAt: claimedUpdatedAt },
   });
 

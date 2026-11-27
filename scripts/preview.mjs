@@ -10,6 +10,20 @@ const privateFile = resolve(root, '.env.preview.local');
 const { offFlags } = previewGuard;
 export const validatePreviewConfig = previewGuard.assertPreviewEnvironment;
 
+export function reuseRunningPreviewConfig(running, owner, hasFictionalMarker) {
+  validatePreviewConfig(running);
+  if (owner !== 'hrm_preview' || hasFictionalMarker !== true) throw new Error('Unverified existing preview ownership');
+  const keys = ['HRM_PREVIEW', 'NODE_ENV', 'PORT', 'DATABASE_URL', 'JWT_SECRET', 'JWT_EXPIRES_IN',
+    'EMPLOYEE_ARCHIVE_ENCRYPTION_KEY', 'AI_PROVIDER_ENCRYPTION_KEY', 'ENABLE_TEST_QUICK_LOGIN',
+    'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'REDIS_URL', 'MINIO_ENDPOINT', 'MINIO_PORT',
+    'MINIO_USE_SSL', 'MINIO_BUCKET', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY',
+    'PAYROLL_FORMAL_ENABLED', 'PAYROLL_FORMAL_VALIDATION_ENABLED', ...offFlags];
+  return { ...Object.fromEntries(keys.filter(key => typeof running[key] === 'string').map(key => [key, running[key]])),
+    DINGTALK_APP_KEY: '', DINGTALK_APP_SECRET: '', DINGTALK_CORP_ID: '', DINGTALK_AGENT_ID: '',
+    DINGTALK_BOT_APP_KEY: '', DINGTALK_BOT_APP_SECRET: '', DINGTALK_REDIRECT_URI: 'http://localhost:5173/auth/callback',
+    DINGTALK_BOT_PREFLIGHT_CONFIRMED: 'false', RECRUITMENT_MAIL_ENABLED: 'false', AI_RESUME_PARSING_ENABLED: 'false' };
+}
+
 export function parseEnv(text) {
   const result = {};
   for (const line of text.split(/\r?\n/)) {
@@ -90,6 +104,12 @@ async function startPreview() {
     env = parseEnv(readFileSync(privateFile, 'utf8'));
     validatePreviewConfig(env);
   } else {
+    if (databaseOwner && process.argv.includes('--reuse-verified-preview')) {
+      const marker = docker(['exec', '-i', 'hrm-postgres-1', 'psql', '-U', pgEnv.POSTGRES_USER,
+        '-d', 'hrm_preview', '-At', '-v', 'ON_ERROR_STOP=1'],
+      "SELECT EXISTS(SELECT 1 FROM system_configs WHERE key='local_preview_fixture_v1' AND value->>'fictional'='true');");
+      env = reuseRunningPreviewConfig(oldApiEnv, databaseOwner, marker === 't');
+    } else {
     if (databaseOwner || sql("SELECT rolname FROM pg_roles WHERE rolname='hrm_preview';")) {
       throw new Error('Existing preview database/role has no local ownership configuration; refusing to adopt it');
     }
@@ -108,6 +128,7 @@ async function startPreview() {
       DINGTALK_REDIRECT_URI: 'http://localhost:5173/auth/callback', DINGTALK_BOT_HRM_URL: '',
       ...Object.fromEntries(offFlags.map((key) => [key, 'false'])),
     };
+    }
   }
   if (databaseOwner && databaseOwner !== 'hrm_preview') throw new Error('Unexpected preview database owner');
   if (!/^[A-Za-z0-9+/]{43}=$/.test(env.AI_PROVIDER_ENCRYPTION_KEY ?? '')) {
@@ -118,8 +139,25 @@ async function startPreview() {
   }
   for (const service of ['api', 'web']) {
     const mount = containers[service].Mounts.find((item) => item.Destination === '/app/node_modules' && item.Type === 'volume');
-    if (!mount) throw new Error(`Missing existing ${service} dependencies volume`);
-    env[`PREVIEW_${service.toUpperCase()}_MODULES`] = mount.Name;
+    if (!mount && service === 'web' && process.argv.includes('--reuse-verified-preview')) {
+      const web = containers.web;
+      const bindings = web.NetworkSettings.Ports?.['5173/tcp'] ?? [];
+      if (web.Config.WorkingDir !== '/app' || !web.Config.Cmd?.includes('dev')
+        || !bindings.length || bindings.some(binding => binding.HostIp !== '127.0.0.1')) {
+        throw new Error('Cannot reuse dependencies from an unverified local preview Web');
+      }
+      docker(['exec', web.Id, 'test', '-x', '/app/node_modules/.bin/vite']);
+      const existingVolumes = docker(['volume', 'ls', '--filter', 'name=^hrm_preview_web_modules$', '--format', '{{.Name}}']);
+      if (existingVolumes) {
+        const volume = JSON.parse(docker(['volume', 'inspect', 'hrm_preview_web_modules']))[0];
+        if (volume.Driver !== 'local' || volume.Options && Object.keys(volume.Options).length
+          || volume.Labels?.['hrm.preview.dependencies'] !== 'true') throw new Error('Refusing an unrelated preview dependency volume');
+      }
+      env.PREVIEW_WEB_MODULES = docker(['volume', 'create', '--label', 'hrm.preview.dependencies=true', 'hrm_preview_web_modules']);
+    } else {
+      if (!mount) throw new Error(`Missing existing ${service} dependencies volume`);
+      env[`PREVIEW_${service.toUpperCase()}_MODULES`] = mount.Name;
+    }
     env[`PREVIEW_${service.toUpperCase()}_IMAGE`] = containers[service].Image;
   }
   validatePreviewConfig(env);

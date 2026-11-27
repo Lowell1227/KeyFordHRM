@@ -506,7 +506,7 @@ export interface TalentFeedbackResponse {
   canEdit: boolean;
   canReturn: boolean;
 }
-export type RecruitmentWorkbenchKey = 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding' | 'intake_review' | 'intake_assignment' | 'entry_overdue';
+export type RecruitmentWorkbenchKey = 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding' | 'onboarding_handoff' | 'intake_review' | 'intake_assignment' | 'entry_overdue' | 'demand_review' | 'demand_returned';
 export interface RecruitmentWorkbenchItem {
   id: string;
   title: string;
@@ -516,6 +516,7 @@ export interface RecruitmentWorkbenchItem {
   applicationId?: string;
   intakeId?: string;
   onboardingRequestId?: string;
+  demandId?: string;
   ownerName?: string | null;
   nextAction?: string;
 }

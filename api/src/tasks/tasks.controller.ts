@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import { ConfirmIndicatorsDto } from './dto/confirm-indicators.dto';
 import { ApproveIndicatorsDto } from './dto/approve-indicators.dto';
 import {
@@ -34,6 +36,7 @@ import {
   BatchRejectIndicatorReviewDto,
 } from './dto/batch-indicator-review.dto';
 
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('tasks')
 export class TasksController {
   constructor(

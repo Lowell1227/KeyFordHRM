@@ -273,7 +273,7 @@ test('ordinary HR monitor cannot call projection or full task list', async ({
   const reads = await setup(page, 'ordinary-hr');
   await page.goto('/tasks?goalView=monitor');
   await expect(
-    page.getByText('无权查看全员目标计划', { exact: true }),
+    page.getByText('无权查看目标台账', { exact: true }),
   ).toBeVisible();
   expect(
     reads.some(
@@ -366,7 +366,7 @@ test('goal list request failure is visible and retryable', async ({ page }) => {
   );
   await page.goto('/tasks?goalView=monitor');
   await expect(
-    page.getByText('目标计划加载失败，请重试', { exact: true }),
+    page.getByText('目标台账更新失败，请重试', { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole('button', { name: '重试', exact: true }),

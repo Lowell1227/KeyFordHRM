@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { isAxiosError } from 'axios';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -8,6 +8,8 @@ import { useAuthStore } from '@/stores/auth.store';
 import { confirmationApi } from '@/api/confirmation.api';
 import { tasksApi } from '@/api/tasks.api';
 import ChartCard from '@/components/common/ChartCard.vue';
+import PerformanceLifecycleActions from '@/views/task/components/PerformanceLifecycleActions.vue';
+import { applyLifecycleProjection, lifecycleReadOnly } from '@/api/performance-lifecycle.api';
 import { CONFIRMATION_STATUS_META, TASK_STATUS_META, VOTE_RESULT_LABELS } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import type { ConfirmationApplication, ApprovalStep, TaskListItem } from '@/types/api.types';
@@ -23,6 +25,10 @@ const companyLabels: Record<string, string> = { fuede: '孚德', beijing_fuede: 
 const appId = computed(() => route.params.id as string);
 const app = ref<ConfirmationApplication | null>(null);
 const loading = ref(false);
+const lifecycleBusy = ref(false);
+const businessReadOnly = computed(() => !app.value || lifecycleReadOnly(app.value) || lifecycleBusy.value);
+let detailGeneration = 0, performanceGeneration = 0, disposed = false;
+onBeforeUnmount(() => { disposed = true; detailGeneration++; performanceGeneration++; });
 const performanceItems = ref<TaskListItem[]>([]);
 const performanceLoading = ref(false);
 const performanceUnavailable = ref(false);
@@ -58,14 +64,22 @@ const approvalDialogTitle = computed(() => {
 
 async function loadDetail() {
   if (!appId.value) return;
+  const id = appId.value, generation = ++detailGeneration;
+  const current = () => !disposed && generation === detailGeneration && appId.value === id;
+  app.value = null;
+  performanceItems.value = [];
+  performanceGeneration++;
+  approvalDialogVisible.value = false;
   loading.value = true;
   try {
-    app.value = await confirmationApi.findOne(appId.value);
+    const value = await confirmationApi.findOne(id);
+    if (!current()) return;
+    app.value = value;
     void loadPerformanceReference(app.value.employeeId);
   } catch {
-    app.value = null;
+    if (current()) app.value = null;
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
@@ -113,7 +127,7 @@ function actionErrorText(error: unknown, fallback: string): string {
 }
 
 async function handleApprove() {
-  if (!app.value) return;
+  if (!app.value || businessReadOnly.value) return;
   managerError.value = managerRecommendation.value === undefined || !managerComment.value.trim()
     ? '请选择是否建议转正并填写评价原因' : '';
   if (managerError.value) return;
@@ -131,23 +145,24 @@ async function handleApprove() {
 }
 
 async function loadPerformanceReference(employeeId: string) {
+  const generation = ++performanceGeneration;
+  const current = () => !disposed && generation === performanceGeneration && app.value?.employeeId === employeeId;
   performanceLoading.value = true;
   performanceUnavailable.value = false;
   try {
     const result = user.value?.id === employeeId
       ? await tasksApi.findMine({ page: 1, pageSize: 50 })
       : await tasksApi.findAll({ employeeId, page: 1, pageSize: 50 });
-    performanceItems.value = result.items.filter((item) => item.employeeId === employeeId);
+    if (current()) performanceItems.value = result.items.filter((item) => item.employeeId === employeeId);
   } catch {
-    performanceItems.value = [];
-    performanceUnavailable.value = true;
+    if (current()) { performanceItems.value = []; performanceUnavailable.value = true; }
   } finally {
-    performanceLoading.value = false;
+    if (current()) performanceLoading.value = false;
   }
 }
 
 async function handleHrSubmit() {
-  if (!app.value) return;
+  if (!app.value || businessReadOnly.value) return;
   hrError.value = !hrResult.value || !hrProposedDate.value
     ? '请填写评议结论和拟生效日期'
     : !hrBasis.value.trim() && !app.value.meetingAttachments?.length
@@ -176,7 +191,7 @@ async function handleHrSubmit() {
 async function handleAttachmentUpload(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
-  if (!file || !app.value) return;
+  if (!file || !app.value || businessReadOnly.value) return;
   uploading.value = true;
   hrError.value = '';
   try {
@@ -203,7 +218,7 @@ async function downloadAttachment(attachment: { id: string; name: string }) {
 }
 
 async function handleMeetingDateBackfill() {
-  if (!app.value) return;
+  if (!app.value || businessReadOnly.value) return;
   backfillError.value = backfillDate.value ? '' : '请选择会议日期';
   if (backfillError.value) return;
   backfilling.value = true;
@@ -219,7 +234,7 @@ async function handleMeetingDateBackfill() {
 }
 
 async function handleCompanyApprove() {
-  if (!app.value) return;
+  if (!app.value || businessReadOnly.value) return;
   companyError.value = !app.value.proposedRegularDate ? '拟生效日期缺失，请联系 HR 补充' : '';
   if (companyError.value) return;
   approving.value = true;
@@ -236,7 +251,7 @@ async function handleCompanyApprove() {
 }
 
 async function handleCompanyDecline() {
-  if (!app.value) return;
+  if (!app.value || businessReadOnly.value) return;
   companyError.value = '';
   declining.value = true;
   try {
@@ -252,7 +267,7 @@ async function handleCompanyDecline() {
 }
 
 async function handleReturn(reason: string, role: 'manager' | 'hr' | 'company') {
-  if (!app.value) return;
+  if (!app.value || businessReadOnly.value) return;
   const trimmedReason = reason.trim();
   if (!trimmedReason) {
     if (role === 'manager') managerError.value = '请填写退回员工的原因';
@@ -372,7 +387,7 @@ const approvalTimeline = computed<TimelineItem[]>(() => {
       .map((event) => historyRole(event.label))
       .filter((role): role is ApprovalStep['role'] => role !== null),
   );
-  const flowActive = ['submitted', 'manager_approved', 'hr_approved'].includes(app.value.status);
+  const flowActive = !lifecycleReadOnly(app.value) && ['submitted', 'manager_approved', 'hr_approved'].includes(app.value.status);
   if (!flowActive && app.value.workflowVersion === 2) return items;
 
   for (const step of sortedSteps(app.value.steps)) {
@@ -408,6 +423,8 @@ function actorInitial(name: string): string {
     </div>
 
     <template v-if="app">
+      <PerformanceLifecycleActions kind="confirmation" :record="app" :disabled="approving || uploading || backfilling || declining || returning || approvalDialogVisible"
+        @busy="lifecycleBusy = $event" @state="value => { if (app) applyLifecycleProjection(app, value); }" @changed="reloadAfterChange" />
       <ChartCard class="info-card">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="员工">{{ app.employee.name }}</el-descriptions-item>
@@ -499,7 +516,7 @@ function actorInitial(name: string): string {
           <div v-for="attachment in app.meetingAttachments" :key="attachment.id">
             <el-button link type="primary" @click="downloadAttachment(attachment)">下载 {{ attachment.name }}</el-button>
           </div>
-          <div v-if="app.voteResult && !app.meetingDate && app.hrId === user?.id" class="meeting-date-backfill">
+          <div v-if="app.voteResult && !app.meetingDate && app.hrId === user?.id && !businessReadOnly" class="meeting-date-backfill">
             <el-date-picker v-model="backfillDate" type="date" value-format="YYYY-MM-DD" placeholder="补录会议日期" style="width: 100%" @change="backfillError = ''" />
             <el-button :loading="backfilling" @click="handleMeetingDateBackfill">保存会议日期</el-button>
             <p v-if="backfillError" class="field-error">{{ backfillError }}</p>
@@ -507,7 +524,7 @@ function actorInitial(name: string): string {
         </div>
       </ChartCard>
 
-      <div v-if="app.canApprove" class="detail-actions">
+      <div v-if="app.canApprove && !businessReadOnly" class="detail-actions">
         <el-button type="primary" @click="approvalDialogVisible = true">办理</el-button>
       </div>
 

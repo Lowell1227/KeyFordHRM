@@ -16,6 +16,10 @@ import {
 } from './reports.excel';
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
+// Removing a completed ledger entry must not erase its established reporting facts.
+const REPORT_LIFECYCLE_WHERE: Prisma.AssessmentTaskWhereInput = {
+  OR: [{ lifecycleStatus: 'active' }, { lifecycleStatus: 'deleted', terminatedAt: null }],
+};
 
 /** 汇总报表单项。任务 ID 仅供 JSON 工作台详情入口使用，不参与导出列。 */
 export interface ReportSummaryItem extends ReportItem {
@@ -120,7 +124,7 @@ export class ReportsService {
 
     const statusCounts = await this.prisma.assessmentTask.groupBy({
       by: ['status'],
-      where: { cycleId },
+      where: { cycleId, ...REPORT_LIFECYCLE_WHERE },
       _count: { status: true },
     });
 
@@ -133,7 +137,7 @@ export class ReportsService {
     }
 
     const tasks = await this.prisma.assessmentTask.findMany({
-      where: { cycleId },
+      where: { cycleId, ...REPORT_LIFECYCLE_WHERE },
       select: { status: true, approvedAt: true, publishedAt: true, gradeResult: { select: { isPublished: true, publishedAt: true } } },
     });
 
@@ -343,6 +347,8 @@ export class ReportsService {
     } else if (options.employeeWhere) {
       where.employee = options.employeeWhere;
     }
+
+    where.AND = [REPORT_LIFECYCLE_WHERE, ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [])];
 
     if (options.deptId) {
       const subDeptIds = await this.dataScope.getSubDeptIds(options.deptId);

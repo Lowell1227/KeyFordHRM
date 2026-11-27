@@ -14,6 +14,7 @@ function load(filename, dependencies, source = fs.readFileSync(filename, 'utf8')
   const original = loaded.require.bind(loaded);
   loaded.require = id => {
     if (id in dependencies) return dependencies[id];
+    if (id === './http' && filename.endsWith('.api.ts')) return {};
     if (id.endsWith('.vue')) return {};
     if (id.startsWith('@/')) return load(path.join(root, `${id.slice(2)}.ts`), dependencies);
     if (id.startsWith('.')) return load(path.resolve(path.dirname(filename), `${id}.ts`), dependencies);
@@ -24,13 +25,14 @@ function load(filename, dependencies, source = fs.readFileSync(filename, 'utf8')
   return loaded.exports;
 }
 function mount(t, relative, input = {}, overrides = {}) {
-  const refreshers = [], replacements = [], events = [];
+  const refreshers = [], replacements = [], pushes = [], events = [];
   const auth = vue.reactive({ user: { id: 'reviewer', sysRole: 'hr', hrCapabilities: ['performance_approval'] }, isManager: false });
   const route = vue.reactive({ query: { goalView: 'review', cycleId: 'cycle' }, fullPath: '/tasks?goalView=review' });
   const dependencies = {
     '@/composables/useVisibleRefresh': { useVisibleRefresh: options => refreshers.push(options) },
     '@/stores/auth.store': { useAuthStore: () => auth },
-    'vue-router': { useRoute: () => route, useRouter: () => ({ push: async () => {}, replace: async target => replacements.push(target) }) },
+    'vue-router': { useRoute: () => route, useRouter: () => ({ push: async target => pushes.push(target), replace: async target => replacements.push(target) }),
+      onBeforeRouteUpdate() {}, onBeforeRouteLeave() {} },
     'element-plus': { ElMessage: { success() {}, warning() {}, error() {} }, ElMessageBox: { confirm: async () => {} } },
     '@/api/goal-plans.api': { canMonitorGoals: () => true, GOAL_STEP_LABELS: {}, goalPlansApi: {
       options: async () => ({ cycles: [], departments: [] }), findAll: async () => ({ items: [{ id: 'old' }], total: 1 }) } },
@@ -49,8 +51,90 @@ function mount(t, relative, input = {}, overrides = {}) {
   const props = vue.reactive(input); let state;
   const app = renderer.createApp({ setup() { state = component.setup(props, { emit: (...args) => events.push(args), expose() {} }); return () => null; } });
   app.mount({}); t.after(() => app.unmount());
-  return { state, auth, props, route, replacements, events, refreshers };
+  return { state, auth, props, route, replacements, pushes, events, refreshers };
 }
+
+test('workbench processing opens pending items while the explicit all-items link preserves the full scope', async t => {
+  const view = mount(t, 'views/dashboard/DashboardTaskEntries.vue'); await flush();
+  view.state.openTeamWorkspace('cycle', 'goal-review', true);
+  view.state.openTeamWorkspace('cycle', 'manager-eval', true);
+  view.state.openTeamWorkspace('cycle', 'manager-eval', false);
+  assert.deepEqual(view.pushes, [
+    { path: '/tasks', query: { scope: 'team', stage: 'goal-review', cycleId: 'cycle', stageState: 'pending' } },
+    { path: '/tasks', query: { scope: 'team', stage: 'manager-eval', cycleId: 'cycle', stageState: 'pending' } },
+    { path: '/tasks', query: { scope: 'team', stage: 'manager-eval', cycleId: 'cycle' } },
+  ]);
+});
+
+test('workbench excludes terminated personal tasks before deletion without hiding them from history APIs', async t => {
+  const view = mount(t, 'views/dashboard/DashboardTaskEntries.vue'); await flush();
+  view.state.personalTasks.value = ['active', 'terminated', 'deleted'].map(lifecycleStatus => ({
+    id: lifecycleStatus, cycleId: 'cycle', cycleName: 'Fictional cycle', status: 'self_eval', isExempt: false, lifecycleStatus,
+  }));
+  assert.deepEqual(view.state.openTasks.value.map(row => row.id), ['active']);
+});
+
+test('personnel and payroll sections survive transport failures with unknown counts, but permission loss purges them', async t => {
+  const queue = { total: 1, page: 1, pageSize: 5, hasMore: false, items: [] };
+  const groups = { personnel: { visible: true, status: 'ready', actionable: queue, attention: { ...queue, total: 0 } },
+    payroll: { visible: true, status: 'ready', actionable: queue, attention: { ...queue, total: 0 } } };
+  let read = async () => ({ groups });
+  const view = mount(t, 'views/dashboard/DashboardView.vue', {}, {
+    '@/api/workbench.api': { workbenchApi: { operations: () => read() } },
+  }); await flush();
+  assert.equal(view.state.operationCount(view.state.operations.value.personnel), 1);
+  read = async () => { throw { response: { status: 503 } }; };
+  await view.state.loadOperations();
+  assert.equal(view.state.operations.value?.personnel.visible, true);
+  assert.equal(view.state.operations.value?.payroll.visible, true);
+  assert.equal(view.state.operationCount(view.state.operations.value.personnel), null);
+  assert.equal(view.state.operationCount(view.state.operations.value.payroll), null);
+  assert.ok(view.state.operationsError.value);
+  read = async () => ({ groups }); await view.state.loadOperations();
+  assert.equal(view.state.operationsError.value, '');
+  assert.equal(view.state.operationCount(view.state.operations.value.payroll), 1);
+  read = async () => { throw { response: { status: 403 } }; }; await view.state.loadOperations();
+  assert.equal(view.state.operations.value, null);
+});
+
+test('operations refresh never blocks itself and account switches discard the previous sections and late results', async t => {
+  const old = { personnel: { visible: true }, payroll: { visible: true } };
+  let read = async () => ({ groups: old });
+  const view = mount(t, 'views/dashboard/DashboardView.vue', {}, {
+    '@/api/workbench.api': { workbenchApi: { operations: () => read() } },
+  }); await flush();
+  const pending = deferred(); read = () => pending.promise;
+  const refreshing = view.state.loadOperations();
+  assert.equal(view.refreshers[0].blocked?.() ?? false, false);
+  view.auth.user = { id: 'different', sysRole: 'employee' }; await flush();
+  assert.equal(view.state.operations.value, null);
+  pending.resolve({ groups: { personnel: { visible: false }, payroll: { visible: false } } });
+  await refreshing; await flush();
+  assert.equal(view.state.operations.value.payroll.visible, false);
+});
+
+test('operations background refresh preserves each section page and shares requests for the same page', async t => {
+  const reads = [];
+  const group = page => ({ visible: true, status: 'ready', actionable: { page, items: [], total: 12 }, attention: { page, items: [], total: 0 } });
+  const view = mount(t, 'views/dashboard/DashboardView.vue', {}, {
+    '@/api/workbench.api': { workbenchApi: { operations: async page => {
+      reads.push(page); return { groups: { performance: group(page), personnel: group(page), payroll: group(page) } };
+    } } },
+  }); await flush();
+  await view.state.loadOperations(2, 'personnel');
+  await view.state.loadOperations(3, 'payroll');
+  reads.length = 0;
+  await view.refreshers[0].refresh(() => true);
+  assert.deepEqual(reads.sort(), [1, 2, 3]);
+  assert.equal(view.state.operations.value.personnel.actionable.page, 2);
+  assert.equal(view.state.operations.value.payroll.actionable.page, 3);
+  assert.equal(view.state.operations.value.performance.actionable.page, 1);
+  reads.length = 0; await view.state.loadOperations(undefined, 'personnel');
+  assert.deepEqual(reads, [2]);
+  await view.state.loadOperations(1, 'personnel'); await view.state.loadOperations(1, 'payroll');
+  reads.length = 0; await view.refreshers[0].refresh(() => true);
+  assert.deepEqual(reads, [1]);
+});
 test('goal background load keeps current rows, filters and route while pending; reports failures without a false zero', async t => {
   let read = async () => ({ items: [{ id: 'old' }], total: 1 });
   const view = mount(t, 'views/task/components/GoalPlanList.vue', { scope: 'review', allowed: true }, {
@@ -69,6 +153,21 @@ test('goal background load keeps current rows, filters and route while pending; 
   await view.refreshers[0].refresh(() => true); assert.ok(view.state.error.value);
   assert.deepEqual(view.state.items.value, [{ id: 'old' }]); assert.equal(view.state.total.value, 1);
   assert.equal(view.events.length, 0, 'a cycle-filtered count must not replace the global pending badge');
+});
+
+test('initial goal reads do not replace an unchanged URL and cancel navigation to another view', async t => {
+  const options = deferred();
+  const view = mount(t, 'views/task/components/GoalPlanList.vue', { scope: 'review', allowed: true }, {
+    '@/api/goal-plans.api': { GOAL_STEP_LABELS: {}, goalPlansApi: {
+      options: () => options.promise, findAll: async () => ({ items: [], total: 0 }),
+    } },
+  });
+  await view.state.router.push('/goal-changes');
+  options.resolve({ cycles: [], departments: [] }); await flush(); await flush();
+  assert.deepEqual(view.pushes, ['/goal-changes']);
+  assert.deepEqual(view.replacements, [], 'unchanged query must not supersede an in-flight view navigation');
+  view.state.employeeName.value = 'new filter'; await view.state.load();
+  assert.equal(view.replacements.at(-1).query.employeeName, 'new filter');
 });
 test('goal permission loss invalidates in-flight rows and options, including scope changes', async t => {
   const pending = deferred(); let first = true;

@@ -970,6 +970,7 @@ describe('CyclesService', () => {
     expect(prisma.assessmentTask.count).toHaveBeenNthCalledWith(2, {
       where: {
         cycleId: 'cycle-1',
+        lifecycleStatus: 'active',
         ...taskScope(manager.id),
       },
     });
@@ -1153,7 +1154,7 @@ describe('CyclesService', () => {
     await service.findOne('cycle-1', employee);
 
     expect(prisma.assessmentTask.groupBy).toHaveBeenCalledWith(expect.objectContaining({
-      where: { cycleId: 'cycle-1', ...taskScope(employee.id) },
+      where: { cycleId: 'cycle-1', lifecycleStatus: 'active', ...taskScope(employee.id) },
     }));
   });
 
@@ -1382,7 +1383,7 @@ describe('CyclesService', () => {
     }));
     expect(prisma.assessmentTask.groupBy).toHaveBeenCalledWith({
       by: ['cycleId', 'status'],
-      where: { cycleId: { in: ['cycle-opened'] } },
+      where: { cycleId: { in: ['cycle-opened'] }, lifecycleStatus: 'active' },
       _count: { _all: true, approvedAt: true },
     });
   });

@@ -359,6 +359,7 @@ describe('SchedulerService', () => {
       expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith({
         where: {
           cycleId,
+          lifecycleStatus: 'active',
           status: { notIn: ['closed', 'exempted'] },
         },
         include: expect.any(Object),
@@ -469,7 +470,7 @@ describe('SchedulerService', () => {
         .runSelfEvalOpenings();
 
       expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { cycleId: 'cycle-q1', status: 'goal_confirmed', OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
+        where: { cycleId: 'cycle-q1', status: 'goal_confirmed', lifecycleStatus: 'active', OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
         data: { status: 'self_eval' },
       });
       expect(prisma.assessmentCycle.update).toHaveBeenCalledWith({
@@ -501,20 +502,20 @@ describe('SchedulerService', () => {
           status: 'unopened',
           indicatorVersionId: { not: null },
           selfEvalOpenAt: { lte: now },
-          task: { cycle: { workflowVersion: 2 }, OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
+          task: { cycle: { workflowVersion: 2 }, lifecycleStatus: 'active', OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
         }),
       }));
       expect(prisma.assessmentPeriod.updateMany).toHaveBeenCalledWith({
         where: {
           id: 'period-2027-01',
-          task: { OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
+          task: { lifecycleStatus: 'active', OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }] },
           status: 'unopened',
           indicatorVersionId: { not: null },
         },
         data: { status: 'self_eval', openedAt: now },
       });
       expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', status: 'goal_confirmed' },
+        where: { id: 'task-1', status: 'goal_confirmed', lifecycleStatus: 'active' },
         data: { status: 'self_eval' },
       });
       expect(notificationsService.create).not.toHaveBeenCalled();

@@ -43,6 +43,8 @@ import { PersonnelReferenceDataModule } from './personnel-reference-data/personn
 import { TalentPoolModule } from './talent-pool/talent-pool.module';
 import { PersonnelConfigModule } from './personnel-config/personnel-config.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { WorkbenchModule } from './workbench/workbench.module';
+import { PerformanceLifecycleModule } from './performance-lifecycle/performance-lifecycle.module';
 
 /**
  * 根模块。
@@ -102,6 +104,8 @@ import { PayrollModule } from './payroll/payroll.module';
     TalentPoolModule,
     PersonnelConfigModule,
     PayrollModule,
+    WorkbenchModule,
+    PerformanceLifecycleModule,
     AiProgressModule,
   ],
   providers: [

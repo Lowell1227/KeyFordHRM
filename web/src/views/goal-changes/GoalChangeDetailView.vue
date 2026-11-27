@@ -8,11 +8,14 @@ import { formatDateTime } from '@/utils/date';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import GoalChangeGoals from './GoalChangeGoals.vue';
 import { actionLabels, percent, statusLabels } from './goal-change-labels';
+import PerformanceLifecycleActions from '@/views/task/components/PerformanceLifecycleActions.vue';
+import { applyLifecycleProjection, lifecycleReadOnly } from '@/api/performance-lifecycle.api';
 
 const route = useRoute(), router = useRouter();
 const emit = defineEmits<{ changed: [] }>();
 const detail = ref<GoalChangeDetail | null>(null), goals = ref<GoalChangeItem[]>([]), reason = ref('');
 const loading = ref(false), busy = ref(false), readError = ref(''), writeError = ref('');
+const lifecycleBusy = ref(false);
 const validate = ref(false), needsReload = ref(false), baseline = ref('');
 const decision = ref<'approve' | 'reject' | 'revoke' | ''>(''), comment = ref(''), commentError = ref('');
 let session = 0, alive = true;
@@ -20,7 +23,7 @@ let pending: { id: string; session: number; revision: number } | null = null;
 onBeforeUnmount(() => { alive = false; session++; });
 const snapshot = () => JSON.stringify({ reason: reason.value, goals: goals.value });
 const dirty = computed(() => Boolean(detail.value) && snapshot() !== baseline.value);
-const can = (action: string) => detail.value?.allowedActions.includes(action) ?? false;
+const can = (action: string) => !!detail.value && !lifecycleReadOnly(detail.value) && detail.value.allowedActions.includes(action);
 const canEdit = computed(() => can('edit'));
 const businessRecords = computed(() => {
   const records = detail.value?.records ?? [];
@@ -81,7 +84,7 @@ watch(() => route.params.id, id => {
 }, { immediate: true, flush: 'sync' });
 
 async function mayLeave() {
-  if (busy.value) { ElMessage.warning('正在办理，请稍候'); return false; }
+  if (busy.value || lifecycleBusy.value) { ElMessage.warning('正在办理，请稍候'); return false; }
   if (!dirty.value) return true;
   const token = session;
   try {
@@ -103,7 +106,7 @@ function valid() {
   return !reasonError.value && !totalError.value && goalErrors.value.every(error => !error.name && !error.weight && !error.targetValue);
 }
 async function write(kind: 'save' | 'submit' | 'approve' | 'reject' | 'revoke', captured = capture()) {
-  if (!captured || !current(captured) || busy.value || needsReload.value) return;
+  if (!captured || !current(captured) || busy.value || lifecycleBusy.value || needsReload.value) return;
   const action = kind === 'save' ? 'edit' : kind === 'approve' || kind === 'reject' ? 'decide' : kind;
   if (!can(action)) return;
   if ((kind === 'save' || kind === 'submit') && !valid()) return;
@@ -162,6 +165,10 @@ function recordAction(record: GoalChangeDetail['records'][number]) {
     :before-close="() => close()" @update:model-value="value => { if (!value) close(); }">
     <div v-if="readError" class="request-error" role="alert">{{ readError }} <el-button link type="primary" @click="reload">重新加载详情</el-button></div>
     <div v-if="detail" data-testid="goal-change-detail" class="goal-change-detail">
+      <PerformanceLifecycleActions kind="goal_change" :record="detail" :disabled="busy || dirty || needsReload || !!decision"
+        :disabled-reason="dirty ? '有未保存的修改，请先保存或重新加载' : ''"
+        @busy="lifecycleBusy = $event" @state="value => { if (detail) applyLifecycleProjection(detail, value); }"
+        @changed="() => { emit('changed'); load(); }" />
       <section class="change-summary"><strong>{{ detail.employeeName }} · {{ detail.cycleName }}</strong>
         <el-tag>{{ statusLabels[detail.status] }}</el-tag><span>发起人：{{ detail.creatorName }}</span>
       </section>

@@ -1,4 +1,5 @@
 import http from './http';
+import { canViewLifecycleLedger, type LifecycleFilter } from './performance-lifecycle.api';
 import type {
   AssessmentTask,
   IndicatorInstance,
@@ -43,8 +44,8 @@ export interface GoalPlanDetail extends GoalPlanItem {
   flowRecords: FlowRecord[];
 }
 export function canMonitorGoals(user: CurrentUser | null): boolean {
-  return (
-    user?.sysRole === 'system_admin' ||
+  return !!user && !user.isAssessorOnly && (
+    canViewLifecycleLedger(user) ||
     user?.systemPermission === 'hr_admin' ||
     (user?.sysRole === 'hr_user' &&
       !!user.hrCapabilities?.includes('cycle_plan_edit') &&
@@ -67,6 +68,7 @@ export const goalPlansApi = {
     deptId?: string;
     employeeName?: string;
     status?: string;
+    lifecycleStatus?: LifecycleFilter;
     page?: number;
     pageSize?: number;
   }): Promise<Paginated<GoalPlanItem>> {

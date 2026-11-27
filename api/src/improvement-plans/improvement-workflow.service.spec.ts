@@ -11,6 +11,7 @@ const departments = [{ id: 'dept', name: '业务部', parentId: null, leaderId: 
   leader: { name: '部门负责人', directManagerId: null, directManager: null }, approver: { name: '分管总' } }];
 const plan = (overrides: Record<string, unknown> = {}) => ({
   id: 'plan', employeeId: 'emp', cycleId: null, taskId: null, creatorId: 'manager', workflowVersion: 2, revision: 0,
+  lifecycleStatus: 'active', lifecycleVersion: 0, employmentRecordId: null,
   improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
   goals: [{ id: 'g1', name: '质量', description: '降低返工', weight: 100 }],
   selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
@@ -26,14 +27,24 @@ describe('ImprovementWorkflowService', () => {
 
   beforeEach(() => {
     prisma = {
+      $queryRaw: jest.fn(async (query: TemplateStringsArray, id: unknown) => {
+        const sql = query.join('');
+        if (sql.includes('FROM users') || sql.includes('FROM improvement_plans')) return [{ id }];
+        throw new Error(`Unexpected improvement lock query: ${sql}`);
+      }),
       user: { findUnique: jest.fn().mockResolvedValue(employee), findMany: jest.fn().mockResolvedValue(
         ['manager', 'director', 'head', 'upper-head', 'vp', 'new-manager', 'hr'].map((id) => ({
           id, status: 'active', deletedAt: null, archivedAt: null, sysRole: id === 'hr' ? 'hr' : 'employee', hrCapabilities: [],
         }))) },
       department: { findMany: jest.fn().mockResolvedValue(departments) },
       assessmentCycle: { findUnique: jest.fn() },
+      employmentRecord: { findMany: jest.fn().mockResolvedValue([{ id: 'employment', userId: employee.id,
+        employeeStatus: 'active', effectiveFrom: new Date('2000-01-01'), effectiveTo: null }]) },
       improvementPlan: { create: jest.fn().mockResolvedValue(plan()), findUnique: jest.fn().mockResolvedValue(plan()),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }), findMany: jest.fn().mockResolvedValue([]) },
+        updateMany: jest.fn(async ({ where }) => {
+          expect(where.lifecycleStatus).toBe('active');
+          return { count: 1 };
+        }), findMany: jest.fn().mockResolvedValue([]) },
       auditLog: { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
     };
     prisma.$transaction = jest.fn(async (callback: (tx: any) => Promise<unknown>) => callback(prisma));
@@ -45,8 +56,10 @@ describe('ImprovementWorkflowService', () => {
   it('allows the direct manager to create a V3 plan without cycle or task', async () => {
     await service.create({ employeeId: 'emp', improvementNeed: '需要提升交付质量', goals: plan().goals }, viewer('manager'));
     expect(prisma.improvementPlan.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
-      employeeId: 'emp', cycleId: null, taskId: null, creatorId: 'manager', workflowVersion: 3,
+      employeeId: 'emp', cycleId: null, taskId: null, creatorId: 'manager', workflowVersion: 3, employmentRecordId: 'employment',
     }) }));
+    expect(prisma.$queryRaw.mock.calls[0][0].join('')).toContain('FROM users');
+    expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.improvementPlan.create.mock.invocationCallOrder[0]);
   });
 
   it('does not let HR initiate merely because HR can see every plan', async () => {

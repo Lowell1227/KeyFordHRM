@@ -6,6 +6,17 @@ import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ObjectivesService } from './objectives.service';
 
+async function progressLockRows(query: TemplateStringsArray, id: unknown, indicatorRead: jest.Mock) {
+  const sql = query.join('');
+  if (!/\bFOR UPDATE\b/.test(sql)) throw new Error(`Unexpected progress lock query: ${sql}`);
+  if (/FROM "?assessment_tasks"?\b/.test(sql)) {
+    const indicator = await indicatorRead.mock.results[indicatorRead.mock.results.length - 1]?.value;
+    return indicator?.task?.id === id ? [{ lifecycleStatus: indicator.task.lifecycleStatus ?? 'active' }] : [];
+  }
+  if (/FROM "?(?:assessment_periods|indicator_instances)"?\b/.test(sql)) return [{ id }];
+  throw new Error(`Unexpected progress lock query: ${sql}`);
+}
+
 describe('ObjectivesService confirmed AI drafts', () => {
   const viewer: AuthUser = { id: 'owner', name: 'Owner', sysRole: SysRole.employee, deptId: null, isAssessorOnly: false, canViewAll: false };
   const task = {
@@ -31,7 +42,8 @@ describe('ObjectivesService confirmed AI drafts', () => {
         }),
       },
       auditLog: { create: jest.fn(async ({ data }) => audits.push(data)) },
-      $queryRaw: jest.fn().mockResolvedValue([]),
+      $queryRaw: jest.fn((query: TemplateStringsArray, id: unknown) =>
+        progressLockRows(query, id, prisma.indicatorInstance.findUnique)),
       $transaction: jest.fn(async callback => callback(prisma)),
     };
     const service = new ObjectivesService(prisma, {} as any);
@@ -449,7 +461,8 @@ describe('ObjectivesService visibility helpers', () => {
       },
       indicatorProgressUpdate: { findMany: jest.fn(), findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() },
       auditLog: { create: jest.fn(), findMany: jest.fn() },
-      $queryRaw: jest.fn().mockResolvedValue([]),
+      $queryRaw: jest.fn((query: TemplateStringsArray, id: unknown) =>
+        progressLockRows(query, id, prisma.indicatorInstance.findUnique)),
       $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
     };
     dataScope = {
@@ -676,6 +689,8 @@ describe('ObjectivesService visibility helpers', () => {
     expect(result).toEqual({
       taskId: 'task-1',
       taskStatus: 'manager_scoring',
+      lifecycleStatus: 'active',
+      readOnlyReason: null,
       canEdit: true,
       monthlyFollowUpRequired: true,
       summary: {
@@ -1357,7 +1372,10 @@ describe('ObjectivesService visibility helpers', () => {
       },
       include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
     });
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw.mock.calls.map(([query]) => query.join(''))).toEqual([
+      expect.stringMatching(/FROM assessment_tasks[\s\S]*FOR UPDATE/),
+      expect.stringMatching(/FROM "indicator_instances"[\s\S]*FOR UPDATE/),
+    ]);
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         userId: viewer.id,

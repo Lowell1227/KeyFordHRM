@@ -7,6 +7,7 @@ export class RecruitmentDemandQueryDto extends PaginationDto {
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @MaxLength(100) keyword?: string;
   @IsOptional() @IsIn(['draft', 'pending', 'approved', 'rejected', 'withdrawn', 'unknown']) status?: string;
+  @IsOptional() @IsIn(['review', 'returned']) workQueue?: 'review' | 'returned';
 }
 
 export class RecruitmentDemandOptionsQueryDto extends PaginationDto {

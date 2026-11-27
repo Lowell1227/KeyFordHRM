@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
@@ -5,6 +7,7 @@ import { FinalGradeService } from './final-grade.service';
 import { SubmitFinalGradeDto } from './dto/submit-final-grade.dto';
 
 /** 整周期结果评定接口。 */
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('tasks/:id')
 export class FinalGradeController {
   constructor(private readonly finalGradeService: FinalGradeService) {}

@@ -90,6 +90,7 @@ declare module 'vue' {
     PerformanceResultDrawer: typeof import('./src/components/common/PerformanceResultDrawer.vue')['default']
     PerformanceResultEvidence: typeof import('./src/components/common/PerformanceResultEvidence.vue')['default']
     PerformanceResultSummary: typeof import('./src/components/common/PerformanceResultSummary.vue')['default']
+    PerformanceTaskNavigation: typeof import('./src/components/performance/PerformanceTaskNavigation.vue')['default']
     PerformanceWorkspace: typeof import('./src/components/performance/PerformanceWorkspace.vue')['default']
     PersonnelReferenceSelect: typeof import('./src/components/common/PersonnelReferenceSelect.vue')['default']
     ProgressBar: typeof import('./src/components/common/ProgressBar.vue')['default']

@@ -20,16 +20,19 @@ describe('five step goal actions', () => {
       deptHeadId: 'd',
       approverId: 'l',
       status: 'indicator_reviewing',
+      lifecycleStatus: 'active',
       updatedAt: new Date('2026-01-01'),
       indicatorConfirmedAt: null,
       goalApprovedAt: null,
     };
     db = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentTask: {
         findUnique: jest.fn(async () => ({ ...task })),
         updateMany: jest.fn(async ({ where }: any) => ({
           count:
             task.updatedAt.getTime() === where.updatedAt.getTime() &&
+            task.lifecycleStatus === where.lifecycleStatus &&
             task.status === where.status
               ? 1
               : 0,
@@ -120,6 +123,22 @@ describe('five step goal actions', () => {
   it('rejects lost concurrent claim before writing any flow or baseline', async () => {
     db.assessmentTask.updateMany.mockResolvedValue({ count: 0 });
     await expect(approve('m')).rejects.toBeInstanceOf(ConflictException);
+    expect(db.flowRecord.create).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+  });
+  it.each(['terminated', 'deleted'])('rejects lifecycle %s that wins the period lock before the version claim', async (lifecycleStatus) => {
+    db.$queryRaw.mockImplementation(async () => {
+      task.lifecycleStatus = lifecycleStatus;
+      return [];
+    });
+
+    await expect(approve('m')).rejects.toBeInstanceOf(ConflictException);
+
+    expect(db.assessmentTask.updateMany).toHaveBeenCalledWith({
+      where: { id: 'task', lifecycleStatus: 'active', updatedAt: task.updatedAt, status: task.status },
+      data: { updatedAt: expect.any(Date) },
+    });
+    expect(db.assessmentTask.update).not.toHaveBeenCalled();
     expect(db.flowRecord.create).not.toHaveBeenCalled();
     expect(activate).not.toHaveBeenCalled();
   });
@@ -228,7 +247,7 @@ describe('five step goal actions', () => {
     Object.assign(service, {indicatorVisibility:{validateSelection:jest.fn()}, objectivesService:{assertIndicatorAlignmentCandidateIds:jest.fn()}});
     const replace = jest.spyOn(service as any,'replaceIndicatorInstances').mockResolvedValue(undefined);
     jest.spyOn(service,'findOne').mockImplementation(async()=>({...task}));
-    db.assessmentTask.updateMany.mockImplementation(async({where}:any)=>({count:task.updatedAt.getTime()===where.updatedAt.getTime()&&(!where.status||task.status===where.status)?1:0}));
+    db.assessmentTask.updateMany.mockImplementation(async({where}:any)=>({count:task.lifecycleStatus===where.lifecycleStatus&&task.updatedAt.getTime()===where.updatedAt.getTime()&&(!where.status||task.status===where.status)?1:0}));
     await service.setIndicators('task',{expectedUpdatedAt:task.updatedAt.toISOString(),action:'submit',instances:[{name:'Round B revised target',weight:1,visibilityScope:'supervisors'}]} as any,actor('m'));
     expect(replace.mock.calls[0][2]).toEqual(expect.arrayContaining([expect.objectContaining({name:'Round B revised target'})]));
     await approve('d');
@@ -247,7 +266,7 @@ describe('five step goal actions', () => {
     Object.assign(service, {indicatorVisibility:{validateSelection:jest.fn()}, objectivesService:{assertIndicatorAlignmentCandidateIds:jest.fn()}});
     jest.spyOn(service as any,'replaceIndicatorInstances').mockResolvedValue(undefined);
     jest.spyOn(service,'findOne').mockImplementation(async()=>({...task}));
-    db.assessmentTask.updateMany.mockImplementation(async({where}:any)=>({count:task.updatedAt.getTime()===where.updatedAt.getTime()&&(!where.status||task.status===where.status)?1:0}));
+    db.assessmentTask.updateMany.mockImplementation(async({where}:any)=>({count:task.lifecycleStatus===where.lifecycleStatus&&task.updatedAt.getTime()===where.updatedAt.getTime()&&(!where.status||task.status===where.status)?1:0}));
     const submit = () => service.setIndicators('task',{expectedUpdatedAt:task.updatedAt.toISOString(),action:'submit',instances:[{name:'调整后的目标',weight:1,visibilityScope:'supervisors'}]} as any,actor('e'));
     await submit();expect(task.status).toBe('indicator_confirming');
     await service.confirmIndicators('task',actor('e'),task.updatedAt.toISOString());

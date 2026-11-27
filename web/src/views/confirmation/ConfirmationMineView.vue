@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
@@ -14,6 +14,7 @@ import { usePagination } from '@/composables/usePagination';
 import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import type { ConfirmationApplication, ConfirmationRoster } from '@/types/api.types';
+import { lifecycleLabel, lifecycleReadOnly, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
 
 const route = useRoute();
 const router = useRouter();
@@ -23,6 +24,10 @@ const list = ref<ConfirmationApplication[]>([]);
 const roster = ref<ConfirmationRoster | null>(null);
 const companyLabels: Record<string, string> = { fuede: '孚德', beijing_fuede: '北京孚德', fuede_sports: '孚德体育文化', fansibao: '凡思堡' };
 const loading = ref(false);
+const listError = ref('');
+const lifecycleStatus = ref<LifecycleFilter | ''>(parseLifecycleFilter(route.query.lifecycleStatus));
+let listGeneration = 0, disposed = false;
+onBeforeUnmount(() => { disposed = true; listGeneration++; });
 const saving = ref(false);
 const draftDialogVisible = ref(false);
 const draftId = ref<string | null>(null);
@@ -33,8 +38,8 @@ const actionError = ref('');
 const draftReturnReason = ref('');
 const detailOpen = computed(() => route.name === 'ConfirmationMineDetail');
 const detailOpenedFromList = ref(false);
-const canStart = computed(() => auth.user?.status === 'probation' && !list.value.some((item) =>
-  item.workflowVersion === 2 && ['draft', 'submitted', 'manager_approved', 'hr_approved'].includes(item.status),
+const canStart = computed(() => !loading.value && !listError.value && !lifecycleStatus.value && auth.user?.status === 'probation' && !list.value.some((item) =>
+  !lifecycleReadOnly(item) && item.workflowVersion === 2 && ['draft', 'submitted', 'manager_approved', 'hr_approved'].includes(item.status),
 ));
 
 const {
@@ -52,17 +57,26 @@ onMounted(() => {
 });
 
 async function loadList() {
+  const generation = ++listGeneration;
   loading.value = true;
+  listError.value = '';
   try {
-    const res = await confirmationApi.findMine(withParams({} as Record<string, unknown>));
+    const res = await confirmationApi.findMine(withParams({ lifecycleStatus: lifecycleStatus.value || undefined }));
+    if (disposed || generation !== listGeneration) return;
     list.value = res.items;
     total.value = res.total;
   } catch {
+    if (disposed || generation !== listGeneration) return;
+    listError.value = '转正记录读取失败，请重试';
     list.value = [];
     total.value = 0;
   } finally {
-    loading.value = false;
+    if (!disposed && generation === listGeneration) loading.value = false;
   }
+}
+function search() { resetPagination(); void loadList(); }
+function canContinueDraft(item: ConfirmationApplication) {
+  return !lifecycleReadOnly(item) && item.workflowVersion === 2 && item.status === 'draft';
 }
 
 function goDetail(row: ConfirmationApplication) {
@@ -94,7 +108,9 @@ function openCreate() {
 }
 
 async function openDraft(row: ConfirmationApplication) {
+  if (!canContinueDraft(row)) { goDetail(row); return; }
   const detail = await confirmationApi.findOne(row.id);
+  if (!canContinueDraft(detail)) { goDetail(detail); return; }
   draftId.value = detail.id;
   draftSubmissionVersion.value = detail.submissionVersion;
   summary.value = detail.summary ?? '';
@@ -157,6 +173,7 @@ function statusLabel(status: string): string {
 }
 
 function applicationStatusLabel(item: ConfirmationApplication): string {
+  if (lifecycleLabel(item)) return lifecycleLabel(item);
   return item.status === 'draft' && item.returnReason ? '退回补充' : statusLabel(item.status);
 }
 
@@ -171,9 +188,15 @@ function statusType(status: string): string {
     <ChartCard class="header-card list-page-header-card">
       <div class="header-actions">
         <span class="tip">填写工作小结后提交，由直属主管、HR 和公司审批人依次办理。</span>
+        <el-select v-model="lifecycleStatus" aria-label="记录范围" style="width: 200px" @change="search">
+          <el-option label="当前记录" value="" /><el-option label="未终止" value="active" /><el-option label="已终止" value="terminated" />
+          <el-option label="历史记录（含已删除）" value="all" /><el-option label="已删除" value="deleted" />
+        </el-select>
         <el-button v-if="canStart" type="primary" @click="openCreate">发起转正申请</el-button>
       </div>
     </ChartCard>
+
+    <el-alert v-if="listError" :title="listError" type="error" :closable="false"><el-button link @click="loadList">重试</el-button></el-alert>
 
     <ChartCard :padded="false" class="list-result-card">
       <div class="desktop-result-table">
@@ -199,8 +222,8 @@ function statusType(status: string): string {
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="(row as ConfirmationApplication).workflowVersion === 2 && (row as ConfirmationApplication).status === 'draft' ? openDraft(row as ConfirmationApplication) : goDetail(row as ConfirmationApplication)">
-              {{ (row as ConfirmationApplication).workflowVersion === 2 && (row as ConfirmationApplication).status === 'draft' ? '继续填写' : '查看' }}
+            <el-button link type="primary" size="small" @click="canContinueDraft(row as ConfirmationApplication) ? openDraft(row as ConfirmationApplication) : goDetail(row as ConfirmationApplication)">
+              {{ canContinueDraft(row as ConfirmationApplication) ? '继续填写' : '查看' }}
             </el-button>
           </template>
         </el-table-column>
@@ -215,7 +238,7 @@ function statusType(status: string): string {
           <div class="mobile-result-field"><span class="mobile-result-field__label">HR 实际经办</span><span class="mobile-result-field__value">{{ item.hr?.name || '尚未办理' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
-          <template #actions><el-button link type="primary" @click="item.workflowVersion === 2 && item.status === 'draft' ? openDraft(item) : goDetail(item)">{{ item.workflowVersion === 2 && item.status === 'draft' ? '继续填写' : '查看' }}</el-button></template>
+          <template #actions><el-button link type="primary" @click="canContinueDraft(item) ? openDraft(item) : goDetail(item)">{{ canContinueDraft(item) ? '继续填写' : '查看' }}</el-button></template>
         </MobileResultCard>
       </div>
       <ListPagination

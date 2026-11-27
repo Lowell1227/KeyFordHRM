@@ -167,6 +167,7 @@ export class PerformanceCardService {
     // Candidate IDs are not authorization. Every row is re-read through the existing service.
     const candidates = await this.prisma.assessmentTask.findMany({
       where: {
+        lifecycleStatus: 'active',
         isExempt: false,
         OR: [
           { employeeId: viewer.id },

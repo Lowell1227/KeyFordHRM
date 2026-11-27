@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ConfirmationStatus, Prisma, SysRole, UserStatus, VoteResult } from '@prisma/client';
+import { ConfirmationStatus, EmploymentRecord, Prisma, SysRole, UserStatus, VoteResult } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
@@ -16,8 +16,10 @@ import { DataScopeService } from '@/common/services/data-scope.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { buildPerformanceApproverMap } from '@/cycles/performance-approval-relations';
 import { approvedEmploymentSourceWhere, intervalsOverlap, selectEmploymentAt, shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
+import { ACTIVE_LIFECYCLE, assertLifecycleActive, canManageLifecycle, LifecycleFilter, LifecycleRecord, lifecycleProjection, lifecycleWhere } from '@/performance-lifecycle/lifecycle-policy';
+import { lockLifecycleRow } from '@/performance-lifecycle/lifecycle-lock';
 
-export interface ConfirmationListItem {
+export interface ConfirmationListItem extends Partial<ReturnType<typeof lifecycleProjection>> {
   id: string;
   workflowVersion: number;
   submissionVersion: number;
@@ -149,7 +151,7 @@ export class ConfirmationService {
     }
     const attachment = await this.prisma.$transaction(async (tx) => {
       const current = await tx.confirmationApplication.updateMany({
-        where: { id, status: app.status, submissionVersion: app.submissionVersion, employmentRecordId: app.employmentRecordId },
+        where: { lifecycleStatus: 'active', id, status: app.status, submissionVersion: app.submissionVersion, employmentRecordId: app.employmentRecordId },
         data: { updatedAt: new Date() },
       });
       if (current.count !== 1) {
@@ -231,7 +233,7 @@ export class ConfirmationService {
     }
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
-        where: {
+        where: { lifecycleStatus: 'active',
           id, hrId: viewer.id,
           submissionVersion: app.submissionVersion, employmentRecordId: app.employmentRecordId,
           status: { in: [ConfirmationStatus.hr_approved, ConfirmationStatus.approved, ConfirmationStatus.rejected] },
@@ -258,54 +260,31 @@ export class ConfirmationService {
 
   /** 试用期员工本人保存转正申请草稿。 */
   async create(dto: CreateSelfConfirmationDto, viewer: AuthUser): Promise<ConfirmationDetail> {
-    const employee = await this.prisma.user.findUnique({
-      where: { id: viewer.id },
-      select: { id: true, name: true, status: true, deletedAt: true },
-    });
-    if (!employee || employee.deletedAt) {
-      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '员工不存在' });
-    }
-    if (employee.status !== UserStatus.probation) {
-      throw new BadRequestException({
-        code: ERROR_CODE.PARAM_INVALID,
-        message: '仅试用期员工可发起转正申请',
-      });
-    }
-
-    const existing = await this.prisma.confirmationApplication.findFirst({
-      where: {
-        employeeId: viewer.id,
-        workflowVersion: 2,
-        status: { in: [
-          ConfirmationStatus.draft,
-          ConfirmationStatus.submitted,
-          ConfirmationStatus.manager_approved,
-          ConfirmationStatus.hr_approved,
-        ] },
-      },
-      select: { id: true },
-    });
-    if (existing) {
-      throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message: '已有办理中的转正申请，请继续原申请' });
-    }
-
-    const { current: employment } = await this.currentEmployment(this.prisma, viewer.id);
-    const data: Prisma.ConfirmationApplicationCreateInput = {
-      employee: { connect: { id: viewer.id } },
-      ...(employment?.directManagerId && { manager: { connect: { id: employment.directManagerId } } }),
-      creator: { connect: { id: viewer.id } },
-      workflowVersion: 2,
-      status: ConfirmationStatus.draft,
-      summary: dto.summary?.trim() || null,
-    };
     let app;
     try {
-      app = await this.prisma.confirmationApplication.create({ data, include: this.detailInclude() });
+      app = await this.prisma.$transaction(async (tx) => {
+        const { employment } = await this.lockProbationEmployment(tx, viewer.id);
+        const existing = await tx.confirmationApplication.findFirst({
+          where: { employeeId: viewer.id, workflowVersion: 2, ...ACTIVE_LIFECYCLE,
+            status: { in: [ConfirmationStatus.draft, ConfirmationStatus.submitted,
+              ConfirmationStatus.manager_approved, ConfirmationStatus.hr_approved] } },
+          select: { id: true },
+        });
+        if (existing) throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message: '已有办理中的转正申请，请继续原申请' });
+        const data: Prisma.ConfirmationApplicationCreateInput = {
+          employee: { connect: { id: viewer.id } },
+          employmentRecord: { connect: { id: employment.id } },
+          ...(employment.directManagerId && { manager: { connect: { id: employment.directManagerId } } }),
+          creator: { connect: { id: viewer.id } }, workflowVersion: 2, status: ConfirmationStatus.draft,
+          summary: dto.summary?.trim() || null,
+        };
+        return tx.confirmationApplication.create({ data, include: this.detailInclude() });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message: '已有办理中的转正申请，请继续原申请' });
       }
-      throw error;
+      this.rethrowTransactionConflict(error);
     }
 
     return this.mapToDetail(app as unknown as ConfirmationWithRelations, viewer, false);
@@ -339,7 +318,7 @@ export class ConfirmationService {
     }
 
     const updated = await this.prisma.confirmationApplication.updateMany({
-      where: { id, employeeId: viewer.id, status: ConfirmationStatus.draft,
+      where: { lifecycleStatus: 'active', id, employeeId: viewer.id, status: ConfirmationStatus.draft,
         submissionVersion: app.submissionVersion, employmentRecordId: app.employmentRecordId },
       data: { summary: dto.summary.trim() || null },
     });
@@ -394,18 +373,11 @@ export class ConfirmationService {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请填写试用期工作小结' });
     }
     const managerId = await this.prisma.$transaction(async (tx) => {
-      const employee = await tx.user.findUnique({
-        where: { id: app.employeeId },
-        select: { status: true, deletedAt: true, employeeNo: true },
-      });
-      if (!employee || employee.deletedAt || employee.status !== UserStatus.probation) {
-        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '员工档案不再处于试用期，请联系 HR 核实' });
-      }
-      const { current: employment } = await this.currentEmployment(tx, app.employeeId);
-      if (!employment || employment.employeeStatus !== UserStatus.probation
-        || !employment.employeeNo || employment.employeeNo !== employee.employeeNo) {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前有效任职已变化，请联系 HR 核实后重新提交' });
-      }
+      const { employee, employment, records } = await this.lockProbationEmployment(tx, app.employeeId);
+      const current = await lockLifecycleRow(tx, 'confirmation', id);
+      if (!current) throw new NotFoundException('转正申请不存在');
+      assertLifecycleActive(current);
+      this.assertSameEmploymentSpell(app.employmentRecordId, employee.id, employment, records);
       if (!employment.directManagerId || employment.directManagerId === app.employeeId) {
         throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请先在员工档案中维护有效的花名册直属主管' });
       }
@@ -425,12 +397,12 @@ export class ConfirmationService {
         throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '分管领导不在职，请联系 HR 核实组织设置' });
       }
       const updated = await tx.confirmationApplication.updateMany({
-        where: { id, workflowVersion: 2, status: ConfirmationStatus.draft, employeeId: viewer.id,
+        where: { lifecycleStatus: 'active', id, workflowVersion: 2, status: ConfirmationStatus.draft, employeeId: viewer.id,
           submissionVersion: app.submissionVersion, employmentRecordId: app.employmentRecordId, summary: app.summary,
           managerId: app.managerId, hrId: app.hrId, companyApproverId: app.companyApproverId },
         data: {
           managerId: employment.directManagerId,
-          employmentRecordId: employment.id,
+          employmentRecordId: app.employmentRecordId,
           hrId: null,
           companyApproverId,
           status: ConfirmationStatus.submitted,
@@ -455,7 +427,7 @@ export class ConfirmationService {
             submissionVersion: app.submissionVersion + 1,
             summary: app.summary,
             managerId: employment.directManagerId,
-            employmentRecordId: employment.id,
+            employmentRecordId: app.employmentRecordId,
             hrId: null,
             companyApproverId,
           },
@@ -471,6 +443,7 @@ export class ConfirmationService {
 
   /** 转正管理列表覆盖本数据范围，以及明确分配给当前用户的办理记录。 */
   async findAll(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<ConfirmationListItem>> {
+    if (canManageLifecycle(viewer, 'view')) return this.findMany(dto, {}, viewer);
     this.assertConfirmationManager(viewer);
     const scope = await this.dataScope.getConfirmationEmployeeFilter(viewer);
     return this.findMany(dto, {
@@ -505,6 +478,7 @@ export class ConfirmationService {
     const hrScope = this.isConfirmationHrHandler(viewer)
       ? await this.dataScope.getConfirmationEmployeeFilter(viewer) : { id: { in: [] } };
     const where: Prisma.ConfirmationApplicationWhereInput = {
+      ...ACTIVE_LIFECYCLE,
       workflowVersion: 2,
       OR: [
         { status: ConfirmationStatus.submitted, managerId: viewer.id },
@@ -523,6 +497,7 @@ export class ConfirmationService {
     const hrPendingScope = this.isConfirmationHrHandler(viewer)
       ? await this.dataScope.getConfirmationEmployeeFilter(viewer) : { id: { in: [] } };
     const pending: Prisma.ConfirmationApplicationWhereInput = {
+      ...ACTIVE_LIFECYCLE,
       OR: [
         { status: ConfirmationStatus.submitted, managerId: viewer.id },
         { status: ConfirmationStatus.manager_approved, employeeId: { not: viewer.id },
@@ -551,10 +526,11 @@ export class ConfirmationService {
     baseWhere: Prisma.ConfirmationApplicationWhereInput,
     viewer: AuthUser,
   ): Promise<Paginated<ConfirmationListItem>> {
-    const query = dto as PaginationDto & { employeeId?: string; status?: ConfirmationStatus; keyword?: string };
+    const query = dto as PaginationDto & { employeeId?: string; status?: ConfirmationStatus; keyword?: string; lifecycleStatus?: LifecycleFilter };
     const where: Prisma.ConfirmationApplicationWhereInput = {
       AND: [
         baseWhere,
+        lifecycleWhere(query.lifecycleStatus, viewer),
         ...(query.employeeId ? [{ employeeId: query.employeeId }] : []),
         ...(query.status ? [{ status: query.status }] : []),
         ...(query.keyword ? [{ employee: { name: { contains: query.keyword, mode: 'insensitive' as const } } }] : []),
@@ -694,9 +670,12 @@ export class ConfirmationService {
       }
       const now = new Date();
       await this.prisma.$transaction(async (tx) => {
+        const current = await lockLifecycleRow(tx, 'confirmation', id);
+        if (!current) throw new NotFoundException('转正申请不存在');
+        assertLifecycleActive(current);
         const employment = await this.applyConfirmedEmployment(tx, app, proposedDate, viewer.id, now);
         const updated = await tx.confirmationApplication.updateMany({
-          where: { id, status: ConfirmationStatus.hr_approved, companyApproverId: viewer.id,
+          where: { lifecycleStatus: 'active', id, status: ConfirmationStatus.hr_approved, companyApproverId: viewer.id,
             submissionVersion: app.submissionVersion, proposedRegularDate: proposedDate,
             employmentRecordId: app.employmentRecordId },
           data: {
@@ -774,7 +753,7 @@ export class ConfirmationService {
 
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
-        where: {
+        where: { lifecycleStatus: 'active',
           id,
           status: app.status,
           submissionVersion: app.submissionVersion,
@@ -835,7 +814,7 @@ export class ConfirmationService {
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
-        where: { id, status: ConfirmationStatus.hr_approved, companyApproverId: viewer.id,
+        where: { lifecycleStatus: 'active', id, status: ConfirmationStatus.hr_approved, companyApproverId: viewer.id,
           submissionVersion: app.submissionVersion, employmentRecordId: app.employmentRecordId },
         data: {
           status: ConfirmationStatus.rejected,
@@ -885,7 +864,7 @@ export class ConfirmationService {
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
-        where: {
+        where: { lifecycleStatus: 'active',
           id,
           status: app.status,
           submissionVersion: app.submissionVersion,
@@ -970,6 +949,7 @@ export class ConfirmationService {
 
     const applications = await this.prisma.confirmationApplication.findMany({
       where: {
+        ...ACTIVE_LIFECYCLE,
         employeeId: { in: probationUsers.map((u) => u.id) },
         status: {
           in: [
@@ -1037,6 +1017,7 @@ export class ConfirmationService {
   }
 
   private async assertCanView(app: ConfirmationWithRelations, viewer: AuthUser): Promise<void> {
+    if (canManageLifecycle(viewer, 'view')) return;
     if (app.workflowVersion === 2) {
       if (app.status === ConfirmationStatus.draft && !app.submissionVersion) {
         if (app.employeeId === viewer.id) return;
@@ -1128,7 +1109,8 @@ export class ConfirmationService {
     throw error;
   }
 
-  private assertSubmissionVersion(app: { submissionVersion: number }, expected: number | undefined) {
+  private assertSubmissionVersion(app: { submissionVersion: number; lifecycleStatus?: string }, expected: number | undefined) {
+    assertLifecycleActive(app);
     if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 0 || expected !== app.submissionVersion) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '申请状态已变化，请刷新页面后重新办理' });
     }
@@ -1139,6 +1121,34 @@ export class ConfirmationService {
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] });
     const selection = selectEmploymentAt(records, shanghaiBusinessDate(at));
     return { current: selection.current, records };
+  }
+
+  private async lockProbationEmployment(client: Prisma.TransactionClient, userId: string) {
+    // Personnel effectiveness updates this same user row; use user -> employment -> application order.
+    await client.$queryRaw`SELECT id FROM users WHERE id=${userId}::uuid FOR UPDATE`;
+    const employee = await client.user.findUnique({ where: { id: userId },
+      select: { id: true, name: true, status: true, employeeNo: true, deletedAt: true, archivedAt: true } });
+    if (!employee || employee.deletedAt || employee.archivedAt) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '员工不存在或已归档' });
+    if (employee.status !== UserStatus.probation) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '仅试用期员工可办理转正申请' });
+    const at = new Date();
+    const { current } = await this.currentEmployment(client, userId, at);
+    if (!current || current.employeeStatus !== UserStatus.probation || !current.employeeNo
+      || current.employeeNo !== employee.employeeNo) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前有效任职不完整或已变化，请联系 HR 核实' });
+    await client.$queryRaw`SELECT id FROM employment_records WHERE id=${current.id}::uuid FOR SHARE`;
+    const { current: employment, records } = await this.currentEmployment(client, userId, at);
+    if (!employment || employment.id !== current.id || employment.employeeStatus !== UserStatus.probation
+      || employment.employeeNo !== employee.employeeNo) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前有效任职已变化，请刷新后重新办理' });
+    return { employee, employment, records };
+  }
+
+  private assertSameEmploymentSpell(boundId: string | null, employeeId: string, current: EmploymentRecord, records: EmploymentRecord[]) {
+    if (!boundId) throw new ConflictException({ code: ERROR_CODE.CONFLICT,
+      message: '原申请未记录本次任职，请联系 HR 核定关联或终止后重新发起，不能自动绑定当前任职' });
+    const bound = records.find((record) => record.id === boundId);
+    if (!bound || bound.userId !== employeeId || !bound.employeeNo || bound.employeeNo !== current.employeeNo
+      || (bound.id !== current.id && (!bound.entryDate || !current.entryDate || bound.entryDate.getTime() !== current.entryDate.getTime()))) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '申请不属于当前这次任职，请联系 HR 核实，不能转入再入职办理' });
+    }
   }
 
   private async applyConfirmedEmployment(client: Prisma.TransactionClient,
@@ -1226,9 +1236,12 @@ export class ConfirmationService {
     hrCanView = false,
     hrCanHandle = hrCanView,
   ): ConfirmationListItem {
-    const canViewInternalMeeting = app.workflowVersion !== 2 || hrCanView || app.companyApproverId === viewer.id;
-    const pendingRole = this.determinePendingRole(app.status);
+    const originalLegacyViewer = [app.employeeId, app.managerId, app.hrId, app.companyApproverId, app.createdBy].includes(viewer.id)
+      || viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin;
+    const canViewInternalMeeting = (app.workflowVersion !== 2 && originalLegacyViewer) || hrCanView || app.companyApproverId === viewer.id;
+    const pendingRole = app.lifecycleStatus && app.lifecycleStatus !== 'active' ? null : this.determinePendingRole(app.status);
     return {
+      ...lifecycleProjection('confirmation', app, viewer),
       id: app.id,
       workflowVersion: app.workflowVersion,
       submissionVersion: app.submissionVersion,
@@ -1259,7 +1272,9 @@ export class ConfirmationService {
     hrCanView = false,
     hrCanHandle = hrCanView,
   ): ConfirmationDetail {
-    const canViewInternalMeeting = app.workflowVersion !== 2 || hrCanView || app.companyApproverId === viewer.id;
+    const originalLegacyViewer = [app.employeeId, app.managerId, app.hrId, app.companyApproverId, app.createdBy].includes(viewer.id)
+      || viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin;
+    const canViewInternalMeeting = (app.workflowVersion !== 2 && originalLegacyViewer) || hrCanView || app.companyApproverId === viewer.id;
     const pendingRole = this.determinePendingRole(app.status);
     const steps: ApprovalStep[] = [
       {
@@ -1354,13 +1369,14 @@ export class ConfirmationService {
     viewer: AuthUser,
     hrCanHandle = false,
   ): boolean {
+    if (app.lifecycleStatus && app.lifecycleStatus !== 'active') return false;
     if (role === 'manager') return app.managerId === viewer.id;
     if (role === 'hr') return hrCanHandle;
     return app.companyApproverId === viewer.id;
   }
 }
 
-interface ConfirmationWithRelations {
+interface ConfirmationWithRelations extends LifecycleRecord {
   id: string;
   workflowVersion: number;
   submissionVersion: number;

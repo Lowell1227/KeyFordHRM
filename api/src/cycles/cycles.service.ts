@@ -640,7 +640,7 @@ export class CyclesService {
     const taskStatusRows = canManageCycles && items.length > 0
       ? await this.prisma.assessmentTask.groupBy({
           by: ['cycleId', 'status'],
-          where: { cycleId: { in: items.map((cycle) => cycle.id) } },
+          where: { cycleId: { in: items.map((cycle) => cycle.id) }, lifecycleStatus: 'active' },
           _count: { _all: true, approvedAt: true },
         })
       : [];
@@ -811,8 +811,8 @@ export class CyclesService {
     }
 
     const taskWhere: Prisma.AssessmentTaskWhereInput = canManageCycles
-      ? { cycleId: id }
-      : { cycleId: id, ...this.visibleTaskWhere(viewer!) };
+      ? { cycleId: id, lifecycleStatus: 'active' }
+      : { cycleId: id, lifecycleStatus: 'active', ...this.visibleTaskWhere(viewer!) };
 
     const [snapshotCount, totalTasks, taskStatusCounts] = await Promise.all([
       this.prisma.assessmentTemplateSnapshot.count({ where: { cycleId: id } }),

@@ -15,6 +15,9 @@ export const talentRecruitmentApi = {
   workbench(): Promise<{ groups: RecruitmentWorkbenchGroup[] }> {
     return http.get(`${base}/workbench`, localError) as unknown as Promise<{ groups: RecruitmentWorkbenchGroup[] }>;
   },
+  onboardingHandoff(query: { page?: number; pageSize?: number } = {}): Promise<RecruitmentWorkbenchGroup> {
+    return http.get(`${base}/workbench/onboarding-handoff`, { params: query, ...localError }) as unknown as Promise<RecruitmentWorkbenchGroup>;
+  },
   hiringReviews(): Promise<TalentApplicationView[]> {
     return http.get(`${base}/hiring-reviews`) as unknown as Promise<TalentApplicationView[]>;
   },

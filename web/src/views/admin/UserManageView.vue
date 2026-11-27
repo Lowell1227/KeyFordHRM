@@ -46,6 +46,7 @@ import EmployeeApplicationDetail from './components/EmployeeApplicationDetail.vu
 import EmployeeArrivalConfirmation from './components/EmployeeArrivalConfirmation.vue';
 import EmployeeChangeHistory from './components/EmployeeChangeHistory.vue';
 import PersonnelPendingReviews from './components/PersonnelPendingReviews.vue';
+import OnboardingHandoffList from './components/OnboardingHandoffList.vue';
 import { applicationProgress, applicationType, archiveSubmissionMessage, canReviseArrivalDate, isCancelledNewHireArrival, isPendingArrival, isPersonnelLifecycleRequest } from '@/utils/employee-lifecycle';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
@@ -188,6 +189,9 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '考核周期审核', value: 'cycle_plan_review' },
   { label: '绩效校准', value: 'performance_calibration' },
   { label: '结果公示', value: 'performance_publish' },
+  { label: '绩效流程全局查看', value: 'performance_lifecycle_view' },
+  { label: '绩效流程终止', value: 'performance_lifecycle_terminate' },
+  { label: '绩效记录移入历史', value: 'performance_lifecycle_delete' },
   { label: '转正管理与 HR 审批', value: 'confirmation_manage' },
   { label: '招聘查看', value: 'recruitment_view' },
   { label: '招聘经办', value: 'recruitment_edit' },
@@ -196,7 +200,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
 ];
 
 type EmployeeDirectoryCategory = 'all' | UserStatus | 'archived';
-type PersonnelProcessingCategory = 'applications' | 'arrivals' | 'reviews' | 'draft';
+type PersonnelProcessingCategory = 'applications' | 'arrivals' | 'reviews' | 'draft' | 'handoff';
 
 const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory }[] = [
   { label: '全部', value: 'all' },
@@ -209,6 +213,7 @@ const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory
 
 const processingCategoryOptions: { label: string; value: PersonnelProcessingCategory }[] = [
   { label: '办理中', value: 'applications' },
+  { label: '待人事接收', value: 'handoff' },
   { label: '待确认到岗', value: 'arrivals' },
   { label: '待我审核', value: 'reviews' },
   { label: '草稿', value: 'draft' },
@@ -2450,7 +2455,8 @@ onBeforeUnmount(() => {
           </button>
         </nav>
 
-        <template v-if="isApplicationsCategory">
+        <OnboardingHandoffList v-if="activeView === 'processing' && processingCategory === 'handoff'" />
+        <template v-else-if="isApplicationsCategory">
           <el-alert v-if="applicationsError" :title="applicationsError" type="error" :closable="false" />
           <div class="directory-table-region desktop-result-table">
             <el-table v-loading="applicationsLoading" :data="pagedApplicationGroups" row-key="id" height="100%" class="app-table compact-table" empty-text="暂无办理中的申请">

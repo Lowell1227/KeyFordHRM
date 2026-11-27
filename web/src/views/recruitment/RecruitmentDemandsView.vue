@@ -25,7 +25,7 @@ import { formatDate } from '@/utils/date';
 
 const route = useRoute(), router = useRouter();
 const auth = useAuthStore();
-const { canRead: canReadTalent, canReadDemand: canRead, canEdit } = useTalentPermissions();
+const { canRead: canReadTalent, canReadDemand: canRead, canEdit, canReviewDemand } = useTalentPermissions();
 const rows = ref<RecruitmentDemandView[]>([]), current = ref<RecruitmentDemandView | null>(null);
 const lifecyclePanel = ref<InstanceType<typeof RecruitmentDemandLifecycle>>();
 const loading = ref(false), detailLoading = ref(false), saving = ref(false);
@@ -33,6 +33,20 @@ const loadError = ref(''), detailError = ref(''), statusError = ref(''), resultM
 const connection = ref<RecruitmentDemandStatus | null>(null);
 const filters = reactive({ keyword: '', status: '' as RecruitmentDemandSourceState | '' });
 const { page, pageSize, total, pageSizeOptions, reset } = usePagination();
+const workQueue = computed(() => route.query.workQueue === 'review' || route.query.workQueue === 'returned' ? route.query.workQueue : undefined);
+function queryPage(value: unknown, fallback: number) {
+  const number = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+  return Number.isSafeInteger(number) && number > 0 ? number : fallback;
+}
+function readListQuery() {
+  const size = queryPage(route.query.pageSize, 20), status = route.query.status;
+  return { keyword: typeof route.query.keyword === 'string' ? route.query.keyword : '',
+    status: typeof status === 'string' && Object.prototype.hasOwnProperty.call(DEMAND_SOURCE_LABELS, status) ? status as RecruitmentDemandSourceState : '',
+    page: queryPage(route.query.page, 1), pageSize: pageSizeOptions.includes(size) ? size : 20 };
+}
+const initialListQuery = readListQuery();
+Object.assign(filters, { keyword: initialListQuery.keyword, status: initialListQuery.status });
+page.value = initialListQuery.page; pageSize.value = initialListQuery.pageSize;
 const drawerOpen = ref(false), mappingOpen = ref(false), mappingConflict = ref(false);
 const selectedId = ref('');
 const directories = ref<RecruitmentDemandDirectories>({ departments: [], positions: [] });
@@ -69,7 +83,7 @@ async function loadList() {
   loading.value = true; loadError.value = '';
   try {
     const result = await recruitmentDemandsApi.list({ keyword: filters.keyword.trim() || undefined,
-      status: filters.status || undefined, page: page.value, pageSize: pageSize.value });
+      status: filters.status || undefined, workQueue: workQueue.value, page: page.value, pageSize: pageSize.value });
     if (token !== listSession) return;
     rows.value = result.items; total.value = result.total;
   } catch (cause) { if (token === listSession) { rows.value = []; total.value = 0; loadError.value = demandErrorMessage(cause); } }
@@ -82,8 +96,17 @@ async function loadConnection() {
   try { const result = await recruitmentDemandsApi.status(); if (token === connectionSession) connection.value = result; }
   catch (cause) { if (token === connectionSession) { connection.value = null; statusError.value = demandErrorMessage(cause); } }
 }
-function search() { page.value = 1; void loadList(); }
-function resetFilters() { filters.keyword = ''; filters.status = ''; reset(); void loadList(); }
+async function changePage() {
+  await router.replace({ query: { ...route.query, keyword: filters.keyword.trim() || undefined, status: filters.status || undefined,
+    page: String(page.value), pageSize: String(pageSize.value) } });
+  await loadList();
+}
+async function search() { page.value = 1; await changePage(); }
+async function resetFilters() { filters.keyword = ''; filters.status = ''; reset(); await changePage(); }
+function changeWorkQueue(value: string) {
+  void router.replace({ query: { ...route.query, workQueue: value === 'review' || value === 'returned' ? value : undefined,
+    keyword: filters.keyword.trim() || undefined, status: filters.status || undefined, page: '1', pageSize: String(pageSize.value) } });
+}
 async function openDetail(row: Pick<RecruitmentDemandView, 'id'>) {
   if (lifecyclePanel.value && !await lifecyclePanel.value.prepareToLeave()) return;
   if (!canRead.value || !await leave.prepareToLeave()) return;
@@ -347,6 +370,12 @@ watch(canRead, allowed => {
   if (allowed) { void loadList(); void loadConnection(); }
   else { ++listSession; ++detailSession; ++connectionSession; ++localSession; rows.value = []; total.value = 0; current.value = null; drawerOpen.value = false; mappingOpen.value = false; syncOpen.value = false; localOpen.value = false; localAction.value = null; localRequest.value = null; connection.value = null; }
 }, { immediate: true });
+watch(() => [route.query.workQueue, route.query.keyword, route.query.status, route.query.page, route.query.pageSize], (values, previous) => {
+  const next = readListQuery();
+  if (values[0] === previous[0] && filters.keyword === next.keyword && filters.status === next.status && page.value === next.page && pageSize.value === next.pageSize) return;
+  Object.assign(filters, { keyword: next.keyword, status: next.status });
+  page.value = next.page; pageSize.value = next.pageSize; void loadList();
+});
 watch(() => [route.query.demandId, auth.user?.id, canRead.value] as const, ([id, , allowed]) => {
   if (allowed && typeof id === 'string' && id) void openDetail({ id });
 }, { immediate: true });
@@ -364,6 +393,7 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
     <template #filters>
       <QueryFilterPanel>
         <el-form :inline="true" @submit.prevent="search">
+          <el-form-item label="办理范围"><el-select :model-value="workQueue || ''" aria-label="招聘需求办理范围" @change="changeWorkQueue"><el-option label="全部需求" value="" /><el-option v-if="canReviewDemand || workQueue === 'review'" label="待我独立审核" value="review" /><el-option v-if="canEdit || workQueue === 'returned'" label="退回待我修改" value="returned" /></el-select></el-form-item>
           <el-form-item label="关键字"><el-input v-model="filters.keyword" clearable placeholder="部门、岗位或单号" /></el-form-item>
           <el-form-item label="需求状态"><el-select v-model="filters.status" clearable placeholder="全部状态" aria-label="招聘需求状态"><el-option v-for="(label, key) in DEMAND_SOURCE_LABELS" :key="key" :value="key" :label="label" /></el-select></el-form-item>
           <el-form-item><el-button type="primary" @click="search">查询</el-button><el-button @click="resetFilters">重置</el-button></el-form-item>
@@ -406,7 +436,7 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
         </MobileResultCard>
       </div>
     </template>
-    <template #pagination><ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="total" @change="loadList" /></template>
+    <template #pagination><ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="total" @change="changePage" /></template>
     <template #detail>
       <BusinessDetailDrawer v-model="drawerOpen" title="招聘需求详情" variant="standard" :loading="detailLoading" :saving="saving" :before-close="closeDetail">
         <el-alert v-if="detailError" :title="detailError" type="error" :closable="false"><el-button v-if="selectedId" link type="primary" :disabled="saving" @click="reloadDetail">刷新详情，保留核对输入</el-button></el-alert>

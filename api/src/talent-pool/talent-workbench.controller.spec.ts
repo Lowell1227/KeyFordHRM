@@ -9,4 +9,10 @@ describe('recruitment workbench route contract', () => {
     expect(Reflect.getMetadata(PATH_METADATA, TalentWorkbenchController.prototype.getWorkbench)).toBe('workbench');
     expect(Reflect.getMetadata(METHOD_METADATA, TalentWorkbenchController.prototype.getWorkbench)).toBe(RequestMethod.GET);
   });
+  it('exposes a paginated handoff reader without a talent mutation endpoint', () => {
+    const method = (TalentWorkbenchController.prototype as any).listOnboardingHandoff;
+    expect(method).toBeDefined();
+    expect(Reflect.getMetadata(PATH_METADATA, method)).toBe('workbench/onboarding-handoff');
+    expect(Reflect.getMetadata(METHOD_METADATA, method)).toBe(RequestMethod.GET);
+  });
 });

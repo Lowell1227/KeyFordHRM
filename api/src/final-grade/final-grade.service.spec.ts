@@ -65,6 +65,10 @@ describe('FinalGradeService department review access', () => {
   it('saves the cycle comment with the grade and reads it back after submission or return', async () => {
     let submittedRecord: any = null;
     const prisma: any = {
+      $queryRaw: jest.fn(async (query: TemplateStringsArray) => {
+        if (query.join('').includes('FROM assessment_periods')) return [];
+        throw new Error('Unexpected final-grade lock query');
+      }),
       assessmentTask: { findUnique: jest.fn().mockResolvedValue({ ...task, updatedAt: new Date() }), updateMany: jest.fn().mockResolvedValue({count:1}) },
       gradeResult: { upsert: jest.fn() },
       flowRecord: { findFirst: jest.fn().mockImplementation(async ({where}) => where.action === 'submit' ? submittedRecord : null) },

@@ -8,6 +8,8 @@ import { IMPROVEMENT_PLAN_STATUS_META } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import ChartCard from '@/components/common/ChartCard.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
+import PerformanceLifecycleActions from '@/views/task/components/PerformanceLifecycleActions.vue';
+import { applyLifecycleProjection, lifecycleLabel, lifecycleReadOnly } from '@/api/performance-lifecycle.api';
 import type { ImprovementEvaluation, ImprovementGoal, ImprovementGoalSuggestion, ImprovementPlan, ImprovementPlanRecord } from '@/types/api.types';
 
 const route = useRoute();
@@ -22,6 +24,7 @@ const plan = ref<ImprovementPlan | null>(null);
 const cycles = ref<Array<{ id: string; name: string }>>([]);
 const loading = ref(false);
 const busy = ref(false);
+const lifecycleBusy = ref(false), baseline = ref('');
 const loadError = ref('');
 const cyclesError = ref('');
 const mutationError = ref('');
@@ -44,14 +47,17 @@ const form = reactive<{ improvementNeed: string; cycleId: string; targetDate: st
 const evaluation = reactive<{ items: Array<{ goalId: string; score: number | null; comment: string }>; overallComment: string }>({
   items: [], overallComment: '',
 });
-const canEdit = computed(() => plan.value?.allowedActions.includes('edit') ?? false);
-const canSubmitGoals = computed(() => plan.value?.allowedActions.includes('submit_goals') ?? false);
-const canDecideGoals = computed(() => plan.value?.allowedActions.includes('decide_goals') ?? false);
+const can = (action: string) => !!plan.value && !lifecycleReadOnly(plan.value) && plan.value.allowedActions.includes(action);
+const canEdit = computed(() => can('edit'));
+const canSubmitGoals = computed(() => can('submit_goals'));
+const canDecideGoals = computed(() => can('decide_goals'));
 const employeeGoalConfirmation = computed(() => canDecideGoals.value && plan.value?.status === 'goal_employee_confirm');
 const latestGoalRejection = computed(() => plan.value?.status === 'goal_revision'
   ? plan.value.records?.find((record) => record.action === 'reject_goals') ?? null : null);
-const canEvaluate = computed(() => plan.value?.allowedActions.includes('evaluate') ?? false);
-const canDecideFinal = computed(() => plan.value?.allowedActions.includes('decide_final') ?? false);
+const canEvaluate = computed(() => can('evaluate'));
+const canDecideFinal = computed(() => can('decide_final'));
+const snapshot = () => JSON.stringify({ form, evaluation });
+const dirty = computed(() => !!plan.value && snapshot() !== baseline.value);
 const decisionDialogForGoals = computed(() => decisionDialogAction.value.startsWith('goals-'));
 const decisionDialogReject = computed(() => decisionDialogAction.value.endsWith('-reject'));
 const decisionDialogTitle = computed(() => {
@@ -63,6 +69,7 @@ const decisionDialogTitle = computed(() => {
 const showEvaluation = computed(() => canEvaluate.value || Boolean(plan.value?.selfEvaluation
   || plan.value?.managerEvaluation || plan.value?.departmentEvaluation));
 const currentStageLabel = computed(() => {
+  if (plan.value && lifecycleLabel(plan.value)) return lifecycleLabel(plan.value);
   switch (plan.value?.status) {
     case 'draft': return '目标制定';
     case 'goal_revision': return '目标修改';
@@ -111,7 +118,7 @@ const draftTotal = computed(() => {
   return Math.round(plan.value.goals.reduce((sum, goal) => sum + goal.weight * Number(evaluation.items.find((item) => item.goalId === goal.id)?.score ?? 0), 0)) / 100;
 });
 const deadlineHint = computed(() => {
-  if (!plan.value?.targetDate || plan.value.status === 'completed') return '';
+  if (!plan.value?.targetDate || plan.value.status === 'completed' || lifecycleReadOnly(plan.value)) return '';
   const date = new Date(`${plan.value.targetDate.slice(0, 10)}T00:00:00`);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -185,13 +192,14 @@ function sync(value: ImprovementPlan, session: PlanSession) {
     comment: previous?.items.find((item) => item.goalId === goal.id)?.comment ?? '',
   }));
   evaluation.overallComment = previous?.overallComment ?? '';
+  baseline.value = snapshot();
   decisionDialogOpen.value = false;
   decisionComment.value = '';
   Object.keys(goalSuggestions).forEach((key) => delete goalSuggestions[key]);
   Object.keys(errors).forEach((key) => delete errors[key]);
 }
 function mutationSession(action: string): MutationSession | null {
-  if (!plan.value || loading.value || busy.value || writesBlocked.value || plan.value.id !== String(route.params.id)
+  if (!plan.value || lifecycleReadOnly(plan.value) || loading.value || busy.value || lifecycleBusy.value || writesBlocked.value || plan.value.id !== String(route.params.id)
     || !plan.value.allowedActions.includes(action)) return null;
   return { id: plan.value.id, generation, revision: plan.value.revision };
 }
@@ -364,6 +372,10 @@ function goalName(goalId: string): string {
       <el-button link type="primary" :disabled="busy" @click="load">重新加载</el-button>
     </el-alert>
     <template v-if="plan">
+      <PerformanceLifecycleActions kind="improvement_plan" :record="plan" :disabled="busy || dirty || writesBlocked || decisionDialogOpen"
+        :disabled-reason="dirty ? '有未保存的修改，请先保存或重新加载' : ''"
+        @busy="lifecycleBusy = $event" @state="value => { if (plan) applyLifecycleProjection(plan, value); }"
+        @changed="() => { emit('changed'); load(); }" />
       <ChartCard class="plan-overview-card">
         <template #title><div class="title-row"><el-button v-if="!embedded" link @click="router.push('/improvement-plans')">返回列表</el-button><strong>绩效改进计划</strong></div></template>
         <template #extra>

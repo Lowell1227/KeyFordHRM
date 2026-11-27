@@ -2,10 +2,11 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
+import { PaginationDto } from '@/common/dto/pagination.dto';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 import { TALENT_APPLICATION_STAGES } from './talent-application-filter';
-import { canEditRecruitment, canReadRecruitment, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, type RecruitmentActor } from './talent-recruitment-policy';
+import { canEditRecruitment, canReadRecruitment, canReviewRecruitmentDemand, canWriteRecruitment, hasTalentHiringConfirm, isCurrentRecruitmentActor, isFeedbackOpen, type RecruitmentActor } from './talent-recruitment-policy';
 
 export interface TalentWorkbenchItem {
   id: string;
@@ -16,14 +17,23 @@ export interface TalentWorkbenchItem {
   applicationId?: string;
   intakeId?: string;
   onboardingRequestId?: string;
+  demandId?: string;
   ownerName?: string | null;
   nextAction?: string;
 }
 
 export interface TalentWorkbenchGroup {
-  key: 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding' | 'intake_review' | 'intake_assignment' | 'entry_overdue';
+  key: 'follow_up' | 'interview' | 'feedback' | 'hiring_review' | 'onboarding_handoff' | 'intake_review' | 'intake_assignment' | 'entry_overdue' | 'demand_review' | 'demand_returned';
   total: number;
   items: TalentWorkbenchItem[];
+}
+
+export function recruitmentDemandWorkbenchWhere(key: 'review' | 'returned', actor: RecruitmentActor): Prisma.RecruitmentDemandWhereInput {
+  if (key === 'review' ? !canReviewRecruitmentDemand(actor) : !canEditRecruitment(actor)) {
+    throw new ForbiddenException('无权限办理该招聘需求队列');
+  }
+  return { sourceKind: 'local', sourceState: key === 'review' ? 'pending' : 'rejected',
+    submittedById: key === 'review' ? { not: actor.id } : actor.id };
 }
 
 export function recruitmentIntakeWorkbenchWhere(key: 'intake_review' | 'intake_assignment', actorId: string): Prisma.RecruitmentIntakeWhereInput {
@@ -109,7 +119,7 @@ export class TalentWorkbenchService {
       const now = new Date();
       const groups: Array<Promise<TalentWorkbenchGroup>> = [];
       if (canEditRecruitment(actor)) {
-        groups.push(this.followUps(tx, actor.id));
+        groups.push(this.followUps(tx, actor.id, now));
         groups.push(this.intakes(tx, 'intake_assignment', actor), this.intakes(tx, 'intake_review', actor));
       }
       const participation = { participants: { some: { userId: actor.id } } };
@@ -128,10 +138,36 @@ export class TalentWorkbenchService {
       if (hasTalentHiringConfirm(actor)) groups.push(this.applications(tx, 'hiring_review', {
         stage: 'hiring_review', hiringRequestedById: { not: actor.id },
       }));
-      if (canWriteRecruitment(actor)) groups.push(this.onboarding(tx, actor.id, now));
+      if (canWriteRecruitment(actor)) groups.push(this.onboarding(tx, now));
       if (recruitmentEntryOverdueScope(actor)) groups.push(this.entryOverdue(tx, actor, now));
+      if (canReviewRecruitmentDemand(actor)) groups.push(this.demands(tx, 'demand_review', actor));
+      if (canEditRecruitment(actor)) groups.push(this.demands(tx, 'demand_returned', actor));
       return { groups: await Promise.all(groups) };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }
+
+  async listOnboardingHandoff(query: PaginationDto, user: AuthUser) {
+    return this.prisma.$transaction(async tx => {
+      const actor = await tx.user.findUnique({ where: { id: user.id }, select: {
+        id: true, sysRole: true, hrCapabilities: true, status: true, archivedAt: true, deletedAt: true, isAssessorOnly: true,
+      } });
+      if (!actor || !canWriteRecruitment(actor)) throw new ForbiddenException('无权限办理入职交接');
+      const { items, total } = await this.onboarding(tx, new Date(), query);
+      return { items, total, page: query.page, pageSize: query.pageSize };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }
+
+  private async demands(tx: Prisma.TransactionClient, key: 'demand_review' | 'demand_returned', actor: RecruitmentActor): Promise<TalentWorkbenchGroup> {
+    const where = recruitmentDemandWorkbenchWhere(key === 'demand_review' ? 'review' : 'returned', actor);
+    const [total, rows] = await Promise.all([
+      tx.recruitmentDemand.count({ where }),
+      tx.recruitmentDemand.findMany({ where, take: 5, orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, rawPosition: true, rawDepartment: true, updatedAt: true } }),
+    ]);
+    return { key, total, items: rows.map(row => ({ id: row.id, demandId: row.id,
+      title: row.rawPosition || '招聘需求', subtitle: row.rawDepartment || '部门待核对', date: row.updatedAt.toISOString(),
+      nextAction: key === 'demand_review' ? '独立审核招聘需求' : '按退回意见修改并重新提交',
+    })) };
   }
 
   private async intakes(tx: Prisma.TransactionClient, key: 'intake_review' | 'intake_assignment', actor: RecruitmentActor & { name: string }): Promise<TalentWorkbenchGroup> {
@@ -162,22 +198,27 @@ export class TalentWorkbenchService {
     })) };
   }
 
-  private async followUps(tx: Prisma.TransactionClient, actorId: string): Promise<TalentWorkbenchGroup> {
+  private async followUps(tx: Prisma.TransactionClient, actorId: string, now: Date): Promise<TalentWorkbenchGroup> {
     // Match the talent list's dueOnly + personal talent scope, including first contact and future plans.
     const where: Prisma.TalentCandidateWhereInput = { deletedAt: null, AND: [
       { OR: [{ ownerId: actorId }, { ownerId: null, createdById: actorId }] },
       { OR: [{ followUps: { none: {} } }, { followUps: { some: { planStatus: 'pending' } } }] },
     ] };
-    const [total, rows] = await Promise.all([
-      tx.talentCandidate.count({ where }),
-      tx.talentCandidate.findMany({ where, take: 5, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    const total = await tx.talentCandidate.count({ where });
+    const today = shanghaiBusinessDate(now).toISOString().slice(0, 10);
+    const bucket = (date: string | null) => date === null ? 2 : date < today ? 0 : date === today ? 1 : 3;
+    let items: TalentWorkbenchItem[] = [];
+    // The latest pending plan is a relation projection; scan bounded pages and retain only the best five.
+    for (let skip = 0; skip < total; skip += 100) {
+      const rows = await tx.talentCandidate.findMany({ where, skip, take: 100, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true, name: true, followUps: { where: { planStatus: 'pending' }, take: 1,
-          orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }], select: { nextFollowUpAt: true } } } }),
-    ]);
-    return { key: 'follow_up', total, items: rows.map(row => ({
-      id: row.id, candidateId: row.id, title: row.name, subtitle: '待跟进',
-      date: row.followUps[0]?.nextFollowUpAt?.toISOString().slice(0, 10) ?? null,
-    })) };
+          orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }], select: { nextFollowUpAt: true } } } });
+      items = [...items, ...rows.map(row => ({ id: row.id, candidateId: row.id, title: row.name, subtitle: '待跟进',
+        date: row.followUps[0]?.nextFollowUpAt?.toISOString().slice(0, 10) ?? null,
+      }))].sort((a, b) => bucket(a.date) - bucket(b.date) || (a.date ?? '').localeCompare(b.date ?? '')).slice(0, 5);
+      if (rows.length < 100) break;
+    }
+    return { key: 'follow_up', total, items };
   }
 
   private async interviews(tx: Prisma.TransactionClient, key: 'interview' | 'feedback',
@@ -197,9 +238,9 @@ export class TalentWorkbenchService {
     })) };
   }
 
-  private async onboarding(tx: Prisma.TransactionClient, actorId: string, now: Date): Promise<TalentWorkbenchGroup> {
+  private async onboarding(tx: Prisma.TransactionClient, now: Date, query?: PaginationDto): Promise<TalentWorkbenchGroup> {
     const linked = await tx.talentCandidate.findMany({ where: { deletedAt: null, convertedUserId: { not: null },
-      applications: { some: { stage: 'accepted', ownerId: actorId } } }, select: { convertedUserId: true } });
+      applications: { some: { stage: 'accepted' } } }, select: { convertedUserId: true } });
     const ids = linked.map(row => row.convertedUserId).filter((id): id is string => id !== null);
     const today = shanghaiBusinessDate(now);
     // Exclude clear conflicts only; the existing intake guards decide recovery and reentry eligibility.
@@ -218,22 +259,22 @@ export class TalentWorkbenchService {
       const current = selectEmploymentAt(employee.employmentHistory, today).current;
       return current !== null && ['active', 'probation'].includes(current.employeeStatus);
     });
-    return this.applications(tx, 'onboarding', {
-      stage: 'accepted', ownerId: actorId,
+    return this.applications(tx, 'onboarding_handoff', {
+      stage: 'accepted',
       candidate: { deletedAt: null, OR: [{ convertedUserId: null }, { convertedUserId: { notIn: blocked } }],
         onboardingRequests: { none: { archivedAt: null, cancelledAt: null,
           onboardingStatus: { in: ['draft', 'submitted', 'pending_entry'] } } } },
-    });
+    }, query);
   }
 
-  private async applications(tx: Prisma.TransactionClient, key: 'hiring_review' | 'onboarding',
-    where: Prisma.TalentApplicationWhereInput): Promise<TalentWorkbenchGroup> {
+  private async applications(tx: Prisma.TransactionClient, key: 'hiring_review' | 'onboarding_handoff',
+    where: Prisma.TalentApplicationWhereInput, query?: PaginationDto): Promise<TalentWorkbenchGroup> {
     const orderBy: Prisma.TalentApplicationOrderByWithRelationInput[] = key === 'hiring_review'
       ? [{ hiringRequestedAt: 'asc' }, { id: 'asc' }]
       : [{ expectedEntryDate: { sort: 'asc', nulls: 'last' } }, { createdAt: 'asc' }, { id: 'asc' }];
     const [total, rows] = await Promise.all([
       tx.talentApplication.count({ where }),
-      tx.talentApplication.findMany({ where, take: 5, orderBy, select: {
+      tx.talentApplication.findMany({ where, ...(query ? { skip: query.skip } : {}), take: query?.take ?? 5, orderBy, select: {
         id: true, candidateId: true, positionName: true, candidate: { select: { name: true } },
         hiringRequestedAt: true, expectedEntryDate: true,
       } }),

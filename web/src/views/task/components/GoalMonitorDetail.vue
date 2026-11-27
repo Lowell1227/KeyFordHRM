@@ -7,6 +7,8 @@ import {
   type GoalPlanDetail,
 } from '@/api/goal-plans.api';
 import IndicatorSnapshot from './IndicatorSnapshot.vue';
+import PerformanceLifecycleActions from './PerformanceLifecycleActions.vue';
+import { applyLifecycleProjection } from '@/api/performance-lifecycle.api';
 import type { IndicatorInstance } from '@/types/api.types';
 const route = useRoute(),
   router = useRouter();
@@ -31,7 +33,7 @@ async function load() {
     if (request === serial) plan.value = result;
   } catch {
     if (request === serial)
-      error.value = '目标计划加载失败或无权查看，请返回计划进度重试';
+      error.value = '目标台账加载失败或无权查看，请返回目标台账重试';
   } finally {
     if (request === serial) loading.value = false;
   }
@@ -54,14 +56,15 @@ watch(() => route.params.id, load, { immediate: true });
     class="goal-monitor"
     data-testid="goal-monitor-detail"
   >
-    <el-button @click="goBack">返回计划进度</el-button
+    <el-button @click="goBack">返回目标台账</el-button
     ><el-alert
       v-if="error"
       :title="error"
       type="error"
       :closable="false"
-    /><template v-if="plan"
-      ><p>
+    /><template v-if="plan">
+      <PerformanceLifecycleActions kind="task" :record="plan" @state="value => { if (plan) applyLifecycleProjection(plan, value); }" @changed="load" />
+      <p>
         {{ plan.employeeName }} · {{ plan.deptName }} · {{ plan.cycleName }}
       </p>
       <el-alert
@@ -79,7 +82,7 @@ watch(() => route.params.id, load, { immediate: true });
         :show-operation-history="true"
         :flow-records="plan.flowRecords"
         :task-status="plan.status"
-        title="目标计划"
+        title="目标台账"
     /></template>
   </section>
 </template>

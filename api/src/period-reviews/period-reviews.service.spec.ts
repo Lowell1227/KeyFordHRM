@@ -34,11 +34,12 @@ describe('PeriodReviewsService', () => {
   };
 
   const tx = {
+    $queryRaw: jest.fn(),
     assessmentPeriod: { findUnique: jest.fn(), updateMany: jest.fn(), update: jest.fn() },
     assessmentPeriodIndicatorReview: { upsert: jest.fn(), updateMany: jest.fn() },
     assessmentPeriodReviewRevision: { count: jest.fn(), create: jest.fn() },
     indicatorProgressUpdate: { create: jest.fn() },
-    assessmentTask: { updateMany: jest.fn() },
+    assessmentTask: { findUnique: jest.fn(), updateMany: jest.fn() },
     auditLog: { create: jest.fn() },
     flowRecord: { create: jest.fn() },
     gradeResult: { updateMany: jest.fn() },
@@ -95,6 +96,8 @@ describe('PeriodReviewsService', () => {
     }],
     task: {
       id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      lifecycleStatus: 'active',
+      lifecycleVersion: 0,
       cycleId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       employeeId: employee.id,
       managerId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
@@ -149,6 +152,14 @@ describe('PeriodReviewsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    tx.$queryRaw.mockImplementation(async (query: TemplateStringsArray) => {
+      const sql = query.join('');
+      if (sql.includes('FROM assessment_periods')) return [{ id: period.id }];
+      if (sql.includes('FROM assessment_tasks')) return [{ id: period.taskId }];
+      throw new Error(`Unexpected review lock query: ${sql}`);
+    });
+    tx.assessmentTask.findUnique.mockResolvedValue({ ...period.task });
+    tx.assessmentPeriod.findUnique.mockResolvedValue(period);
     prisma.assessmentPeriod.findUnique.mockResolvedValue(period);
     prisma.assessmentPeriod.findMany.mockResolvedValue([{
       id: 'previous-period',
@@ -765,6 +776,11 @@ describe('PeriodReviewsService', () => {
     });
     expect(result).toMatchObject({ periodId: period.id, draftVersion: 3 });
     expect(tx.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+    expect(tx.$queryRaw.mock.calls.map(([query]) => query.join(''))).toEqual([
+      expect.stringContaining('FROM assessment_periods'), expect.stringContaining('FROM assessment_tasks'),
+    ]);
+    expect(tx.assessmentTask.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: period.taskId } }));
+    expect(tx.assessmentTask.findUnique.mock.invocationCallOrder[0]).toBeLessThan(tx.assessmentPeriod.updateMany.mock.invocationCallOrder[0]);
   });
 
   it('submits lightweight progress and self evaluation atomically', async () => {
@@ -1170,7 +1186,13 @@ describe('PeriodReviewsService', () => {
         reason: 'Correct the monthly self-evaluation',
       }, { ...capableHr, canViewAll: true })).rejects.toBeInstanceOf(ForbiddenException);
 
-      expect(tx.assessmentPeriod.findUnique).toHaveBeenCalledTimes(1);
+      expect(tx.assessmentPeriod.findUnique).toHaveBeenCalledTimes(2);
+      expect(tx.assessmentPeriod.findUnique).toHaveBeenNthCalledWith(1, {
+        where: { id: period.id }, select: { taskId: true },
+      });
+      expect(tx.assessmentPeriod.findUnique).toHaveBeenNthCalledWith(2, {
+        where: { id: period.id }, include: expect.objectContaining({ task: expect.any(Object) }),
+      });
       expect(prisma.assessmentPeriod.findUnique).not.toHaveBeenCalled();
       expect(tx.assessmentPeriod.updateMany).not.toHaveBeenCalled();
       expect(tx.assessmentPeriod.update).not.toHaveBeenCalled();

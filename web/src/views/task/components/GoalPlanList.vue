@@ -11,6 +11,7 @@ import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import { useAuthStore } from '@/stores/auth.store';
+import { canViewLifecycleHistory, lifecycleLabel, lifecycleReadOnly, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
 const props = defineProps<{ scope: GoalScope; allowed: boolean }>();
 const emit = defineEmits<{ refreshed: [total: number | null] }>();
 const auth = useAuthStore();
@@ -25,17 +26,19 @@ const items = ref<GoalPlanItem[]>([]),
 const cycleId = ref(''),
   deptId = ref(''),
   employeeName = ref('');
+const lifecycleStatus = ref<LifecycleFilter | ''>(parseLifecycleFilter(route.query.lifecycleStatus));
+const canViewHistory = computed(() => canViewLifecycleHistory(auth.user));
 const options = ref<{
   cycles: { id: string; name: string }[];
   departments: { id: string; name: string }[];
 }>({ cycles: [], departments: [] });
 let request = 0;
 const accessDenied = ref(false), appliedQuery = ref('');
-const queryKey = () => JSON.stringify([props.scope, cycleId.value, deptId.value, employeeName.value, page.value]);
+const queryKey = () => JSON.stringify([props.scope, cycleId.value, deptId.value, employeeName.value, page.value, lifecycleStatus.value]);
 const refreshBlocked = () => loading.value || queryKey() !== appliedQuery.value;
 const title = computed(
   () =>
-    ({ mine: '我的计划', review: '待我审核', monitor: '计划进度' })[
+    ({ mine: '我的目标', review: '目标审核', monitor: '目标台账' })[
       props.scope
     ],
 );
@@ -48,22 +51,28 @@ async function fetchPlans(background: boolean, canApply = () => true) {
   const serial = ++request;
   if (!props.allowed) return;
   const key = queryKey(), scope = props.scope;
-  const unfiltered = !cycleId.value && !deptId.value && !employeeName.value;
+  const unfiltered = !cycleId.value && !deptId.value && !employeeName.value && !lifecycleStatus.value;
   if (!background) { loading.value = true; error.value = ''; appliedQuery.value = key; }
   const current = () => serial === request && props.allowed && key === queryKey()
     && (!background || (canApply() && !refreshBlocked()));
   try {
-    if (!background) await router.replace({
-      path: '/tasks',
-      query: { ...route.query, cycleId: cycleId.value || undefined, deptId: deptId.value || undefined,
-        employeeName: employeeName.value || undefined, page: page.value > 1 ? String(page.value) : undefined },
-    });
+    if (!background) {
+      const query = { ...route.query, cycleId: cycleId.value || undefined, deptId: deptId.value || undefined,
+        employeeName: employeeName.value || undefined, lifecycleStatus: lifecycleStatus.value || undefined,
+        page: page.value > 1 ? String(page.value) : undefined };
+      const entries = Object.entries(query).filter(([, value]) => value !== undefined);
+      // A redundant replace can cancel a newer navigation while its page is still loading.
+      if (entries.length !== Object.keys(route.query).length || entries.some(([key, value]) => route.query[key] !== value)) {
+        await router.replace({ path: '/tasks', query });
+      }
+    }
     if (serial !== request || !props.allowed) return;
     const result = await goalPlansApi.findAll({
       scope,
       cycleId: cycleId.value || undefined,
       deptId: deptId.value || undefined,
       employeeName: employeeName.value || undefined,
+      lifecycleStatus: lifecycleStatus.value || undefined,
       page: page.value,
       pageSize: 20,
     });
@@ -78,10 +87,10 @@ async function fetchPlans(background: boolean, canApply = () => true) {
     const status = (cause as { response?: { status?: number } })?.response?.status;
     if (status === 401 || status === 403) {
       accessDenied.value = true; items.value = []; total.value = 0; options.value = { cycles: [], departments: [] };
-      error.value = '当前无权读取目标计划，请重新登录或联系管理员';
+      error.value = '当前无权读取目标台账，请重新登录或联系管理员';
     } else if (current()) {
       if (!background) items.value = [];
-      error.value = '目标计划更新失败，请重试';
+      error.value = '目标台账更新失败，请重试';
     } else return;
     if (scope === 'review' && (unfiltered || accessDenied.value)) emit('refreshed', null);
   } finally {
@@ -105,6 +114,7 @@ watch(
       typeof route.query.employeeName === 'string'
         ? route.query.employeeName
         : '';
+    lifecycleStatus.value = parseLifecycleFilter(route.query.lifecycleStatus);
     optionsError.value = '';
     options.value = { cycles: [], departments: [] };
     if (props.allowed) {
@@ -126,7 +136,7 @@ function open(item: GoalPlanItem) {
   router.push({
     path: `/tasks/${item.id}`,
     query: {
-      goalView: props.scope === 'monitor' ? 'monitor' : undefined,
+      goalView: props.scope === 'monitor' || lifecycleReadOnly(item) ? 'monitor' : undefined,
       stage:
         item.status === 'indicator_confirming' ||
         item.status === 'indicator_approving'
@@ -150,6 +160,10 @@ function search() {
     <template #subtitle>{{ title }} · 目标内容与审批进度</template>
     <template #filters
       ><div class="goal-filters" v-if="allowed">
+        <el-select v-model="lifecycleStatus" aria-label="记录范围" @change="search">
+          <el-option label="当前记录" value="" /><el-option label="未终止" value="active" /><el-option label="已终止" value="terminated" />
+          <el-option v-if="canViewHistory" label="历史记录（含已删除）" value="all" /><el-option v-if="canViewHistory" label="已删除" value="deleted" />
+        </el-select>
         <el-select
           v-model="cycleId"
           placeholder="全部周期"
@@ -186,7 +200,7 @@ function search() {
     <template #feedback
       ><el-alert
         v-if="!allowed"
-        title="无权查看全员目标计划"
+        title="无权查看目标台账"
         type="warning"
         :closable="false"
       /><el-alert v-if="optionsError" :title="optionsError" type="warning" :closable="false" />
@@ -209,7 +223,7 @@ function search() {
           label="考核周期"
           min-width="180"
         /><el-table-column label="当前阶段" min-width="180"
-          ><template #default="{ row }">{{
+          ><template #default="{ row }"><el-tag v-if="lifecycleLabel(row)" type="info" size="small">{{ lifecycleLabel(row) }}</el-tag> {{
             GOAL_STEP_LABELS[row.currentStep as keyof typeof GOAL_STEP_LABELS]
           }}</template></el-table-column
         ><el-table-column
@@ -222,7 +236,7 @@ function search() {
               link
               type="primary"
               @click="open(row as GoalPlanItem)"
-              >{{ scope === 'review' ? '办理目标' : '查看计划' }}</el-button
+              >{{ scope === 'review' && !lifecycleReadOnly(row) ? '办理目标' : '查看计划' }}</el-button
             ></template
           ></el-table-column
         ></el-table
@@ -240,11 +254,11 @@ function search() {
           >{{ item.employeeName }} · {{ item.deptName }}</template
         >
         <p>{{ item.cycleName }}</p>
-        <p>{{ GOAL_STEP_LABELS[item.currentStep] }}</p>
+        <p><el-tag v-if="lifecycleLabel(item)" type="info" size="small">{{ lifecycleLabel(item) }}</el-tag> {{ GOAL_STEP_LABELS[item.currentStep] }}</p>
         <p>当前办理人：{{ item.currentHandlerName || '—' }}</p>
         <template #actions
           ><el-button @click="open(item)">{{
-            scope === 'review' ? '办理目标' : '查看计划'
+            scope === 'review' && !lifecycleReadOnly(item) ? '办理目标' : '查看计划'
           }}</el-button></template
         ></MobileResultCard
       ></template

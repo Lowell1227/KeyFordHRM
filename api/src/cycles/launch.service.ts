@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { resolveLifecycleEmployment } from '@/performance-lifecycle/lifecycle-employment';
 import {
   AccountType,
   AssessmentPeriodType,
@@ -521,6 +522,7 @@ export class LaunchService {
       );
 
       for (const candidate of candidates) {
+        const employmentRecordId = await resolveLifecycleEmployment(tx, candidate.id, openedAt);
         const participantPlan = participantPlanByEmployeeId.get(candidate.id)!;
         const manager = { id: participantPlan.managerId, name: participantPlan.managerName };
 
@@ -532,6 +534,7 @@ export class LaunchService {
               cycleId,
               snapshotId: null,
               employeeId: candidate.id,
+              employmentRecordId,
               deptId: candidate.deptId,
               managerId: manager.id,
               deptHeadId: participantPlan.deptHeadId,
@@ -555,6 +558,7 @@ export class LaunchService {
             cycleId,
             snapshotId: null,
             employeeId: candidate.id,
+            employmentRecordId,
             deptId: candidate.deptId,
             managerId: manager.id,
             deptHeadId: participantPlan.deptHeadId,

@@ -52,6 +52,7 @@ const REMINDER_NODES: ReminderNodeConfig[] = [
 const CLOSED_TASK_STATUSES: TaskStatus[] = ['closed', 'exempted'];
 
 const APPROVED_GOAL_WHERE: Prisma.AssessmentTaskWhereInput = {
+  lifecycleStatus: 'active',
   OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }],
 };
 
@@ -339,7 +340,7 @@ export class SchedulerService {
         if (claimed.count !== 1) return false;
 
         await tx.assessmentTask.updateMany({
-          where: { id: period.taskId, status: 'goal_confirmed' },
+          where: { id: period.taskId, status: 'goal_confirmed', lifecycleStatus: 'active' },
           data: { status: 'self_eval' },
         });
         await this.flow.syncCycleStage(tx, period.task.cycleId);
@@ -368,7 +369,7 @@ export class SchedulerService {
   private async runMonthlyPeriodReminders(now: Date): Promise<void> {
     const periods = await this.prisma.assessmentPeriod.findMany({
       where: {
-        task: { cycle: { workflowVersion: 2, scoringFrequency: 'monthly' } },
+        task: { lifecycleStatus: 'active', cycle: { workflowVersion: 2, scoringFrequency: 'monthly' } },
         OR: [
           { status: 'self_eval', employeeSubmittedAt: null },
           {
@@ -480,6 +481,7 @@ export class SchedulerService {
         const tasks = await tx.assessmentTask.findMany({
           where: {
             cycleId: cycle.id,
+            lifecycleStatus: 'active',
             status: { notIn: CLOSED_TASK_STATUSES },
           },
           include: {

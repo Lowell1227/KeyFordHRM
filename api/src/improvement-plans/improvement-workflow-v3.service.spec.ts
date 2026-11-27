@@ -29,6 +29,7 @@ describe('Improvement workflow V3', () => {
     departments = [{ id: 'dept', name: 'Department', parentId: null, leaderId: 'head', approverId: 'vp',
       leader: { name: 'Head', directManagerId: null, directManager: null }, approver: { name: 'VP' } }];
     state = { id: 'plan', employeeId: 'emp', creatorId: 'manager', cycleId: null, taskId: null,
+      lifecycleStatus: 'active', lifecycleVersion: 0, employmentRecordId: null,
       workflowVersion: 3, revision: 0, status: 'draft', improvementNeed: 'Improve quality', goals,
       importance: null, improvementGoal: null, targetDate: null, measures: [], selfEvaluation: null,
       managerEvaluation: null, departmentEvaluation: null, finalScore: null, startedAt: null,
@@ -37,6 +38,12 @@ describe('Improvement workflow V3', () => {
       creator: { id: 'manager', name: 'Manager' }, cycle: null });
     records = [];
     prisma = {
+      $queryRaw: jest.fn(async (query: TemplateStringsArray, id: unknown) => {
+        const sql = query.join('');
+        if (sql.includes('FROM users')) return users.some((item) => item.id === id) ? [{ id }] : [];
+        if (sql.includes('FROM improvement_plans')) return id === state.id ? [{ id }] : [];
+        throw new Error(`Unexpected improvement V3 lock query: ${sql}`);
+      }),
       user: { findUnique: jest.fn(async ({ where }: any) => {
         const found = users.find((item) => item.id === where.id);
         return found ? { ...found } : null;
@@ -51,12 +58,15 @@ describe('Improvement workflow V3', () => {
         findUnique: jest.fn(async () => included()), findMany: jest.fn(async () => [included()]),
         create: jest.fn(async ({ data }: any) => { Object.assign(state, data); return included(); }),
         updateMany: jest.fn(async ({ where, data }: any) => {
+          expect(where.lifecycleStatus).toBe('active');
           if (Object.entries(where).some(([key, value]) => state[key] !== value)) return { count: 0 };
           Object.assign(state, data, { revision: data.revision?.increment ? state.revision + data.revision.increment : state.revision });
           return { count: 1 };
         }),
       },
       assessmentCycle: { findUnique: jest.fn(async () => ({ id: 'cycle' })) },
+      employmentRecord: { findMany: jest.fn(async () => [{ id: 'employment', userId: 'emp', employeeStatus: 'active',
+        effectiveFrom: new Date('2000-01-01'), effectiveTo: null }]) },
       auditLog: { create: jest.fn(async ({ data }: any) => records.push(data)), findMany: jest.fn(async () => []) },
     };
     prisma.$transaction = jest.fn(async (callback: any) => callback(prisma));
@@ -150,7 +160,7 @@ describe('Improvement workflow V3', () => {
     state.status = 'goal_dept_review';
     await service.decideGoals('plan', { approve: true, expectedRevision: 0 }, viewer('head'));
     expect(state.status).toBe('goal_hr_review');
-    expect((await service.findOne('plan', viewer('emp', 'hr'))).allowedActions).toEqual([]);
+    expect((await service.findOne('plan', viewer('emp', 'hr'))).allowedActions).toEqual(['lifecycle_terminate']);
     expect(await service.myPending(viewer('emp', 'hr'))).toEqual([]);
     await expect(service.decideGoals('plan', { approve: true, expectedRevision: 1 }, viewer('emp', 'hr')))
       .rejects.toThrow(ForbiddenException);
@@ -224,7 +234,7 @@ describe('Improvement workflow V3', () => {
       .rejects.toThrow(ConflictException);
     expect(state).toMatchObject({ improvementNeed: 'Latest draft', revision: 1 });
     expect(prisma.improvementPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'plan', status: 'draft', workflowVersion: 3, revision: 0 },
+      where: { id: 'plan', lifecycleStatus: 'active', status: 'draft', workflowVersion: 3, revision: 0 },
       data: expect.objectContaining({ revision: { increment: 1 } }),
     }));
     expect(records).toHaveLength(1);
@@ -328,6 +338,19 @@ describe('Improvement workflow V3', () => {
     });
     await expect(service.evaluate('plan', { ...evaluation, expectedRevision: 0 }, viewer('emp'))).rejects.toThrow(ConflictException);
     expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the locked plan lifecycle before applying a stale draft save', async () => {
+    prisma.$transaction.mockImplementationOnce(async (callback: any) => {
+      state.lifecycleStatus = 'terminated';
+      return callback(prisma);
+    });
+    await expect(service.updateDraft('plan', { expectedRevision: 0, improvementNeed: 'Stale draft' }, viewer('manager')))
+      .rejects.toThrow(ConflictException);
+    expect(prisma.$queryRaw.mock.calls[0][0].join('')).toContain('FROM improvement_plans');
+    expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
+    expect(records).toEqual([]);
+    expect(state.improvementNeed).toBe('Improve quality');
   });
 
   it('rejects an organization transfer during a write instead of using old skip routing', async () => {

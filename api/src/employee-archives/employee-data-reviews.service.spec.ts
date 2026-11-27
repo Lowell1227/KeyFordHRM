@@ -1035,9 +1035,15 @@ describe('EmployeeDataReviewsService', () => {
         findFirst: jest.fn().mockResolvedValue({
           id: 'employment-current', effectiveFrom: new Date('2024-01-01T00:00:00.000Z'),
         }),
+        findUnique: jest.fn().mockResolvedValue({ id: 'employment-current', userId: request.userId,
+          entryDate: new Date('2024-01-01'), employeeNo: '009' }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'employment-current' }]),
         update: employmentUpdate,
         create: employmentCreate,
       },
+      assessmentTask: { findMany: jest.fn().mockResolvedValue([]) },
+      improvementPlan: { findMany: jest.fn().mockResolvedValue([]) },
+      confirmationApplication: { findMany: jest.fn().mockResolvedValue([]) },
       employeeContract: { createMany: jest.fn() },
       externalIdentityBinding: { updateMany: jest.fn() },
       auditLog: { create: jest.fn() },
@@ -1048,6 +1054,9 @@ describe('EmployeeDataReviewsService', () => {
     const result = await service.approveBatch({ requestIds: [request.id], requestVersions: { [request.id]: request.requestVersion }, scopes: ['profile'] }, operator);
 
     expect(result.failed).toEqual([]);
+    expect(tx.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      employeeId: request.userId, employmentRecordId: { in: ['employment-current'] }, lifecycleStatus: 'active',
+    } }));
     expect(employmentUpdate).toHaveBeenCalledWith({
       where: { id: 'employment-current' },
       data: { effectiveTo: new Date('2026-09-16T00:00:00.000Z') },

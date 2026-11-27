@@ -13,6 +13,7 @@ import { claimTaskVersion } from '@/tasks/task-version';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { mapReviewHistory, REVIEW_HISTORY_NODES } from '@/tasks/review-history';
 import { CalibrationQueryDto } from './dto/calibration-query.dto';
+import { lifecycleProjection } from '@/performance-lifecycle/lifecycle-policy';
 
 /** 等级分布单项。 */
 export interface GradeDistributionEntry {
@@ -72,7 +73,7 @@ export interface CalibrationActionResult {
 }
 
 /** 校准详情（个人抽屉）。 */
-export interface CalibrationCandidateDetail {
+export interface CalibrationCandidateDetail extends Partial<ReturnType<typeof lifecycleProjection>> {
   resultEvidence?: ResultEvidence;
   flowRecords: ReturnType<typeof mapReviewHistory>;
   taskId: string;
@@ -179,7 +180,8 @@ export class CalibrationService {
         employee: { select: { name: true, employeeNo: true, position: true } },
         dept: { select: { name: true } },
         manager: { select: { name: true } },
-        gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true } },
+        gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true,
+          approvedAt: true, employeeConfirmedAt: true, publishedAt: true, isPublished: true } },
         periods: {
           orderBy: { sequence: 'asc' },
           select: RESULT_PERIOD_SELECT,
@@ -199,6 +201,7 @@ export class CalibrationService {
     const resultEvidence = buildResultEvidence(task.periods);
 
     return {
+      ...lifecycleProjection('task', task, viewer),
       taskId: task.id,
       employeeName: task.employee?.name ?? '',
       employeeNo: task.employee?.employeeNo ?? null,
@@ -439,7 +442,7 @@ export class CalibrationService {
 
   private async findActiveTasksWithResult(cycleId: string) {
     return this.prisma.assessmentTask.findMany({
-      where: { cycleId, isExempt: false },
+      where: { cycleId, isExempt: false, lifecycleStatus: 'active' },
       include: {
         employee: { select: { name: true, employeeNo: true, position: true } },
         dept: { select: { name: true } },
@@ -452,7 +455,7 @@ export class CalibrationService {
 
   private async findActiveTasksByIds(cycleId: string, taskIds: string[]) {
     return this.prisma.assessmentTask.findMany({
-      where: { cycleId, isExempt: false, id: { in: taskIds } },
+      where: { cycleId, isExempt: false, lifecycleStatus: 'active', id: { in: taskIds } },
       include: {
         employee: { select: { name: true } },
         gradeResult: { select: { calculatedScore: true, rawGrade: true } },

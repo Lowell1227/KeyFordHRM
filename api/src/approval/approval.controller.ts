@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
@@ -7,6 +9,7 @@ import { ApprovalRejectDto } from './dto/approval-reject.dto';
 import { ApprovalQueryDto } from './dto/approval-query.dto';
 
 /** 周期级审批接口。 */
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('cycles/:id')
 export class ApprovalController {
   constructor(private readonly approvalService: ApprovalService) {}

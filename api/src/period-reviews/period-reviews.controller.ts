@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import {
   Body,
   Controller,
@@ -30,6 +32,7 @@ import { ReopenPeriodReviewDto } from './dto/reopen-period-review.dto';
 import { QueryPeriodMonitoringDto } from './dto/query-period-monitoring.dto';
 import { PeriodMonitoringService } from './period-monitoring.service';
 
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('assessment-periods')
 export class PeriodReviewsController {
   constructor(

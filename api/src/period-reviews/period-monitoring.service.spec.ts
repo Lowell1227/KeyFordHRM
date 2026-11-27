@@ -37,7 +37,7 @@ describe('PeriodMonitoringService', () => {
     expect(dataScope.getVisibleEmployeeFilter).toHaveBeenCalledWith(viewer);
     expect(prisma.assessmentPeriod.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
-        task: expect.objectContaining({ cycleId: 'cycle-1', employee: { deptId: { in: ['dept-1'] } } }),
+        task: expect.objectContaining({ cycleId: 'cycle-1', lifecycleStatus: 'active', employee: { deptId: { in: ['dept-1'] } } }),
       }),
     }));
     expect(result.summary).toEqual({

@@ -1,9 +1,9 @@
 import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
-import { PaginationDto } from '@/common/dto/pagination.dto';
+import { LifecycleQueryDto } from '@/performance-lifecycle/lifecycle.dto';
 import { ImprovementPlanStatus } from '@prisma/client';
 
 /** 改进计划列表查询参数。 */
-export class ImprovementPlanQueryDto extends PaginationDto {
+export class ImprovementPlanQueryDto extends LifecycleQueryDto {
   @IsOptional()
   @IsUUID()
   employeeId?: string;

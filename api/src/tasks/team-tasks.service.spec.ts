@@ -78,6 +78,7 @@ describe("TeamTasksService", () => {
 
   function mockSuccessfulReviewTransaction() {
     const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       flowRecord: { create: jest.fn() },
     };
@@ -222,13 +223,13 @@ describe("TeamTasksService", () => {
     expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        where: { managerId: managerViewer.id, NOT: { employeeId: managerViewer.id }, cycleId: "cycle-1" },
+        where: { lifecycleStatus: "active", managerId: managerViewer.id, NOT: { employeeId: managerViewer.id }, cycleId: "cycle-1" },
       }),
     );
     expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        where: { managerId: managerViewer.id, NOT: { employeeId: managerViewer.id }, cycleId: "cycle-1" },
+        where: { lifecycleStatus: "active", managerId: managerViewer.id, NOT: { employeeId: managerViewer.id }, cycleId: "cycle-1" },
       }),
     );
     expect(result).toEqual({
@@ -418,6 +419,7 @@ describe("TeamTasksService", () => {
       const result = await service.findAll(query, managerViewer);
 
       const itemWhere = {
+        lifecycleStatus: "active",
         managerId: managerViewer.id,
         NOT: { employeeId: managerViewer.id },
         status: { in: ["exempted"] },
@@ -471,7 +473,7 @@ describe("TeamTasksService", () => {
     expect(prisma.assessmentTask.count).not.toHaveBeenCalled();
     expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ where: { managerId: managerViewer.id, NOT: { employeeId: managerViewer.id } } }),
+      expect.objectContaining({ where: { lifecycleStatus: "active", managerId: managerViewer.id, NOT: { employeeId: managerViewer.id } } }),
     );
     expect(result).toMatchObject({
       total: 1,
@@ -507,6 +509,7 @@ describe("TeamTasksService", () => {
     expect(transaction.assessmentTask.updateMany).toHaveBeenCalledWith({
       where: {
         id: "valid-task",
+        lifecycleStatus: "active",
         updatedAt: new Date("2026-08-08T08:00:00.000Z"),
       },
       data: { updatedAt: expect.any(Date) },
@@ -581,6 +584,7 @@ describe("TeamTasksService", () => {
 
   it("contains an unexpected transaction failure and continues to the next task", async () => {
     const secondTransaction = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       flowRecord: { create: jest.fn() },
     };
@@ -624,10 +628,12 @@ describe("TeamTasksService", () => {
   it("records an atomic claim conflict and then processes the next task", async () => {
     const transactions = [
       {
+        $queryRaw: jest.fn().mockResolvedValue([]),
         assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
         flowRecord: { create: jest.fn() },
       },
       {
+        $queryRaw: jest.fn().mockResolvedValue([]),
         assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
         flowRecord: { create: jest.fn() },
       },
@@ -663,6 +669,10 @@ describe("TeamTasksService", () => {
   it("claims the task version before the flow transition writes", async () => {
     const writeOrder: string[] = [];
     const transaction = {
+      $queryRaw: jest.fn().mockImplementation(async () => {
+        writeOrder.push("lock-periods");
+        return [];
+      }),
       assessmentTask: {
         updateMany: jest.fn().mockImplementation(async () => {
           writeOrder.push("claim");
@@ -687,7 +697,7 @@ describe("TeamTasksService", () => {
       managerViewer,
     );
 
-    expect(writeOrder).toEqual(["claim", "transition"]);
+    expect(writeOrder).toEqual(["lock-periods", "claim", "transition"]);
   });
 
   it("uses one batch id for every successful flow transition in a request", async () => {
@@ -754,10 +764,12 @@ describe("TeamTasksService", () => {
   it("rejects every eligible task in its own transaction with the shared reason", async () => {
     const transactions = [
       {
+        $queryRaw: jest.fn().mockResolvedValue([]),
         assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
         flowRecord: { create: jest.fn() },
       },
       {
+        $queryRaw: jest.fn().mockResolvedValue([]),
         assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
         flowRecord: { create: jest.fn() },
       },

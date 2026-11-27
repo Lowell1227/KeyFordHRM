@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import {
   Body,
   Controller,
@@ -29,6 +31,7 @@ import { ReturnConfirmationDto } from './dto/return-confirmation.dto';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { ConfirmationMutationDto } from './dto/confirmation-mutation.dto';
 
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('confirmation-applications')
 export class ConfirmationController {
   constructor(private readonly confirmationService: ConfirmationService, private readonly storageService: StorageService) {}
@@ -40,7 +43,7 @@ export class ConfirmationController {
 
   @Get()
   @Roles(SysRole.hr)
-  @HrCapabilities('confirmation_manage')
+  @HrCapabilities('confirmation_manage', 'performance_lifecycle_view')
   findAll(@Query() dto: ConfirmationQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.findAll(dto, viewer);
   }

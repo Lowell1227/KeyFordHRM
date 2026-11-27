@@ -7,7 +7,7 @@ import {
   MaxLength,
 } from "class-validator";
 import { TaskStatus } from "@prisma/client";
-import { PaginationDto } from "@/common/dto/pagination.dto";
+import { LifecycleQueryDto } from '@/performance-lifecycle/lifecycle.dto';
 
 export enum GoalPlanScope {
   mine = "mine",
@@ -15,7 +15,7 @@ export enum GoalPlanScope {
   monitor = "monitor",
 }
 
-export class GoalPlanQueryDto extends PaginationDto {
+export class GoalPlanQueryDto extends LifecycleQueryDto {
   @IsOptional()
   @IsEnum(GoalPlanScope)
   scope: GoalPlanScope = GoalPlanScope.mine;

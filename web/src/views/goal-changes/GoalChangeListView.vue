@@ -7,19 +7,26 @@ import { useAuthStore } from '@/stores/auth.store';
 import { usePagination } from '@/composables/usePagination';
 import { formatDateTime } from '@/utils/date';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
+import PerformanceTaskNavigation from '@/components/performance/PerformanceTaskNavigation.vue';
+import { canMonitorGoals } from '@/api/goal-plans.api';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { grantLabels, statusLabels } from './goal-change-labels';
+import { canViewLifecycleHistory, lifecycleLabel, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
 
 const route = useRoute(), router = useRouter(), auth = useAuthStore();
 const context = ref<GoalChangeContext | null>(null), rows = ref<GoalChangeRow[]>([]);
 const pendingRows = ref<GoalChangeRow[]>([]), listTotal = ref(0);
 const contextError = ref(''), listError = ref(''), pendingError = ref(''), dialogError = ref('');
 const loading = ref(false), contextLoading = ref(false), busy = ref(false);
-const scope = ref('self');
+const requestedScope = route.query.scope;
+const scope = ref(typeof requestedScope === 'string' && ['self', 'team', 'all', 'pending', 'review'].includes(requestedScope)
+  ? requestedScope : 'self');
 const filters = reactive({ keyword: '', status: '' });
+const lifecycleStatus = ref<LifecycleFilter | ''>(parseLifecycleFilter(route.query.lifecycleStatus));
+const canViewHistory = computed(() => canViewLifecycleHistory(auth.user));
 const { page, pageSize, pageSizeOptions } = usePagination({ defaultPageSize: 10 });
 const dialog = ref(false);
 const createdId = ref('');
@@ -41,8 +48,8 @@ const filteredRows = computed(() => (queueScope.value ? pendingRows.value : rows
 }));
 const pageRows = computed(() => queueScope.value ? filteredRows.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value) : rows.value);
 const totalRows = computed(() => queueScope.value ? filteredRows.value.length : listTotal.value);
-watch([scope, () => filters.keyword, () => filters.status, pageSize, page], (values, previous) => {
-  if (values.slice(0, 4).some((value, index) => value !== previous[index]) && page.value !== 1) { page.value = 1; return; }
+watch([scope, () => filters.keyword, () => filters.status, lifecycleStatus, pageSize, page], (values, previous) => {
+  if (values.slice(0, 5).some((value, index) => value !== previous[index]) && page.value !== 1) { page.value = 1; return; }
   ++listSession;
   clearTimeout(filterTimer);
   if (queueScope.value) { loading.value = false; return; }
@@ -68,6 +75,7 @@ async function loadList() {
   loading.value = true; listError.value = '';
   try {
     const result = await goalChangesApi.page({ scope: scope.value as 'self' | 'team' | 'all', page: page.value,
+      ...(lifecycleStatus.value ? { lifecycleStatus: lifecycleStatus.value } : {}),
       pageSize: pageSize.value, ...(filters.status ? { status: filters.status } : {}),
       ...(filters.keyword.trim() ? { keyword: filters.keyword.trim() } : {}) });
     if (alive && token === listSession) { rows.value = result.items; listTotal.value = result.total; }
@@ -112,6 +120,9 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
 </script>
 
 <template>
+  <div class="performance-task-page">
+  <PerformanceTaskNavigation active="changes" :can-monitor="canMonitorGoals(auth.user)" />
+  <div class="performance-task-page__body">
   <PerformanceWorkspace title="目标变更" active-section="changes" :show-context="false">
     <template #toolbar>
       <span class="goal-changes-toolbar-label">变更申请与记录</span>
@@ -128,6 +139,10 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
         </el-tabs>
         <QueryFilterPanel>
           <el-form inline @submit.prevent="page = 1">
+            <el-form-item v-if="!queueScope" label="记录范围"><el-select v-model="lifecycleStatus" aria-label="记录范围">
+              <el-option label="当前记录" value="" /><el-option label="未终止" value="active" /><el-option label="已终止" value="terminated" />
+              <el-option v-if="canViewHistory" label="历史记录（含已删除）" value="all" /><el-option v-if="canViewHistory" label="已删除" value="deleted" />
+            </el-select></el-form-item>
             <el-form-item label="状态"><el-select v-model="filters.status" aria-label="状态" clearable placeholder="全部状态">
               <el-option v-for="(label, value) in statusLabels" :key="value" :label="label" :value="value" />
             </el-select></el-form-item>
@@ -152,7 +167,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
         <el-table v-if="!(queueScope ? pendingError : listError)" :data="pageRows" height="100%" class="app-table">
           <el-table-column prop="employeeName" label="员工" min-width="120" />
           <el-table-column prop="cycleName" label="考核周期" min-width="160" />
-          <el-table-column label="当前环节" min-width="170"><template #default="{ row }">{{ statusLabels[row.status as keyof typeof statusLabels] || row.status }}</template></el-table-column>
+          <el-table-column label="当前环节" min-width="170"><template #default="{ row }"><el-tag v-if="lifecycleLabel(row)" size="small" type="info">{{ lifecycleLabel(row) }}</el-tag> {{ statusLabels[row.status as keyof typeof statusLabels] || row.status }}</template></el-table-column>
           <el-table-column prop="creatorName" label="发起人" min-width="100" />
           <el-table-column prop="reason" label="变更原因" min-width="180" show-overflow-tooltip />
           <el-table-column label="更新时间" width="165"><template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template></el-table-column>
@@ -162,7 +177,7 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
       <template #mobile-list>
         <div v-if="!(queueScope ? pendingError : listError)" class="mobile-stack">
           <MobileResultCard v-for="row in pageRows" :key="row.id">
-            <template #title>{{ row.employeeName }}</template><template #status><el-tag size="small">{{ statusLabels[row.status] }}</el-tag></template>
+            <template #title>{{ row.employeeName }}</template><template #status><el-tag size="small">{{ lifecycleLabel(row) || statusLabels[row.status] }}</el-tag></template>
             <div class="mobile-result-field"><span>考核周期</span><span>{{ row.cycleName }}</span></div>
             <div class="mobile-result-field"><span>发起人</span><span>{{ row.creatorName }}</span></div>
             <div class="mobile-result-field"><span>变更原因</span><span>{{ row.reason || '未填写' }}</span></div>
@@ -191,9 +206,13 @@ function closeDialog(done: () => void) { if (!busy.value) { dialogSession++; don
       </template>
     </BusinessListPage>
   </PerformanceWorkspace>
+  </div>
+  </div>
 </template>
 
 <style scoped>
+.performance-task-page { display:flex; flex-direction:column; width:100%; height:100%; min-width:0; min-height:0; }
+.performance-task-page__body { flex:1; min-width:0; min-height:0; overflow:auto; }
 .goal-changes-list { padding: 16px; }
 .goal-changes-toolbar-label { color: #4d576b; font-size: 13px; white-space: nowrap; }
 .goal-changes-list :deep(.el-select) { width: 200px; }

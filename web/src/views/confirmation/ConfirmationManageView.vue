@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { confirmationApi } from '@/api/confirmation.api';
 import ListPagination from '@/components/common/ListPagination.vue';
@@ -13,12 +13,16 @@ import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import type { ConfirmationApplication, ConfirmationWarning } from '@/types/api.types';
 import type { ConfirmationStatus } from '@/types/enums';
+import { canViewLifecycleHistory, canViewLifecycleLedger, lifecycleLabel, lifecycleReadOnly, parseLifecycleFilter, type LifecycleFilter } from '@/api/performance-lifecycle.api';
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const list = ref<ConfirmationApplication[]>([]);
 const loading = ref(false);
+const listError = ref('');
+const lifecycleStatus = ref<LifecycleFilter | ''>(parseLifecycleFilter(route.query.lifecycleStatus));
+const canViewHistory = computed(() => canViewLifecycleHistory(auth.user));
 const warnings = ref<ConfirmationWarning[]>([]);
 const attentionOpen = ref(false);
 const attentionItems = computed(() => warnings.value.filter((item) => !item.hasApplication || !item.plannedRegularDate));
@@ -26,9 +30,12 @@ const filters = reactive<{ keyword: string; status: ConfirmationStatus | '' }>({
 const statusOptions: ConfirmationStatus[] = ['draft', 'submitted', 'manager_approved', 'hr_approved', 'approved', 'rejected'];
 const hasManagementScope = computed(() => auth.user?.sysRole === 'hr'
   || Boolean(auth.user?.hrCapabilities?.includes('confirmation_manage')));
+const canReadManagementList = computed(() => hasManagementScope.value || canViewLifecycleLedger(auth.user));
 const { page, pageSize, total, pageSizeOptions, reset: resetPagination, withParams } = usePagination({ defaultPageSize: 10 });
 const detailOpen = computed(() => route.name === 'ConfirmationManageDetail');
 const detailOpenedFromList = ref(false);
+let generation = 0, disposed = false;
+onBeforeUnmount(() => { disposed = true; generation++; });
 
 onMounted(() => {
   void loadList();
@@ -41,21 +48,27 @@ async function loadWarnings() {
 }
 
 async function loadList() {
+  const requestGeneration = ++generation;
   loading.value = true;
+  listError.value = '';
   try {
     const params = withParams({
       keyword: filters.keyword || undefined,
       status: filters.status || undefined,
+      lifecycleStatus: lifecycleStatus.value || undefined,
     });
-    const request = hasManagementScope.value ? confirmationApi.findAll : confirmationApi.findAssigned;
+    const request = canReadManagementList.value ? confirmationApi.findAll : confirmationApi.findAssigned;
     const result = await request(params);
+    if (disposed || requestGeneration !== generation) return;
     list.value = result.items;
     total.value = result.total;
   } catch {
+    if (disposed || requestGeneration !== generation) return;
+    listError.value = '转正记录读取失败，请重试或核对访问范围';
     list.value = [];
     total.value = 0;
   } finally {
-    loading.value = false;
+    if (!disposed && requestGeneration === generation) loading.value = false;
   }
 }
 
@@ -65,6 +78,7 @@ function search() {
 }
 
 function reset() {
+  lifecycleStatus.value = '';
   filters.keyword = '';
   filters.status = '';
   search();
@@ -85,7 +99,7 @@ function openDetail(id: string) {
 }
 
 function actionLabel(row: ConfirmationApplication) {
-  return row.pendingRole ? '办理' : '查看';
+  return row.pendingRole && !lifecycleReadOnly(row) ? '办理' : '查看';
 }
 
 function closeDetail() {
@@ -110,6 +124,10 @@ function handleDetailVisibility(value: boolean) {
     <template #filters>
       <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="search">
+          <el-form-item label="记录范围"><el-select v-model="lifecycleStatus" aria-label="记录范围" style="width: 200px">
+            <el-option label="当前记录" value="" /><el-option label="未终止" value="active" /><el-option label="已终止" value="terminated" />
+            <el-option v-if="canViewHistory" label="历史记录（含已删除）" value="all" /><el-option v-if="canViewHistory" label="已删除" value="deleted" />
+          </el-select></el-form-item>
           <el-form-item label="状态">
             <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
               <el-option v-for="status in statusOptions" :key="status" :label="CONFIRMATION_STATUS_META[status]?.label ?? status" :value="status" />
@@ -121,10 +139,12 @@ function handleDetailVisibility(value: boolean) {
       </QueryFilterPanel>
     </template>
 
+    <template #feedback><el-alert v-if="listError" :title="listError" type="error" :closable="false"><el-button link @click="loadList">重试</el-button></el-alert></template>
+
     <template #desktop-list>
       <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="员工" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template></el-table-column>
-        <el-table-column label="状态" width="130"><template #default="{ row }"><el-tag :type="statusType(row as ConfirmationApplication) as any" size="small">{{ statusLabel(row as ConfirmationApplication) }}</el-tag></template></el-table-column>
+        <el-table-column label="状态" min-width="150"><template #default="{ row }"><el-tag v-if="lifecycleLabel(row)" type="info" size="small">{{ lifecycleLabel(row) }}</el-tag> <el-tag :type="statusType(row as ConfirmationApplication) as any" size="small">{{ statusLabel(row as ConfirmationApplication) }}</el-tag></template></el-table-column>
         <el-table-column label="直属主管" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).manager?.name || '待核实' }}</template></el-table-column>
         <el-table-column label="HR 实际经办" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).hr?.name || '尚未办理' }}</template></el-table-column>
         <el-table-column label="公司审批人" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).companyApprover?.name || '提交时确定' }}</template></el-table-column>
@@ -138,7 +158,7 @@ function handleDetailVisibility(value: boolean) {
       <div v-loading="loading" class="confirmation-mobile-list">
         <MobileResultCard v-for="item in list" :key="item.id">
           <template #title>{{ item.employee?.name || '-' }}</template>
-          <template #status><el-tag :type="statusType(item) as any" size="small">{{ statusLabel(item) }}</el-tag></template>
+          <template #status><el-tag :type="statusType(item) as any" size="small">{{ lifecycleLabel(item) || statusLabel(item) }}</el-tag></template>
           <div class="mobile-result-field"><span class="mobile-result-field__label">直属主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '待核实' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">HR 实际经办</span><span class="mobile-result-field__value">{{ item.hr?.name || '尚未办理' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '提交时确定' }}</span></div>

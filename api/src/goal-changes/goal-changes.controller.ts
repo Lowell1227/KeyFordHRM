@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
@@ -5,6 +7,7 @@ import { ChangeDecisionDto, ChangeDraftDto, ChangeGrantDto, ChangeRevisionDto, C
 import { GoalChangesService } from './goal-changes.service';
 import { GoalChangeListQueryDto } from './dto/goal-change-list-query.dto';
 
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('goal-changes')
 export class GoalChangesController {
   constructor(private readonly service: GoalChangesService) {}

@@ -34,7 +34,9 @@ describe('FlowService', () => {
 
   beforeEach(async () => {
     tx = {
-      $queryRaw: jest.fn().mockResolvedValue([]),
+      $queryRaw: jest.fn().mockImplementation(async (sql: TemplateStringsArray) => (
+        sql.join('').includes('lifecycle_status') ? [{ lifecycleStatus: 'active' }] : []
+      )),
       assessmentTask: { update: jest.fn(), groupBy: jest.fn().mockResolvedValue([]) },
       assessmentCycle: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       flowRecord: { create: jest.fn() },
@@ -72,6 +74,9 @@ describe('FlowService', () => {
         where: { id: 'task-1' },
         data: { status: t.to },
       });
+      expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        tx.assessmentTask.update.mock.invocationCallOrder[0],
+      );
       expect(tx.flowRecord.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -87,6 +92,21 @@ describe('FlowService', () => {
   });
 
   describe('非法转换', () => {
+    it.each(['terminated', 'deleted'])('rejects a task that became %s before the locked transition', async (lifecycleStatus) => {
+      tx.$queryRaw.mockResolvedValue([{ lifecycleStatus }]);
+
+      await expect(service.transition({
+        task: makeTask('indicator_drafting'),
+        action: 'submit',
+        targetStatus: 'indicator_reviewing',
+        actorId: 'actor-1',
+      })).rejects.toBeInstanceOf(ConflictException);
+
+      expect(tx.assessmentTask.update).not.toHaveBeenCalled();
+      expect(tx.flowRecord.create).not.toHaveBeenCalled();
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    });
+
     it('未定义的转换抛 4009', async () => {
       await expect(
         service.transition({
@@ -378,7 +398,7 @@ describe('FlowService', () => {
         data: { status: expected },
       });
       expect(tx.assessmentTask.groupBy).toHaveBeenCalledWith(expect.objectContaining({
-        where: { cycleId: 'cycle-1', isExempt: false },
+        where: { cycleId: 'cycle-1', isExempt: false, lifecycleStatus: 'active' },
       }));
     });
 

@@ -26,7 +26,7 @@ interface ReviewFormItem {
   selfScore: number | null;
 }
 
-const props = defineProps<{ periodId: string }>();
+const props = defineProps<{ periodId: string; readOnly?: boolean }>();
 const emit = defineEmits<{ submitted: [] }>();
 
 const detail = ref<PeriodReviewDetail>();
@@ -54,7 +54,7 @@ const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> =
   { value: 'completed', label: '已经完成' },
 ];
 
-const canEdit = computed(() => Boolean(detail.value?.permissions.canEditEmployee));
+const canEdit = computed(() => !props.readOnly && Boolean(detail.value?.permissions.canEditEmployee));
 const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
 const scoreExcludedCount = computed(() => (detail.value?.indicators.length ?? 0) - scoreRequiredCount.value);
 const completedCount = computed(() => formItems.filter((item, index) => (

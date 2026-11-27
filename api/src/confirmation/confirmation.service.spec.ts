@@ -21,6 +21,7 @@ describe('employee confirmation draft', () => {
     canViewAll: false,
   };
   const prisma = {
+    $queryRaw: jest.fn(),
     user: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
     department: { findMany: jest.fn() },
     employmentRecord: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
@@ -36,6 +37,12 @@ describe('employee confirmation draft', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    prisma.$queryRaw.mockImplementation(async (query: TemplateStringsArray, id: unknown) => {
+      const sql = query.join('');
+      if (/FROM (?:confirmation_applications|users|employment_records)\b/.test(sql)) return [{ id }];
+      throw new Error(`Unexpected confirmation lock query: ${sql}`);
+    });
+    dataScope.getConfirmationEmployeeFilter.mockReset().mockResolvedValue({});
     prisma.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === employeeId ? { ...employee, deptId: 'dept-1' }
         : { id: where.id, status: UserStatus.active, deletedAt: null });
@@ -55,6 +62,8 @@ describe('employee confirmation draft', () => {
       workflowVersion: 2,
       submissionVersion: 0,
       status: ConfirmationStatus.draft,
+      lifecycleStatus: 'active',
+      lifecycleVersion: 0,
       employeeId,
       employmentRecordId: 'synthetic-employment',
       managerId,
@@ -89,7 +98,10 @@ describe('employee confirmation draft', () => {
     prisma.confirmationApplication.create.mockResolvedValue(draft);
     prisma.confirmationApplication.findUnique.mockResolvedValue(draft);
     prisma.confirmationApplication.update.mockResolvedValue(draft);
-    prisma.confirmationApplication.updateMany.mockResolvedValue({ count: 1 });
+    prisma.confirmationApplication.updateMany.mockImplementation(async ({ where }) => {
+      expect(where.lifecycleStatus).toBe('active');
+      return { count: 1 };
+    });
     prisma.confirmationApplication.count.mockResolvedValue(1);
     prisma.auditLog.findMany.mockResolvedValue([]);
     prisma.user.updateMany.mockResolvedValue({ count: 1 });
@@ -103,13 +115,14 @@ describe('employee confirmation draft', () => {
 
     expect(prisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: employeeId } }));
     expect(prisma.confirmationApplication.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ employeeId, workflowVersion: 2 }),
+      where: expect.objectContaining({ employeeId, workflowVersion: 2, lifecycleStatus: 'active' }),
     }));
     expect(prisma.confirmationApplication.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         workflowVersion: 2,
         status: ConfirmationStatus.draft,
         employee: { connect: { id: employeeId } },
+        employmentRecord: { connect: { id: 'synthetic-employment' } },
         manager: { connect: { id: managerId } },
         summary: '完成目标与改进计划',
       }),
@@ -125,7 +138,7 @@ describe('employee confirmation draft', () => {
     } as never, viewer);
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: '33333333-3333-4333-8333-333333333333', employeeId, status: ConfirmationStatus.draft,
+      where: { lifecycleStatus: 'active', id: '33333333-3333-4333-8333-333333333333', employeeId, status: ConfirmationStatus.draft,
         submissionVersion: 0, employmentRecordId: 'synthetic-employment' },
       data: { summary: '更新工作小结' },
     }));
@@ -148,6 +161,24 @@ describe('employee confirmation draft', () => {
       data: expect.objectContaining({ status: ConfirmationStatus.submitted, managerId,
         hrId: null, companyApproverId: '55555555-5555-4555-8555-555555555555' }),
     }));
+    expect(prisma.$queryRaw.mock.calls.map(([query]) => query.join(''))).toEqual([
+      expect.stringMatching(/FROM users[\s\S]*FOR UPDATE/),
+      expect.stringMatching(/FROM employment_records[\s\S]*FOR SHARE/),
+      expect.stringMatching(/FROM confirmation_applications[\s\S]*FOR UPDATE/),
+    ]);
+    expect(prisma.$queryRaw.mock.invocationCallOrder[2]).toBeLessThan(prisma.confirmationApplication.updateMany.mock.invocationCallOrder[0]);
+  });
+
+  it('rejects submission when the locked application ended after the draft page was read', async () => {
+    const draft = await prisma.confirmationApplication.findUnique();
+    prisma.confirmationApplication.findUnique.mockResolvedValueOnce(draft)
+      .mockResolvedValue({ ...draft, lifecycleStatus: 'terminated' });
+    await expect(service.submit(draft.id, viewer, { submissionVersion: 0 })).rejects.toThrow('记录已终止');
+    expect(prisma.$queryRaw.mock.calls.map(([query]) => query.join(''))).toContainEqual(
+      expect.stringMatching(/FROM confirmation_applications[\s\S]*FOR UPDATE/),
+    );
+    expect(prisma.confirmationApplication.updateMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('routes company approval to the top department leader manager instead of the parent department leader', async () => {
@@ -180,6 +211,7 @@ describe('employee confirmation draft', () => {
     prisma.confirmationApplication.findUnique.mockResolvedValue({
       id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2, submissionVersion: 1,
       status: ConfirmationStatus.draft, employeeId, managerId,
+      employmentRecordId: 'synthetic-employment',
       hrId: '44444444-4444-4444-8444-444444444444',
       companyApproverId: '88888888-8888-4888-8888-888888888888',
       summary: '补充后的工作小结', returnReason: '补充项目结果',
@@ -203,6 +235,7 @@ describe('employee confirmation draft', () => {
     prisma.confirmationApplication.findUnique.mockResolvedValue({
       id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2,
       submissionVersion: 1, status: ConfirmationStatus.draft, employeeId,
+      employmentRecordId: 'synthetic-employment',
       managerId, hrId: '44444444-4444-4444-8444-444444444444',
       companyApproverId: '55555555-5555-4555-8555-555555555555',
       summary: '补充后的工作小结', returnReason: '请补充项目结果',
@@ -238,7 +271,7 @@ describe('employee confirmation draft', () => {
     } as never, manager);
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.submitted, managerId,
+      where: { lifecycleStatus: 'active', id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.submitted, managerId,
         submissionVersion: 1, employmentRecordId: null },
       data: expect.objectContaining({
         status: ConfirmationStatus.manager_approved,
@@ -272,7 +305,7 @@ describe('employee confirmation draft', () => {
     const result = await service.findPending({ page: 1, pageSize: 10, skip: 0, take: 10 } as never, { ...viewer, id: managerId });
     expect(result.items[0].pendingRole).toBe('manager');
     expect(prisma.confirmationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ AND: expect.arrayContaining([expect.objectContaining({ workflowVersion: 2 })]) }),
+      where: expect.objectContaining({ AND: expect.arrayContaining([expect.objectContaining({ workflowVersion: 2, lifecycleStatus: 'active' })]) }),
     }));
   });
 
@@ -325,7 +358,7 @@ describe('employee confirmation draft', () => {
     expect(prisma.confirmationApplication.updateMany).not.toHaveBeenCalled();
   });
 
-  it('lets an authorized HR manager read a scoped application while blocking out-of-scope HR and system admins', async () => {
+  it('retains scoped HR denial and gives lifecycle administrators read-only access, not HR approval authority', async () => {
     prisma.confirmationApplication.findUnique.mockResolvedValue({
       workflowVersion: 2, employeeId, managerId,
       hrId: '44444444-4444-4444-8444-444444444444',
@@ -341,7 +374,8 @@ describe('employee confirmation draft', () => {
       ...unrelated, sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'],
     })).rejects.toThrow('无权查看');
     await expect(service.findOne('33333333-3333-4333-8333-333333333333', { ...unrelated, sysRole: SysRole.system_admin }))
-      .rejects.toThrow('无权查看');
+      .resolves.toMatchObject({ employeeId, canApprove: false, canReject: false, canReturn: false,
+        canViewInternalMeeting: false, salary: null, voteComment: null, voteParticipants: [] });
   });
 
   it('does not treat a legacy preassigned HR as the actual actor or grant them internal access', async () => {
@@ -382,7 +416,7 @@ describe('employee confirmation draft', () => {
         expect.objectContaining({ workflowVersion: 2, AND: expect.arrayContaining([
           { OR: [{ managerId }, { companyApproverId: managerId },
             { hrId: managerId, hrApprovedAt: { not: null }, employee: { is: { id: { in: [] } } } }] },
-          { NOT: expect.objectContaining({ OR: expect.arrayContaining([{ status: ConfirmationStatus.submitted, managerId }]) }) },
+          { NOT: expect.objectContaining({ lifecycleStatus: 'active', OR: expect.arrayContaining([{ status: ConfirmationStatus.submitted, managerId }]) }) },
         ]) }),
       ]) }),
     }));
@@ -406,22 +440,21 @@ describe('employee confirmation draft', () => {
             { companyApproverId },
           ],
         },
+        { lifecycleStatus: { not: 'deleted' } },
         { status: ConfirmationStatus.approved },
         { employee: { name: { contains: '余', mode: 'insensitive' } } },
       ] }),
     }));
   });
 
-  it('shows HR managers scoped draft records', async () => {
+  it('keeps HR administrator draft visibility global while excluding logically deleted records', async () => {
     prisma.confirmationApplication.findMany.mockResolvedValue([]);
     const hrId = '44444444-4444-4444-8444-444444444444';
     await service.findAll({ page: 1, pageSize: 10, skip: 0, take: 10, keyword: '张' } as never,
       { ...viewer, id: hrId, sysRole: SysRole.hr });
     expect(prisma.confirmationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ AND: expect.arrayContaining([
-        expect.objectContaining({ OR: expect.arrayContaining([{ employee: { is: {} } }]) }),
-        expect.objectContaining({ employee: { name: { contains: '张', mode: 'insensitive' } } }),
-      ]) }),
+      where: { AND: [{}, { lifecycleStatus: { not: 'deleted' } },
+        { employee: { name: { contains: '张', mode: 'insensitive' } } }] },
     }));
   });
 
@@ -446,7 +479,7 @@ describe('employee confirmation draft', () => {
               OR: [{ managerId }, { companyApproverId: managerId }],
             },
           ],
-        }],
+        }, { lifecycleStatus: { not: 'deleted' } }],
       },
     }));
   });
@@ -606,7 +639,7 @@ describe('employee confirmation draft', () => {
       hrCapabilities: ['confirmation_manage'] });
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.manager_approved,
+      where: { lifecycleStatus: 'active', id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.manager_approved,
         submissionVersion: 1, employmentRecordId: null },
       data: expect.objectContaining({
         status: ConfirmationStatus.hr_approved,
@@ -641,7 +674,7 @@ describe('employee confirmation draft', () => {
     expect(managerResult.status).toBe(ConfirmationStatus.manager_approved);
     const managerUpdate = prisma.confirmationApplication.updateMany.mock.calls.at(-1)?.[0];
     expect(managerUpdate).toMatchObject({
-      where: { id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.submitted, managerId },
+      where: { lifecycleStatus: 'active', id: '33333333-3333-4333-8333-333333333333', status: ConfirmationStatus.submitted, managerId },
       data: { status: ConfirmationStatus.manager_approved },
     });
     expect(managerUpdate?.data).not.toHaveProperty('hrId');
@@ -743,6 +776,7 @@ describe('employee confirmation draft', () => {
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith({
       where: {
         id: '33333333-3333-4333-8333-333333333333', hrId,
+        lifecycleStatus: 'active',
         submissionVersion: 1, employmentRecordId: null,
         status: { in: [ConfirmationStatus.hr_approved, ConfirmationStatus.approved, ConfirmationStatus.rejected] },
         voteResult: { not: null },

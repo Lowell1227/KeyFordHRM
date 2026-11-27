@@ -1,0 +1,9 @@
+{
+  "rootDir": "../..",
+  "testEnvironment": "node",
+  "testMatch": ["<rootDir>/test/performance-lifecycle/*.integration.spec.ts"],
+  "transform": { "^.+\\.ts$": "ts-jest" },
+  "moduleNameMapper": { "^@/(.*)$": "<rootDir>/src/$1" },
+  "testTimeout": 30000,
+  "maxWorkers": 1
+}

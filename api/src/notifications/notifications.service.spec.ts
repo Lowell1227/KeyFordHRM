@@ -7,8 +7,9 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 
 /** 构造一个可被 jest.spyOn mock 的 PrismaService。 */
 function makePrismaMock() {
-  return {
+  const prisma = {
     $transaction: jest.fn(),
+    $queryRaw: jest.fn(),
     $executeRaw: jest.fn().mockResolvedValue(1),
     user: { findUnique: jest.fn(), findFirst: jest.fn() },
     notificationLog: {
@@ -24,7 +25,20 @@ function makePrismaMock() {
     assessmentTask: { findUnique: jest.fn(), findMany: jest.fn() },
     auditLog: { create: jest.fn() },
     appeal: { findUnique: jest.fn() },
-  } as unknown as PrismaService;
+  };
+  prisma.assessmentTask.findUnique.mockImplementation(async ({ where }) => {
+    const reads = prisma.assessmentTask.findMany.mock.results;
+    const tasks = await reads[reads.length - 1]?.value;
+    return tasks?.find((task: { id: string }) => task.id === where.id) ?? null;
+  });
+  prisma.$queryRaw.mockImplementation(async (query: TemplateStringsArray, id: unknown) => {
+    const sql = query.join('');
+    if (!sql.includes('SELECT lifecycle_status AS "lifecycleStatus" FROM assessment_tasks')
+      || !sql.includes('FOR UPDATE')) throw new Error(`Unexpected notification lock query: ${sql}`);
+    const task = await prisma.assessmentTask.findUnique({ where: { id }, select: { lifecycleStatus: true } });
+    return task ? [{ lifecycleStatus: task.lifecycleStatus }] : [];
+  });
+  return prisma as unknown as PrismaService;
 }
 
 function makePushProviderMock(): MessagePushProvider {
@@ -380,6 +394,7 @@ describe('NotificationsService', () => {
     beforeEach(() => {
       jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue({
         id: taskId,
+        lifecycleStatus: 'active',
         cycleId: 'cycle-1',
         employeeId: 'emp-1',
         managerId: 'mgr-1',
@@ -464,6 +479,7 @@ describe('NotificationsService', () => {
     it('HR 节点始终催办周期指定的 HR 负责人', async () => {
       jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue({
         id: taskId,
+        lifecycleStatus: 'active',
         cycleId: 'cycle-1',
         employeeId: 'emp-1',
         managerId: 'mgr-1',
@@ -483,6 +499,7 @@ describe('NotificationsService', () => {
     it('节点处理人为空时应抛 NOT_FOUND', async () => {
       jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue({
         id: taskId,
+        lifecycleStatus: 'active',
         cycleId: 'cycle-1',
         employeeId: 'emp-1',
         managerId: null,
@@ -496,7 +513,7 @@ describe('NotificationsService', () => {
 
   describe('sendBatchReminders', () => {
     it.each(['manual', 'batch'] as const)('routes %s HR reminders for the owner own result to an eligible reviewer', async mode => {
-      const task = { id: 't-own', cycleId: 'c1', status: 'hr_calibration', employeeId: 'owner',
+      const task = { id: 't-own', cycleId: 'c1', lifecycleStatus: 'active', status: 'hr_calibration', employeeId: 'owner',
         managerId: 'head', deptHeadId: 'head', approverId: 'head', cycle: { hrOwnerId: 'owner' } };
       jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue(task as any);
       jest.spyOn(prisma.assessmentTask, 'findMany').mockResolvedValue([task] as any);
@@ -514,6 +531,7 @@ describe('NotificationsService', () => {
     it('批量 HR 催办只发送给周期指定的 HR 负责人', async () => {
       prisma.assessmentTask.findMany = jest.fn().mockResolvedValue([{
         id: 't-hr',
+        lifecycleStatus: 'active',
         cycleId: 'c1',
         status: 'hr_calibration',
         employeeId: 'e1',
@@ -535,9 +553,9 @@ describe('NotificationsService', () => {
     });
     it('与人工催办共用限频，只给当前处于该节点的任务处理人发通知', async () => {
       prisma.assessmentTask.findMany = jest.fn().mockResolvedValue([
-        { id: 't1', cycleId: 'c1', status: 'indicator_reviewing', employeeId: 'e1', managerId: 'm1', deptHeadId: null, approverId: null },
-        { id: 't2', cycleId: 'c1', status: 'manager_scoring', employeeId: 'e2', managerId: 'm2', deptHeadId: null, approverId: null },
-        { id: 't3', cycleId: 'c1', status: 'dept_review', employeeId: 'e3', managerId: null, deptHeadId: null, approverId: null },
+        { id: 't1', cycleId: 'c1', lifecycleStatus: 'active', status: 'indicator_reviewing', employeeId: 'e1', managerId: 'm1', deptHeadId: null, approverId: null },
+        { id: 't2', cycleId: 'c1', lifecycleStatus: 'active', status: 'manager_scoring', employeeId: 'e2', managerId: 'm2', deptHeadId: null, approverId: null },
+        { id: 't3', cycleId: 'c1', lifecycleStatus: 'active', status: 'dept_review', employeeId: 'e3', managerId: null, deptHeadId: null, approverId: null },
       ] as any);
       jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dingtalkId: null } as any);
       jest.spyOn(prisma.notificationLog, 'create').mockResolvedValue({ id: 'log-batch' } as any);
@@ -550,6 +568,7 @@ describe('NotificationsService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             cycleId: 'c1',
+            lifecycleStatus: 'active',
             status: { in: ['indicator_reviewing', 'manager_scoring'] },
           }),
         }),
@@ -577,6 +596,7 @@ describe('NotificationsService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             cycleId: 'c1',
+            lifecycleStatus: 'active',
             status: { in: ['indicator_reviewing', 'manager_scoring'] },
           }),
         }),
@@ -589,6 +609,7 @@ describe('NotificationsService', () => {
     it('应发给任务员工', async () => {
       jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue({
         id: 't1',
+        lifecycleStatus: 'active',
         cycleId: 'c1',
         employeeId: 'e1',
         managerId: 'm1',
@@ -611,13 +632,14 @@ describe('NotificationsService', () => {
 
   describe('sendAppealNotice', () => {
     it('应发给 dept_head 处理人', async () => {
+      jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue({ id: 't1', lifecycleStatus: 'active' } as any);
       jest.spyOn(prisma.appeal, 'findUnique').mockResolvedValue({
         id: 'a1',
         taskId: 't1',
         cycleId: 'c1',
         deptResolverId: 'head-1',
         hrResolverId: 'hr-1',
-        task: { id: 't1' },
+        task: { id: 't1', lifecycleStatus: 'active' },
       } as any);
       jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dingtalkId: null } as any);
       jest.spyOn(prisma.notificationLog, 'create').mockResolvedValue({ id: 'log-app' } as any);
@@ -639,7 +661,7 @@ describe('NotificationsService', () => {
         cycleId: 'c1',
         deptResolverId: null,
         hrResolverId: null,
-        task: { id: 't1' },
+        task: { id: 't1', lifecycleStatus: 'active' },
       } as any);
 
       await expect(service.sendAppealNotice('a1', 'hr')).rejects.toThrow(NotFoundException);

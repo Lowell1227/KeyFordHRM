@@ -13,6 +13,7 @@ import { useGoalChangeEntry } from '@/composables/useGoalChangeEntry';
 import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
+import PerformanceTaskNavigation from '@/components/performance/PerformanceTaskNavigation.vue';
 import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
 import TeamTaskList, {
   type TeamTaskListHandle,
@@ -54,8 +55,8 @@ const canSeeChanges = useGoalChangeEntry();
 const goalView = computed(() => ['mine','review','monitor'].includes(String(route.query.goalView)) ? route.query.goalView as GoalScope : null);
 const canMonitor = computed(() => canMonitorGoals(auth.user));
 const goalReviewTotal = ref<number | null>(null);
-const goalReviewLabel = computed(() => goalReviewTotal.value == null ? '待我审核（待更新）'
-  : goalReviewTotal.value > 0 ? `待我审核（${goalReviewTotal.value}）` : '待我审核');
+const goalReviewError = ref(false);
+const goalReviewLoading = ref(false);
 const workspaceQuery = useTaskWorkspaceQuery();
 
 const list = ref<TaskListItem[]>([]);
@@ -452,25 +453,35 @@ async function loadGoalReviewTotal(canApply = () => true) {
   const requestId = ++goalReviewCountRequestSerial;
   if (!auth.user || (goalView.value === 'monitor' && !canMonitor.value)) {
     goalReviewTotal.value = null;
+    goalReviewError.value = false;
+    goalReviewLoading.value = false;
     return;
   }
   const userId = auth.user?.id;
+  goalReviewLoading.value = true;
   try {
     const response = await goalPlansApi.findAll({ scope: 'review', page: 1, pageSize: 1 });
-    if (requestId === goalReviewCountRequestSerial && userId === auth.user?.id && canApply()) goalReviewTotal.value = response.total;
+    if (requestId === goalReviewCountRequestSerial && userId === auth.user?.id && canApply()) {
+      goalReviewTotal.value = response.total; goalReviewError.value = false;
+    }
   } catch {
-    if (requestId === goalReviewCountRequestSerial && userId === auth.user?.id && canApply()) goalReviewTotal.value = null;
+    if (requestId === goalReviewCountRequestSerial && userId === auth.user?.id && canApply()) {
+      goalReviewTotal.value = null; goalReviewError.value = true;
+    }
+  } finally {
+    if (requestId === goalReviewCountRequestSerial) goalReviewLoading.value = false;
   }
 }
 function onGoalPlansRefreshed(total: number | null) {
   goalReviewCountRequestSerial++;
   goalReviewTotal.value = total;
+  goalReviewError.value = total === null;
 }
 useVisibleRefresh({ intervalMs: 0, enabled: () => Boolean(auth.user) && (goalView.value !== 'review'
   || Boolean(route.query.cycleId || route.query.deptId || route.query.employeeName)),
   refresh: loadGoalReviewTotal });
 watch(() => [auth.user?.id, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => {
-  goalReviewCountRequestSerial++; goalReviewTotal.value = null;
+  goalReviewCountRequestSerial++; goalReviewTotal.value = null; goalReviewError.value = false; goalReviewLoading.value = false;
   if (auth.user && goalView.value !== 'review') void loadGoalReviewTotal();
 });
 
@@ -1099,15 +1110,10 @@ watch(
 </script>
 
 <template>
-  <nav v-if="goalView || isTeamTaskWorkspace" class="goal-plan-navigation" aria-label="目标计划视图">
-    <el-button :type="goalView === 'mine' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
-    <el-button :type="goalView === 'review' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=review')">
-      {{ goalReviewLabel }}
-    </el-button>
-    <el-button v-if="canMonitor" :type="goalView === 'monitor' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
-    <el-button v-if="goalView" @click="router.push('/tasks')">绩效待办</el-button>
-    <el-button v-if="canSeeChanges && (isTeamTaskWorkspace || goalView)" @click="router.push('/goal-changes')">目标变更</el-button>
-  </nav>
+  <div class="performance-task-page">
+  <PerformanceTaskNavigation :active="goalView || 'tasks'" :can-monitor="canMonitor" :can-see-changes="canSeeChanges"
+    :review-total="goalReviewTotal" :review-error="goalReviewError" />
+  <div class="performance-task-page__body">
   <GoalPlanList v-if="goalView" :key="goalView" :scope="goalView" :allowed="goalView !== 'monitor' || canMonitor" @refreshed="onGoalPlansRefreshed"/>
   <PerformanceWorkspace v-else
     title="绩效待办"
@@ -1235,14 +1241,10 @@ watch(
       </PerformanceContextPanel>
     </template>
 
-    <nav v-if="!isTeamTaskWorkspace" class="goal-plan-navigation is-content-tabs" aria-label="目标计划视图">
-      <el-button @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
-      <el-button @click="router.push('/tasks?goalView=review')">
-        {{ goalReviewLabel }}
-      </el-button>
-      <el-button v-if="canMonitor" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
-    </nav>
-
+    <el-alert v-if="goalReviewError && !isTeamTaskWorkspace" title="目标审核数量暂不可用" type="warning" :closable="false" show-icon>
+      <el-button link type="primary" :loading="goalReviewLoading" @click="() => loadGoalReviewTotal()">重新读取</el-button>
+      <el-button link type="primary" @click="router.push('/tasks?goalView=review')">打开待审目标</el-button>
+    </el-alert>
     <section
       v-if="(goalReviewTotal ?? 0) > 0 && !isTeamTaskWorkspace"
       class="goal-review-notice"
@@ -1518,6 +1520,8 @@ watch(
       </div>
     </div>
   </PerformanceWorkspace>
+  </div>
+  </div>
 </template>
 
 <style scoped>
@@ -2002,25 +2006,8 @@ watch(
 </style>
 
 <style scoped>
-.goal-plan-navigation {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.goal-plan-navigation .el-button {
-  margin-left: 0;
-}
-
-.goal-plan-navigation.is-content-tabs {
-  flex-wrap: nowrap;
-  margin-bottom: 0;
-  padding: 12px 16px;
-  overflow-x: auto;
-  background: #fff;
-  border-bottom: 1px solid #e5e8ef;
-}
+.performance-task-page { display:flex; flex-direction:column; width:100%; height:100%; min-width:0; min-height:0; }
+.performance-task-page__body { flex:1; min-width:0; min-height:0; overflow:auto; }
 
 .task-cycle-toolbar {
   display: flex;

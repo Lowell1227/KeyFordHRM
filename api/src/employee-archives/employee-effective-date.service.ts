@@ -3,6 +3,7 @@ import { EmployeeNumberStatus, ExternalIdentityProvider, ExternalIdentityStatus,
 import { PrismaService } from '@/prisma/prisma.service';
 import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from './employment-timeline';
 import { lockTalentSource, syncTalentApplicationOnboarding } from './employee-talent-source';
+import { terminateEmploymentPerformance } from '@/performance-lifecycle/lifecycle-employment';
 
 export const RESIGNATION_BINDING_DISABLED_REASON = '员工档案审核为离职';
 
@@ -83,6 +84,13 @@ export class EmployeeEffectiveDateService {
       await tx.user.update({ where: { id: userId }, data: projection });
     }
     if (current.employeeStatus === 'resigned') {
+      if (updated && user.status !== 'resigned' && current.changeType === 'resignation' && !overlap) {
+        const previousDay = new Date(current.effectiveFrom.getTime() - 86_400_000);
+        const previous = selectEmploymentAt(records, previousDay);
+        const departing = previous.matches.length === 1 && ['active', 'probation'].includes(previous.current!.employeeStatus)
+          ? previous.current! : current;
+        await terminateEmploymentPerformance(tx, userId, departing.id, at, current.createdById);
+      }
       await tx.externalIdentityBinding.updateMany({ where: { userId, status: ExternalIdentityStatus.enabled, endedAt: null },
         data: { status: ExternalIdentityStatus.disabled, disabledAt: at, disabledReason: RESIGNATION_BINDING_DISABLED_REASON } });
     }

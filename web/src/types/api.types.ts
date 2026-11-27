@@ -1,4 +1,5 @@
 import type { PayrollAccess } from './payroll.types';
+import type { LifecycleFilter, LifecycleMetadata } from '@/api/performance-lifecycle.api';
 import type {
   SysRole,
   EmploymentType,
@@ -163,6 +164,9 @@ export type HrCapability =
   | 'cycle_plan_review'
   | 'performance_calibration'
   | 'performance_publish'
+  | 'performance_lifecycle_view'
+  | 'performance_lifecycle_terminate'
+  | 'performance_lifecycle_delete'
   | 'confirmation_manage'
   | 'talent_hiring_confirm';
 
@@ -874,7 +878,8 @@ export interface GradeResult {
   employeeConfirmedAt?: string | null;
 }
 
-export interface AssessmentTask {
+export interface AssessmentTask extends LifecycleMetadata {
+  allowedActions?: string[];
   goalWorkflowVersion?: number;
   goalApprovedAt?: string | null;
   id: string;
@@ -1026,6 +1031,7 @@ export interface CycleParticipantRecord {
 }
 
 export interface TaskQuery {
+  lifecycleStatus?: LifecycleFilter;
   page?: number;
   pageSize?: number;
   cycleId?: string;
@@ -1877,7 +1883,7 @@ export interface ImprovementPlanRecord {
   newValue: Record<string, unknown> | null;
 }
 
-export interface ImprovementPlan {
+export interface ImprovementPlan extends LifecycleMetadata {
   id: string;
   revision: number;
   workflowIssue: string | null;
@@ -1912,6 +1918,7 @@ export interface ImprovementPlan {
 }
 
 export interface ImprovementPlanQuery {
+  lifecycleStatus?: LifecycleFilter;
   page?: number;
   pageSize?: number;
   status?: ImprovementPlanStatus;
@@ -2048,7 +2055,8 @@ export interface ProbationReviewActionResult {
 // 转正申请（Confirmation Application）
 // ---------------------------------------------------------------------------
 
-export interface ConfirmationApplication {
+export interface ConfirmationApplication extends LifecycleMetadata {
+  allowedActions?: string[];
   id: string;
   workflowVersion?: number;
   submissionVersion?: number;
@@ -2115,6 +2123,7 @@ export interface ApprovalStep {
 }
 
 export interface ConfirmationQuery {
+  lifecycleStatus?: LifecycleFilter;
   page?: number;
   pageSize?: number;
   employeeId?: string;

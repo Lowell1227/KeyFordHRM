@@ -4,6 +4,7 @@ import { validatePersonnelReferences } from '@/personnel-reference-data/personne
 import { validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { assertValidContractChanges } from './employee-contract-validation';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { terminateEmploymentPerformance } from '@/performance-lifecycle/lifecycle-employment';
 import {
   AccountType,
   CompanyCode,
@@ -957,6 +958,9 @@ export class EmployeeDataReviewsService {
     }
 
     if (employeeStatus === UserStatus.resigned && shouldUpdateUserProjection) {
+      if (isResignation && currentEmployment) {
+        await terminateEmploymentPerformance(tx, userId, currentEmployment.id, new Date(), operator.id);
+      }
       await tx.externalIdentityBinding.updateMany({
         where: {
           userId,

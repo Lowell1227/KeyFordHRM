@@ -8,11 +8,14 @@ import { improvementPlansApi } from '@/api/improvement-plans.api';
 import { goalChangesApi, type GoalChangeRow } from '@/api/goal-changes.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
+import DashboardSection from './DashboardSection.vue';
 import { getEmployeeTaskStageState, isTerminalTaskStatus, resolveEmployeeTaskEntry } from '@/views/task/task-stage';
 import type { AssessmentCycle, TaskListItem, ImprovementPlan } from '@/types/api.types';
 import type { TeamTaskStage } from '@/types/enums';
 
 const auth = useAuthStore();
+const props = withDefaults(defineProps<{ extraCount?: number | null; extraLoading?: boolean; extraError?: string }>(), { extraCount: 0, extraLoading: false, extraError: '' });
+const emit = defineEmits<{ refresh: [] }>();
 const router = useRouter();
 const selectedPlanId = ref('');
 const cycles = ref<AssessmentCycle[]>([]);
@@ -36,7 +39,7 @@ const teamCounts = ref<Record<string, CycleTeamCounts>>({});
 let requestSerial = 0;
 
 const openTasks = computed(() => personalTasks.value.filter((task) => (
-  !task.isExempt && !isTerminalTaskStatus(task.status)
+  !task.isExempt && !isTerminalTaskStatus(task.status) && (!task.lifecycleStatus || task.lifecycleStatus === 'active')
   && !cycles.value.some((cycle) => cycle.id === task.cycleId && ['draft', 'scheduled', 'launch_blocked', 'closed'].includes(cycle.status))
 )));
 const candidatePlans = computed(() => {
@@ -73,6 +76,16 @@ const plans = computed(() => candidatePlans.value.map((plan) => {
 const visiblePlans = computed(() => selectedPlanId.value
   ? plans.value.filter((plan) => plan.id === selectedPlanId.value)
   : plans.value);
+const sectionError = computed(() => props.extraError || (personalError.value || cyclesError.value || goalReviewError.value
+  || goalChangeError.value || improvementError.value || Object.values(teamCounts.value).some(counts => stages.some(stage => counts[stage.key].error))
+  ? '部分绩效事项暂时无法读取，已读取的事项仍可查看。' : ''));
+const pendingTotal = computed(() => {
+  if (loading.value || props.extraLoading || sectionError.value || goalReviewTotal.value === null || props.extraCount === null) return null;
+  // Goal review is counted once by its dedicated queue, not again through the team summary.
+  return (goalReviewTotal.value ?? 0) + plans.value.reduce((sum, plan) => sum
+    + plan.tasks.filter(item => item.actionable).length + (plan.team?.['manager-eval'].pending ?? 0), 0)
+    + goalChangePending.value.length + improvementPending.value.length + (props.extraCount ?? 0);
+});
 
 watch(plans, (availablePlans) => {
   if (selectedPlanId.value && !availablePlans.some((plan) => plan.id === selectedPlanId.value)) {
@@ -88,7 +101,7 @@ async function loadPersonalTasks(requestId: number, canApply: () => boolean) {
     const items: TaskListItem[] = [];
     let page = 1;
     while (requestId === requestSerial) {
-      const response = await tasksApi.findMine({ page, pageSize: 100 });
+      const response = await tasksApi.findMine({ page, pageSize: 100, lifecycleStatus: 'active' });
       if (!canApply()) return;
       items.push(...response.items);
       if (!response.items.length || items.length >= response.total) break;
@@ -146,11 +159,13 @@ async function fetchEntries(background: boolean, canApply = () => true) {
   }
   if (!auth.user) return;
   await Promise.all([goalPlansApi.findAll({scope:'review',page:1,pageSize:1}).then(result => {
+    if (!Number.isInteger(result.total) || result.total < 0) throw new Error('Invalid goal-review count');
     if (current()) { goalReviewTotal.value = result.total; goalReviewError.value = false; }
   }).catch(error => {
     if (requestId === requestSerial && (current() || isForbidden(error))) { goalReviewTotal.value = null; goalReviewError.value = true; }
   }), loadPersonalTasks(requestId, current), loadCycles(requestId, current),
     improvementPlansApi.myPending().then((items) => {
+      if (!Array.isArray(items)) throw new Error('Invalid improvement-plan queue');
       if (current()) { improvementPending.value = items; improvementError.value = false; }
     }).catch(error => {
       if (requestId !== requestSerial) return;
@@ -158,6 +173,7 @@ async function fetchEntries(background: boolean, canApply = () => true) {
       if (current() || isForbidden(error)) improvementError.value = true;
     }),
     goalChangesApi.myPending().then((items) => {
+      if (!Array.isArray(items)) throw new Error('Invalid goal-change queue');
       if (current()) { goalChangePending.value = items; goalChangeError.value = false; }
     }).catch(error => {
       if (requestId !== requestSerial) return;
@@ -192,8 +208,8 @@ function openPersonalTask(task: TaskListItem) {
   } });
 }
 
-function openTeamWorkspace(cycleId: string, stage: TeamTaskStage) {
-  void router.push({ path: '/tasks', query: { scope: 'team', stage, cycleId } });
+function openTeamWorkspace(cycleId: string, stage: TeamTaskStage, pendingOnly = false) {
+  void router.push({ path: '/tasks', query: { scope: 'team', stage, cycleId, ...(pendingOnly ? { stageState: 'pending' } : {}) } });
 }
 
 function improvementAction(status: ImprovementPlan['status']): string {
@@ -221,11 +237,11 @@ onUnmounted(() => { requestSerial += 1; });
 </script>
 
 <template>
+  <DashboardSection v-if="auth.user && !auth.user.isAssessorOnly" section-id="performance" title="绩效事项" :count="pendingTotal" :loading="loading || extraLoading" :error="sectionError" @refresh="() => { emit('refresh'); void fetchEntries(true); }">
   <section class="dashboard-tasks" aria-label="当前周期待办">
     <header class="dashboard-tasks__header">
       <div>
-        <h2>当前周期待办</h2>
-        <p>按计划查看本人任务{{ auth.isManager ? '和团队待办' : '' }}。</p>
+        <h3>待我办理</h3>
       </div>
       <label class="dashboard-tasks__filter">
         <span>考核计划</span>
@@ -236,9 +252,9 @@ onUnmounted(() => { requestSerial += 1; });
       </label>
     </header>
     <div class="goal-entry-links">
-      <el-button @click="router.push('/tasks?goalView=mine')">我的目标计划</el-button>
-      <el-button @click="router.push('/tasks?goalView=review')">待我审核目标（{{goalReviewTotal ?? '待更新'}}）</el-button>
-      <el-button v-if="canMonitorGoals(auth.user)" @click="router.push('/tasks?goalView=monitor')">目标计划进度</el-button>
+      <el-button @click="router.push('/tasks?goalView=mine')">我的目标</el-button>
+      <el-button @click="router.push('/tasks?goalView=review')">目标审核（{{goalReviewTotal ?? '待更新'}}）</el-button>
+      <el-button v-if="canMonitorGoals(auth.user)" @click="router.push('/tasks?goalView=monitor')">目标台账</el-button>
       <span v-if="goalReviewError" class="task-note">目标审核待办暂时无法加载，请进入列表重试。</span>
     </div>
     <el-skeleton v-if="loading" :rows="3" animated />
@@ -256,7 +272,7 @@ onUnmounted(() => { requestSerial += 1; });
                 <span v-if="item.entry.progressLabel" class="task-progress">{{ item.entry.progressLabel }}</span>
                 <span v-if="item.entry.hintLabel" class="task-note">{{ item.entry.hintLabel }}</span>
               </div>
-              <el-button data-testid="employee-current-task-open" :type="item.actionable ? 'primary' : 'default'" @click="openPersonalTask(item.task)">{{ item.entry.actionLabel }}</el-button>
+              <el-button data-testid="employee-current-task-open" :type="item.actionable ? 'primary' : 'default'" @click="openPersonalTask(item.task)">{{ item.actionable ? item.entry.actionLabel : '查看进度' }}</el-button>
             </div>
             <span v-if="!plan.tasks.length" class="task-note">{{ personalError ? '个人任务暂时无法加载' : '当前没有个人绩效任务' }}</span>
           </div>
@@ -268,7 +284,7 @@ onUnmounted(() => { requestSerial += 1; });
               <template v-else-if="plan.team">
                 <div class="team-task__action">
                   <span><strong :data-testid="`manager-${stage.testId}-count`">{{ plan.team[stage.key].pending }}</strong><span class="task-note"> 项待办</span></span>
-                  <el-button :data-testid="`manager-${stage.testId}-open`" text type="primary" @click="openTeamWorkspace(plan.id, stage.key)">{{ plan.team[stage.key].pending === 0 ? '查看全部' : '处理' }}</el-button>
+                  <el-button :data-testid="`manager-${stage.testId}-open`" text type="primary" @click="openTeamWorkspace(plan.id, stage.key, (plan.team[stage.key].pending ?? 0) > 0)">{{ plan.team[stage.key].pending === 0 ? '查看全部' : '处理' }}</el-button>
                 </div>
               </template>
             </div>
@@ -295,24 +311,26 @@ onUnmounted(() => { requestSerial += 1; });
       <span class="dashboard-improvement__open">去处理</span>
     </router-link>
   </section>
+  <slot/>
+  </DashboardSection>
 </template>
 
 <style scoped>
-.dashboard-improvement { display:grid; gap:8px; margin-top:12px; padding:16px 18px; background:var(--app-card-bg); border:1px solid var(--app-border-color); border-radius:var(--app-radius); }
-.dashboard-improvement h2 { margin:0; font-size:18px; }
-.dashboard-improvement__item { display:flex; align-items:center; gap:12px; padding:9px 10px; color:var(--app-text-primary); text-decoration:none; border:1px solid var(--app-border-color); border-radius:5px; }
+.dashboard-improvement { display:grid; gap:8px; margin-top:12px; padding:12px 0; border-top:1px solid var(--app-border-color); }
+.dashboard-improvement h2 { margin:0; font-size:14px; }
+.dashboard-improvement__item { display:flex; align-items:center; gap:12px; padding:10px 4px; color:var(--app-text-primary); text-decoration:none; border-bottom:1px solid var(--app-border-color); }
 .dashboard-improvement__item small { margin-left:auto; color:var(--app-text-secondary); }
 .dashboard-improvement__item em { color:var(--el-color-warning); font-style:normal; }
 .dashboard-improvement__open { color:var(--el-color-primary); }
 .dashboard-tasks { display: grid; gap: 12px; min-width: 0; }
 .dashboard-tasks__header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.dashboard-tasks__header h2 { margin: 0 0 4px; font-size: 18px; }
+.dashboard-tasks__header h3 { margin: 0; font-size: 14px; }
 .dashboard-tasks__header p, .dashboard-tasks__empty { margin: 0; color: var(--app-text-secondary); font-size: 13px; }
 .dashboard-tasks__filter { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
 .dashboard-tasks__filter > span { flex-shrink: 0; }
 .dashboard-tasks__filter select { width: 280px; min-width: 0; height: 34px; padding: 0 28px 0 10px; color: var(--app-text-primary); background: var(--app-card-bg); border: 1px solid var(--app-border-color); border-radius: 4px; font: inherit; }
 .dashboard-tasks__filter select:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
-.plan-entry { min-width: 0; padding: 16px 18px; background: var(--app-card-bg); border: 1px solid var(--app-border-color); border-radius: var(--app-radius); }
+.plan-entry { min-width: 0; padding: 12px 0; border-top: 1px solid var(--app-border-color); }
 .plan-entry h3 { margin: 0 0 14px; color: var(--app-text-primary); font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
 .plan-entry__tasks { display: grid; gap: 18px; }
 .plan-entry__tasks--team { grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr)); }

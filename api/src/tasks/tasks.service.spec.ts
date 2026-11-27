@@ -63,6 +63,7 @@ describe('TasksService', () => {
   };
   let flowService: { transition: jest.Mock; transitionTx: jest.Mock };
   let transactionClient: {
+    $queryRaw: jest.Mock;
     assessmentTask: { update: jest.Mock; updateMany: jest.Mock };
     indicatorInstance: {
       update: jest.Mock;
@@ -80,8 +81,9 @@ describe('TasksService', () => {
 
   beforeEach(async () => {
     transactionClient = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentTask: {
-        update: jest.fn(),
+        update: jest.fn().mockImplementation(({ where, data }) => ({ ...where, ...data })),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       indicatorInstance: {
@@ -188,6 +190,7 @@ describe('TasksService', () => {
       deptHeadId: 'head-1',
       approverId: 'vp-1',
       status,
+      lifecycleStatus: 'active',
       isExempt: false,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -1038,9 +1041,16 @@ describe('TasksService', () => {
         expect.objectContaining({ id: 'mgr-1' }),
       );
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', updatedAt },
+        where: { id: 'task-1', lifecycleStatus: 'active', updatedAt },
         data: { updatedAt: expect.any(Date) },
       });
+      expect(transactionClient.$queryRaw).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.stringContaining('FROM assessment_periods')]),
+        'task-1',
+      );
+      expect(transactionClient.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0],
+      );
       expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
         transactionClient.indicatorInstance.deleteMany.mock.invocationCallOrder[0],
       );
@@ -1060,10 +1070,11 @@ describe('TasksService', () => {
       prisma.$transaction.mockImplementation(async (callback) => {
         const stagedIndicators: string[] = [];
         const tx = {
+          $queryRaw: jest.fn().mockResolvedValue([]),
           assessmentTask: {
             updateMany: jest.fn(async ({ where, data }) => {
               const expected = (where.updatedAt as Date).toISOString();
-              if (expected !== storedVersion) return { count: 0 };
+              if (where.lifecycleStatus !== task.lifecycleStatus || expected !== storedVersion) return { count: 0 };
               storedVersion = (data.updatedAt as Date).toISOString();
               return { count: 1 };
             }),
@@ -1189,7 +1200,7 @@ describe('TasksService', () => {
       await expect(service.submitSelfEval('task-1', input, makeViewer({ id: 'emp-1' })))
         .rejects.toBeInstanceOf(ConflictException);
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', updatedAt, status: 'self_eval' }, data: { updatedAt: expect.any(Date) },
+        where: { id: 'task-1', lifecycleStatus: 'active', updatedAt, status: 'self_eval' }, data: { updatedAt: expect.any(Date) },
       });
       expectNoSubmissionWrites();
     });
@@ -1205,7 +1216,7 @@ describe('TasksService', () => {
         goalChangeRequests: { where: { status: 'active' }, select: { id: true }, take: 1 },
       }) }));
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', updatedAt, status: 'self_eval' }, data: { updatedAt: expect.any(Date) },
+        where: { id: 'task-1', lifecycleStatus: 'active', updatedAt, status: 'self_eval' }, data: { updatedAt: expect.any(Date) },
       });
       expect(transactionClient.indicatorInstance.update).toHaveBeenCalledTimes(indicators.length);
       expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0])
@@ -1309,7 +1320,7 @@ describe('TasksService', () => {
         updatedAt: expect.any(String),
       }));
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', updatedAt },
+        where: { id: 'task-1', lifecycleStatus: 'active', updatedAt },
         data: { updatedAt: expect.any(Date) },
       });
       expect(transactionClient.indicatorInstance.update).toHaveBeenNthCalledWith(1, {
@@ -1998,7 +2009,7 @@ describe('TasksService', () => {
       );
 
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', updatedAt, status: 'dept_review' },
+        where: { id: 'task-1', lifecycleStatus: 'active', updatedAt, status: 'dept_review' },
         data: { updatedAt: expect.any(Date) },
       });
       expect(flowService.transitionTx).toHaveBeenCalledWith(
@@ -2025,7 +2036,7 @@ describe('TasksService', () => {
       );
 
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', updatedAt, status: 'dept_review' },
+        where: { id: 'task-1', lifecycleStatus: 'active', updatedAt, status: 'dept_review' },
         data: { updatedAt: expect.any(Date) },
       });
       expect(flowService.transitionTx).toHaveBeenCalledWith(
@@ -2098,7 +2109,7 @@ describe('TasksService', () => {
       await service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' }));
 
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: { id: 'task-1', status: TaskStatus.indicator_confirming },
+        where: { id: 'task-1', status: TaskStatus.indicator_confirming, lifecycleStatus: 'active' },
         data: { indicatorConfirmedAt: confirmedAt },
       });
       expect(transactionClient.indicatorInstance.findMany).toHaveBeenCalledWith({
@@ -2205,6 +2216,7 @@ describe('TasksService', () => {
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
         where: {
           id: 'task-1',
+          lifecycleStatus: 'active',
           updatedAt: staleTask.updatedAt,
           status: TaskStatus.indicator_confirming,
         },

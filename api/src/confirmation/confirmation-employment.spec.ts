@@ -23,12 +23,18 @@ describe('confirmation follows the approved employment', () => {
       sourceBatchId: null, createdById: null, createdAt: user.entryDate, updatedAt: user.entryDate };
     const records = [employment];
     const app: any = { id: 'application', workflowVersion: 2, status: 'hr_approved', employeeId: user.id,
+      lifecycleStatus: 'active', lifecycleVersion: 0, updatedAt: at,
       employmentRecordId: employment.id, managerId: 'frozen-roster-manager', hrId: 'hr',
       companyApproverId: approver.id, proposedRegularDate: regularDate, submissionVersion: 1,
       summary: '虚构工作小结', createdAt: new Date('2026-11-01T00:00:00.000Z') };
     Object.assign(app, { employee: user, voteResult: 'pass', meetingDate: null, meetingAttachments: [] });
     const attachments: any[] = [];
     const prisma: any = {
+      $queryRaw: jest.fn(async (query: TemplateStringsArray, id: unknown) => {
+        const sql = query.join('');
+        if (/FROM (?:confirmation_applications|users|employment_records)\b/.test(sql)) return [{ id }];
+        throw new Error(`Unexpected confirmation employment lock query: ${sql}`);
+      }),
       user: {
         findMany: jest.fn(async () => [{ ...user }]),
         count: jest.fn(async () => 1),
@@ -108,7 +114,7 @@ describe('confirmation follows the approved employment', () => {
 
   it('submits to the current employment roster manager when the performance manager differs', async () => {
     const f = fixture();
-    Object.assign(f.app, { status: 'draft', submissionVersion: 0, employmentRecordId: null });
+    Object.assign(f.app, { status: 'draft', submissionVersion: 0, employmentRecordId: f.employment.id });
     await f.service.submit(f.app.id, viewer, { submissionVersion: f.app.submissionVersion });
     expect(f.app).toMatchObject({ status: 'submitted', managerId: 'roster-manager', employmentRecordId: 'employment-current' });
     expect(f.user.directManagerId).toBe('performance-manager');

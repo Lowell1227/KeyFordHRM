@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ArrowRight, Refresh } from '@element-plus/icons-vue';
+import { ArrowRight } from '@element-plus/icons-vue';
 import { talentRecruitmentApi } from '@/api/talent-recruitment.api';
 import { useAuthStore } from '@/stores/auth.store';
+import DashboardSection from './DashboardSection.vue';
+import { useVisibleRefresh } from '@/composables/useVisibleRefresh';
 import type { RecruitmentWorkbenchGroup, RecruitmentWorkbenchItem, RecruitmentWorkbenchKey } from '@/types/talent.types';
 
 const auth = useAuthStore(), router = useRouter();
@@ -13,6 +15,7 @@ let session = 0;
 const labels: Record<RecruitmentWorkbenchKey, string> = {
   follow_up: '待跟进', interview: '待参加面试', feedback: '待补反馈', hiring_review: '待录用确认', onboarding: '待办入职',
   intake_review: '待核对简历', intake_assignment: '待归岗位', entry_overdue: '到岗日期已过待确认',
+  onboarding_handoff: '待人事接收', demand_review: '待审核招聘需求', demand_returned: '需求退回待修改',
 };
 const current = computed(() => groups.value.find(group => group.key === activeKey.value));
 const total = computed(() => loading.value || error.value ? null : groups.value.reduce((sum, group) => sum + group.total, 0));
@@ -32,19 +35,24 @@ async function load() {
   } finally { if (token === session) loading.value = false; }
 }
 function open(key: RecruitmentWorkbenchKey, item: RecruitmentWorkbenchItem) {
-  if (key === 'intake_review' || key === 'intake_assignment') {
+  if (key === 'demand_review' || key === 'demand_returned') {
+    if (item.demandId) void router.push({ path: '/recruitment/demands', query: { demandId: item.demandId, workQueue: key === 'demand_review' ? 'review' : 'returned' } });
+  } else if (key === 'intake_review' || key === 'intake_assignment') {
     if (item.intakeId && auth.user?.id) void router.push({ path: '/recruitment/intakes', query: { workQueue: key === 'intake_review' ? 'review' : 'assignment', ownerId: auth.user.id, intakeId: item.intakeId } });
   } else if (key === 'entry_overdue') {
     if (item.onboardingRequestId) void router.push({ path: '/entry-exit', query: { requestId: item.onboardingRequestId } });
     else if (item.candidateId && item.applicationId) void router.push({ path: '/talent-interviews', query: { work: 'applications', scope: 'all', overdueOnly: 'true', candidateId: item.candidateId, applicationId: item.applicationId } });
   } else if (key === 'interview' || key === 'feedback') void router.push({ path: `/talent-interviews/${item.id}`, query: { work: 'interviews', scope: 'mine', bucket: key === 'feedback' ? 'feedback' : 'upcoming' } });
   else if (key === 'hiring_review') void router.push({ path: '/talent-hiring', query: { applicationId: item.id } });
-  else if (key === 'onboarding' && item.candidateId && item.applicationId) {
+  else if ((key === 'onboarding' || key === 'onboarding_handoff') && item.candidateId && item.applicationId) {
     void router.push({ path: '/entry-exit', query: { talentId: item.candidateId, talentApplicationId: item.applicationId } });
   } else if (item.candidateId) void router.push({ path: '/talents', query: { candidateId: item.candidateId } });
 }
 function openAll(key: RecruitmentWorkbenchKey) {
-  if (key === 'intake_review' || key === 'intake_assignment') {
+  if (key === 'demand_review' || key === 'demand_returned') {
+    void router.push({ path: '/recruitment/demands', query: { workQueue: key === 'demand_review' ? 'review' : 'returned' } });
+  } else if (key === 'onboarding_handoff') void router.push({ path: '/entry-exit', query: { tab: 'handoff' } });
+  else if (key === 'intake_review' || key === 'intake_assignment') {
     if (auth.user?.id) void router.push({ path: '/recruitment/intakes', query: { workQueue: key === 'intake_review' ? 'review' : 'assignment', ownerId: auth.user.id } });
   }
   else if (key === 'entry_overdue') void router.push({ path: '/talent-interviews', query: { work: 'applications', scope: 'all', overdueOnly: 'true' } });
@@ -56,33 +64,41 @@ function openAll(key: RecruitmentWorkbenchKey) {
 }
 function dateLabel(group: RecruitmentWorkbenchKey, value: string | null) {
   if (!value) return '';
-  if (group === 'follow_up' || group === 'onboarding' || group === 'entry_overdue') return value.slice(0, 10);
-  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
+  if (group === 'follow_up' || group === 'onboarding' || group === 'onboarding_handoff' || group === 'entry_overdue') return value.slice(0, 10);
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
-watch(() => [auth.user?.id, auth.user?.isAssessorOnly], () => { groups.value = []; void load(); }, { immediate: true });
+function allLabel(key: RecruitmentWorkbenchKey) {
+  if (key.startsWith('intake_')) return '全部收件';
+  if (key === 'demand_review' || key === 'demand_returned') return '全部需求';
+  if (key === 'onboarding_handoff') return '全部待接收';
+  if (key === 'entry_overdue' || key === 'hiring_review') return '全部申请';
+  if (key === 'interview' || key === 'feedback') return '全部邀约';
+  return '人才库';
+}
+watch(() => [auth.user?.id, auth.user?.isAssessorOnly, auth.user?.sysRole, JSON.stringify(auth.user?.hrCapabilities)], () => { groups.value = []; void load(); }, { immediate: true });
 onBeforeUnmount(() => { ++session; });
+useVisibleRefresh({ intervalMs: 0, enabled: () => Boolean(auth.user) && !auth.user?.isAssessorOnly, refresh: () => load() });
 </script>
 
 <template>
-  <section v-if="auth.user && !auth.user.isAssessorOnly" v-loading="loading" class="dashboard-recruitment" data-testid="dashboard-recruitment">
-    <header><h2>招聘事项 <span v-if="total !== null">{{ total }}</span></h2><el-tooltip content="刷新招聘事项"><el-button :icon="Refresh" circle aria-label="刷新招聘事项" :loading="loading" @click="load" /></el-tooltip></header>
-    <el-alert v-if="error" :title="error" type="error" :closable="false"><el-button link @click="load">重试</el-button></el-alert>
-    <p v-else-if="loading" class="empty" role="status">正在读取招聘事项</p>
+  <DashboardSection v-if="auth.user && !auth.user.isAssessorOnly" section-id="recruitment" title="招聘事项" :count="total" :loading="loading" :error="error" class="dashboard-recruitment" data-testid="dashboard-recruitment" @refresh="load">
+    <p v-if="loading && !groups.length" class="empty" role="status">正在读取招聘事项</p>
     <el-tabs v-else-if="groups.length" v-model="activeKey">
       <el-tab-pane v-for="group in groups" :key="group.key" :name="group.key" :label="`${labels[group.key]} ${group.total}`">
         <ul v-if="group.items.length">
-          <li v-for="item in group.items" :key="item.id"><button type="button" @click="open(group.key, item)"><strong>{{ item.title }}</strong><span>{{ item.subtitle }}<template v-if="item.nextAction"><small>经办：{{ item.ownerName || '待核对' }} · {{ item.nextAction }}</small></template></span><time v-if="item.date">{{ dateLabel(group.key, item.date) }}</time><el-icon><ArrowRight /></el-icon></button></li>
+          <li v-for="item in group.items" :key="item.id"><button type="button" class="workbench-row" @click="open(group.key, item)"><strong>{{ item.title }}</strong><span>{{ item.subtitle }}<template v-if="item.nextAction"><small>经办：{{ item.ownerName || '待核对' }} · {{ item.nextAction }}</small></template></span><time v-if="item.date">{{ dateLabel(group.key, item.date) }}</time><el-icon><ArrowRight /></el-icon></button></li>
         </ul>
-        <p v-else-if="!loading" class="empty">暂无{{ labels[group.key] }}事项</p>
+        <p v-else class="empty">暂无{{ labels[group.key] }}事项</p>
       </el-tab-pane>
     </el-tabs>
-    <p v-else-if="!loading" class="empty">暂无招聘事项</p>
-    <footer v-if="current && !error && !loading"><span>{{ current.total > current.items.length ? `显示前 ${current.items.length} 条，共 ${current.total} 条` : '' }}</span><el-button link type="primary" :icon="ArrowRight" @click="openAll(current.key)">{{ current.key.startsWith('intake_') ? '全部收件' : current.key === 'entry_overdue' || current.key === 'hiring_review' ? '全部申请' : current.key === 'interview' || current.key === 'feedback' ? '全部邀约' : '人才库' }}</el-button></footer>
-  </section>
+    <p v-else-if="!loading && !error" class="empty">暂无招聘事项</p>
+    <footer v-if="current && !error"><span>{{ current.total > current.items.length ? `显示前 ${current.items.length} 条，共 ${current.total} 条` : '' }}</span><el-button link type="primary" :icon="ArrowRight" :disabled="loading" @click="openAll(current.key)">{{ allLabel(current.key) }}</el-button></footer>
+  </DashboardSection>
 </template>
 
 <style scoped>
-.dashboard-recruitment { padding: 16px 0; border-top: 1px solid var(--el-border-color-light); min-width: 0; }
+.dashboard-recruitment { min-width: 0; }
 header, footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 h2 { font-size: 16px; margin: 0; } h2 span, footer, .empty { color: var(--el-text-color-secondary); font-size: 13px; }
 ul { list-style: none; margin: 0; padding: 0; }

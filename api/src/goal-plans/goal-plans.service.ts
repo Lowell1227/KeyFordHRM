@@ -13,6 +13,7 @@ import {
   usesFiveStepGoalWorkflow,
 } from "@/tasks/goal-workflow";
 import { GoalPlanQueryDto, GoalPlanScope } from "./goal-plans.dto";
+import { ACTIVE_LIFECYCLE, canManageLifecycle, LIFECYCLE_SELECT, lifecycleProjection, lifecycleWhere } from '@/performance-lifecycle/lifecycle-policy';
 
 const GOAL_STATUSES: TaskStatus[] = [
   "pending",
@@ -32,6 +33,7 @@ const GOAL_NODES: FlowNodeType[] = [
   "indicator_approval",
 ];
 const SUMMARY_SELECT = Prisma.validator<Prisma.AssessmentTaskSelect>()({
+  ...LIFECYCLE_SELECT,
   id: true,
   cycleId: true,
   employeeId: true,
@@ -45,6 +47,11 @@ const SUMMARY_SELECT = Prisma.validator<Prisma.AssessmentTaskSelect>()({
   indicatorSetAt: true,
   indicatorConfirmedAt: true,
   goalApprovedAt: true,
+  publishedAt: true,
+  approvedAt: true,
+  employeeConfirmedAt: true,
+  closedAt: true,
+  gradeResult: { select: { approvedAt: true, employeeConfirmedAt: true, publishedAt: true, isPublished: true } },
   updatedAt: true,
   cycle: { select: { name: true, goalWorkflowVersion: true } },
   employee: { select: { name: true, employeeNo: true, position: true } },
@@ -121,6 +128,7 @@ type SummaryRow = Prisma.AssessmentTaskGetPayload<{
 
 export function canMonitorGoals(viewer: AuthUser): boolean {
   return (
+    canManageLifecycle(viewer, 'view') ||
     viewer.sysRole === SysRole.hr ||
     viewer.sysRole === SysRole.system_admin ||
     (viewer.sysRole === SysRole.hr_user &&
@@ -321,17 +329,20 @@ export class GoalPlansService {
       indicatorSetAt: task.indicatorSetAt,
       indicatorConfirmedAt: task.indicatorConfirmedAt,
       goalApprovedAt: task.goalApprovedAt,
-      updatedAt: task.updatedAt,
       currentStep,
-      currentHandlerId: handlerId,
-      currentHandlerName: handlerName,
-      permissions,
+      ...lifecycleProjection('task', task, viewer),
+      currentHandlerId: !task.lifecycleStatus || task.lifecycleStatus === 'active' ? handlerId : null,
+      currentHandlerName: !task.lifecycleStatus || task.lifecycleStatus === 'active' ? handlerName : null,
+      permissions: task.lifecycleStatus && task.lifecycleStatus !== 'active'
+        ? Object.fromEntries(Object.keys(permissions).map((key) => [key, false])) : permissions,
     };
   }
 
   async findAll(query: GoalPlanQueryDto, viewer: AuthUser) {
     const conditions: Prisma.AssessmentTaskWhereInput[] = [
       this.scopeWhere(query.scope, viewer),
+      lifecycleWhere(query.lifecycleStatus, viewer),
+      ...(query.scope === GoalPlanScope.review ? [ACTIVE_LIFECYCLE] : []),
     ];
     if (query.cycleId) conditions.push({ cycleId: query.cycleId });
     if (query.deptId) conditions.push({ deptId: query.deptId });
@@ -371,7 +382,7 @@ export class GoalPlansService {
   }
 
   async options(query: GoalPlanQueryDto, viewer: AuthUser) {
-    const where = this.scopeWhere(query.scope, viewer);
+    const where: Prisma.AssessmentTaskWhereInput = { AND: [this.scopeWhere(query.scope, viewer), lifecycleWhere(query.lifecycleStatus, viewer)] };
     const [cycleRows, deptRows] = await Promise.all([
       this.prisma.assessmentTask.findMany({
         where,

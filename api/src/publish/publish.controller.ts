@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import {
   Body,
   Controller,
@@ -17,6 +19,7 @@ import { PublishCycleDto } from "./dto/publish-cycle.dto";
 import { PublicationRecordsQueryDto } from "./dto/publication-records-query.dto";
 import { HrCapabilities } from "@/common/decorators/hr-capabilities.decorator";
 
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller("cycles/:id")
 @Roles(SysRole.hr, SysRole.system_admin)
 @HrCapabilities("performance_publish")

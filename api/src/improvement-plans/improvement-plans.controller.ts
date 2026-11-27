@@ -1,3 +1,5 @@
+import { UseFilters } from '@nestjs/common';
+import { PerformanceLifecycleExceptionFilter } from '@/performance-lifecycle/lifecycle-exception.filter';
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
@@ -6,6 +8,7 @@ import { ImprovementPlanQueryDto } from './dto/improvement-plan-query.dto';
 import { CreateImprovementPlanDto, UpdateImprovementPlanDto, ImprovementDecisionDto, ImprovementGoalDecisionDto,
   ImprovementEvaluationDto, ImprovementEvaluationDraftDto, ImprovementRevisionDto } from './dto/improvement-workflow.dto';
 
+@UseFilters(PerformanceLifecycleExceptionFilter)
 @Controller('improvement-plans')
 export class ImprovementPlansController {
   constructor(private readonly service: ImprovementWorkflowService) {}

@@ -1,10 +1,10 @@
 import { Type } from 'class-transformer';
 import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { TaskStatus } from '@prisma/client';
-import { PaginationDto } from '@/common/dto/pagination.dto';
+import { LifecycleQueryDto } from '@/performance-lifecycle/lifecycle.dto';
 
 /** GET /tasks 查询参数。 */
-export class TaskQueryDto extends PaginationDto {
+export class TaskQueryDto extends LifecycleQueryDto {
   @IsOptional()
   @IsUUID()
   employeeId?: string;

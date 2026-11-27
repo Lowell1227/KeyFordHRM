@@ -2,6 +2,7 @@ import { AccountType, Prisma, SysRole } from '@prisma/client';
 import { createHash } from 'crypto';
 import { LaunchService } from './launch.service';
 import { AuthUser } from '@/common/types/auth.types';
+import { approvedEmploymentSourceWhere } from '@/employee-archives/employment-timeline';
 
 describe('LaunchService preflight', () => {
   const cycleId = '55555555-5555-4555-8555-555555555555';
@@ -26,6 +27,9 @@ describe('LaunchService preflight', () => {
     directManager: { name: '直属上级' },
     entryDate: new Date('2020-01-01T00:00:00.000Z'),
     leaveDate: null,
+    status: 'active',
+    deletedAt: null,
+    archivedAt: null,
   };
   const activeCandidate = { ...candidate, status: 'active' };
   const companyFinalApprover = {
@@ -105,7 +109,11 @@ describe('LaunchService preflight', () => {
     finalApprover: Record<string, unknown> | null = companyFinalApprover,
   ) {
     tx.user.findMany.mockResolvedValue(scopedUsers);
-    tx.user.findUnique.mockResolvedValue(finalApprover);
+    tx.user.findUnique.mockImplementation(({ where }: { where: { id: string } }) => (
+      where.id === finalApprover?.id
+        ? finalApprover
+        : scopedUsers.find((user) => user.id === where.id) ?? null
+    ));
   }
 
   function template(id: string, indicatorWeight = 1) {
@@ -169,7 +177,19 @@ describe('LaunchService preflight', () => {
       user: {
         findMany: jest.fn().mockResolvedValue([candidate]),
         findFirst: jest.fn().mockResolvedValue({ id: operator.id, name: '测试 HR' }),
-        findUnique: jest.fn().mockResolvedValue(null),
+        findUnique: jest.fn().mockImplementation(({ where }: { where: { id: string } }) => (
+          where.id === candidate.id ? candidate : null
+        )),
+      },
+      employmentRecord: {
+        findMany: jest.fn().mockImplementation(({ where }: { where: { userId: string } }) => [{
+          id: `employment-${where.userId}`,
+          userId: where.userId,
+          employeeStatus: 'active',
+          effectiveFrom: candidate.entryDate,
+          effectiveTo: null,
+          sourceRequestId: null,
+        }]),
       },
       cyclePeriodSchedule: { findMany: jest.fn().mockResolvedValue([]) },
       assessmentTemplate: { findMany: jest.fn() },
@@ -242,6 +262,79 @@ describe('LaunchService preflight', () => {
       .resolves.toEqual(expect.objectContaining({ ready: true, templateCount: 0 }));
     expect(tx.assessmentTemplate.findMany).not.toHaveBeenCalled();
   });
+
+  it('locks and rechecks the employee before freezing the unique effective employment', async () => {
+    const checked = await service.preflight(cycleId);
+
+    await service.launch(cycleId, operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: checked.planHash!,
+    });
+
+    expect(tx.$queryRaw).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.stringContaining('FROM users')]),
+      candidate.id,
+    );
+    expect(tx.user.findUnique).toHaveBeenCalledWith({
+      where: { id: candidate.id },
+      select: { status: true, deletedAt: true, archivedAt: true },
+    });
+    expect(tx.employmentRecord.findMany).toHaveBeenCalledWith({
+      where: { userId: candidate.id, ...approvedEmploymentSourceWhere },
+    });
+    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ employmentRecordId: `employment-${candidate.id}` }),
+    });
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.user.findUnique.mock.invocationCallOrder[0]);
+    expect(tx.user.findUnique.mock.invocationCallOrder[0]).toBeLessThan(tx.employmentRecord.findMany.mock.invocationCallOrder[0]);
+    expect(tx.employmentRecord.findMany.mock.invocationCallOrder[0]).toBeLessThan(tx.assessmentTask.create.mock.invocationCallOrder[0]);
+  });
+
+  it.each([
+    null,
+    { ...candidate, status: 'resigned' },
+    { ...candidate, deletedAt: new Date('2026-12-23T00:00:00.000Z') },
+    { ...candidate, archivedAt: new Date('2026-12-23T00:00:00.000Z') },
+  ])('rejects a no-longer-eligible employee after the participant query: %j', async (employee) => {
+    const checked = await service.preflight(cycleId);
+    tx.user.findUnique.mockResolvedValue(employee);
+
+    await expect(service.launch(cycleId, operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: checked.planHash!,
+    })).rejects.toThrow('员工已不在有效任职范围');
+
+    expect(tx.employmentRecord.findMany).not.toHaveBeenCalled();
+    expect(tx.assessmentTask.create).not.toHaveBeenCalled();
+    expect(tx.assessmentPeriod.createMany).not.toHaveBeenCalled();
+    expect(tx.indicatorVersion.create).not.toHaveBeenCalled();
+    expect(notificationsService.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'overlapping', 'future', 'ended'])(
+    'does not guess the employment link when the effective history is %s', async (history) => {
+      const checked = await service.preflight(cycleId);
+      const employment = {
+        id: 'employment-current', userId: candidate.id, employeeStatus: 'active',
+        effectiveFrom: candidate.entryDate, effectiveTo: null,
+      };
+      tx.employmentRecord.findMany.mockResolvedValue(
+        history === 'missing' ? []
+          : history === 'overlapping' ? [employment, { ...employment, id: 'employment-overlap' }]
+            : history === 'future' ? [{ ...employment, effectiveFrom: new Date('2027-01-01T00:00:00.000Z') }]
+              : [{ ...employment, effectiveTo: new Date('2026-12-22T00:00:00.000Z') }],
+      );
+
+      await service.launch(cycleId, operator, {
+        now: new Date('2026-12-23T00:00:00.000Z'),
+        expectedPlanHash: checked.planHash!,
+      });
+
+      expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ employmentRecordId: null }),
+      });
+    },
+  );
 
   it('warns without blocking preflight or launch when an approved workflow time sequence runs backwards', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({

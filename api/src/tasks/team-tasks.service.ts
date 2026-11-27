@@ -140,6 +140,7 @@ export class TeamTasksService {
     viewer: AuthUser,
   ): Promise<TeamTaskPage> {
     const authorizedWhere: Prisma.AssessmentTaskWhereInput = {
+      lifecycleStatus: 'active',
       managerId: viewer.id,
       // Historical self-managed tasks cannot expose unpublished results through a team projection.
       NOT: { employeeId: viewer.id },

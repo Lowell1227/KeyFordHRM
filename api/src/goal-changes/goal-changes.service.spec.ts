@@ -4,6 +4,7 @@ import { GoalChangesService } from './goal-changes.service';
 describe('GoalChangesService access and revisions', () => {
   const viewer: any = { id: 'employee', sysRole: 'employee', isAssessorOnly: false, canViewAll: false };
   const task: any = { id: 'task', employeeId: 'employee', managerId: 'manager', deptHeadId: 'head', approverId: 'vp',
+    lifecycleStatus: 'active', lifecycleVersion: 0, updatedAt: new Date(),
     employee: { id: 'employee', status: 'active', deletedAt: null, archivedAt: null },
     manager: { id: 'manager', status: 'active', deletedAt: null, archivedAt: null },
     deptHead: { id: 'head', status: 'active', deletedAt: null, archivedAt: null },
@@ -12,10 +13,19 @@ describe('GoalChangesService access and revisions', () => {
     goalApprovedAt: new Date(), participantDisposition: 'active', isExempt: false, periods: [],
     selfEvalSubmittedAt: null, managerScoredAt: null, status: 'goal_confirmed' };
   function setup(request: any = { id: 'request', taskId: 'task', creatorId: 'employee', status: 'draft', revision: 2 }) {
-    const tx: any = { $queryRaw: jest.fn().mockResolvedValue([]),
+    request = { lifecycleStatus: 'active', lifecycleVersion: 0, updatedAt: new Date(), ...request };
+    const tx: any = { $queryRaw: jest.fn(async (query: TemplateStringsArray) => {
+      const sql = query.join('');
+      if (sql.includes('FROM assessment_periods')) return task.periods.map((period: { id: string }) => ({ id: period.id }));
+      if (sql.includes('FROM assessment_tasks')) return [{ id: task.id }];
+      throw new Error(`Unexpected goal-change lock query: ${sql}`);
+    }),
       assessmentTask: { findUnique: jest.fn().mockResolvedValue(task), findMany: jest.fn().mockResolvedValue([task]) },
       goalChangeRequest: { findUnique: jest.fn().mockResolvedValue(request), findFirst: jest.fn().mockResolvedValue(null),
-        findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0), updateMany: jest.fn(async ({ where }) => {
+          expect(where.lifecycleStatus).toBe('active');
+          return { count: 1 };
+        }) },
       goalChangeGrant: { findUnique: jest.fn().mockResolvedValue(task.goalChangeGrant) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -42,6 +52,21 @@ describe('GoalChangesService access and revisions', () => {
     await expect(service.update('request', { expectedRevision: 2, reason: 'change', goals: [] }, viewer)).rejects.toBeInstanceOf(ConflictException);
     expect(tx.goalChangeRequest.updateMany).not.toHaveBeenCalled();
   });
+  it('rejects a request write after its locked parent task has terminated', async () => {
+    const { service, tx } = setup();
+    tx.assessmentTask.findUnique.mockResolvedValue({ ...task, lifecycleStatus: 'terminated' });
+    await expect(service.update('request', { expectedRevision: 2, reason: 'change', goals: [] }, viewer))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.goalChangeRequest.updateMany).not.toHaveBeenCalled();
+  });
+  it('rejects an ended request even when its locked parent task remains active', async () => {
+    const { service, tx } = setup({ id: 'request', taskId: 'task', creatorId: 'employee', status: 'draft', revision: 2,
+      lifecycleStatus: 'terminated' });
+    await expect(service.update('request', { expectedRevision: 2, reason: 'change', goals: [] }, viewer))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(tx.goalChangeRequest.updateMany).not.toHaveBeenCalled();
+  });
   it('opens navigation for an eligible grant or related history, but not an unrelated employee', async () => {
     const { service, tx } = setup();
     expect(await service.entry(viewer)).toEqual({ visible: true });
@@ -61,7 +86,7 @@ describe('GoalChangesService access and revisions', () => {
     expect(rows).toMatchObject([{ id: 'request', employeeName: '虚构员工', creatorName: '虚构上级',
       currentOwnerId: 'manager', allowedActions: expect.arrayContaining(['edit', 'submit']) }]);
     expect(tx.goalChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ OR: expect.any(Array) }),
+      where: expect.objectContaining({ lifecycleStatus: 'active', task: { lifecycleStatus: 'active' }, OR: expect.any(Array) }),
       include: expect.objectContaining({ task: expect.any(Object), creator: expect.any(Object) }),
     }));
   });
@@ -79,6 +104,7 @@ describe('GoalChangesService access and revisions', () => {
     const where = tx.goalChangeRequest.findMany.mock.calls[0][0].where;
     expect(where.AND).toEqual(expect.arrayContaining([
       { task: { OR: expect.any(Array) } }, { task: { employeeId: 'employee' } }, { status: 'active' },
+      { lifecycleStatus: { not: 'deleted' } },
     ]));
     expect(tx.goalChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 10, take: 10,
       include: expect.objectContaining({ task: expect.any(Object), creator: expect.any(Object) }) }));
@@ -95,11 +121,15 @@ describe('GoalChangesService access and revisions', () => {
     await service.submit('request', { expectedRevision: 2, reason: ' 调整范围 ', goals: [goal] }, viewer);
     expect(tx.goalChangeRequest.updateMany).toHaveBeenCalledTimes(1);
     expect(tx.goalChangeRequest.updateMany.mock.calls[0][0]).toMatchObject({
-      where: { id: 'request', revision: 2, status: 'draft' },
+      where: { id: 'request', lifecycleStatus: 'active', revision: 2, status: 'draft' },
       data: { reason: '调整范围', goals: [goal], status: 'indicator_reviewing' },
     });
     expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
     expect(tx.auditLog.create.mock.calls[0][0].data.action).toBe('submit');
+    expect(tx.$queryRaw.mock.calls.map(([query]: [TemplateStringsArray]) => query.join(''))).toEqual([
+      expect.stringContaining('FROM assessment_periods'), expect.stringContaining('FROM assessment_tasks'),
+    ]);
+    expect(tx.assessmentTask.findUnique.mock.invocationCallOrder[0]).toBeLessThan(tx.goalChangeRequest.updateMany.mock.invocationCallOrder[0]);
   });
   it('rejects stale submit before writing edited content', async () => {
     const { service, tx } = setup();

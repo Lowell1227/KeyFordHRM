@@ -8,6 +8,7 @@ services:
     env_file: .env.preview.local
     environment:
       NODE_ENV: development
+      NODE_OPTIONS: --max-old-space-size=1536
       TZ: Asia/Shanghai
       CHOKIDAR_USEPOLLING: "true"
     volumes:

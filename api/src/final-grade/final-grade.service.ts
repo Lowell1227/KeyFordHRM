@@ -142,7 +142,7 @@ export class FinalGradeService {
       currentGrade: task.gradeResult?.rawGrade ?? null,
       comment: typeof submissionData?.comment === 'string' ? submissionData.comment : null,
       allPeriodsComplete,
-      canSubmit: allPeriodsComplete && task.status === TaskStatus.manager_scoring
+      canSubmit: (!task.lifecycleStatus || task.lifecycleStatus === 'active') && allPeriodsComplete && task.status === TaskStatus.manager_scoring
         && task.managerId === viewer.id && task.employeeId !== viewer.id,
       latestReject: latestReject
         ? {

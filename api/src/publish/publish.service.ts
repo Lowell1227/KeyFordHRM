@@ -128,6 +128,7 @@ export class PublishService {
     const keyword = dto.keyword?.trim();
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
+      lifecycleStatus: 'active',
       OR: [{ status: { in: PUBLICATION_TASK_STATUSES } }, { flowRecords: { some: { nodeType: "approval" } } }],
       isExempt: false,
       ...(dto.deptId ? { deptId: dto.deptId } : {}),
@@ -289,6 +290,7 @@ export class PublishService {
         const lockedTasks = await tx.assessmentTask.findMany({
           where: {
             id: { in: dto.taskIds },
+            lifecycleStatus: 'active',
             cycleId,
             status: TaskStatus.confirmed,
             employeeConfirmedAt: { not: null },
@@ -359,7 +361,7 @@ export class PublishService {
 
         // 全部非豁免任务均已实际公示后才推进周期，申诉重评和待确认任务仍阻止整周期完成。
         const remainingUnpublishedTasks = await tx.assessmentTask.count({
-          where: { cycleId, isExempt: false, NOT: PUBLISHED_RESULT_WHERE },
+          where: { cycleId, isExempt: false, lifecycleStatus: 'active', NOT: PUBLISHED_RESULT_WHERE },
         });
 
         const cycleData: Prisma.AssessmentCycleUpdateInput = {
