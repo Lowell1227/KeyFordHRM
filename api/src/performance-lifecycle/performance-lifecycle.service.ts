@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { TasksService } from '@/tasks/tasks.service';
+import { GoalPlansService } from '@/goal-plans/goal-plans.service';
 import { GoalChangesService } from '@/goal-changes/goal-changes.service';
 import { ImprovementWorkflowService } from '@/improvement-plans/improvement-workflow.service';
 import { ConfirmationService } from '@/confirmation/confirmation.service';
@@ -23,12 +24,19 @@ export class PerformanceLifecycleService {
     private readonly changes: GoalChangesService,
     private readonly improvements: ImprovementWorkflowService,
     private readonly confirmations: ConfirmationService,
+    private readonly goals: GoalPlansService,
   ) {}
 
   private async assertView(kind: LifecycleKind, id: string, viewer: AuthUser) {
     // Reuse the original projection's authorization; lifecycle capabilities never disclose domain content.
     switch (kind) {
-      case 'task': return this.tasks.findOne(id, viewer);
+      case 'task':
+        try { return await this.tasks.findOne(id, viewer); }
+        catch (error) {
+          if (!(error instanceof ForbiddenException)) throw error;
+          // Goal-ledger operators need not receive full assessment/result access.
+          return this.goals.findOne(id, viewer);
+        }
       case 'goal_change': return this.changes.findOne(id, viewer);
       case 'improvement_plan': return this.improvements.findOne(id, viewer);
       case 'confirmation': return this.confirmations.findOne(id, viewer);
@@ -58,8 +66,10 @@ export class PerformanceLifecycleService {
       workflowContext?: { currentHandler?: { id: string; nodeType: string } | null }; pendingRole?: string | null;
       managerId?: string | null; companyApproverId?: string | null };
     const taskHandler = projection.workflowContext?.currentHandler;
+    const goalHandlerId = projection.currentHandlerId && 'employeeId' in row && projection.currentHandlerId !== row.employeeId
+      ? projection.currentHandlerId : null;
     const reviewerIds = row.lifecycleStatus !== 'active' ? [] : kind === 'task'
-      ? (taskHandler && taskHandler.nodeType !== 'employee' ? [taskHandler.id] : [])
+      ? (taskHandler ? taskHandler.nodeType !== 'employee' ? [taskHandler.id] : [] : [goalHandlerId])
       : kind === 'confirmation' ? [projection.pendingRole === 'manager' ? projection.managerId
         : projection.pendingRole === 'company' ? projection.companyApproverId : null]
       : [projection.currentOwnerId];

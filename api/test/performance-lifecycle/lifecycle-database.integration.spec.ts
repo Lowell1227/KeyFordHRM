@@ -37,7 +37,7 @@ describe('performance lifecycle: isolated real PostgreSQL fence contracts', () =
     const suffix = randomUUID();
     actor = await db.user.create({ data: { name: `Fictional lifecycle operator ${suffix.slice(0, 8)}`, sysRole: 'hr_user',
       hrCapabilities: ['performance_lifecycle_view', 'performance_lifecycle_terminate', 'performance_lifecycle_delete'] } });
-    service = new PerformanceLifecycleService(db as any, views, views, views, views);
+    service = new PerformanceLifecycleService(db as any, views, views, views, views, views);
   });
   afterAll(async () => { await second?.$disconnect(); await db?.$disconnect(); });
   async function fixture() {
@@ -170,7 +170,7 @@ describe('performance lifecycle: isolated real PostgreSQL fence contracts', () =
       pid = (await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`)[0].pid;
       started.resolve(); return fn(tx);
     }, { ...options, timeout: 20000 }) };
-    const queuedService = new PerformanceLifecycleService(wrapped as any, views, views, views, views);
+    const queuedService = new PerformanceLifecycleService(wrapped as any, views, views, views, views, views);
     const mutation = queuedService.mutate('task', task.id, 'terminate', input(task), actor).catch((error) => error);
     try { await started.promise; await waitForLock(pid); } finally { release.resolve(); }
     await revoking;

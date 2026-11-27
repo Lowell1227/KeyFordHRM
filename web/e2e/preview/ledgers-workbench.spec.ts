@@ -43,6 +43,21 @@ function fictionalEmployeeToken(id: string) {
     stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000 }).trim(); }
   catch { throw Error('Fictional role session could not be established'); }
 }
+function prepareGoalLedgerOperator(f: Demo) {
+  const code = `require('./prisma/preview-guard.cjs').assertPreviewEnvironment(process.env);
+    const {PrismaClient}=require('@prisma/client');const db=new PrismaClient();
+    (async()=>{const marker=await db.systemConfig.findUnique({where:{key:'local_preview_fixture_v1'}});
+      const employee=await db.user.findUniqueOrThrow({where:{id:${JSON.stringify(f.employeeId)}}});
+      if(marker?.value?.fictional!==true||!employee.name.startsWith('LC_')||employee.dingtalkId||employee.dingtalkUnionId)throw Error('fixture guard');
+      const operator=await db.user.create({data:{name:${JSON.stringify(f.prefix + ' 虚构目标专员')},
+        sysRole:'hr_user',status:'active',canViewAll:false,isAssessorOnly:false,
+        hrCapabilities:['cycle_plan_edit','performance_publish','performance_lifecycle_terminate','performance_lifecycle_delete']}});
+      process.stdout.write(JSON.stringify({id:operator.id}));
+    })().finally(()=>db.$disconnect()).catch(()=>{process.exitCode=1});`;
+  try { return JSON.parse(execFileSync('docker', ['exec', '-i', 'hrm-api-1', 'node'], { input: code,
+    encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000 })) as { id: string }; }
+  catch { throw Error('Guarded fictional goal-ledger operator could not be prepared'); }
+}
 async function manage(page: Page, kind: string, id: string, action: 'terminate' | 'delete') {
   const title = action === 'terminate' ? '终止流程' : '删除记录';
   await page.getByRole('button', { name: title, exact: true }).click();
@@ -93,6 +108,56 @@ test('list operations terminate and delete the exact four fictional records with
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await page.screenshot({ path: info.outputPath(`${row.kind}-list-after-delete.png`), fullPage: true });
   }
+  expect(errors).toEqual([]);
+});
+
+test('goal-only HR opens lifecycle modal and terminates/deletes without full assessment access', async ({ page }, info) => {
+  expect(info.project.use.baseURL).toBe(process.env.HRM_PREVIEW_URL ?? origin);
+  const f = prepare(), operator = prepareGoalLedgerOperator(f);
+  const token = fictionalEmployeeToken(operator.id);
+  await page.addInitScript(value => {
+    localStorage.setItem('token', value);
+    localStorage.setItem('expiresAt', String(Date.now() + 600000));
+    localStorage.setItem('passwordChangeRequired', 'false');
+  }, token);
+  const errors: string[] = []; page.on('pageerror', () => errors.push('pageerror'));
+  const route = `/tasks?goalView=monitor&employeeName=${encodeURIComponent(f.employeeName)}`;
+  await page.goto(route);
+  const me = await read(page, '/auth/me');
+  expect(me.sysRole).toBe('hr_user'); expect(me.canViewAll).toBe(false);
+  for (const endpoint of [`/tasks/${f.taskId}`]) {
+    const denied = await page.request.get(`/api/v1${endpoint}`, { headers: { authorization: `Bearer ${token}` } });
+    expect(denied.status()).toBe(403);
+  }
+  const before = await read(page, `/goal-plans/${f.taskId}`);
+  expect(before.indicatorInstances).toHaveLength(1);
+  const controls = page.locator(`.lifecycle-actions--compact[data-record-id="${f.taskId}"]:visible`);
+  for (const action of ['terminate', 'delete'] as const) {
+    const title = action === 'terminate' ? '终止流程' : '删除记录';
+    const loaded = page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/performance-lifecycle/task/${f.taskId}`
+      && r.request().method() === 'GET');
+    await controls.getByRole('button', { name: action === 'terminate' ? '终止' : '删除', exact: true }).click();
+    expect((await loaded).status()).toBe(200);
+    const dialog = page.getByRole('dialog', { name: title, exact: true });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    await dialog.getByLabel('操作原因', { exact: true }).fill('隔离虚构验收：窄目标台账权限办理');
+    await expect(dialog.getByRole('button', { name: title, exact: true })).toBeEnabled();
+    if (action === 'terminate') await page.screenshot({ path: info.outputPath('goal-only-hr-modal.png'), fullPage: true });
+    const saved = page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/performance-lifecycle/task/${f.taskId}/${action}`
+      && r.request().method() === 'POST');
+    await dialog.getByRole('button', { name: title, exact: true }).click();
+    expect((await saved).status()).toBe(201);
+    await expect(dialog).toBeHidden();
+  }
+  await expect(controls).toHaveCount(0);
+  const history = await read(page, `/performance-lifecycle/task/${f.taskId}`);
+  expect(history.lifecycleStatus).toBe('deleted'); expect(history.events).toHaveLength(2);
+  const retained = await read(page, `/goal-plans/${f.taskId}`);
+  expect(retained.status).toBe(before.status); expect(retained.goalApprovedAt).toBe(before.goalApprovedAt);
+  expect(retained.indicatorInstances).toEqual(before.indicatorInstances);
+  expect((await page.request.get(`/api/v1/tasks/${f.taskId}`, { headers: { authorization: `Bearer ${token}` } })).status()).toBe(403);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   expect(errors).toEqual([]);
 });
 
