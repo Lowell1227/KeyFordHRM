@@ -166,6 +166,21 @@ describe("GoalPlansService goal-only read scope", () => {
     );
   });
 
+  it("does not let an assessor-only account reuse retained specialist capabilities for unrelated goal records", async () => {
+    const viewer = { ...specialist, isAssessorOnly: true };
+    for (const read of [
+      () => service.findAll(Object.assign(new GoalPlanQueryDto(), { scope: "monitor" }), viewer),
+      () => service.options(Object.assign(new GoalPlanQueryDto(), { scope: "monitor" }), viewer),
+      () => service.findOne("task-1", viewer),
+    ]) await expect(read()).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.assessmentTask.findMany).not.toHaveBeenCalled();
+  });
+
+  it("retains the original frozen-participant goal read when assessor-only monitor access is denied", async () => {
+    const viewer = actor({ id: "manager", isAssessorOnly: true });
+    await expect(service.findOne("task-1", viewer)).resolves.toMatchObject({ id: "task-1" });
+  });
+
   it("shows the frozen leader the pending final goal decision without giving a same-role stranger actions", async () => {
     prisma.assessmentTask.findUnique.mockResolvedValue(
       row({

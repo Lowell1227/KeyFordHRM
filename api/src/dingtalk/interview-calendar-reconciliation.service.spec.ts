@@ -16,6 +16,7 @@ function setup() {
   const intents = [intent];
   const prisma: any = {
     $queryRaw: jest.fn().mockResolvedValue([]),
+    user: { findUnique: jest.fn().mockResolvedValue({ ...editor, status: 'active', deletedAt: null, archivedAt: null, isAssessorOnly: false }) },
     talentInterview: { findUnique: jest.fn(async () => structuredClone(interview)),
       update: jest.fn(async ({ data }) => Object.assign(interview, data)),
       updateMany: jest.fn(async ({ where, data }) => {
@@ -96,10 +97,39 @@ describe('Interview calendar reconciliation', () => {
   it.each([
     { sysRole: 'employee', hrCapabilities: [] },
     { sysRole: 'hr_user', hrCapabilities: ['employee_archive_review'] },
-  ])('rejects users without the existing archive-edit capability before reading anything', async (permissions) => {
+  ])('rejects users without recruitment maintenance rights before any transaction or remote read', async (permissions) => {
     const { prisma, calendar, service } = setup();
+    prisma.user.findUnique.mockResolvedValue({ ...editor, ...permissions, status: 'active', deletedAt: null, archivedAt: null, isAssessorOnly: false });
     await expect(service.reconcile('interview', 3, { ...editor, ...permissions } as AuthUser)).rejects.toThrow(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled(); expect(calendar.locate).not.toHaveBeenCalled();
+  });
+  it.each(['hr_user', 'employee'])('allows the current recruitment-only %s without archive rights', async sysRole => {
+    const { prisma, calendar, service } = setup();
+    const actor = { ...editor, sysRole, hrCapabilities: ['recruitment_edit'] } as AuthUser;
+    prisma.user.findUnique.mockResolvedValue({ ...actor, status: 'active', deletedAt: null, archivedAt: null, isAssessorOnly: false });
+    await expect(service.reconcile('interview', 3, actor)).resolves.toMatchObject({ status: 'pending' });
+    expect(calendar.create).not.toHaveBeenCalled(); expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks a revoked current account before any remote I/O', async () => {
+    const { prisma, calendar, service } = setup();
+    prisma.user.findUnique.mockResolvedValue({ ...editor, status: 'active', hrCapabilities: [], isAssessorOnly: false });
+    await expect(service.reconcile('interview', 3, editor)).rejects.toThrow(ForbiddenException);
+    expect(calendar.locate).not.toHaveBeenCalled(); expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('rejects revocation during remote lookup before requeueing or auditing', async () => {
+    const { prisma, calendar, service } = setup();
+    calendar.locate.mockImplementation(async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...editor, status: 'active', hrCapabilities: [], isAssessorOnly: false });
+      return { kind: 'found', eventId: 'verified-event' };
+    });
+    await expect(service.reconcile('interview', 3, editor)).rejects.toThrow(ForbiddenException);
+    expect(prisma.talentInterviewSync.updateMany).not.toHaveBeenCalled(); expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('rejects a current assessor-only account even when an old archive capability remains', async () => {
+    const { prisma, calendar, service } = setup();
+    prisma.user.findUnique.mockResolvedValue({ ...editor, status: 'active', isAssessorOnly: true });
+    await expect(service.reconcile('interview', 3, editor)).rejects.toThrow(ForbiddenException);
+    expect(calendar.locate).not.toHaveBeenCalled();
   });
   it('rejects a stale client version before a remote read', async () => {
     const { calendar, service } = setup();

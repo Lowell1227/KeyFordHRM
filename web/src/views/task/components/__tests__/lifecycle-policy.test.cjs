@@ -36,6 +36,7 @@ test('goal monitor recognizes lifecycle-only HR staff and HR without a systemPer
   assert.equal(canMonitorGoals({ sysRole: 'hr_user', hrCapabilities: ['cycle_plan_edit', 'performance_publish'] }), true);
   assert.equal(canMonitorGoals({ sysRole: 'hr_user', hrCapabilities: [] }), false);
   assert.equal(canMonitorGoals({ sysRole: 'hr_user', isAssessorOnly: true, hrCapabilities: ['performance_lifecycle_view'] }), false);
+  assert.equal(canMonitorGoals({ sysRole: 'hr_user', isAssessorOnly: true, hrCapabilities: ['cycle_plan_edit', 'performance_publish'] }), false);
 });
 
 test('metadata recheck preserves original business actions only while the record stays active', () => {

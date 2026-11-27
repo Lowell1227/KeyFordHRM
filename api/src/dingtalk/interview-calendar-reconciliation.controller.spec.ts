@@ -16,8 +16,9 @@ describe('Interview calendar reconciliation HTTP contract (no external providers
     app = module.createNestApplication();
     app.use((req: any, _res: any, next: () => void) => {
       const role = req.headers['x-test-role'];
-      req.user = { id: 'synthetic-editor', sysRole: role === 'editor' || role === 'reviewer' ? 'hr_user' : role,
-        hrCapabilities: role === 'editor' ? ['employee_archive_edit'] : role === 'reviewer' ? ['employee_archive_review'] : [] };
+      req.user = { id: 'synthetic-editor', sysRole: ['editor', 'reviewer', 'recruiter', 'assessor'].includes(role) ? 'hr_user' : role === 'employee-recruiter' ? 'employee' : role,
+        isAssessorOnly: role === 'assessor', hrCapabilities: ['editor', 'assessor'].includes(role) ? ['employee_archive_edit']
+          : ['recruiter', 'employee-recruiter', 'assessor'].includes(role) ? ['recruitment_edit'] : role === 'reviewer' ? ['employee_archive_review'] : [] };
       next();
     });
     app.useGlobalGuards(new RolesGuard(new Reflector()));
@@ -26,13 +27,13 @@ describe('Interview calendar reconciliation HTTP contract (no external providers
   });
   afterAll(async () => { await app.close(); });
   beforeEach(() => reconcile.mockClear());
-  it.each(['editor', 'hr', 'system_admin'])('allows existing %s maintenance rights without a new capability', async (role) => {
+  it.each(['editor', 'hr', 'system_admin', 'recruiter', 'employee-recruiter'])('allows existing %s maintenance rights without a new capability', async (role) => {
     const result = await request(app.getHttpServer()).post(`/talent-interviews/${id}/reconcile-calendar`)
       .set('x-test-role', role).send({ version: 3, eventId: 'must-not-be-trusted' }).expect(200);
     expect(result.body).toEqual({ status: 'pending', version: 3 });
     expect(reconcile).toHaveBeenCalledWith(id, 3, expect.objectContaining({ id: 'synthetic-editor' }));
   });
-  it.each(['employee', 'reviewer'])('denies %s before any reconciliation', async (role) => {
+  it.each(['employee', 'reviewer', 'assessor'])('denies %s before any reconciliation', async (role) => {
     await request(app.getHttpServer()).post(`/talent-interviews/${id}/reconcile-calendar`)
       .set('x-test-role', role).send({ version: 3 }).expect(403);
     expect(reconcile).not.toHaveBeenCalled();

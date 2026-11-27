@@ -21,7 +21,7 @@ describe('PeriodMonitoringService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: '2026 Q3' });
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: '2026 Q3', hrOwnerId: 'another-owner', reviewerId: null });
     dataScope.getVisibleEmployeeFilter.mockResolvedValue({ deptId: { in: ['dept-1'] } });
     prisma.assessmentPeriod.findMany.mockResolvedValue([
       makePeriod({ id: 'p-7-a', sequence: 1, periodKey: '2026-07', employeeNo: '001', employeeName: '甲', selfEvalDueAt: '2026-09-02T10:00:00.000Z' }),
@@ -52,12 +52,13 @@ describe('PeriodMonitoringService', () => {
     expect(result.items[3]).toMatchObject({
       derivedStatus: 'manager_completed',
       canReopen: false,
-      reopenBlockedReason: '仅具备周期管理编辑权限的HR可重新开放',
+      reopenBlockedReason: '仅本周期获授权的HR可重新开放',
     });
   });
 
   it('支持月份、状态、员工关键词筛选且分页总数不受页大小影响', async () => {
     const editViewer = { ...viewer, hrCapabilities: ['cycle_plan_edit'] };
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: '2026 Q3', hrOwnerId: viewer.id, reviewerId: null });
     const result = await service.findCycleMonitoring('cycle-1', {
       page: 1,
       pageSize: 1,
@@ -69,6 +70,48 @@ describe('PeriodMonitoringService', () => {
     expect(result.total).toBe(1);
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({ id: 'p-9-a', canReopen: true, reopenBlockedReason: null });
+  });
+  function completedPeriod() {
+    return { ...makePeriod({ id: 'owned-month', sequence: 1, periodKey: '2026-09', employeeNo: '999', employeeName: '虚构员工',
+      employeeSubmittedAt: '2026-09-01T08:00:00Z', managerSubmittedAt: '2026-09-02T08:00:00Z', lockedAt: '2026-09-02T08:00:00Z', status: 'completed' }),
+      selfGrade: 'B', managerGrade: 'A' };
+  }
+  it('counts owned-cycle periods outside personnel scope without disclosing scores or opening full assessment access', async () => {
+    const owner = { ...viewer, hrCapabilities: ['cycle_plan_edit'] };
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: '虚构周期', hrOwnerId: owner.id, reviewerId: null });
+    dataScope.getVisibleEmployeeFilter.mockResolvedValue({ id: owner.id });
+    prisma.assessmentPeriod.findMany.mockImplementation(async ({ where }) => where.task.employee ? [] : [completedPeriod()]);
+    const result = await service.findCycleMonitoring('cycle-1', { page: 1, pageSize: 1 } as any, owner);
+    expect(result.total).toBe(1); expect(result.summary.managerCompleted).toBe(1);
+    expect(result.items[0]).toMatchObject({ managerScoreTotal: null, selfScoreTotal: null, selfGrade: null, managerGrade: null, canReopen: true });
+    expect(prisma.assessmentPeriod.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { task: {
+      cycleId: 'cycle-1', lifecycleStatus: 'active', participantDisposition: 'active' } } }));
+  });
+  it('lets the explicitly assigned reviewer see cycle progress but not reopen or read unrelated scores', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: '虚构周期', hrOwnerId: 'another-owner', reviewerId: viewer.id });
+    prisma.assessmentPeriod.findMany.mockImplementation(async ({ where }) => where.task.employee ? [] : [completedPeriod()]);
+    const result = await service.findCycleMonitoring('cycle-1', { page: 1, pageSize: 20 } as any, viewer);
+    expect(result.total).toBe(1); expect(result.items[0]).toMatchObject({ canReopen: false, managerScoreTotal: null, managerGrade: null });
+  });
+  it('keeps original employee scope on an unrelated cycle and never offers an unauthorized reopen', async () => {
+    prisma.assessmentPeriod.findMany.mockResolvedValue([completedPeriod()]);
+    const actor = { ...viewer, hrCapabilities: ['cycle_plan_edit'] };
+    const result = await service.findCycleMonitoring('cycle-1', {} as any, actor);
+    expect(prisma.assessmentPeriod.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      task: expect.objectContaining({ employee: { deptId: { in: ['dept-1'] } } }) }) }));
+    expect(result.items[0].canReopen).toBe(false);
+  });
+  it('preserves score visibility for an existing full assessment reader', async () => {
+    const owner = { ...viewer, canViewAll: true, hrCapabilities: ['cycle_plan_edit'] };
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: '虚构周期', hrOwnerId: owner.id, reviewerId: null });
+    prisma.assessmentPeriod.findMany.mockResolvedValue([completedPeriod()]);
+    const result = await service.findCycleMonitoring('cycle-1', {} as any, owner);
+    expect(result.items[0]).toMatchObject({ managerScoreTotal: 90, managerGrade: 'A', canReopen: true });
+  });
+  it('rejects an assessor-only identity before any cycle or period read', async () => {
+    await expect(service.findCycleMonitoring('cycle-1', {} as any, { ...viewer, isAssessorOnly: true })).rejects.toThrow('无权查看月度自评进度');
+    expect(prisma.assessmentCycle.findUnique).not.toHaveBeenCalled();
+    expect(prisma.assessmentPeriod.findMany).not.toHaveBeenCalled();
   });
 });
 
@@ -100,6 +143,7 @@ function makePeriod(options: {
     managerScoreTotal: options.managerSubmittedAt ? { toNumber: () => 90 } : null,
     task: {
       id: `task-${options.employeeNo}`,
+      employeeId: `employee-${options.employeeNo}`, managerId: 'manager-1', deptHeadId: 'head-1', approverId: 'approver-1',
       status: options.managerSubmittedAt ? 'dept_review' : 'self_eval',
       publishedAt: null,
       participantDisposition: 'active',

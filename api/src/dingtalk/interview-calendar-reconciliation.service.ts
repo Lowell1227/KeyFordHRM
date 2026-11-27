@@ -1,9 +1,9 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma, TalentInterview, TalentInterviewSync } from '@prisma/client';
-import { hasHrCapability } from '@/auth/hr-capabilities';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, type TalentInterview, type TalentInterviewSync } from '@prisma/client';
 import type { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { CalendarEventLocator, CalendarLookupResult, InterviewCalendarService } from './interview-calendar.service';
+import { assertRecruitmentEditor } from '@/talent-pool/talent-recruitment-policy';
 
 type Snapshot = { interview: TalentInterview; intents: TalentInterviewSync[] };
 type UnresolvedReason = Extract<CalendarLookupResult, { kind: 'unresolved' }>['reason'];
@@ -16,11 +16,12 @@ export class InterviewCalendarReconciliationService {
   constructor(private readonly prisma: PrismaService, private readonly calendar: InterviewCalendarService) {}
 
   async reconcile(id: string, version: number, user: AuthUser): Promise<CalendarReconciliationResult> {
-    if (!hasHrCapability(user, 'employee_archive_edit')) throw new ForbiddenException('无权限核对面试日程');
+    await assertRecruitmentEditor(this.prisma, user);
     if (!Number.isInteger(version) || version < 1) throw new BadRequestException('请提供有效的邀约版本');
     if (!this.calendar.isEnabled()) return { status: 'unconfigured', version, reason: 'calendar_disabled' };
 
-    const snapshot = await this.prisma.$transaction(tx => this.readLocked(tx, id, version));
+    const snapshot = await this.prisma.$transaction(tx => this.readLocked(tx, id, version, user),
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     const locator = this.locator(snapshot);
     if (!locator) return { status: 'uncertain', version, reason: 'context_mismatch' };
 
@@ -36,7 +37,7 @@ export class InterviewCalendarReconciliationService {
     if (!this.calendar.isEnabled()) return { status: 'unconfigured', version, reason: 'calendar_disabled' };
 
     await this.prisma.$transaction(async tx => {
-      const current = await this.readLocked(tx, id, version);
+      const current = await this.readLocked(tx, id, version, user);
       const latestLocator = this.locator(current);
       const original = snapshot.intents[0], latest = current.intents[0];
       if (!latestLocator || JSON.stringify(latestLocator) !== JSON.stringify(locator)
@@ -60,12 +61,14 @@ export class InterviewCalendarReconciliationService {
         newValue: { version, syncStatus: 'pending', operation: original.operation,
           matchedBy: locator.eventId ? 'stored_event_id' : 'business_marker' },
       } });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     return { status: 'pending', version };
   }
 
-  private async readLocked(tx: Prisma.TransactionClient, id: string, version: number): Promise<Snapshot> {
+  private async readLocked(tx: Prisma.TransactionClient, id: string, version: number, user: AuthUser): Promise<Snapshot> {
     await tx.$queryRaw`SELECT id FROM talent_interviews WHERE id = ${id}::uuid FOR UPDATE`;
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR SHARE`;
+    await assertRecruitmentEditor(tx, user);
     const interview = await tx.talentInterview.findUnique({ where: { id } });
     if (!interview) throw new NotFoundException('面试邀约不存在');
     if (interview.version !== version) throw new ConflictException('邀约已更新，请刷新后重试');

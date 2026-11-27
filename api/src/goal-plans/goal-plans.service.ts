@@ -127,6 +127,7 @@ type SummaryRow = Prisma.AssessmentTaskGetPayload<{
 }>;
 
 export function canMonitorGoals(viewer: AuthUser): boolean {
+  if (viewer.isAssessorOnly) return false;
   return (
     canManageLifecycle(viewer, 'view') ||
     viewer.sysRole === SysRole.hr ||

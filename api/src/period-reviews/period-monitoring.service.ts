@@ -7,6 +7,8 @@ import { DataScopeService } from '@/common/services/data-scope.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { QueryPeriodMonitoringDto, PeriodMonitoringStatus } from './dto/query-period-monitoring.dto';
 import type { PeriodMonitoringResult, PeriodMonitoringRow } from './period-review.types';
+import { isGlobalCycleOperator } from '@/cycles/cycle-operator-scope';
+import { canViewTask } from '@/tasks/task-access-policy';
 
 const monitoringSelect = {
   id: true,
@@ -27,6 +29,7 @@ const monitoringSelect = {
   task: {
     select: {
       id: true,
+      employeeId: true, managerId: true, deptHeadId: true, approverId: true,
       status: true,
       publishedAt: true,
       participantDisposition: true,
@@ -56,30 +59,35 @@ export class PeriodMonitoringService {
   ): Promise<PeriodMonitoringResult> {
     const canEdit = hasHrCapability(viewer, 'cycle_plan_edit');
     const canRead = canEdit || hasHrCapability(viewer, 'cycle_plan_review');
-    if (!canRead) {
+    if (!canRead || viewer.isAssessorOnly) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看月度自评进度' });
     }
     const cycle = await this.prisma.assessmentCycle.findUnique({
       where: { id: cycleId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, hrOwnerId: true, reviewerId: true },
     });
     if (!cycle) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
     }
 
-    const employeeWhere = await this.dataScope.getVisibleEmployeeFilter(viewer);
+    // Cycle duties grant progress visibility, not personnel-file or full-result access.
+    const cycleDuty = (canEdit && cycle.hrOwnerId === viewer.id)
+      || (hasHrCapability(viewer, 'cycle_plan_review') && cycle.reviewerId === viewer.id);
+    const employeeWhere = cycleDuty ? undefined : await this.dataScope.getVisibleEmployeeFilter(viewer);
+    const canReopen = canEdit && (isGlobalCycleOperator(viewer) || cycle.hrOwnerId === viewer.id);
     const periods = await this.prisma.assessmentPeriod.findMany({
       where: {
         task: {
           cycleId,
           lifecycleStatus: 'active',
           participantDisposition: 'active',
-          employee: employeeWhere,
+          ...(employeeWhere ? { employee: employeeWhere } : {}),
         },
       },
       select: monitoringSelect,
     });
-    const rows = periods.map((period) => this.toRow(period, canEdit, now));
+    const rows = periods.map((period) => this.toRow(period, canReopen, now,
+      !cycleDuty || canViewTask(period.task, viewer)));
     const summary = {
       employeePending: rows.filter((row) => row.derivedStatus === 'employee_pending').length,
       employeeOverdue: rows.filter((row) => row.derivedStatus === 'employee_overdue').length,
@@ -114,7 +122,7 @@ export class PeriodMonitoringService {
     };
   }
 
-  private toRow(period: MonitoringPeriod, canEdit: boolean, now: Date): PeriodMonitoringRow {
+  private toRow(period: MonitoringPeriod, canEdit: boolean, now: Date, includeScores: boolean): PeriodMonitoringRow {
     const derivedStatus = this.derivedStatus(period, now);
     const publicationBlocked = Boolean(
       period.task.cycle.publishedAt
@@ -125,7 +133,7 @@ export class PeriodMonitoringService {
     const taskStatusBlocked = !['manager_scoring', 'dept_review', 'hr_calibration', 'approval', 'self_eval']
       .includes(period.task.status);
     const reopenBlockedReason = !canEdit
-      ? '仅具备周期管理编辑权限的HR可重新开放'
+      ? '仅本周期获授权的HR可重新开放'
       : publicationBlocked
         ? '结果已经公示，请走现有结果更正流程'
         : derivedStatus !== 'manager_completed'
@@ -153,10 +161,10 @@ export class PeriodMonitoringService {
       employeeSubmittedAt: period.employeeSubmittedAt,
       managerSubmittedAt: period.managerSubmittedAt,
       lockedAt: period.lockedAt,
-      selfScoreTotal: period.selfScoreTotal?.toNumber() ?? null,
-      managerScoreTotal: period.managerScoreTotal?.toNumber() ?? null,
-      selfGrade: period.selfGrade,
-      managerGrade: period.managerGrade,
+      selfScoreTotal: includeScores ? period.selfScoreTotal?.toNumber() ?? null : null,
+      managerScoreTotal: includeScores ? period.managerScoreTotal?.toNumber() ?? null : null,
+      selfGrade: includeScores ? period.selfGrade : null,
+      managerGrade: includeScores ? period.managerGrade : null,
       canReopen: reopenBlockedReason == null,
       reopenBlockedReason,
     };
