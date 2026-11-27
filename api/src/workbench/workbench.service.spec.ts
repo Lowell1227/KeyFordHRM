@@ -22,13 +22,12 @@ function setup(subjects = [subject(['payroll_review'])], viewer = actor) {
     maintenancePurpose: jest.fn().mockReturnValue('formal'), assertDomain: jest.fn().mockResolvedValue('formal') };
   const reviews = { findAll: jest.fn().mockResolvedValue({ total: 0, items: [] }) };
   const digest = { list: jest.fn().mockResolvedValue({ items: [] }) };
-  const parameters = { list: jest.fn().mockResolvedValue([]) };
   const readiness = { list: jest.fn().mockResolvedValue([]) };
   const performance = { read: jest.fn().mockResolvedValue({ visible: true, actionable: [], attention: [] }) };
   const service = new WorkbenchService(prisma as never, access as never, reviews as never,
-    digest as never, parameters as never, readiness as never, performance as never);
+    digest as never, readiness as never, performance as never);
   const get = (page = 1, pageSize = 5) => service.operations(viewer, { page, pageSize });
-  return { prisma, access, reviews, digest, parameters, readiness, get };
+  return { prisma, access, reviews, digest, readiness, get };
 }
 
 describe('operations workbench scoped projection (pure)', () => {
@@ -39,7 +38,7 @@ describe('operations workbench scoped projection (pure)', () => {
     expect(result.groups.payroll.attention.total).toBe(0);
     expect(result.groups.payroll.visible).toBe(false);
     expect(f.prisma.payrollBatch.findMany).not.toHaveBeenCalled();
-    expect(f.parameters.list).not.toHaveBeenCalled();
+    expect(f.prisma.payrollParameterRelease.findMany).not.toHaveBeenCalled();
     expect(f.readiness.list).not.toHaveBeenCalled();
   });
 
@@ -48,8 +47,44 @@ describe('operations workbench scoped projection (pure)', () => {
     f.prisma.payrollBatch.findMany.mockResolvedValue([batch('other', { subjectId: 'ungranted' }), batch('mine')]);
     const result = await f.get();
     expect(result.groups.payroll.actionable.items.map(row => row.batchId)).toEqual(['mine']);
-    expect(f.prisma.payrollBatch.findMany.mock.calls[0][0].where.subjectId).toBe('subject');
+    expect(f.prisma.payrollBatch.findMany.mock.calls[0][0].where.subjectId).toEqual({ in: ['subject'] });
     expect(f.readiness.list).toHaveBeenCalledWith('subject', actor);
+  });
+
+  it('queries wage batch metadata once across all granted subjects', async () => {
+    const f = setup([
+      subject(['payroll_review'], 'subject'),
+      subject(['payroll_review'], 'second'),
+      subject(['payroll_parameter_review'], 'parameter-only'),
+    ]);
+    f.prisma.payrollBatch.findMany.mockResolvedValue([
+      batch('first'), batch('second', { subjectId: 'second' }),
+      batch('parameter-only', { subjectId: 'parameter-only' }),
+    ]);
+    const result = (await f.get()).groups.payroll;
+    expect(result.actionable.items.map(row => row.batchId)).toEqual(['first', 'second']);
+    expect(f.prisma.payrollBatch.findMany).toHaveBeenCalledTimes(1);
+    expect(f.prisma.payrollBatch.findMany.mock.calls[0][0].where.subjectId).toEqual({ in: ['subject', 'second'] });
+  });
+
+  it('reads only pending parameter routing fields once across subjects', async () => {
+    const f = setup([subject(['payroll_edit'], 'subject'), subject(['payroll_parameter_review'], 'second')]);
+    await f.get();
+    expect(f.prisma.payrollParameterRelease.findMany).toHaveBeenCalledTimes(1);
+    expect(f.prisma.payrollParameterRelease.findMany.mock.calls[0][0].select).toEqual({
+      id: true, domain: true, subjectId: true, status: true, reviewerId: true, submittedById: true,
+      submittedBy: { select: { payrollGrants: { where: { subjectId: { in: ['subject', 'second'] },
+        revokedAt: null, capabilities: { has: 'payroll_edit' } }, select: { subjectId: true } } } },
+    });
+  });
+
+  it('requires a live edit grant for the exact assigned parameter subject', async () => {
+    const f = setup([subject(['payroll_parameter_review'])]);
+    f.prisma.payrollParameterRelease.findMany.mockResolvedValue([
+      { id: 'different', subjectId: 'subject', domain: 'formal', status: 'pending', reviewerId: 'viewer',
+        submittedById: 'maker', submittedBy: { payrollGrants: [{ subjectId: 'another-subject' }] } },
+    ]);
+    expect((await f.get()).groups.payroll.actionable.total).toBe(0);
   });
 
   it('counts only the frozen current step with matching stage capability, never self-review', async () => {
@@ -103,19 +138,29 @@ describe('operations workbench scoped projection (pure)', () => {
 
   it('only lists live independent parameter assignments, never own or stale-manager reviews', async () => {
     const f = setup([subject(['payroll_edit', 'payroll_parameter_review'])]);
-    f.parameters.list.mockResolvedValue([
-      { id: 'assigned', subjectId: 'subject', domain: 'formal', status: 'pending', kind: 'rule', reviewerId: 'viewer', submittedById: 'maker' },
-      { id: 'stale', subjectId: 'subject', domain: 'formal', status: 'pending', kind: 'rule', reviewerId: 'viewer', submittedById: 'former-report' },
-      { id: 'self', subjectId: 'subject', domain: 'formal', status: 'pending', kind: 'rule', reviewerId: 'viewer', submittedById: 'viewer' },
+    const retainedGrant = { payrollGrants: [{ subjectId: 'subject' }] };
+    f.prisma.payrollParameterRelease.findMany.mockResolvedValue([
+      { id: 'assigned', subjectId: 'subject', domain: 'formal', status: 'pending', reviewerId: 'viewer', submittedById: 'maker', submittedBy: retainedGrant },
+      { id: 'mine-waiting', subjectId: 'subject', domain: 'formal', status: 'pending', reviewerId: 'manager', submittedById: 'viewer', submittedBy: retainedGrant },
+      { id: 'self', subjectId: 'subject', domain: 'formal', status: 'pending', reviewerId: 'viewer', submittedById: 'viewer', submittedBy: retainedGrant },
       { id: 'other', subjectId: 'other', domain: 'formal', status: 'pending', kind: 'rule', reviewerId: 'viewer', submittedById: 'maker' },
+      { id: 'preview', subjectId: 'subject', domain: 'validation', status: 'pending', reviewerId: 'viewer', submittedById: 'maker' },
     ]);
-    f.prisma.payrollParameterRelease.findMany.mockResolvedValue([{ id: 'assigned' }, { id: 'self' }]);
     const result = (await f.get()).groups.payroll;
     expect(result.actionable.items.map(row => row.requestId)).toEqual(['assigned']);
+    expect(result.attention.items.map(row => row.requestId)).toEqual(['mine-waiting']);
     expect(result.actionable.items[0].path).toBe('/payroll/parameter-reviews?subjectId=subject&releaseId=assigned');
-    const where = f.prisma.payrollParameterRelease.findMany.mock.calls[0][0].where;
-    expect(where).toMatchObject({ reviewerId: 'viewer', subjectId: 'subject', domain: 'formal', status: 'pending',
-      submittedBy: { is: { directManagerId: 'viewer', payrollGrants: { some: { subjectId: 'subject', revokedAt: null, capabilities: { has: 'payroll_edit' } } } } } });
+    const { where, select } = f.prisma.payrollParameterRelease.findMany.mock.calls[0][0];
+    expect(where).toMatchObject({ domain: 'formal', status: 'pending', subjectId: { in: ['subject'] }, OR: [
+      { reviewerId: 'viewer', submittedById: { not: 'viewer' },
+        reviewer: { is: { archivedAt: null, deletedAt: null, isAssessorOnly: false } },
+        submittedBy: { is: { directManagerId: 'viewer', archivedAt: null, deletedAt: null } } },
+      { reviewerId: { not: 'viewer' }, subjectId: { in: ['subject'] }, submittedById: 'viewer',
+        submittedBy: { is: { archivedAt: null, deletedAt: null, isAssessorOnly: false } } },
+    ] });
+    expect(select.submittedBy.select.payrollGrants).toEqual({
+      where: { subjectId: { in: ['subject'] }, revokedAt: null, capabilities: { has: 'payroll_edit' } }, select: { subjectId: true },
+    });
   });
 
   it('projects readiness current-step assignments without reading monetary detail', async () => {
@@ -137,7 +182,7 @@ describe('operations workbench scoped projection (pure)', () => {
   it('does not query wage data for a parameter-only manager', async () => {
     const f = setup([subject(['payroll_parameter_review'])]);
     await f.get();
-    expect(f.parameters.list).toHaveBeenCalledWith('subject', actor);
+    expect(f.prisma.payrollParameterRelease.findMany).toHaveBeenCalledTimes(1);
     expect(f.prisma.payrollBatch.findMany).not.toHaveBeenCalled();
     expect(f.readiness.list).not.toHaveBeenCalled();
   });
@@ -217,7 +262,7 @@ describe('operations workbench scoped projection (pure)', () => {
     const f = setup([subject(['payroll_edit', 'payroll_parameter_review'])]);
     await f.get();
     expect(Object.keys(f.prisma.payrollBatch)).toEqual(['findMany']);
-    expect(Object.keys(f.parameters)).toEqual(['list']);
+    expect(Object.keys(f.prisma.payrollParameterRelease)).toEqual(['findMany']);
     expect(Object.keys(f.readiness)).toEqual(['list']);
   });
 });
