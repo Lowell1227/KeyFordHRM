@@ -19,13 +19,14 @@ export interface RecruitmentIntakeView {
   ownerId: string; ownerName: string | null; sourceChannel: string | null;
   postingId: string | null; demandId: string | null; positionName: string | null;
   sourceNotes: string | null; nextFollowUpAt: string | null;
+  followUpSources?: Array<{ intakeId: string; nextFollowUpAt: string; primary: boolean }>;
   candidateDraft: Record<string, unknown> | null; applicationDraft: Record<string, unknown> | null;
   parseStatus: 'idle' | 'processing' | 'succeeded' | 'failed'; parseResult: Record<string, unknown> | null;
   parseMessage: string | null; issues: string[]; files: RecruitmentIntakeFileView[];
   candidateId: string | null; applicationId: string | null;
   candidateUrl: string | null; applicationUrl: string | null;
   associatedToId: string | null; associatedFromIds: string[]; closeReason: string | null;
-  mail: { messageId: string; receivedAt: string; subject: string; bodyText: string; sourcePartId: string } | null;
+  mail: { messageId: string; receivedAt: string; subject: string; bodyText: string; sourcePartId: string; mailboxId: string | null; mailboxName: string | null } | null;
   createdAt: string; updatedAt: string; events?: RecruitmentSourceEventView[];
 }
 export interface RecruitmentMailboxSyncView {

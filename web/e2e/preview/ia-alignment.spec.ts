@@ -80,7 +80,7 @@ test('real role matrix: menus, real recruitment defaults, URLs and backend permi
       await expect(module).toBeVisible();
       await expect(page.getByTestId('module-status-recruitment')).toHaveCount(0);
       await module.click();
-      await expect(page).toHaveURL(actor.talent ? /\/talents$/ : /\/talent-hiring$/);
+      await expect(page).toHaveURL(actor.talent ? /\/recruitment\/demands$/ : /\/talent-hiring$/);
       await expect(page.locator('.menu-panel').getByRole('button', { name: '人才库', exact: true })).toHaveCount(actor.talent ? 1 : 0);
       await expect(page.locator('.menu-panel').getByRole('button', { name: '应聘与面试', exact: true })).toHaveCount(actor.talent ? 1 : 0);
       await expect(page.locator('.menu-panel').getByRole('button', { name: '录用确认', exact: true })).toHaveCount(actor.hiring ? 1 : 0);
@@ -144,7 +144,7 @@ test('three-size navigation, collapse/reload, real queues, notification/share an
     await page.getByRole('button', { name: '转正管理', exact: true }).click();
     await expect(page.getByTestId('nav-module-performance')).toHaveClass(/is-active/);
     await page.getByTestId('nav-module-recruitment').click();
-    await expect(page).toHaveURL(/\/talents$/);
+    await expect(page).toHaveURL(/\/recruitment\/demands$/);
     await page.getByRole('button', { name: '应聘与面试', exact: true }).click();
     await expect(page.locator('.interview-page')).toBeVisible();
     await page.getByRole('tab', { name: '我发起的', exact: true }).click();
@@ -156,7 +156,7 @@ test('three-size navigation, collapse/reload, real queues, notification/share an
     await page.screenshot({ path: info.outputPath(`navigation-${size.width}.png`), fullPage: true, animations: 'disabled' });
   }
   await page.goto('/recruitment?from=bookmark#saved');
-  await expect(page).toHaveURL(/\/talents\?from=bookmark#saved$/);
+  await expect(page).toHaveURL(/\/recruitment\/demands\?from=bookmark#saved$/);
   await page.goto('/personnel-processing?tab=reviews#history');
   await expect(page).toHaveURL(/\/entry-exit\?tab=reviews#history$/);
   await expect(page.getByTestId('nav-module-people')).toHaveClass(/is-active/);
@@ -213,7 +213,7 @@ test('overview GET-only notification states and admin planning remain separate f
     await page.unroute('**/api/v1/notification-settings/dingtalk');
   }
   await page.getByTestId('nav-module-recruitment').click();
-  await expect(page).toHaveURL(/\/talents$/);
+  await expect(page).toHaveURL(/\/recruitment\/demands$/);
   await page.getByRole('button', { name: '建设规划', exact: true }).click();
   await expect(page.getByTestId('recruitment-planning')).toContainText('招聘需求与编制');
   await expect(page.getByTestId('recruitment-planning').locator('button,input,select,textarea')).toHaveCount(0);

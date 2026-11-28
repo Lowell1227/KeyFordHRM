@@ -140,3 +140,13 @@ test('demand list API passes workQueue through without adding candidate or resum
   await api.list({ workQueue: 'review', keyword: 'Synthetic', page: 2, pageSize: 10 });
   assert.deepEqual(calls, [['/recruitment-demands', { params: { workQueue: 'review', keyword: 'Synthetic', page: 2, pageSize: 10 }, skipErrorMessage: true }]]);
 });
+
+test('demand recruitment progress is a separate persisted filter and resets without losing the review queue', async t => {
+  const view = await mount(t, demandFile, { query: { workQueue: 'review', status: 'approved', trackingState: 'paused', keyword: 'Synthetic', page: '2' } });
+  assert.equal(view.queries[0].trackingState, 'paused');
+  assert.equal(view.queries[0].status, 'approved');
+  view.route.query = { ...view.route.query, trackingState: 'filled' }; await flush();
+  assert.equal(view.state.filters.trackingState, 'filled'); assert.equal(view.queries.at(-1).trackingState, 'filled');
+  await view.state.resetFilters(); await flush();
+  assert.equal(view.route.query.workQueue, 'review'); assert.equal(view.queries.at(-1).trackingState, undefined);
+});

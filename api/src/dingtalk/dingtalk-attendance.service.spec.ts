@@ -69,6 +69,16 @@ describe("DingtalkAttendanceService read-only official contracts", () => {
     transport: jest.SpyInstance,
     token: jest.Mock;
   let list: (body: any) => any, schedules: any, detail: any, workflow: any;
+  it('keeps one enterprise credential snapshot for the whole multi-request read', async () => {
+    let version = 1;
+    const values = { DINGTALK_CORP_ID: 'fictional-corp', DINGTALK_APP_KEY: 'app-', DINGTALK_APP_SECRET: 'secret-' };
+    const config = { get: (key: string) => key === 'DINGTALK_CORP_ID' ? values[key] : values[key] ? values[key] + version : undefined } as ConfigService;
+    token.mockImplementation(async () => { version = 2; return 'fictional-token'; });
+    service = new DingtalkAttendanceService({ getAccessToken: token } as unknown as DingtalkService, config);
+    await service.readRange(query());
+    expect(token.mock.calls.length).toBeGreaterThan(1);
+    for (const call of token.mock.calls) expect(call[1]).toMatchObject({ corpId: 'fictional-corp', appKey: 'app-1', appSecret: 'secret-1' });
+  });
   beforeEach(() => {
     token = jest.fn(async () => "fictional-token");
     service = new DingtalkAttendanceService(

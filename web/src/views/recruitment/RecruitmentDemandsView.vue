@@ -20,8 +20,8 @@ import { recruitmentDemandsApi } from '@/api/recruitment-demands.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { useTalentPermissions } from '../talent/useTalentPermissions';
 import { useRecruitmentLeaveGuard } from '../talent/useRecruitmentLeaveGuard';
-import type { RecruitmentDemandDirectories, RecruitmentDemandLocalAction, RecruitmentDemandLocalCreate, RecruitmentDemandSourceState, RecruitmentDemandStatus, RecruitmentDemandView } from '@/types/recruitment-demand.types';
-import { DEMAND_SOURCE_LABELS, LOCAL_DEMAND_ACTION_LABELS, demandErrorMessage, demandEventLabel, demandOriginLabel, demandReference, demandStateLabel, demandUsabilityLabel, isLocalDemand, safeDemandSourceLink } from './demand-presentation';
+import type { RecruitmentDemandDirectories, RecruitmentDemandLocalAction, RecruitmentDemandLocalCreate, RecruitmentDemandSourceState, RecruitmentDemandStatus, RecruitmentDemandTrackingState, RecruitmentDemandView } from '@/types/recruitment-demand.types';
+import { DEMAND_SOURCE_LABELS, DEMAND_TRACKING_LABELS, LOCAL_DEMAND_ACTION_LABELS, demandDepartmentLabel, demandDetailIssues, demandErrorMessage, demandEventLabel, demandHeadcountLabel, demandNextStep, demandOriginLabel, demandPositionLabel, demandReference, demandStateLabel, demandTrackingLabel, isLocalDemand, safeDemandSourceLink } from './demand-presentation';
 import { formatDate } from '@/utils/date';
 
 const route = useRoute(), router = useRouter();
@@ -32,7 +32,7 @@ const lifecyclePanel = ref<InstanceType<typeof RecruitmentDemandLifecycle>>();
 const loading = ref(false), detailLoading = ref(false), saving = ref(false);
 const loadError = ref(''), detailError = ref(''), statusError = ref(''), resultMessage = ref('');
 const connection = ref<RecruitmentDemandStatus | null>(null);
-const filters = reactive({ keyword: '', status: '' as RecruitmentDemandSourceState | '' });
+const filters = reactive({ keyword: '', status: '' as RecruitmentDemandSourceState | '', trackingState: '' as RecruitmentDemandTrackingState | '' });
 const { page, pageSize, total, pageSizeOptions, reset } = usePagination();
 const workQueue = computed(() => route.query.workQueue === 'review' || route.query.workQueue === 'returned' ? route.query.workQueue : undefined);
 function queryPage(value: unknown, fallback: number) {
@@ -40,13 +40,14 @@ function queryPage(value: unknown, fallback: number) {
   return Number.isSafeInteger(number) && number > 0 ? number : fallback;
 }
 function readListQuery() {
-  const size = queryPage(route.query.pageSize, 20), status = route.query.status;
+  const size = queryPage(route.query.pageSize, 20), status = route.query.status, trackingState = route.query.trackingState;
   return { keyword: typeof route.query.keyword === 'string' ? route.query.keyword : '',
     status: typeof status === 'string' && Object.prototype.hasOwnProperty.call(DEMAND_SOURCE_LABELS, status) ? status as RecruitmentDemandSourceState : '',
+    trackingState: typeof trackingState === 'string' && Object.prototype.hasOwnProperty.call(DEMAND_TRACKING_LABELS, trackingState) ? trackingState as RecruitmentDemandTrackingState : '',
     page: queryPage(route.query.page, 1), pageSize: pageSizeOptions.includes(size) ? size : 20 };
 }
 const initialListQuery = readListQuery();
-Object.assign(filters, { keyword: initialListQuery.keyword, status: initialListQuery.status });
+Object.assign(filters, { keyword: initialListQuery.keyword, status: initialListQuery.status, trackingState: initialListQuery.trackingState });
 page.value = initialListQuery.page; pageSize.value = initialListQuery.pageSize;
 const drawerOpen = ref(false), mappingOpen = ref(false), mappingConflict = ref(false);
 const selectedId = ref('');
@@ -67,6 +68,18 @@ const syncIntent = ref<SyncIntent | null>(null), syncRecovering = ref(false), sy
 const syncActionLabel = computed(() => !syncIntent.value ? '开始同步' : syncRecovering.value || !syncIntent.value.cursor ? '恢复本次' : '继续同步');
 let listSession = 0, detailSession = 0, connectionSession = 0, syncSession = 0, localSession = 0;
 const sourceLink = computed(() => safeDemandSourceLink(current.value?.sourceLink));
+const detailIssues = computed(() => current.value ? demandDetailIssues(current.value) : []);
+const returnReason = computed(() => current.value?.sourceState === 'rejected'
+  ? [...(current.value.events || [])].reverse().find(event => event.action === 'local_return')?.reason : null);
+const isApproved = computed(() => current.value?.sourceState === 'approved');
+const hasRecruitingHistory = computed(() => !!current.value && (isApproved.value
+  || Boolean(current.value.approvedAt && current.value.approvedHeadcount != null)
+  || (current.value.occupiedCount || 0) > 0 || (current.value.acceptedCount || 0) > 0 || (current.value.hiredCount || 0) > 0));
+async function copyDemandReference() {
+  if (!current.value) return;
+  try { await navigator.clipboard.writeText(current.value.instanceId || current.value.id); resultMessage.value = '需求编号已复制。'; }
+  catch { detailError.value = '复制失败，请选中需求编号后手动复制。'; }
+}
 const returnTarget = computed(() => {
   const candidateId = route.query.candidateId, applicationId = route.query.applicationId;
   return typeof candidateId === 'string' && candidateId && typeof applicationId === 'string' && applicationId
@@ -84,7 +97,7 @@ async function loadList() {
   loading.value = true; loadError.value = '';
   try {
     const result = await recruitmentDemandsApi.list({ keyword: filters.keyword.trim() || undefined,
-      status: filters.status || undefined, workQueue: workQueue.value, page: page.value, pageSize: pageSize.value });
+      status: filters.status || undefined, ...(filters.trackingState ? { trackingState: filters.trackingState } : {}), workQueue: workQueue.value, page: page.value, pageSize: pageSize.value });
     if (token !== listSession) return;
     rows.value = result.items; total.value = result.total;
   } catch (cause) { if (token === listSession) { rows.value = []; total.value = 0; loadError.value = demandErrorMessage(cause); } }
@@ -98,15 +111,15 @@ async function loadConnection() {
   catch (cause) { if (token === connectionSession) { connection.value = null; statusError.value = demandErrorMessage(cause); } }
 }
 async function changePage() {
-  await router.replace({ query: { ...route.query, keyword: filters.keyword.trim() || undefined, status: filters.status || undefined,
+  await router.replace({ query: { ...route.query, keyword: filters.keyword.trim() || undefined, status: filters.status || undefined, trackingState: filters.trackingState || undefined,
     page: String(page.value), pageSize: String(pageSize.value) } });
   await loadList();
 }
 async function search() { page.value = 1; await changePage(); }
-async function resetFilters() { filters.keyword = ''; filters.status = ''; reset(); await changePage(); }
+async function resetFilters() { filters.keyword = ''; filters.status = ''; filters.trackingState = ''; reset(); await changePage(); }
 function changeWorkQueue(value: string) {
   void router.replace({ query: { ...route.query, workQueue: value === 'review' || value === 'returned' ? value : undefined,
-    keyword: filters.keyword.trim() || undefined, status: filters.status || undefined, page: '1', pageSize: String(pageSize.value) } });
+    keyword: filters.keyword.trim() || undefined, status: filters.status || undefined, trackingState: filters.trackingState || undefined, page: '1', pageSize: String(pageSize.value) } });
 }
 async function openDetail(row: Pick<RecruitmentDemandView, 'id'>) {
   if (lifecyclePanel.value && !await lifecyclePanel.value.prepareToLeave()) return;
@@ -283,7 +296,7 @@ async function submitLocalAction() {
     const result = await recruitmentDemandsApi.localAction(localActionDemandId.value, { expectedRevision: localActionRevision.value, action, ...(reason ? { reason } : {}) });
     if (token !== localSession) return;
     localAction.value = null;
-    await applyLocalResult(result, ({ submit: '需求已提交审核。', approve: '需求已审核通过，可供提交录用时选用。', return: '需求已退回修改。', withdraw: '需求已撤销，历史录用依据和已占名额保留。' })[action], token);
+    await applyLocalResult(result, ({ submit: '需求已提交审核。', submit_approve: '需求已提交并通过，可供录用选用。', approve: '需求已审核通过，可供提交录用时选用。', return: '需求已退回修改。', withdraw: '需求已撤销，历史录用依据和已占名额保留。' })[action], token);
   } catch (cause) {
     if (token !== localSession) return;
     const status = (cause as { response?: { status?: number } }).response?.status;
@@ -371,10 +384,10 @@ watch(canRead, allowed => {
   if (allowed) { void loadList(); void loadConnection(); }
   else { ++listSession; ++detailSession; ++connectionSession; ++localSession; rows.value = []; total.value = 0; current.value = null; drawerOpen.value = false; mappingOpen.value = false; syncOpen.value = false; localOpen.value = false; localAction.value = null; localRequest.value = null; connection.value = null; }
 }, { immediate: true });
-watch(() => [route.query.workQueue, route.query.keyword, route.query.status, route.query.page, route.query.pageSize], (values, previous) => {
+watch(() => [route.query.workQueue, route.query.keyword, route.query.status, route.query.page, route.query.pageSize, route.query.trackingState], (values, previous) => {
   const next = readListQuery();
-  if (values[0] === previous[0] && filters.keyword === next.keyword && filters.status === next.status && page.value === next.page && pageSize.value === next.pageSize) return;
-  Object.assign(filters, { keyword: next.keyword, status: next.status });
+  if (values[0] === previous[0] && filters.keyword === next.keyword && filters.status === next.status && filters.trackingState === next.trackingState && page.value === next.page && pageSize.value === next.pageSize) return;
+  Object.assign(filters, { keyword: next.keyword, status: next.status, trackingState: next.trackingState });
   page.value = next.page; pageSize.value = next.pageSize; void loadList();
 });
 watch(() => [route.query.demandId, auth.user?.id, canRead.value] as const, ([id, , allowed]) => {
@@ -394,17 +407,17 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
     <template #filters>
       <QueryFilterPanel>
         <el-form :inline="true" @submit.prevent="search">
-          <el-form-item label="办理范围"><el-select :model-value="workQueue || ''" aria-label="招聘需求办理范围" @change="changeWorkQueue"><el-option label="全部需求" value="" /><el-option v-if="canReviewDemand || workQueue === 'review'" label="待我独立审核" value="review" /><el-option v-if="canEdit || workQueue === 'returned'" label="退回待我修改" value="returned" /></el-select></el-form-item>
+          <el-form-item label="办理范围"><el-select :model-value="workQueue || ''" aria-label="招聘需求办理范围" @change="changeWorkQueue"><el-option label="全部需求" value="" /><el-option v-if="canReviewDemand || workQueue === 'review'" label="待我审核" value="review" /><el-option v-if="canEdit || workQueue === 'returned'" label="退回待我修改" value="returned" /></el-select></el-form-item>
           <el-form-item label="关键字"><el-input v-model="filters.keyword" clearable placeholder="部门、岗位或单号" /></el-form-item>
-          <el-form-item label="需求状态"><el-select v-model="filters.status" clearable placeholder="全部状态" aria-label="招聘需求状态"><el-option v-for="(label, key) in DEMAND_SOURCE_LABELS" :key="key" :value="key" :label="label" /></el-select></el-form-item>
+          <el-form-item label="审核状态"><el-select v-model="filters.status" clearable placeholder="全部状态" aria-label="招聘需求状态"><el-option v-for="(label, key) in DEMAND_SOURCE_LABELS" :key="key" :value="key" :label="label" /></el-select></el-form-item>
+          <el-form-item label="招聘进度"><el-select v-model="filters.trackingState" clearable placeholder="全部进度" aria-label="招聘进度"><el-option v-for="(label, key) in DEMAND_TRACKING_LABELS" :key="key" :value="key" :label="label" /></el-select></el-form-item>
           <el-form-item><el-button type="primary" @click="search">查询</el-button><el-button @click="resetFilters">重置</el-button></el-form-item>
         </el-form>
       </QueryFilterPanel>
     </template>
     <template #feedback>
       <el-alert v-if="!canRead" title="当前无招聘查看权限" type="error" :closable="false" />
-      <el-alert v-if="connection && !connection.configured" title="钉钉招聘需求接入未就绪" type="warning" :closable="false">
-        <p>系统创建的需求可正常办理。钉钉接入缺项：{{ connection.missing.join('、') || '接入配置待核实' }}，请由应用维护人员核对；不能据空列表判断没有钉钉需求。</p>
+      <el-alert v-if="connection && !connection.configured" title="钉钉需求未接通，HRM需求可继续办理" type="info" :closable="false">
         <ConfigurationLink setting="recruitment-demand" />
       </el-alert>
       <el-alert v-if="statusError" :title="statusError" type="error" :closable="false"><el-button link type="primary" @click="loadConnection">重试接入检查</el-button></el-alert>
@@ -416,13 +429,13 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
     </template>
     <template #desktop-list>
       <el-table v-loading="loading" :data="rows" height="100%" class="app-table" :empty-text="loadError ? '列表读取失败' : '暂无招聘需求'">
-        <el-table-column label="需求单 / 岗位" min-width="240"><template #default="{ row }"><strong>{{ row.positionName || row.rawPosition || '岗位待核对' }}</strong><div class="muted">{{ demandOriginLabel(row) }} · {{ demandReference(row) }}</div></template></el-table-column>
-        <el-table-column label="部门" min-width="180"><template #default="{ row }">{{ row.departmentName || row.rawDepartment || '待核对' }}</template></el-table-column>
-        <el-table-column label="批准人数" width="100"><template #default="{ row }">{{ row.approvedHeadcount === null ? '待核对' : row.approvedHeadcount ?? '—' }}</template></el-table-column>
-        <el-table-column label="剩余名额" width="100"><template #default="{ row }">{{ describeDemandSeats(row).remaining }}</template></el-table-column>
-        <el-table-column label="需求状态" width="120"><template #default="{ row }"><el-tag :type="row.sourceState === 'approved' ? 'success' : 'info'" size="small">{{ demandStateLabel(row as RecruitmentDemandView) }}</el-tag></template></el-table-column>
-        <el-table-column label="可用状态" min-width="170"><template #default="{ row }">{{ demandUsabilityLabel(row as RecruitmentDemandView) }}</template></el-table-column>
-        <el-table-column label="批准 / 同步时间" width="170"><template #default="{ row }">{{ isLocalDemand(row) ? row.approvedAt ? formatDate(row.approvedAt) : '尚未批准' : row.lastSyncedAt ? formatDate(row.lastSyncedAt) : '尚未同步' }}</template></el-table-column>
+        <el-table-column label="招聘岗位" min-width="210"><template #default="{ row }"><strong>{{ row.positionName || row.rawPosition || '岗位待核对' }}</strong><div class="muted">{{ demandOriginLabel(row) }}</div></template></el-table-column>
+        <el-table-column label="部门" min-width="170"><template #default="{ row }">{{ demandDepartmentLabel(row as RecruitmentDemandView) }}</template></el-table-column>
+        <el-table-column label="招聘人数" min-width="110"><template #default="{ row }">{{ demandHeadcountLabel(row as RecruitmentDemandView) }}</template></el-table-column>
+        <el-table-column label="剩余名额" width="100"><template #default="{ row }">{{ row.sourceState === 'approved' ? describeDemandSeats(row).remaining : '—' }}</template></el-table-column>
+        <el-table-column label="审核状态" width="110"><template #default="{ row }"><el-tag :type="row.sourceState === 'approved' ? 'success' : 'info'" size="small">{{ demandStateLabel(row as RecruitmentDemandView) }}</el-tag></template></el-table-column>
+        <el-table-column label="招聘进度" width="110"><template #default="{ row }">{{ demandTrackingLabel(row as RecruitmentDemandView) }}</template></el-table-column>
+        <el-table-column label="下一步" min-width="170"><template #default="{ row }">{{ demandNextStep(row as RecruitmentDemandView) }}</template></el-table-column>
         <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDetail(row as RecruitmentDemandView)">查看</el-button></template></el-table-column>
       </el-table>
     </template>
@@ -432,8 +445,8 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
         <MobileResultCard v-for="row in rows" :key="row.id">
           <template #title>{{ row.positionName || row.rawPosition || '岗位待核对' }}</template>
           <template #status><el-tag size="small">{{ demandStateLabel(row) }}</el-tag></template>
-          <p class="muted">{{ demandOriginLabel(row) }} · {{ demandReference(row) }}</p>
-          <dl><dt>部门</dt><dd>{{ row.departmentName || row.rawDepartment || '待核对' }}</dd><dt>批准人数</dt><dd>{{ row.approvedHeadcount === null ? '待核对' : row.approvedHeadcount ?? '—' }}</dd><dt>剩余名额</dt><dd>{{ describeDemandSeats(row).remaining }}</dd><dt>可用状态</dt><dd>{{ demandUsabilityLabel(row) }}</dd></dl>
+          <p class="muted">{{ demandOriginLabel(row) }}</p>
+          <dl><dt>部门</dt><dd>{{ demandDepartmentLabel(row) }}</dd><dt>招聘人数</dt><dd>{{ demandHeadcountLabel(row) }}</dd><template v-if="row.sourceState === 'approved'"><dt>剩余名额</dt><dd>{{ describeDemandSeats(row).remaining }}</dd><dt>招聘进度</dt><dd>{{ demandTrackingLabel(row) }}</dd></template><dt>下一步</dt><dd>{{ demandNextStep(row) }}</dd></dl>
           <template #actions><el-button link type="primary" @click="openDetail(row)">查看需求</el-button></template>
         </MobileResultCard>
       </div>
@@ -443,39 +456,42 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
       <BusinessDetailDrawer v-model="drawerOpen" title="招聘需求详情" variant="standard" :loading="detailLoading" :saving="saving" :before-close="closeDetail">
         <el-alert v-if="detailError" :title="detailError" type="error" :closable="false"><el-button v-if="selectedId" link type="primary" :disabled="saving" @click="reloadDetail">刷新详情，保留核对输入</el-button></el-alert>
         <template v-if="current">
-          <dl><dt>需求来源</dt><dd>{{ demandOriginLabel(current) }}</dd><dt>{{ isLocalDemand(current) ? '需求单' : '原单号' }}</dt><dd>{{ demandReference(current) }} · 版本 {{ current.revision }}</dd><dt>{{ isLocalDemand(current) ? '申请状态' : '钉钉审批' }}</dt><dd>{{ demandStateLabel(current) }}</dd><dt>批准时间</dt><dd>{{ current.approvedAt ? formatDate(current.approvedAt) : '未取得批准时间' }}</dd></dl>
-          <template v-if="isLocalDemand(current)">
-            <dl><dt>申请部门</dt><dd>{{ current.departmentName || '未取得' }}</dd><dt>申请岗位</dt><dd>{{ current.positionName || '未取得' }}</dd><dt>申请人数</dt><dd>{{ current.requestedHeadcount ?? '未取得' }}</dd><dt>招聘原因</dt><dd class="event-reason">{{ current.requestReason || '未取得' }}</dd><dt>批准人数</dt><dd>{{ current.approvedHeadcount ?? '尚未批准' }}</dd><dt>可用状态</dt><dd>{{ demandUsabilityLabel(current) }}</dd></dl>
-            <ul v-if="current.issues.length" class="issues"><li v-for="issue in current.issues" :key="issue">{{ issue }}</li></ul>
-          </template>
-          <template v-else><dl><dt>来源部门</dt><dd>{{ current.rawDepartment || '未取得' }}</dd><dt>来源岗位</dt><dd>{{ current.rawPosition || '未取得' }}</dd><dt>来源人数</dt><dd>{{ current.rawHeadcount || '未取得' }}</dd><dt>最近同步</dt><dd>{{ current.lastSyncedAt ? formatDate(current.lastSyncedAt) : '尚未同步' }}</dd><dt>钉钉原单</dt><dd><a v-if="sourceLink" :href="sourceLink" target="_blank" rel="noopener noreferrer">查看钉钉原单</a><span v-else>未提供可用的钉钉链接</span></dd></dl></template>
+          <section class="demand-summary" aria-label="招聘需求概要" data-testid="demand-summary">
+            <header><h2>{{ current.positionName || current.rawPosition || '岗位待核对' }}</h2><el-tag :type="isApproved ? 'success' : 'info'">{{ demandStateLabel(current) }}</el-tag></header>
+            <dl><dt>申请部门</dt><dd>{{ demandDepartmentLabel(current) }}</dd><dt>招聘人数</dt><dd>{{ demandHeadcountLabel(current) }}</dd><dt>下一步</dt><dd>{{ demandNextStep(current) }}</dd>
+              <template v-if="isLocalDemand(current) && current.sourceState === 'pending'"><dt>提交人</dt><dd>{{ current.submittedByName || '—' }}<span v-if="current.submittedAt"> · {{ formatDate(current.submittedAt) }}</span></dd><dt>{{ (current.reviewers?.length || 0) > 1 ? '可审核人员' : '审核人' }}</dt><dd>{{ current.reviewers?.map(reviewer => reviewer.name).join('、') || '未设置审核人' }}</dd></template>
+              <template v-if="isApproved"><dt>招聘进度</dt><dd>{{ demandTrackingLabel(current) }}</dd></template>
+              <template v-if="isLocalDemand(current)"><dt>招聘原因</dt><dd class="event-reason">{{ current.requestReason || '—' }}</dd></template>
+            </dl>
+            <p v-if="returnReason" class="return-reason"><strong>退回意见：</strong>{{ returnReason }}</p>
+          </section>
+          <el-alert v-if="detailIssues.length" title="需处理的异常" type="warning" :closable="false"><ul class="issues"><li v-for="issue in detailIssues" :key="issue">{{ issue }}</li></ul></el-alert>
           <section v-if="!isLocalDemand(current)" class="mapping-section" aria-label="部门、岗位和人数核对">
             <h3>部门、岗位和人数核对</h3>
-            <dl><dt>HRM 部门</dt><dd>{{ current.departmentName || '待核对' }}</dd><dt>HRM 岗位</dt><dd>{{ current.positionName || '待核对' }}</dd><dt>批准人数</dt><dd>{{ current.approvedHeadcount === null ? '待核对' : current.approvedHeadcount ?? '—' }}</dd><dt>可用状态</dt><dd>{{ current.usable ? '已核对，可供选用' : '待核对或不可使用' }}</dd></dl>
-            <ul v-if="current.issues.length" class="issues"><li v-for="issue in current.issues" :key="issue">{{ issue }}</li></ul>
+            <dl><dt>来源部门</dt><dd>{{ current.rawDepartment || '—' }}</dd><dt>来源岗位</dt><dd>{{ current.rawPosition || '—' }}</dd><dt>来源人数</dt><dd>{{ current.rawHeadcount || '—' }}</dd></dl>
             <el-button v-if="canEdit && !mappingOpen" :disabled="saving || detailLoading" @click="beginMapping">核对部门、岗位和人数</el-button>
             <el-skeleton v-if="mappingOpen && canEdit && directoryLoading" :rows="3" animated aria-label="正在读取部门和岗位目录" />
             <el-form v-else-if="mappingOpen && canEdit" label-position="top" :disabled="saving || detailLoading" @submit.prevent="saveMapping">
               <el-alert v-if="directoryError" :title="directoryError" type="error" :closable="false"><el-button link type="primary" @click="loadDirectories">重试目录</el-button></el-alert>
               <el-form-item label="HRM 部门" required :error="mappingErrors.deptId"><el-select v-model="mapping.deptId" filterable fit-input-width aria-label="HRM 部门"><el-option v-for="dept in directories.departments" :key="dept.id" :value="dept.id" :label="dept.fullPath || dept.name" /></el-select></el-form-item>
-              <el-form-item label="HRM 岗位" required :error="mappingErrors.positionId"><el-select v-model="mapping.positionId" filterable fit-input-width aria-label="HRM 岗位"><el-option v-for="job in directories.positions" :key="job.id" :value="job.id" :label="[job.code, job.name].filter(Boolean).join(' · ')" /></el-select></el-form-item>
+              <el-form-item label="HRM 岗位" required :error="mappingErrors.positionId"><el-select v-model="mapping.positionId" filterable fit-input-width aria-label="HRM 岗位" placeholder="搜索岗位名称"><el-option v-for="job in directories.positions" :key="job.id" :value="job.id" :label="demandPositionLabel(job, directories.positions)" /></el-select></el-form-item>
               <el-form-item label="批准人数" required :error="mappingErrors.approvedHeadcount"><el-input-number v-model="mapping.approvedHeadcount" :min="1" :precision="0" :max="2147483647" aria-label="批准人数" /></el-form-item>
               <el-form-item label="核对依据" required :error="mappingErrors.reason"><el-input v-model="mapping.reason" type="textarea" :rows="3" maxlength="1000" show-word-limit /></el-form-item>
             </el-form>
           </section>
-          <RecruitmentDemandSeats :value="current" />
+          <RecruitmentDemandSeats v-if="hasRecruitingHistory" :value="current" />
           <RecruitmentPostingsPanel v-if="canEdit && current.sourceState === 'approved'" :demand="current" />
-          <RecruitmentDemandApplications v-if="canReadTalent" :demand-id="current.id" :revision="current.revision" />
-          <el-collapse v-if="canReadTalent" class="demand-detail-sections">
+          <RecruitmentDemandApplications v-if="canReadTalent && hasRecruitingHistory" :demand-id="current.id" :revision="current.revision" />
+          <el-collapse v-if="canReadTalent && hasRecruitingHistory" class="demand-detail-sections">
             <el-collapse-item title="招聘结案与外部职位处理" name="lifecycle"><RecruitmentDemandLifecycle ref="lifecyclePanel" :demand-id="current.id" :revision="current.revision" @updated="reloadLifecycle" /></el-collapse-item>
             <el-collapse-item title="本岗位渠道转化" name="channels"><RecruitmentChannelAnalysis :demand-id="current.id" /></el-collapse-item>
           </el-collapse>
-          <section aria-label="需求时间线"><h3>需求时间线</h3><el-timeline v-if="current.events?.length"><el-timeline-item v-for="event in current.events" :key="event.id" :timestamp="formatDate(event.createdAt)"><div>{{ event.actorName || '系统' }} · {{ demandEventLabel(event.action) }} · 版本 {{ event.revision }}</div><p v-if="event.reason" class="event-reason">{{ event.reason }}</p></el-timeline-item></el-timeline><p v-else class="muted">暂无变更记录</p></section>
+          <el-collapse class="demand-more-information"><el-collapse-item title="更多信息" name="metadata"><dl><dt>需求来源</dt><dd>{{ demandOriginLabel(current) }}</dd><dt>{{ isLocalDemand(current) ? '需求编号' : '钉钉原单号' }}</dt><dd><span class="demand-reference">{{ demandReference(current) }}</span><el-button link type="primary" @click="copyDemandReference">复制编号</el-button></dd><dt>版本</dt><dd>{{ current.revision }}</dd><template v-if="current.createdByName"><dt>创建人</dt><dd>{{ current.createdByName }}</dd></template><template v-if="current.approvedAt"><dt>审核通过</dt><dd>{{ current.approvedByName || '—' }} · {{ formatDate(current.approvedAt) }}</dd></template><template v-if="!isLocalDemand(current)"><dt>最近同步</dt><dd>{{ current.lastSyncedAt ? formatDate(current.lastSyncedAt) : '尚未同步' }}</dd><dt>钉钉原单</dt><dd><a v-if="sourceLink" :href="sourceLink" target="_blank" rel="noopener noreferrer">查看钉钉原单</a><span v-else>未提供可用链接</span></dd></template></dl></el-collapse-item><el-collapse-item title="办理记录" name="history"><section aria-label="需求时间线"><el-timeline v-if="current.events?.length"><el-timeline-item v-for="event in current.events" :key="event.id" :timestamp="formatDate(event.createdAt)"><div>{{ event.actorName || '系统' }} · {{ demandEventLabel(event.action) }} · 版本 {{ event.revision }}</div><p v-if="event.reason" class="event-reason">{{ event.reason }}</p></el-timeline-item></el-timeline><p v-else class="muted">暂无变更记录</p></section></el-collapse-item></el-collapse>
         </template>
         <template #footer>
           <el-button :disabled="saving" @click="closeDetail()">关闭</el-button>
           <el-button v-if="canEdit && canLocalAction('edit')" :disabled="saving || detailLoading" @click="beginLocalEdit">修改需求</el-button>
-          <template v-for="action in (['submit', 'approve', 'return', 'withdraw'] as const)" :key="action"><el-button v-if="canLocalAction(action)" :type="action === 'approve' || action === 'submit' ? 'primary' : 'default'" :disabled="saving || detailLoading" @click="beginLocalAction(action)">{{ LOCAL_DEMAND_ACTION_LABELS[action] }}</el-button></template>
+          <template v-for="action in (['submit', 'submit_approve', 'approve', 'return', 'withdraw'] as const)" :key="action"><el-button v-if="canLocalAction(action)" :type="['approve', 'submit', 'submit_approve'].includes(action) ? 'primary' : 'default'" :disabled="saving || detailLoading" @click="beginLocalAction(action)">{{ LOCAL_DEMAND_ACTION_LABELS[action] }}</el-button></template>
           <el-button v-if="canEdit && current && !isLocalDemand(current) && !mappingOpen" :loading="saving" :disabled="!connection?.configured || detailLoading" @click="refreshSource">刷新钉钉原单</el-button><el-button v-if="canEdit && mappingOpen" type="primary" :loading="saving" :disabled="mappingConflict || detailLoading || directoryLoading || !!directoryError" @click="saveMapping">保存核对结果</el-button>
         </template>
       </BusinessDetailDrawer>
@@ -485,7 +501,7 @@ onBeforeUnmount(() => { ++listSession; ++detailSession; ++connectionSession; ++s
         <el-skeleton v-if="directoryLoading" :rows="4" animated />
         <el-form v-else label-position="top" :disabled="saving || localConflict || localUnknown" @submit.prevent="saveLocal">
           <el-form-item label="申请部门" required :error="localErrors.deptId"><el-select v-model="localForm.deptId" filterable fit-input-width aria-label="申请部门"><el-option v-for="dept in directories.departments" :key="dept.id" :value="dept.id" :label="dept.fullPath || dept.name" /></el-select></el-form-item>
-          <el-form-item label="申请岗位" required :error="localErrors.positionId"><el-select v-model="localForm.positionId" filterable fit-input-width aria-label="申请岗位"><el-option v-for="job in directories.positions" :key="job.id" :value="job.id" :label="[job.code, job.name].filter(Boolean).join(' · ')" /></el-select></el-form-item>
+          <el-form-item label="申请岗位" required :error="localErrors.positionId"><el-select v-model="localForm.positionId" filterable fit-input-width aria-label="申请岗位" placeholder="搜索岗位名称"><el-option v-for="job in directories.positions" :key="job.id" :value="job.id" :label="demandPositionLabel(job, directories.positions)" /></el-select></el-form-item>
           <el-form-item label="申请人数" required :error="localErrors.headcount"><el-input-number v-model="localForm.headcount" :min="1" :max="2147483647" :precision="0" aria-label="申请人数" /></el-form-item>
           <el-form-item label="招聘原因" required :error="localErrors.reason"><el-input v-model="localForm.reason" type="textarea" :rows="3" maxlength="1000" show-word-limit aria-label="招聘原因" /></el-form-item>
         </el-form>
@@ -522,6 +538,15 @@ section { border-top: 1px solid var(--el-border-color-lighter); margin-top: 18px
 .issues { padding-left: 18px; font-size: 13px; color: var(--el-color-warning-dark-2); overflow-wrap: anywhere; }
 .mapping-section :deep(.el-select) { width: 100%; }
 .event-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
+.demand-summary { margin: 0 0 16px; padding: 0; border: 0; }
+.demand-summary header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.demand-summary h2 { margin: 0; font-size: 18px; line-height: 1.5; overflow-wrap: anywhere; }
+.demand-summary header :deep(.el-tag) { flex-shrink: 0; }
+.demand-summary dd { color: var(--el-text-color-primary); }
+.return-reason { padding: 10px 12px; background: var(--el-color-warning-light-9); border-radius: 4px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.demand-more-information { margin-top: 16px; }
+.demand-more-information section { border: 0; margin: 0; padding: 4px 0; }
+.demand-reference { user-select: all; overflow-wrap: anywhere; margin-right: 8px; }
 .local-demand-dialog :deep(.el-select) { width: 100%; min-width: 0; }
 @media (max-width: 768px) {
   .recruitment-demands :deep(.el-form--inline .el-form-item) { display: flex; margin-right: 0; }

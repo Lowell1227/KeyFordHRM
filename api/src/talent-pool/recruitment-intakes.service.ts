@@ -16,6 +16,7 @@ import { RecruitmentMailboxGateway, normalizeRecruitmentMailboxPage, recruitment
 import { lockRecruitmentSources, recruitmentSourceTx, sourceFingerprint, sourceOwner } from './recruitment-postings.service';
 import { AssociateRecruitmentIntakeDto, CloseRecruitmentIntakeDto, ConfirmRecruitmentIntakeDto, CreateRecruitmentIntakeDto, ParseRecruitmentIntakeDto, RecruitmentIntakeQueryDto, SyncRecruitmentMailboxDto, UpdateRecruitmentIntakeDto } from './recruitment-intakes.dto';
 import type { RecruitmentIntakeView, RecruitmentMailboxSyncView } from './recruitment-intakes.types';
+import { intakeFollowUpSources, selectIntakeFollowUpSource, transferIntakeFollowUpPlan } from './talent-follow-up-transfer';
 
 const include = { files: { orderBy: { createdAt: 'asc' } } } satisfies Prisma.RecruitmentIntakeInclude;
 type Intake = Prisma.RecruitmentIntakeGetPayload<{ include: typeof include }>;
@@ -123,9 +124,10 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
       candidateUrl:row.candidateId ? `/talents?candidateId=${row.candidateId}` : null,
       applicationUrl:row.applicationId ? `/talents?candidateId=${row.candidateId}&applicationId=${row.applicationId}` : null,
       associatedToId:row.associatedToId,associatedFromIds:related.map(source=>source.id),closeReason:row.closeReason,
-      mail:mailRow ? {messageId:mailRow.messageId!,receivedAt:mailRow.receivedAt!.toISOString(),subject:mailRow.subject ?? '',bodyText:mailRow.bodyText ?? '',sourcePartId:mailRow.sourcePartId!} : null,
+      mail:mailRow ? {messageId:mailRow.messageId!,receivedAt:mailRow.receivedAt!.toISOString(),subject:mailRow.subject ?? '',bodyText:mailRow.bodyText ?? '',sourcePartId:mailRow.sourcePartId!,...(typeof this.mailbox.sourceForKey==='function'?this.mailbox.sourceForKey(mailRow.mailboxKey):{mailboxId:null,mailboxName:null})} : null,
       createdAt:row.createdAt.toISOString(),updatedAt:row.updatedAt.toISOString()};
     if(detail) {
+      result.followUpSources=intakeFollowUpSources(row,related);
       const events=await this.db.recruitmentIntakeEvent.findMany({where:{intakeId:row.id},orderBy:{revision:'asc'}});
       const names=new Map((await this.db.user.findMany({where:{id:{in:events.map(e=>e.actorId)}},select:{id:true,name:true}})).map(actor=>[actor.id,actor.name]));
       result.events=events.map(e=>({id:e.id,action:e.action,revision:e.revision,actorName:names.get(e.actorId) ?? null,reason:e.reason,createdAt:e.createdAt.toISOString(),metadata:e.metadata as Record<string,unknown>}));
@@ -145,9 +147,13 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
   async list(query:RecruitmentIntakeQueryDto,user:AuthUser) {
     await assertRecruitmentEditor(this.db,user); await this.expireParsing(user);
     const keyword=query.keyword?.trim();
+    const linkedCandidates=keyword ? await this.db.talentCandidate.findMany({where:{deletedAt:null,OR:[
+      {name:{contains:keyword,mode:'insensitive'}},{phone:{contains:keyword,mode:'insensitive'}}]},select:{id:true}}) : [];
     const where:Prisma.RecruitmentIntakeWhereInput={...(query.state?{state:query.state}:{}),...(query.ownerId?{ownerId:query.ownerId}:{}),
       ...(query.demandId?{demandId:query.demandId}:{}),...(query.postingId?{postingId:query.postingId}:{}),...(query.sourceChannel?{sourceChannel:query.sourceChannel}:{}),
-      ...(keyword?{OR:['positionName','sourceNotes','subject'].map(field=>({[field]:{contains:keyword,mode:'insensitive'}}))}:{})};
+      ...(keyword?{OR:[...['positionName','sourceNotes','subject'].map(field=>({[field]:{contains:keyword,mode:'insensitive'}})),
+        ...['name','phone'].map(field=>({candidateDraft:{path:[field],string_contains:keyword}})),
+        ...(linkedCandidates.length?[{candidateId:{in:linkedCandidates.map(candidate=>candidate.id)}}]:[])]}:{})};
     if(query.workQueue)where.AND=[{associatedToId:null},query.workQueue==='assignment'
       ? {demandId:null,state:{in:OPEN}} : {demandId:{not:null},state:{in:['pending_review','needs_material']}}];
     const [rows,total]=await this.db.$transaction([this.db.recruitmentIntake.findMany({where,include,orderBy:[{updatedAt:'desc'},{id:'asc'}],skip:(query.page-1)*query.pageSize,take:query.pageSize}),this.db.recruitmentIntake.count({where})]);
@@ -309,15 +315,21 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
 
   async confirm(id:string,input:ConfirmRecruitmentIntakeDto,user:AuthUser) {
     await assertRecruitmentEditor(this.db,user);
-    const fingerprint=sourceFingerprint({mode:input.mode,existingCandidateId:input.existingCandidateId,candidate:input.candidate,
-      application:input.application,existingApplicationId:input.existingApplicationId,expectedExistingApplicationRevision:input.expectedExistingApplicationRevision});
+    const baseIntent={mode:input.mode,existingCandidateId:input.existingCandidateId,candidate:input.candidate,
+      application:input.application,existingApplicationId:input.existingApplicationId,expectedExistingApplicationRevision:input.expectedExistingApplicationRevision};
+    const fingerprint=sourceFingerprint({...baseIntent,followUpPlanAction:input.followUpPlanAction ?? 'keep',
+      expectedFollowUpPlanId:input.expectedFollowUpPlanId ?? null,followUpSourceIntakeId:input.followUpSourceIntakeId ?? null,
+      expectedFollowUpSourceAt:input.expectedFollowUpSourceAt ? recruitmentFollowUpDate(input.expectedFollowUpSourceAt)!.toISOString() : null});
+    // Old in-flight confirmations had no source/plan choice. Recover them without replaying a transfer.
+    const legacyFingerprint=!input.followUpSourceIntakeId&&!input.expectedFollowUpSourceAt&&!input.expectedFollowUpPlanId
+      &&input.followUpPlanAction!=='replace' ? sourceFingerprint(baseIntent) : null;
     try { await this.db.$transaction(async tx=>{
       await lockRecruitmentSources(tx,user);
       await this.lock(tx,user);const old=await this.row(tx,id);
       const previous=await tx.recruitmentIntake.findUnique({where:{confirmRequestId:input.requestId}});
       if(previous) {
         if(previous.confirmedById!==user.id)throw new ForbiddenException('该办理请求不属于当前经办人');
-        if(previous.id!==id||previous.confirmFingerprint!==fingerprint)throw new ConflictException('该办理请求已用于其他内容');
+        if(previous.id!==id||(previous.confirmFingerprint!==fingerprint&&!(legacyFingerprint&&previous.confirmFingerprint===legacyFingerprint)))throw new ConflictException('该办理请求已用于其他内容');
         return;
       }
       this.revision(old,input.expectedRevision);this.open(old);
@@ -326,6 +338,9 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
       if(Boolean(input.existingCandidateId)===Boolean(input.candidate))throw new BadRequestException('请明确选择复用人才或创建人才，不能同时选择');
       if(input.mode==='candidate_only'&&(input.application||input.existingApplicationId))throw new BadRequestException('仅入库不能同时建立应聘');
       if(!['candidate_only','candidate_application'].includes(input.mode))throw new BadRequestException('请选择入库方式');
+      const related=await this.related(tx,id);
+      const followUpSource=selectIntakeFollowUpSource(old,related,input);
+      if(!followUpSource&&input.followUpPlanAction==='replace')throw new BadRequestException('本次收件没有需要承接的跟进安排');
       let candidateId:string;
       if(input.existingCandidateId) {
         await tx.$queryRaw`SELECT id FROM talent_candidates WHERE id=${input.existingCandidateId}::uuid FOR UPDATE`;
@@ -356,7 +371,7 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
           applicationId=(await this.recruitment.createInTransaction(tx,candidateId,{...fields,requestId:undefined},user)).id;
         }
       }
-      const related=await this.related(tx,id),files=[...old.files,...related.flatMap(row=>row.files)];
+      const files=[...old.files,...related.flatMap(row=>row.files)];
       const existingFiles=await tx.talentResumeFile.findMany({where:{candidateId},select:{objectKey:true}});
       const additions=files.filter(file=>!existingFiles.some(existing=>existing.objectKey===file.objectKey));
       if(existingFiles.length+additions.length>3)throw new ConflictException('目标人才简历文件最多3个，请先核对已有资料');
@@ -365,9 +380,12 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
         await tx.talentResumeFile.create({data:{candidateId,objectKey:file.objectKey,fileName:file.fileName,mimeType:file.mimeType,fileSize:file.fileSize,
           sortOrder:existingFiles.length+index,uploadedById:user.id}});
       }
+      if(followUpSource)await transferIntakeFollowUpPlan(tx,followUpSource,candidateId,input,user.id);
       const row=await tx.recruitmentIntake.update({where:{id},data:{state:'completed',candidateId,applicationId,confirmRequestId:input.requestId,
         confirmFingerprint:fingerprint,confirmedById:user.id,parseToken:null,parseStatus:old.parseStatus==='processing'?'failed':old.parseStatus,revision:{increment:1},updatedAt:new Date()}});
-      await this.event(tx,row,user,'confirm_intake',null,{mode:input.mode,fileCount:additions.length});
+      await this.event(tx,row,user,'confirm_intake',null,{mode:input.mode,fileCount:additions.length,
+        followUpSourceIntakeId:followUpSource?.id ?? null,followUpPlanAction:input.followUpPlanAction ?? 'keep',
+        followUpSources:intakeFollowUpSources(old,related)});
     },recruitmentSourceTx); } catch(error) {
       const unique=error as {code?:string;meta?:{target?:unknown;modelName?:string}};
       const target=unique.meta?.target;
@@ -382,29 +400,41 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
     this.parsing.get(id)?.abort();return this.detail(id,user);
   }
 
-  async mailboxStatus(user:AuthUser) {
+  async mailboxes(user:AuthUser) {
     await assertRecruitmentEditor(this.db,user);
-    const state=await this.db.recruitmentMailboxState.findUnique({where:{id:'primary'}});
+    const choices=this.mailbox.choices();
+    return Promise.all(choices.map(async item=>{
+      const stateId=this.mailbox.stateId(item.id);
+      const state=stateId?await this.db.recruitmentMailboxState.findUnique({where:{id:stateId}}):null;
+      return {...item,lastSyncedAt:state?.lastSyncedAt?.toISOString()??null};
+    }));
+  }
+  async mailboxStatus(user:AuthUser,mailboxId?:string) {
+    await assertRecruitmentEditor(this.db,user);
+    const selected=mailboxId&&typeof this.mailbox.select==='function'?this.mailbox.select(mailboxId):null;
+    const state=await this.db.recruitmentMailboxState.findUnique({where:{id:selected?.stateId??'primary'}});
     return {configured:this.mailbox.status().configured,lastSyncedAt:state?.lastSyncedAt?.toISOString()??null};
   }
   async syncMailbox(input:SyncRecruitmentMailboxDto,user:AuthUser):Promise<RecruitmentMailboxSyncView> {
     await assertRecruitmentEditor(this.db,user);
     if(!this.mailbox.status().configured)throw new ServiceUnavailableException('招聘邮箱未配置，请先手工上传');
+    const selected=typeof this.mailbox.select==='function'?this.mailbox.select(input.mailboxId):{id:'recruitment-mail',name:'招聘邮箱',stateId:'primary',readPage:(request:{cursor?:string;limit:number})=>this.mailbox.readPage(request)};
+    const stateId=selected.stateId;
     const limit=input.limit??10;if(!Number.isInteger(limit)||limit<1||limit>20)throw new BadRequestException('每次最多读取20封邮件');
     const token=randomUUID();
     const before=await this.db.$transaction(async tx=>{
       await this.lock(tx,user);
-      const old=await tx.recruitmentMailboxState.upsert({where:{id:'primary'},create:{id:'primary'},update:{}});
+      const old=await tx.recruitmentMailboxState.upsert({where:{id:stateId},create:{id:stateId},update:{}});
       if(old.leaseToken&&old.leaseUntil&&old.leaseUntil.getTime()>Date.now())throw new ConflictException('已有邮箱同步正在进行，请稍后查看或重试');
-      await tx.recruitmentMailboxState.update({where:{id:'primary'},data:{leaseToken:token,leaseUntil:new Date(Date.now()+LEASE_MS)}});return old;
+      await tx.recruitmentMailboxState.update({where:{id:stateId},data:{leaseToken:token,leaseUntil:new Date(Date.now()+LEASE_MS)}});return old;
     },recruitmentSourceTx);
     let synced=0,skipped=0,failed=0,hasMore=false;
     try {
-      const page=normalizeRecruitmentMailboxPage(await this.mailbox.readPage({...(before.cursor?{cursor:before.cursor}:{}),limit}));
+      const page=normalizeRecruitmentMailboxPage(await selected.readPage({...(before.cursor?{cursor:before.cursor}:{}),limit}));
       if(page.messages.length>limit||page.nextCursor!==null&&page.nextCursor===before.cursor)throw new ServiceUnavailableException('邮箱分页返回无效，本页未完成');
       if(before.mailboxKey&&(before.mailboxKey!==page.mailboxKey||before.authorizedFrom?.toISOString()!==page.authorizedFrom))throw new ConflictException('邮箱或授权范围已变化，须由受控接入流程核对同步位置');
       hasMore=page.nextCursor!==null;
-      await this.db.$transaction(async tx=>{await this.lease(tx,user,token);await tx.recruitmentMailboxState.update({where:{id:'primary'},data:{mailboxKey:page.mailboxKey,authorizedFrom:new Date(page.authorizedFrom)}});},recruitmentSourceTx);
+      await this.db.$transaction(async tx=>{await this.lease(tx,user,token,stateId);await tx.recruitmentMailboxState.update({where:{id:stateId},data:{mailboxKey:page.mailboxKey,authorizedFrom:new Date(page.authorizedFrom)}});},recruitmentSourceTx);
       for(const message of page.messages)for(const unit of recruitmentMailUnits(message)) {
         let stored:StoredFileMeta|undefined,used=false;
         try {
@@ -417,7 +447,7 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
             if(!issue)stored=await this.storage.uploadIntakeFile(file);
           }
           const outcome=await this.db.$transaction(async tx=>{
-            await this.lease(tx,user,token);
+            await this.lease(tx,user,token,stateId);
             const prior=await tx.recruitmentIntake.findUnique({where:{mailboxKey_messageId_sourcePartId:{mailboxKey:page.mailboxKey,messageId:message.id,sourcePartId:unit.sourcePartId}}});
             if(prior)return 'skipped';
             const matches=message.postingChannel&&(message.externalPostingId||message.externalPostingUrl) ? await tx.recruitmentPosting.findMany({where:{channel:message.postingChannel.trim().toLowerCase(),active:true,verifiedIdentity:true,
@@ -430,23 +460,23 @@ export class RecruitmentIntakesService implements OnModuleDestroy {
               sourceChannel:message.sourceChannel,postingId:posting?.id??null,demandId:posting?.demandId??null,positionName:posting?.name.slice(0,100)??null,
               postingSnapshot:posting?json({postingId:posting.id,revision:posting.revision,demandId:posting.demandId,channel:posting.channel,name:posting.name,url:posting.url}):Prisma.DbNull,issues}});
             if(stored&&unit.attachment)await this.storeFile(tx,row.id,stored,createHash('sha256').update(unit.attachment.bytes).update(unit.attachment.fileName).digest('hex'),user);
-            await this.event(tx,row,user,'receive_mail_intake',null,{mapping:{before:null,after:this.mapping(row)}});
+            await this.event(tx,row,user,'receive_mail_intake',null,{mapping:{before:null,after:this.mapping(row)},mailbox:{id:selected.id,name:selected.name}});
             return 'created';
           },recruitmentSourceTx);
           if(outcome==='created'){used=Boolean(stored);synced++;}else skipped++;
         }catch{used=false;failed++;}
         finally{if(stored&&!used)await this.discardIfUnbound(stored.objectKey);}
       }
-      if(!failed)await this.db.$transaction(async tx=>{await this.lease(tx,user,token);await tx.recruitmentMailboxState.update({where:{id:'primary'},data:{cursor:page.nextCursor??page.checkpointCursor??null,lastSyncedAt:new Date(),leaseToken:null,leaseUntil:null}});},recruitmentSourceTx);
+      if(!failed)await this.db.$transaction(async tx=>{await this.lease(tx,user,token,stateId);await tx.recruitmentMailboxState.update({where:{id:stateId},data:{cursor:page.nextCursor??page.checkpointCursor??null,lastSyncedAt:new Date(),leaseToken:null,leaseUntil:null}});},recruitmentSourceTx);
     }finally{
-      await this.db.recruitmentMailboxState.updateMany({where:{id:'primary',leaseToken:token},data:{leaseToken:null,leaseUntil:null}});
+      await this.db.recruitmentMailboxState.updateMany({where:{id:stateId,leaseToken:token},data:{leaseToken:null,leaseUntil:null}});
     }
-    const state=await this.db.recruitmentMailboxState.findUnique({where:{id:'primary'}});
+    const state=await this.db.recruitmentMailboxState.findUnique({where:{id:stateId}});
     return {configured:true,synced,skipped,failed,complete:failed===0,hasMore,lastSyncedAt:state?.lastSyncedAt?.toISOString()??null};
   }
-  private async lease(tx:Prisma.TransactionClient,user:AuthUser,token:string) {
+  private async lease(tx:Prisma.TransactionClient,user:AuthUser,token:string,stateId='primary') {
     await this.lock(tx,user);
-    const state=await tx.recruitmentMailboxState.findUnique({where:{id:'primary'}});
+    const state=await tx.recruitmentMailboxState.findUnique({where:{id:stateId}});
     if(state?.leaseToken!==token||!state.leaseUntil||state.leaseUntil.getTime()<=Date.now())throw new ConflictException('邮箱同步已中断，请重试本页');
   }
 }

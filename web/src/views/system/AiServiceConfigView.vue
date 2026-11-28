@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { onBeforeRouteUpdate, useRoute } from 'vue-router';
 import { aiProgressApi } from '@/api/ai-progress.api';
 import { usersApi } from '@/api/users.api';
 import type { AiConfigState, AiProvider, SaveAiProviderBody, User } from '@/types/api.types';
@@ -18,8 +18,9 @@ type Draft = { modelId: string; apiKey: string; replaceKey: boolean; region: str
 const emptyDraft = (): Draft => ({ modelId: '', apiKey: '', replaceKey: false, region: '', workspaceId: '' });
 const drafts = reactive<Record<AiProvider, Draft>>({ kimi: emptyDraft(), deepseek: emptyDraft(), qwen: emptyDraft() });
 const route = useRoute();
+const isResume = computed(() => route.query.feature === 'resume');
 const provider = route.query.provider;
-const selected = ref<AiProvider>(provider === 'deepseek' || provider === 'qwen' ? provider : 'kimi');
+const selected = ref<AiProvider>(isResume.value ? 'deepseek' : provider === 'deepseek' || provider === 'qwen' ? provider : 'kimi');
 const state = ref<AiConfigState>();
 const busy = ref('');
 const loading = ref(true);
@@ -56,15 +57,19 @@ async function load() {
     state.value = await aiProgressApi.getConfig();
     for (const provider of ['kimi', 'deepseek', 'qwen'] as const) hydrateDraft(provider);
     userIds.value = [...state.value.allowlist];
-    await searchUsers('');
-    // Resolve already-selected people even when outside the first search page.
-    const missing = userIds.value.filter((id) => !users.value.some((user) => user.id === id));
-    const results = await Promise.allSettled(missing.map((id) => usersApi.findOne(id)));
-    for (const result of results) if (result.status === 'fulfilled') users.value.push(result.value);
+    if (isResume.value) return;
+    await loadPeople();
   } catch {
     state.value = undefined;
     loadError.value = 'AI 服务配置读取失败，请重试。';
   } finally { loading.value = false; }
+}
+async function loadPeople() {
+  await searchUsers('');
+  // Resolve already-selected people even when outside the first search page.
+  const missing = userIds.value.filter((id) => !users.value.some((user) => user.id === id));
+  const results = await Promise.allSettled(missing.map((id) => usersApi.findOne(id)));
+  for (const result of results) if (result.status === 'fulfilled') users.value.push(result.value);
 }
 
 let searchVersion = 0;
@@ -176,6 +181,13 @@ async function saveAllowlist() {
   finally { busy.value = ''; }
 }
 
+onBeforeRouteUpdate(() => !busy.value);
+watch([isResume, () => route.query.provider], ([resume, provider]) => {
+  if (resume) selected.value = 'deepseek';
+  else if (provider === 'kimi' || provider === 'deepseek' || provider === 'qwen') selected.value = provider;
+  clearFeedback();
+});
+watch(isResume, value => { if (!value && state.value) void loadPeople(); });
 onMounted(load);
 </script>
 
@@ -188,11 +200,11 @@ onMounted(load);
     </template>
     <template v-else-if="state">
       <el-alert v-if="!state.encryptionReady" title="凭据加密尚未就绪，请联系部署管理员配置后重试。" type="warning" :closable="false" />
-      <section class="config-panel" :aria-label="route.query.feature === 'resume' ? '简历解析凭据' : '目标进展识别服务商'">
-        <p v-if="route.query.feature === 'resume'" class="hint">简历解析使用 DeepSeek 的已验证凭据。保存和测试后，由部署管理员核对简历解析开关。</p>
-        <div class="panel-heading"><h2>目标进展识别</h2><span>当前使用：{{ state.activeProvider ? labels[state.activeProvider] : '未启用' }}</span></div>
-        <p class="hint">先保存配置，再使用样例测试连接，测试通过后启用。修改正在使用的配置会关闭机器人，需重新测试并启用。</p>
-        <el-radio-group v-model="selected" aria-label="AI 服务商" :disabled="Boolean(busy)" @change="clearFeedback">
+      <section class="config-panel" :aria-label="isResume ? '简历解析凭据' : '目标进展识别服务商'">
+        <p v-if="isResume" class="hint">简历解析使用 DeepSeek 的已验证凭据。保存并测试后，<RouterLink to="/system/configurations/ai-resume">维护简历解析开关</RouterLink>。凭据核验不启用目标进展机器人。</p>
+        <div class="panel-heading"><h2>{{ isResume ? 'DeepSeek 简历解析凭据' : '目标进展识别' }}</h2><span v-if="!isResume">当前使用：{{ state.activeProvider ? labels[state.activeProvider] : '未启用' }}</span></div>
+        <p class="hint">{{ isResume ? '先保存 DeepSeek 配置，再测试连接。简历解析开关在独立配置页维护。' : '先保存配置，再使用样例测试连接，测试通过后启用。修改正在使用的配置会关闭机器人，需重新测试并启用。' }}</p>
+        <el-radio-group v-if="!isResume" v-model="selected" aria-label="AI 服务商" :disabled="Boolean(busy)" @change="clearFeedback">
           <el-radio-button value="kimi">Kimi</el-radio-button>
           <el-radio-button value="deepseek">DeepSeek</el-radio-button>
           <el-radio-button value="qwen">千问</el-radio-button>
@@ -225,13 +237,13 @@ onMounted(load);
           <div class="actions">
             <el-button type="primary" :loading="busy === 'save'" :disabled="disabled" @click="save">保存服务商配置</el-button>
             <el-button :loading="busy === 'test'" :disabled="disabled || !summary?.configured || dirty" @click="testConnection">测试连接</el-button>
-            <el-button :loading="busy === 'activate'" :disabled="disabled || !tested || dirty || summary?.active" @click="activate">启用此服务商</el-button>
+            <el-button v-if="!isResume" :loading="busy === 'activate'" :disabled="disabled || !tested || dirty || summary?.active" @click="activate">启用此服务商</el-button>
           </div>
           <p v-if="dirty" class="hint">有未保存的修改，请先保存再测试或启用。</p>
         </el-form>
         <p v-if="feedback" role="status" class="feedback" :class="{ error: feedbackError }">{{ feedback }}</p>
       </section>
-      <section class="config-panel" aria-label="机器人试运行">
+      <section v-if="!isResume" class="config-panel" aria-label="机器人试运行">
         <div class="panel-heading"><h2>机器人试运行</h2><span>{{ state.botEnabled ? '机器人已开启' : '机器人已关闭' }}</span></div>
         <el-switch :model-value="state.botEnabled" aria-label="目标进展机器人" :loading="busy === 'bot'"
           :disabled="Boolean(busy) || (!state.botEnabled && (!state.encryptionReady || !state.activeProvider))" @change="toggleBot" />

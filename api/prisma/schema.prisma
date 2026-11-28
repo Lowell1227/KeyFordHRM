@@ -2478,6 +2478,9 @@ model TalentFollowUp {
   planClosedById String?   @map("plan_closed_by_id") @db.Uuid
   createdById    String    @map("created_by_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  recordType     String    @default("communication") @map("record_type") @db.VarChar(20)
+  sourceIntakeId String?   @unique @map("source_intake_id") @db.Uuid
+  sourceFollowUpAt DateTime? @map("source_follow_up_at") @db.Timestamptz(6)
 
   candidate TalentCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
@@ -2622,6 +2625,7 @@ model RecruitmentDemand {
   createdById           String?   @map("created_by_id") @db.Uuid
   submittedById         String?   @map("submitted_by_id") @db.Uuid
   approvedById          String?   @map("approved_by_id") @db.Uuid
+  approvalMode          String?   @map("approval_mode") @db.VarChar(20)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 

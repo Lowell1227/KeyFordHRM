@@ -171,7 +171,7 @@ export class TalentsService {
     const salary = talentSalaryWhere(query);
     if (salary) and.push(salary);
     if (query.dueOnly) and.push({ OR: [
-      { followUps: { none: {} } },
+      { followUps: { none: { recordType: 'communication' } } },
       { followUps: { some: { planStatus: 'pending' } } },
     ] });
     if (query.staleOnly) and.push(this.staleWhere());

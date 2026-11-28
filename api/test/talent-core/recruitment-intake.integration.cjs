@@ -271,8 +271,10 @@ async function inPreview() {
 
     currentCase = 'same_phone_explicit_reuse_different_job_preserves_candidate_followup_and_original_application';
     const existingCandidate = await http('operator', 'GET', '/talents/' + first.candidateId);
+    const currentFollowUpPlan = existingCandidate.followUps.find(plan => plan.planStatus === 'pending');
     const followUp = await http('operator', 'POST', `/talents/${first.candidateId}/follow-ups`, { channel: 'other',
-      summary: `虚构${f.prefix}原沟通记录不得覆盖`, occurredAt: '2037-01-08', nextFollowUpAt: '2037-01-12' }, 201);
+      summary: `虚构${f.prefix}原沟通记录不得覆盖`, occurredAt: '2037-01-08', nextFollowUpAt: '2037-01-12',
+      ...(currentFollowUpPlan ? { expectedPlanId: currentFollowUpPlan.id, completePlanId: currentFollowUpPlan.id } : {}) }, 201);
     let existingApp = await http('operator', 'POST', `/talent-recruitment/candidates/${first.candidateId}/applications`,
       { deptId: f.department.id, positionName: f.position.name }, 201);
     const preservedCandidate = await db.talentCandidate.findUniqueOrThrow({ where: { id: first.candidateId } });
@@ -400,6 +402,91 @@ async function inPreview() {
     assert.equal((await detail(mail.id)).mail.messageId, mail.mail.messageId);
     assert.equal(await db.user.count(), peopleBeforeMail); assert.equal(await db.talentApplication.count(), applicationsBeforeMail);
     assert.equal(gateway.evidence().externalCalls, 0); assert.equal(parser.client.evidence().externalCalls, 0);
+    pass(currentCase);
+
+    currentCase = 'intake_plan_transfer_is_atomic_idempotent_and_never_a_communication';
+    const promiseAt = '2037-01-08T16:15:00.000Z';
+    const transferCandidate = candidate('仅安排未沟通');
+    const plannedIntake = await create({ state: 'pending_review', nextFollowUpAt: promiseAt,
+      candidateDraft: { name: transferCandidate.name, phone: transferCandidate.phone } });
+    for (const keyword of [transferCandidate.name, transferCandidate.phone]) {
+      const found = await http('operator', 'GET', '/recruitment-intakes?keyword=' + encodeURIComponent(keyword) + '&page=1&pageSize=100');
+      assert.ok(found.items.some(row => row.id === plannedIntake.id));
+    }
+    const transferInput = { requestId: randomUUID(), mode: 'candidate_only', candidate: transferCandidate };
+    const [transferred, retry] = await Promise.all([confirm(plannedIntake, transferInput), confirm(plannedIntake, transferInput)]);
+    assert.equal(transferred.candidateId, retry.candidateId);
+    const carried = await db.talentFollowUp.findUniqueOrThrow({ where: { sourceIntakeId: plannedIntake.id } });
+    assert.equal(carried.recordType, 'plan'); assert.equal(carried.planStatus, 'pending');
+    assert.equal(carried.sourceFollowUpAt.toISOString(), promiseAt); assert.equal(carried.nextFollowUpAt.toISOString().slice(0, 10), '2037-01-09');
+    const talentAfterPlan = await db.talentCandidate.findUniqueOrThrow({ where: { id: transferred.candidateId } });
+    assert.equal(talentAfterPlan.lastFollowUpAt, null); assert.equal(talentAfterPlan.ownerId, f.actors.operator.id);
+    assert.equal(await db.talentFollowUp.count({ where: { sourceIntakeId: plannedIntake.id } }), 1);
+    await http('operator', 'POST', `/talents/${transferred.candidateId}/follow-ups/${carried.id}/cancel`, {}, 201);
+    const uncontacted = await http('operator', 'GET', '/talents?dueOnly=true&keyword=' + encodeURIComponent(transferCandidate.name));
+    assert.ok(uncontacted.items.some(row => row.id === transferred.candidateId));
+    pass(currentCase);
+
+    currentCase = 'reuse_preserves_current_plan_unless_operator_explicitly_replaces_exact_version';
+    const secondPlanIntake = await create({ state: 'pending_review', nextFollowUpAt: '2037-01-10T09:30:00+08:00' });
+    await confirm(secondPlanIntake, { mode: 'candidate_only', existingCandidateId: transferred.candidateId });
+    const pendingPlan = await db.talentFollowUp.findUniqueOrThrow({ where: { sourceIntakeId: secondPlanIntake.id } });
+    const preserve = await create({ state: 'pending_review', nextFollowUpAt: '2037-01-11T09:30:00+08:00' });
+    await confirm(preserve, { mode: 'candidate_only', existingCandidateId: transferred.candidateId });
+    assert.equal((await db.talentFollowUp.findUniqueOrThrow({ where: { id: pendingPlan.id } })).planStatus, 'pending');
+    assert.equal((await db.talentFollowUp.findUniqueOrThrow({ where: { sourceIntakeId: preserve.id } })).planStatus, 'superseded');
+    const replace = await create({ state: 'pending_review', nextFollowUpAt: '2037-01-12T09:30:00+08:00' });
+    const replacement = { requestId: randomUUID(), mode: 'candidate_only', existingCandidateId: transferred.candidateId,
+      followUpPlanAction: 'replace', expectedFollowUpPlanId: randomUUID() };
+    const stalePlan = await confirm(replace, replacement, 409);
+    assert.equal(stalePlan.data.reason, 'TALENT_FOLLOW_UP_PLAN_CHANGED'); assert.equal(stalePlan.data.currentPlan.id, pendingPlan.id);
+    assert.equal((await detail(replace.id)).state, 'pending_review');
+    assert.equal(await db.talentFollowUp.count({ where: { sourceIntakeId: replace.id } }), 0);
+    const validReplacement = { ...replacement, expectedFollowUpPlanId: pendingPlan.id };
+    await confirm(replace, validReplacement); await confirm(replace, validReplacement);
+    assert.equal((await db.talentFollowUp.findUniqueOrThrow({ where: { id: pendingPlan.id } })).planStatus, 'superseded');
+    assert.equal(await db.talentFollowUp.count({ where: { candidateId: transferred.candidateId, planStatus: 'pending' } }), 1);
+    assert.equal((await db.talentCandidate.findUniqueOrThrow({ where: { id: transferred.candidateId } })).lastFollowUpAt, null);
+    pass(currentCase);
+
+    currentCase = 'associated_follow_up_sources_require_explicit_choice_and_matching_source_time';
+    async function linkedPromise(parent, suffix, at) {
+      const source = await db.recruitmentIntake.create({ data: { state: 'closed', transport: 'email', associatedToId: parent.id,
+        ownerId: f.actors.operator.id, createdById: f.actors.operator.id, sourceChannel: 'job_site',
+        mailboxKey: fixtures.mailboxKey, messageId: f.prefix + '_promise_' + suffix, sourcePartId: 'body',
+        receivedAt: new Date('2037-01-07T01:00:00Z'), subject: '虚构关联来源跟进约定', bodyText: '虚构招聘资料',
+        closeReason: '虚构已关联来源', nextFollowUpAt: new Date(at) } });
+      intakes.add(source.id); return source;
+    }
+    const uniqueParent = await create({ state: 'pending_review' });
+    const uniqueSource = await linkedPromise(uniqueParent, 'unique', '2037-01-13T02:00:00Z');
+    assert.deepEqual((await detail(uniqueParent.id)).followUpSources, [{ intakeId: uniqueSource.id,
+      nextFollowUpAt: uniqueSource.nextFollowUpAt.toISOString(), primary: false }]);
+    const uniqueResult = await confirm(uniqueParent, { mode: 'candidate_only', candidate: candidate('单一关联安排') });
+    assert.equal((await db.talentFollowUp.findUniqueOrThrow({ where: { sourceIntakeId: uniqueSource.id } })).candidateId, uniqueResult.candidateId);
+    const multiParent = await create({ state: 'pending_review' });
+    const linkedSourceA = await linkedPromise(multiParent, 'multi_a', '2037-01-14T02:00:00Z');
+    const linkedSourceB = await linkedPromise(multiParent, 'multi_b', '2037-01-15T02:00:00Z');
+    const multiInput = { requestId: randomUUID(), mode: 'candidate_only', candidate: candidate('多关联安排') };
+    const required = await confirm(multiParent, multiInput, 409);
+    assert.equal(required.data.reason, 'INTAKE_FOLLOW_UP_SOURCE_REQUIRED'); assert.equal(required.data.followUpSources.length, 2);
+    assert.equal((await detail(multiParent.id)).state, 'pending_review');
+    for (const choice of [{ followUpSourceIntakeId: uniqueSource.id },
+      { followUpSourceIntakeId: linkedSourceB.id, expectedFollowUpSourceAt: linkedSourceA.nextFollowUpAt.toISOString() }]) {
+      const changed = await confirm(multiParent, { ...multiInput, ...choice }, 409);
+      assert.equal(changed.data.reason, 'INTAKE_FOLLOW_UP_SOURCE_CHANGED');
+    }
+    const selectedInput = { ...multiInput, followUpSourceIntakeId: linkedSourceB.id, expectedFollowUpSourceAt: linkedSourceB.nextFollowUpAt.toISOString() };
+    const selected = await confirm(multiParent, selectedInput); await confirm(multiParent, selectedInput);
+    const selectedPlan = await db.talentFollowUp.findUniqueOrThrow({ where: { sourceIntakeId: linkedSourceB.id } });
+    assert.equal(selectedPlan.candidateId, selected.candidateId);
+    assert.equal(await db.talentFollowUp.count({ where: { candidateId: selected.candidateId, planStatus: 'pending' } }), 1);
+    await confirm(multiParent, { ...selectedInput, followUpSourceIntakeId: linkedSourceA.id }, 409);
+    assert.equal((await db.recruitmentIntake.findUniqueOrThrow({ where: { id: linkedSourceA.id } })).nextFollowUpAt.toISOString(), linkedSourceA.nextFollowUpAt.toISOString());
+    const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+    await http('operator', 'POST', `/talents/${selected.candidateId}/follow-ups`, { channel: 'phone', summary: '虚构补记昨日实际沟通并完成安排',
+      occurredAt: yesterday, expectedPlanId: selectedPlan.id, completePlanId: selectedPlan.id }, 201);
+    assert.equal((await db.talentFollowUp.findUniqueOrThrow({ where: { id: selectedPlan.id } })).planStatus, 'completed');
     pass(currentCase); passed = true;
   } catch (error) {
     process.stdout.write(JSON.stringify({ case: currentCase, passed: false, name: error.name, message: error.message }) + '\n'); throw error;

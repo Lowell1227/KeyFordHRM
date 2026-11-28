@@ -59,7 +59,7 @@ const meetingHint = computed(() => {
     : status === 'none' && inviteMode.value === '线上面试' ? '未识别到有效的腾讯会议链接，如使用腾讯会议，请核对后填写。' : '';
   if (meetingLinkManual.value) return result + (form.meetingUrl.trim()
     ? '已保留手动填写的链接，请核对后保存。' : '会议链接已手动清空，请核对是否需要补充。');
-  return result || '已提取腾讯会议链接，请核对后保存。';
+  return result || (status === 'single' ? '已提取腾讯会议链接，请核对后保存。' : '');
 });
 function invitationChanged(value: string) {
   meetingExtraction.value = extractTencentMeetingLink(value);

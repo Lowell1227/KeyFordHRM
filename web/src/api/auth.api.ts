@@ -2,6 +2,13 @@ import http from './http';
 import type { CurrentUser, LoginResult } from '@/types/api.types';
 
 export type DingTalkLoginMode = 'oauth' | 'internal';
+export interface DingTalkPublicConfig {
+  enabled: boolean;
+  corpId: string | null;
+  appKey: string | null;
+  agentId: string | null;
+  redirectUri: string | null;
+}
 
 export interface TestAccount {
   employeeNo: string;
@@ -16,6 +23,9 @@ export interface TestAccountsResult {
 }
 
 export const authApi = {
+  getDingTalkConfig(): Promise<DingTalkPublicConfig> {
+    return http.get('/auth/dingtalk/config', { skipErrorMessage: true }) as unknown as Promise<DingTalkPublicConfig>;
+  },
   dingtalkLogin(authCode: string, loginMode: DingTalkLoginMode): Promise<LoginResult> {
     return http.post('/auth/dingtalk', { authCode, loginMode }, { skipErrorMessage: true }) as unknown as Promise<LoginResult>;
   },

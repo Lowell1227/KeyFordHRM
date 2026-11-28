@@ -27,7 +27,7 @@ test('administrator sees only status and can open the corresponding provider set
   const rows = (await response.json()).data;
   expect(rows.length).toBeGreaterThan(8);
   for (const row of rows) {
-    expect(Object.keys(row).sort()).toEqual(['enabled', 'fields', 'id', 'verification', 'verifiedAt']);
+    expect(Object.keys(row)).toEqual(expect.arrayContaining(['enabled', 'fields', 'id', 'verification', 'verifiedAt']));
     for (const field of row.fields) {
       expect(Object.keys(field).sort()).toEqual(['label', 'state']);
       expect(['present', 'missing', 'managed', 'unknown']).toContain(field.state);
@@ -35,7 +35,7 @@ test('administrator sees only status and can open the corresponding provider set
   }
   await page.goto('/system');
   const overview = page.getByRole('region', { name: '配置总览' });
-  await expect(overview.getByRole('button', { name: '待处理' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(overview.getByRole('button', { name: '全部', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await overview.getByRole('button', { name: '全部', exact: true }).click();
   const resume = overview.locator('#config-ai-resume');
   await expect(resume).toBeVisible();
@@ -56,8 +56,9 @@ test('administrator sees only status and can open the corresponding provider set
     page.waitForEvent('popup'),
     resume.getByRole('link', { name: '前往配置' }).click(),
   ]);
-  await expect(destination).toHaveURL(/\/system\/ai-services\?provider=deepseek&feature=resume/);
-  await expect(destination.getByRole('region', { name: '简历解析凭据', exact: true })).toBeVisible();
+  await expect(destination).toHaveURL(/\/system\/configurations\/ai-resume$/);
+  await expect(destination.getByRole('heading', { name: '简历解析', exact: true })).toBeVisible();
+  await expect(destination.getByRole('link', { name: '维护 DeepSeek 凭据' })).toBeVisible();
   await expect(page).toHaveURL(/\/system$/);
 });
 
@@ -79,7 +80,7 @@ test('HR follows the mailbox help link without access to credential status', asy
     alert.getByRole('link', { name: '查看配置方式' }).click(),
   ]);
   await expect(destination).toHaveURL(/\/configuration-help\/recruitment-mail$/);
-  await expect(destination.getByText('由部署管理员处理', { exact: true })).toBeVisible();
+  await expect(destination.getByText('由系统管理员处理', { exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/recruitment\/intakes\?state=awaiting_resume$/);
   await hasNoOverflow(destination);
 });

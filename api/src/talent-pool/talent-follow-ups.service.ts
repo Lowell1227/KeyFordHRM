@@ -19,7 +19,7 @@ export class TalentFollowUpsService {
       SELECT id FROM talent_candidates WHERE id = ${candidateId}::uuid AND deleted_at IS NULL FOR UPDATE
     `;
     if (!active.length) throw new NotFoundException('候选人不存在或已删除');
-    return tx.talentFollowUp.findFirst({ where: { candidateId, planStatus: 'pending' }, select: { id: true, occurredAt: true } });
+    return tx.talentFollowUp.findFirst({ where: { candidateId, planStatus: 'pending' }, select: { id: true, occurredAt: true, recordType: true } });
   }
 
   private planConflict() {
@@ -43,7 +43,7 @@ export class TalentFollowUpsService {
       await assertRecruitmentEditor(tx, operator);
       if (input.expectedPlanId !== undefined && input.expectedPlanId?.toLowerCase() !== current?.id) throw this.planConflict();
       if (input.completePlanId !== undefined && input.completePlanId.toLowerCase() !== current?.id) throw this.planConflict();
-      const historical = !!current && occurredAt < current.occurredAt;
+      const historical = !!current && current.recordType !== 'plan' && occurredAt < current.occurredAt;
       if (input.completePlanId && historical) throw new BadRequestException('完成安排的沟通日期不能早于该安排的沟通日期；可改为补充记录');
       if (current && input.completePlanId) await this.closePlan(tx, current.id, 'completed', operator);
       else if (current && nextFollowUpAt && !historical) {

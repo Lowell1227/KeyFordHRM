@@ -29,6 +29,7 @@ import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSele
 import type { Department, User } from '@/types/api.types';
 import EmployeeReentryNameMatches from './EmployeeReentryNameMatches.vue';
 import { useAuthStore } from '@/stores/auth.store';
+import type { RecruitmentOnboardingPrefill } from '@/views/talent/application-presentation';
 
 const auth = useAuthStore();
 const canMaintainPositions = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
@@ -43,6 +44,7 @@ const props = defineProps<{
   /** 从人才库「办理入职」带入的预填姓名/手机（无草稿时生效）。 */
   initialName?: string;
   initialPhone?: string;
+  initialRecruitment?: RecruitmentOnboardingPrefill;
   talentCandidateId?: string;
   talentApplicationId?: string;
 }>();
@@ -246,6 +248,9 @@ function reset() {
   if (!props.draft) {
     if (props.initialName) form.name = props.initialName;
     if (props.initialPhone) form.phone = props.initialPhone;
+    if (props.initialRecruitment?.deptId) form.deptId = props.initialRecruitment.deptId;
+    if (props.initialRecruitment?.positionId) form.positionId = props.initialRecruitment.positionId;
+    if (props.initialRecruitment?.expectedEntryDate) form.entryDate = props.initialRecruitment.expectedEntryDate;
   }
   Object.assign(form.employee, {
     contractSubjectId: employee.contractSubjectId ?? undefined,
@@ -906,7 +911,7 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer
             <el-form-item data-archive-field="employee.workLocation" label="工作地点" :error="fieldErrors['employee.workLocation']"><PersonnelReferenceSelect v-model="form.employee.workLocation" v-model:reference-id="form.employee.workLocationId" kind="work_location" label="工作地点" /></el-form-item>
             <el-form-item data-archive-field="employee.employmentType" label="用工类型" required :error="fieldErrors['employee.employmentType']"><el-select v-model="form.employmentType" placeholder="待核实后选择" aria-label="用工类型"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="实习" value="internship" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
             <el-form-item data-archive-field="employee.employeeStatus" label="员工状态" required :error="fieldErrors['employee.employeeStatus']"><el-select v-model="form.employeeStatus" placeholder="待核实后选择" aria-label="员工状态"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
-            <el-form-item data-archive-field="employee.entryDate" label="入职日期" required :error="fieldErrors['employee.entryDate']"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="employee.entryDate" label="入职日期" required :error="fieldErrors['employee.entryDate']"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /><small v-if="!draft && initialRecruitment?.expectedEntryDate" class="field-help">已带入录用约定的预计到岗日期，请核对本次入职日期。</small></el-form-item>
             <el-form-item data-archive-field="employee.effectiveFrom" label="任职开始" required :error="fieldErrors['employee.effectiveFrom']"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item v-if="form.effectiveTo || fieldErrors['employee.effectiveTo']" data-archive-field="employee.effectiveTo" label="任职结束" :error="fieldErrors['employee.effectiveTo']"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item data-archive-field="employee.probationMonths" label="试用期（月）" :error="fieldErrors['employee.probationMonths']"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /><small v-if="form.employee.probationMonths === null">未提供月数，保持空值，可核实后补充。</small></el-form-item>

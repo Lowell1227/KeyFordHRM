@@ -4,6 +4,7 @@ export type IntakeState = 'awaiting_resume' | 'pending_review' | 'needs_material
 export interface IntakeFile { id: string; fileName: string; mimeType: string; fileSize: number; url: string; createdAt: string }
 export interface IntakeEvent { id: string; action: string; revision: number; createdAt: string; actorName?: string | null; reason?: string | null; metadata?: Record<string, unknown>; snapshot?: Record<string, unknown> }
 export interface RecruitmentIntake {
+  followUpSources?: Array<{ intakeId: string; nextFollowUpAt: string; primary: boolean }>;
   id: string; revision: number; state: IntakeState; transport: 'manual' | 'email'; sourceChannel: TalentSourceChannel | null;
   ownerId: string; ownerName?: string | null; postingId: string | null; demandId: string | null;
   positionName: string | null; nextFollowUpAt: string | null; sourceNotes: string | null;
@@ -11,7 +12,7 @@ export interface RecruitmentIntake {
   parseStatus: 'idle' | 'processing' | 'succeeded' | 'failed'; parseResult: ResumeParseResult | null; parseMessage: string | null; issues: string[];
   candidateId: string | null; applicationId: string | null; candidateUrl: string | null; applicationUrl: string | null;
   associatedToId: string | null; associatedFromIds: string[]; closeReason: string | null; events?: IntakeEvent[];
-  mail: { messageId: string; receivedAt: string; subject: string; bodyText: string; sourcePartId: string } | null;
+  mail: { messageId: string; receivedAt: string; subject: string; bodyText: string; sourcePartId: string; mailboxId?: string | null; mailboxName?: string | null } | null;
   createdAt: string; updatedAt: string;
 }
 export interface IntakeFields {
@@ -24,6 +25,8 @@ export interface IntakeUpdate extends IntakeFields { expectedRevision: number }
 export interface IntakeQuery { state?: IntakeState; ownerId?: string; workQueue?: 'review' | 'assignment'; sourceChannel?: string; demandId?: string; postingId?: string; keyword?: string; page?: number; pageSize?: number }
 export interface IntakeApplication { deptId?: string | null; positionName?: string; ownerId?: string; recruitmentBatch?: string | null; expectedEntryDate?: string | null; intentDemandId?: string | null; sourceChannel?: TalentSourceChannel | null }
 export interface IntakeConfirm {
+  followUpPlanAction?: 'keep' | 'replace'; expectedFollowUpPlanId?: string | null;
+  followUpSourceIntakeId?: string; expectedFollowUpSourceAt?: string;
   requestId: string; expectedRevision: number; mode: 'candidate_only' | 'candidate_application';
   candidate?: TalentCandidateInput; existingCandidateId?: string;
   application?: IntakeApplication; existingApplicationId?: string; expectedExistingApplicationRevision?: number;
@@ -36,4 +39,5 @@ export interface RecruitmentPosting {
 export interface PostingFields { demandId: string; channel: string; name: string; url: string; externalId?: string | null; verifiedIdentity: boolean; evidence?: string | null; ownerId?: string; active?: boolean }
 export interface PostingQuery { demandId?: string; keyword?: string; page?: number; pageSize?: number }
 export interface MailboxStatus { configured: boolean; issue?: string | null }
+export interface MailboxChoice { id: string; name: string; enabled: boolean; configured: boolean; lastSyncedAt: string | null }
 export interface MailboxSyncResult { configured: boolean; synced: number; skipped: number; failed: number; complete: boolean; hasMore: boolean; lastSyncedAt: string | null }

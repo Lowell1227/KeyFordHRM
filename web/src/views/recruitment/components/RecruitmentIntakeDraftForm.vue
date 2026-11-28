@@ -5,6 +5,8 @@ import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSele
 const props = defineProps<{ modelValue: TalentCandidateInput; disabled?: boolean; errors?: Record<string, string> }>();
 const emit = defineEmits<{ 'update:modelValue': [value: TalentCandidateInput]; 'check-phone': [] }>();
 const local = ref<TalentCandidateInput>({ ...props.modelValue });
+const detailsOpened = ref<string[]>([]);
+watch(() => props.errors, errors => { if (Object.keys(errors || {}).some(field => !['name', 'phone', 'sourceChannel'].includes(field))) detailsOpened.value = ['more']; }, { deep: true });
 watch(() => props.modelValue, value => { local.value = { ...value }; }, { deep: true, flush: 'sync' });
 function update(field: keyof TalentCandidateInput, value: unknown) {
   local.value = { ...local.value, ...(field === 'birthYear' && value !== local.value.birthYear ? { birthMonth: null } : {}), [field]: value };
@@ -15,8 +17,10 @@ function update(field: keyof TalentCandidateInput, value: unknown) {
 <template>
   <el-form label-position="top" :disabled="disabled" class="intake-draft-form" @submit.prevent>
     <div class="draft-grid">
-      <el-form-item label="姓名" required :error="errors?.name"><el-input :model-value="modelValue.name" maxlength="50" aria-label="候选人姓名" @update:model-value="update('name', $event)" /></el-form-item>
-      <el-form-item label="手机号" required :error="errors?.phone"><el-input :model-value="modelValue.phone" maxlength="11" inputmode="tel" aria-label="候选人手机号" @update:model-value="update('phone', $event)" @blur="emit('check-phone')" /></el-form-item>
+      <el-form-item label="姓名" :error="errors?.name"><el-input :model-value="modelValue.name" maxlength="50" aria-label="候选人姓名" @update:model-value="update('name', $event)" /></el-form-item>
+      <el-form-item label="手机号" :error="errors?.phone"><el-input :model-value="modelValue.phone" maxlength="11" inputmode="tel" aria-label="候选人手机号" @update:model-value="update('phone', $event)" @blur="emit('check-phone')" /></el-form-item>
+    </div>
+    <el-collapse v-model="detailsOpened"><el-collapse-item title="更多候选人资料（选填）" name="more"><div class="draft-grid">
       <el-form-item label="邮箱" :error="errors?.email"><el-input :model-value="modelValue.email" maxlength="100" aria-label="候选人邮箱" @update:model-value="update('email', $event)" /></el-form-item>
       <el-form-item label="性别"><el-select :model-value="modelValue.gender || 'unknown'" aria-label="候选人性别" @update:model-value="update('gender', $event)"><el-option label="未提供" value="unknown" /><el-option label="男" value="male" /><el-option label="女" value="female" /></el-select></el-form-item>
       <el-form-item label="出生年" :error="errors?.birthYear"><el-input-number :model-value="modelValue.birthYear ?? undefined" :min="1900" :max="new Date().getFullYear()" :precision="0" aria-label="出生年" @update:model-value="update('birthYear', $event)" /></el-form-item>
@@ -34,6 +38,7 @@ function update(field: keyof TalentCandidateInput, value: unknown) {
       <el-form-item label="期望薪资上限（元/月）" :error="errors?.expectSalaryMaxYuan"><el-input-number :model-value="modelValue.expectSalaryMaxYuan ?? undefined" :min="0" :max="2147483647" :precision="0" :controls="false" aria-label="期望薪资上限" @update:model-value="update('expectSalaryMaxYuan', $event)" /></el-form-item>
     </div>
     <el-form-item label="资料备注" :error="errors?.note"><el-input :model-value="modelValue.note" type="textarea" :rows="2" maxlength="500" show-word-limit @update:model-value="update('note', $event)" /></el-form-item>
+    </el-collapse-item></el-collapse>
   </el-form>
 </template>
 

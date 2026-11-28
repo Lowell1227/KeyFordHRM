@@ -67,6 +67,29 @@ function setup(applicationChanges = {}, interviewChanges = {}) {
   return { sut: new TalentRecruitmentService(prisma as never, demands), demands, demand, gateway, prisma, tx, app, interview, actors, feedbacks, feedbackEvents };
 }
 
+describe('application queue interview history projection', () => {
+  it('keeps completed and cancelled history distinct from scheduled interviews without N+1 reads', async () => {
+    const { sut, tx, app } = setup();
+    tx.talentApplication.findMany.mockResolvedValue([{ ...app, interviews: [] }] as never);
+    (tx.talentApplication as any).count = jest.fn().mockResolvedValue(1);
+    tx.talentInterview.findMany.mockResolvedValue([
+      { id: 'last-cancelled', applicationId: app.id, status: 'cancelled', startsAt: new Date('2026-12-03'), endsAt: new Date('2026-12-03'), participants: [{ userId: 'participant' }], feedback: [] },
+      { id: 'completed', applicationId: app.id, status: 'completed', startsAt: new Date('2026-12-02'), endsAt: new Date('2026-12-02'), participants: [{ userId: 'participant' }], feedback: [] },
+    ] as never);
+    const result = await sut.queue({ page: 1, pageSize: 20 } as never, hr);
+    expect(result.items[0]).toMatchObject({ nextInterview: null, latestInterview: { id: 'last-cancelled', status: 'cancelled' },
+      activitySummary: { scheduledCount: 0, completedCount: 1, cancelledCount: 1, unsubmittedFeedbackCount: 1 } });
+    expect(tx.talentInterview.findMany).toHaveBeenCalledTimes(1);
+  });
+  it('uses the detail termination definition in the queue while keeping raw event history private', async () => {
+    const { sut, tx, app } = setup({ stage: 'withdrawn', revision: 4 });
+    tx.talentApplication.findMany.mockResolvedValue([{ ...app, interviews: [], events: [{ action: 'accept_offer', version: 2 }, { action: 'terminate_offer', version: 4 }] }] as never);
+    (tx.talentApplication as any).count = jest.fn().mockResolvedValue(1);
+    const result = await sut.queue({ page: 1, pageSize: 20 } as never, hr);
+    expect(result.items[0].offerTerminated).toBe(true); expect(result.items[0]).not.toHaveProperty('events');
+  });
+});
+
 describe('application creation replay', () => {
   const intent = { requestId: '69b63655-caad-431e-bb8d-e96d5ab930ba', positionName: 'Synthetic role', recruitmentBatch: 'Round 1' };
 

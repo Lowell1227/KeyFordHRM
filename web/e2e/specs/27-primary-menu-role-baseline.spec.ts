@@ -29,7 +29,7 @@ test.describe('一级菜单角色基线', () => {
     ]);
 
     await page.goto('/recruitment');
-    await expect(page).toHaveURL(/\/talents(?:\?|$)/);
+    await expect(page).toHaveURL(/\/recruitment\/demands(?:\?|$)/);
     await expect(page.getByTestId('module-status-recruitment')).toHaveCount(0);
     await page.goto('/recruitment/planning');
     await expect(page.getByTestId('app-route-title')).toHaveText('招聘建设规划');
@@ -47,7 +47,7 @@ test.describe('一级菜单角色基线', () => {
 
     await expectPrimaryModules(page, ['工作台', '绩效', '人员', '招聘', '系统管理']);
     await page.goto('/recruitment');
-    await expect(page).toHaveURL(/\/talents(?:\?|$)/);
+    await expect(page).toHaveURL(/\/recruitment\/demands(?:\?|$)/);
     await expect(page.locator('.app-sidebar').getByRole('button', { name: '建设规划', exact: true })).toHaveCount(0);
     await page.goto('/recruitment/planning');
     await expect(page).toHaveURL(/\/dashboard$/);

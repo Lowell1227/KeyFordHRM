@@ -49,6 +49,10 @@ export class ConfirmRecruitmentIntakeDto extends RecruitmentIntakeVersionDto {
   @IsOptional() @ValidateNested() @Type(() => CreateTalentApplicationDto) application?: CreateTalentApplicationDto;
   @IsOptional() @IsUUID() existingApplicationId?: string;
   @IsOptional() @IsInt() @Min(0) @Max(2147483646) expectedExistingApplicationRevision?: number;
+  @IsOptional() @IsIn(['keep', 'replace']) followUpPlanAction?: 'keep' | 'replace';
+  @IsOptional() @IsUUID() expectedFollowUpPlanId?: string | null;
+  @IsOptional() @IsUUID() followUpSourceIntakeId?: string;
+  @IsOptional() @IsISO8601({ strict: true, strictSeparator: true }) expectedFollowUpSourceAt?: string;
 }
 export class CloseRecruitmentIntakeDto extends RecruitmentIntakeVersionDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(2000) reason!: string;
@@ -59,4 +63,5 @@ export class AssociateRecruitmentIntakeDto extends RecruitmentIntakeVersionDto {
 }
 export class SyncRecruitmentMailboxDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20) limit = 10;
+  @IsOptional() @IsString() @MaxLength(80) mailboxId?: string;
 }

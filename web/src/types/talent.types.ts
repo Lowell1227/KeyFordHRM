@@ -149,6 +149,9 @@ export interface TalentResumeFile {
 }
 
 export interface TalentFollowUp {
+  recordType?: 'communication' | 'plan';
+  sourceIntakeId?: string | null;
+  sourceFollowUpAt?: string | null;
   id: string;
   candidateId: string;
   occurredAt: string;
@@ -380,6 +383,9 @@ export interface TalentApplicationQueueQuery {
   page?: number; pageSize?: number;
 }
 export interface TalentApplicationQueueItem {
+  offerTerminated?: boolean;
+  latestInterview?: { id: string; startsAt: string; endsAt?: string; status: TalentInterviewStatus } | null;
+  activitySummary?: { scheduledCount: number; unsubmittedFeedbackCount: number };
   id: string; candidateId: string; candidateName: string; positionName: string;
   recruitmentBatch: string | null; stage: TalentApplicationStage; ownerId: string; ownerName: string | null;
   departmentNameSnapshot: string | null; expectedEntryDate: string | null; updatedAt: string;
@@ -429,6 +435,7 @@ export interface TalentApplicationEvent {
   createdAt: string;
 }
 export interface TalentApplicationView {
+  latestInterview?: { id: string; startsAt: string; endsAt?: string; status: TalentInterviewStatus } | null;
   intentDemandId?: string | null;
   intentDemandCurrent?: import('./recruitment-demand.types').RecruitmentDemandView | null;
   sourceChannel?: TalentSourceChannel | null;
@@ -437,7 +444,7 @@ export interface TalentApplicationView {
   recruitmentDemandRevision?: number | null;
   recruitmentDemandSnapshot?: import('./recruitment-demand.types').RecruitmentDemandSnapshot | null;
   recruitmentDemandCurrent?: import('./recruitment-demand.types').RecruitmentDemandView | null;
-  activitySummary?: { scheduledCount: number; unsubmittedFeedbackCount: number };
+  activitySummary?: { scheduledCount: number; completedCount?: number; cancelledCount?: number; unsubmittedFeedbackCount: number };
   id: string;
   candidateId: string;
   candidateName?: string;

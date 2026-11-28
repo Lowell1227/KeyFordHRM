@@ -168,11 +168,13 @@ function resumeClient(db, onlyPrefix) {
 
 function realResumeServiceWithFixtureProvider(db, environment = process.env, onlyPrefix) {
   require('../../prisma/preview-guard.cjs').assertPreviewEnvironment(environment);
-  const { ConfigService } = require('@nestjs/config');
   const { TalentResumeService } = require('../../dist/src/talent-pool/talent-resume.service');
   const client = resumeClient(db, onlyPrefix);
+  // Nest ConfigService gives process.env priority over constructor values. Keep the real preview
+  // disabled and enable only this instance, whose provider accepts owned fictional markers only.
+  const localParserConfig = { get: key => key === 'AI_RESUME_PARSING_ENABLED' ? 'true' : environment[key] };
   const service = new TalentResumeService({ getProviderRuntimeConfig: async () => ({ apiKey: 'fictional-provider-no-network' }) },
-    new ConfigService({ ...environment, AI_RESUME_PARSING_ENABLED: 'true' }), client);
+    localParserConfig, client);
   return { service, client };
 }
 

@@ -21,6 +21,17 @@ describe('Interview calendar transport', () => {
     await expect(service(false).create(event)).rejects.toMatchObject({ state: 'unconfigured' });
     expect(token).not.toHaveBeenCalled(); expect(fetchMock).not.toHaveBeenCalled();
   });
+  it('keeps discovery pagination on one enterprise identity when settings change during the request', async () => {
+    let version = 1;
+    const config = { get: (key: string) => key === 'DINGTALK_INTERVIEW_CALENDAR_ENABLED' ? 'true' : key === 'DINGTALK_APP_KEY' ? 'app-' + version : key === 'DINGTALK_APP_SECRET' ? 'secret-' + version : undefined } as ConfigService;
+    const transport = new InterviewCalendarService({ getAccessToken: token } as any, config);
+    token.mockImplementation(async () => { version = 2; return 'token'; });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ events: [], nextToken: 'next' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ events: [] }), { status: 200 }));
+    await transport.locate({ invitationId: 'id', organizerUnionId: 'organizer', eventId: null, operation: 'upsert' });
+    expect(token).toHaveBeenCalledTimes(2);
+    for (const call of token.mock.calls) expect(call[1]).toMatchObject({ appKey: 'app-1', appSecret: 'secret-1' });
+  });
   it('creates an event with a stable operation key and no Tencent API invocation', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: 'event-1' }), { status: 200 }));
     await expect(service().create(event)).resolves.toBe('event-1');

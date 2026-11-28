@@ -52,8 +52,9 @@ test.describe('线上一级菜单业务域基线', () => {
       const user: NavigationUser = { sysRole: 'hr_user', canViewAll: false, hrCapabilities: [capability] };
       const recruitment = buildNavigation(routes, user).find(({ key }) => key === 'recruitment');
 
-      expect(recruitment?.defaultPath).toBe('/talents');
+      expect(recruitment?.defaultPath).toBe('/recruitment/demands');
       expect(recruitment?.groups.flatMap(({ items }) => items.map(({ path }) => path))).toEqual([
+        '/recruitment/demands', ...(capability === 'employee_archive_edit' ? ['/recruitment/intakes'] : []),
         '/talents', '/talent-interviews',
       ]);
       for (const path of ['/talent-hiring', '/recruitment/planning', '/compensation']) {

@@ -37,7 +37,7 @@ describe('Talent follow-up due and attachment query contracts', () => {
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1); // only selected-page date attachment
     expect(prisma.talentCandidate.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { deletedAt: null, AND: [{ OR: [
-        { followUps: { none: {} } }, { followUps: { some: { planStatus: 'pending' } } },
+        { followUps: { none: { recordType: 'communication' } } }, { followUps: { some: { planStatus: 'pending' } } },
       ] }] },
     }));
   });

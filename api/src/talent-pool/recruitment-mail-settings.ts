@@ -10,7 +10,7 @@ export interface RecruitmentMailSettings {
 }
 
 const fields = ['version', 'provider', 'account', 'password', 'folder', 'authorizedFrom'];
-const invalid = () => new ServiceUnavailableException('招聘邮箱安全配置未就绪，请管理员检查私有配置，不要在页面提交密码');
+const invalid = () => new ServiceUnavailableException('招聘邮箱安全配置未就绪，请管理员检查私有配置或已保存的邮箱设置');
 
 export function readRecruitmentMailSettings(config?: Pick<ConfigService, 'get'>): RecruitmentMailSettings | null {
   const enabled = config?.get('RECRUITMENT_MAIL_ENABLED');

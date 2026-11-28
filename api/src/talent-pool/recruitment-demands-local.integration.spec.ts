@@ -123,7 +123,7 @@ describe('local recruitment demands: isolated HTTP and PostgreSQL', () => {
     const submitted = (await api(editor).act(draft.id, { expectedRevision: draft.revision, action: 'submit' }).expect(201)).body;
     expect(submitted).toMatchObject({ sourceState: 'pending', submittedById: editor.id, allowedActions: ['withdraw'] });
     expect(submitted.issues).not.toContain('请核对批准人数');
-    expect(submitted.issues.join('')).toContain('独立审核');
+    expect(submitted.issues.join('')).toContain('待审核');
     await api(editor).update(draft.id, { expectedRevision: submitted.revision, headcount: 3 }).expect(400);
     await api(editor).act(draft.id, { expectedRevision: submitted.revision, action: 'approve' }).expect(403);
     const returned = (await api(reviewer).act(draft.id, { expectedRevision: submitted.revision, action: 'return', reason: 'Synthetic missing justification' }).expect(201)).body;

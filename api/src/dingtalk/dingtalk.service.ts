@@ -1,8 +1,11 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { ERROR_CODE } from '../common/constants/error-codes';
 
 export type DingtalkLoginMode = 'oauth' | 'internal';
+export type DingtalkIdentity = { appKey?: string; appSecret?: string; agentId?: string; corpId?: string };
 
 /** 钉钉 access_token 缓存项。 */
 interface TokenCacheEntry {
@@ -46,7 +49,19 @@ export class DingtalkService {
   private readonly logger = new Logger(DingtalkService.name);
   private readonly tokenCache = new Map<string, TokenCacheEntry>();
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(RuntimeSettingsService) private readonly config: ConfigService) {}
+
+  getIdentitySnapshot(): Readonly<DingtalkIdentity> {
+    return Object.freeze({ appKey: this.appKey, appSecret: this.appSecret, agentId: this.agentId, corpId: this.corpId });
+  }
+  private async safeFetch(url: string, options?: RequestInit): Promise<Response> {
+    try { return await fetch(url, options); }
+    catch { throw new Error('钉钉请求未完成，请检查网络及平台配置'); }
+  }
+  private async safeJson(response: Response): Promise<unknown> {
+    try { return await response.json(); }
+    catch { throw new Error('钉钉响应格式无效，请稍后重试'); }
+  }
 
   private get appKey(): string | undefined {
     return this.config.get<string>('DINGTALK_APP_KEY');
@@ -64,8 +79,8 @@ export class DingtalkService {
     return this.config.get<string>('DINGTALK_CORP_ID');
   }
 
-  private assertConfigured(): void {
-    if (!this.appKey || !this.appSecret) {
+  private assertConfigured(identity: DingtalkIdentity): void {
+    if (!identity.appKey || !identity.appSecret) {
       throw new Error('缺少 DINGTALK_APP_KEY / DINGTALK_APP_SECRET 环境变量，无法调用钉钉 API');
     }
   }
@@ -74,22 +89,23 @@ export class DingtalkService {
    * 获取 access_token，带内存缓存（有效期 7200s，保留 60s 余量）。
    * 内存缓存进程重启后丢失，可接受。
    */
-  async getAccessToken(signal?: AbortSignal): Promise<string> {
+  async getAccessToken(signal?: AbortSignal, identity = this.getIdentitySnapshot()): Promise<string> {
     signal?.throwIfAborted();
-    this.assertConfigured();
+    if (this.config.get('HRM_PREVIEW') === 'true') throw new Error('隔离预览禁止调用真实钉钉服务');
+    this.assertConfigured(identity);
 
-    const cacheKey = `${this.appKey}:token`;
+    const cacheKey = createHash('sha256').update(JSON.stringify([identity.corpId, identity.appKey, identity.appSecret])).digest('hex');
     const cached = this.tokenCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.token;
     }
 
     const url = new URL('https://oapi.dingtalk.com/gettoken');
-    url.searchParams.set('appkey', this.appKey!);
-    url.searchParams.set('appsecret', this.appSecret!);
+    url.searchParams.set('appkey', identity.appKey!);
+    url.searchParams.set('appsecret', identity.appSecret!);
 
-    const res = await fetch(url.toString(), { signal });
-    const data = (await res.json()) as {
+    const res = await this.safeFetch(url.toString(), { signal });
+    const data = (await this.safeJson(res)) as {
       errcode?: number;
       errmsg?: string;
       access_token?: string;
@@ -98,7 +114,7 @@ export class DingtalkService {
     signal?.throwIfAborted();
 
     if (!res.ok || data.errcode !== 0 || !data.access_token) {
-      throw new Error(`钉钉获取 access_token 失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+      throw new Error('钉钉应用凭据连接失败，请核对配置、平台权限及网络');
     }
 
     const ttlSeconds = data.expires_in ?? 7200;
@@ -117,26 +133,28 @@ export class DingtalkService {
 
   /** 按授权码来源换取 unionId，避免不同类型的一次性 code 被错误接口消费。 */
   async getAuthCodeUnionId(authCode: string, loginMode: DingtalkLoginMode): Promise<string> {
-    this.assertConfigured();
+    if (this.config.get('HRM_PREVIEW') === 'true') throw new Error('隔离预览禁止调用真实钉钉服务');
+    const identity = this.getIdentitySnapshot();
+    this.assertConfigured(identity);
 
     return loginMode === 'internal'
-      ? this.getUnionIdByAppAuthCode(authCode)
-      : this.getUnionIdByOAuthCode(authCode);
+      ? this.getUnionIdByAppAuthCode(authCode, identity)
+      : this.getUnionIdByOAuthCode(authCode, identity);
   }
 
-  private async getUnionIdByOAuthCode(authCode: string): Promise<string> {
-    const tokenRes = await fetch('https://api.dingtalk.com/v1.0/oauth2/userAccessToken', {
+  private async getUnionIdByOAuthCode(authCode: string, identity: DingtalkIdentity): Promise<string> {
+    const tokenRes = await this.safeFetch('https://api.dingtalk.com/v1.0/oauth2/userAccessToken', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        clientId: this.appKey,
-        clientSecret: this.appSecret,
+        clientId: identity.appKey,
+        clientSecret: identity.appSecret,
         code: authCode,
         grantType: 'authorization_code',
       }),
     });
 
-    const tokenData = (await tokenRes.json()) as {
+    const tokenData = (await this.safeJson(tokenRes)) as {
       accessToken?: string;
       corpId?: string;
       code?: string;
@@ -145,25 +163,25 @@ export class DingtalkService {
 
     if (!tokenRes.ok || !tokenData.accessToken) {
       throw new Error(
-        `钉钉 OAuth 授权码换用户 token 失败: ${tokenData.message ?? tokenRes.statusText} (${tokenData.code ?? tokenRes.status})`,
+        '钉钉 OAuth 授权码换用户 token 失败，请检查应用身份与授权配置',
       );
     }
 
-    if (!this.corpId || tokenData.corpId !== this.corpId) {
+    if (!identity.corpId || tokenData.corpId !== identity.corpId) {
       throw new UnauthorizedException({
         code: ERROR_CODE.UNAUTHORIZED,
         message: '当前选择的钉钉组织不属于本系统企业',
       });
     }
 
-    const userRes = await fetch('https://api.dingtalk.com/v1.0/contact/users/me', {
+    const userRes = await this.safeFetch('https://api.dingtalk.com/v1.0/contact/users/me', {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
         'x-acs-dingtalk-access-token': tokenData.accessToken,
       },
     });
-    const userData = (await userRes.json()) as {
+    const userData = (await this.safeJson(userRes)) as {
       unionId?: string;
       unionid?: string;
       code?: string;
@@ -172,7 +190,7 @@ export class DingtalkService {
 
     if (!userRes.ok) {
       throw new Error(
-        `钉钉获取登录用户信息失败: ${userData.message ?? userRes.statusText} (${userData.code ?? userRes.status})`,
+        '钉钉获取登录用户信息失败，请检查平台权限',
       );
     }
 
@@ -181,22 +199,22 @@ export class DingtalkService {
     return unionId;
   }
 
-  private async getUnionIdByAppAuthCode(authCode: string): Promise<string> {
-    const token = await this.getAccessToken();
-    const res = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getuserinfo?access_token=${token}`, {
+  private async getUnionIdByAppAuthCode(authCode: string, identity: DingtalkIdentity): Promise<string> {
+    const token = await this.getAccessToken(undefined, identity);
+    const res = await this.safeFetch(`https://oapi.dingtalk.com/topapi/v2/user/getuserinfo?access_token=${token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: authCode }),
     });
 
-    const data = (await res.json()) as {
+    const data = (await this.safeJson(res)) as {
       errcode?: number;
       errmsg?: string;
       result?: { unionid?: string; unionId?: string; userid?: string };
     };
 
     if (!res.ok || data.errcode !== 0) {
-      throw new Error(`钉钉 app authCode 换 unionId 失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+      throw new Error('钉钉 app authCode 换 unionId 失败，请重新登录或检查平台权限');
     }
 
     const unionId = data.result?.unionid ?? data.result?.unionId;
@@ -218,17 +236,17 @@ export class DingtalkService {
   }
 
   /** 获取单个用户详情，用于补齐成员列表未返回的直属主管等字段。 */
-  async fetchUserDetail(userId: string, token?: string, signal?: AbortSignal): Promise<DingtalkUser> {
-    const accessToken = token ?? (await this.getAccessToken(signal));
+  async fetchUserDetail(userId: string, token?: string, signal?: AbortSignal, identity?: DingtalkIdentity): Promise<DingtalkUser> {
+    const accessToken = token ?? (await this.getAccessToken(signal, identity ?? this.getIdentitySnapshot()));
     signal?.throwIfAborted();
-    const res = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${accessToken}`, {
+    const res = await this.safeFetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${accessToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userid: userId, language: 'zh_CN' }),
       signal,
     });
 
-    const data = (await res.json()) as {
+    const data = (await this.safeJson(res)) as {
       errcode?: number;
       errmsg?: string;
       result?: DingtalkUser & { unionId?: string };
@@ -236,7 +254,7 @@ export class DingtalkService {
     signal?.throwIfAborted();
 
     if (!res.ok || data.errcode !== 0) {
-      throw new Error(`钉钉获取用户详情失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+      throw new Error('钉钉获取用户详情失败，请检查平台权限');
     }
 
     const user = data.result;
@@ -263,20 +281,20 @@ export class DingtalkService {
       if (visited.has(deptId)) continue;
       visited.add(deptId);
 
-      const res = await fetch(`https://oapi.dingtalk.com/topapi/v2/department/listsub?access_token=${token}`, {
+      const res = await this.safeFetch(`https://oapi.dingtalk.com/topapi/v2/department/listsub?access_token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dept_id: deptId, language: 'zh_CN' }),
       });
 
-      const data = (await res.json()) as {
+      const data = (await this.safeJson(res)) as {
         errcode?: number;
         errmsg?: string;
         result?: DingtalkDepartment[];
       };
 
       if (!res.ok || data.errcode !== 0) {
-        throw new Error(`钉钉拉取部门失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+        throw new Error('钉钉拉取部门失败，请检查平台权限');
       }
 
       const list = data.result ?? [];
@@ -299,13 +317,13 @@ export class DingtalkService {
     const size = 100;
 
     while (true) {
-      const res = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/list?access_token=${token}`, {
+      const res = await this.safeFetch(`https://oapi.dingtalk.com/topapi/v2/user/list?access_token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dept_id: deptId, cursor, size }),
       });
 
-      const data = (await res.json()) as {
+      const data = (await this.safeJson(res)) as {
         errcode?: number;
         errmsg?: string;
         result?: {
@@ -316,7 +334,7 @@ export class DingtalkService {
       };
 
       if (!res.ok || data.errcode !== 0) {
-        throw new Error(`钉钉拉取成员失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+        throw new Error('钉钉拉取成员失败，请检查平台权限');
       }
 
       const list = data.result?.list ?? [];
@@ -342,11 +360,12 @@ export class DingtalkService {
     content: string,
     url?: string,
   ): Promise<void> {
-    if (!this.agentId) {
+    const identity = this.getIdentitySnapshot();
+    if (!identity.agentId) {
       throw new Error('缺少 DINGTALK_AGENT_ID 环境变量，无法发送工作通知');
     }
 
-    const token = await this.getAccessToken();
+    const token = await this.getAccessToken(undefined, identity);
     const message: Record<string, unknown> = {
       msgtype: 'markdown',
       markdown: { title, text: content },
@@ -361,19 +380,19 @@ export class DingtalkService {
       message.msgtype = 'action_card';
     }
 
-    const res = await fetch(`https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token=${token}`, {
+    const res = await this.safeFetch(`https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token=${token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        agent_id: this.agentId,
+        agent_id: identity.agentId,
         userid_list: dingtalkUserId,
         msg: message,
       }),
     });
 
-    const data = (await res.json()) as { errcode?: number; errmsg?: string };
+    const data = (await this.safeJson(res)) as { errcode?: number; errmsg?: string };
     if (!res.ok || data.errcode !== 0) {
-      throw new Error(`钉钉发送工作通知失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+      throw new Error('钉钉发送工作通知失败，请检查平台权限');
     }
   }
 }

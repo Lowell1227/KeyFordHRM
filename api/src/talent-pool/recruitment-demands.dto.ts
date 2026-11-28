@@ -2,12 +2,14 @@ import { Transform } from 'class-transformer';
 import { IsIn, IsInt, IsISO8601, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 import { PartialType } from '@nestjs/mapped-types';
+import { RECRUITMENT_TRACKING_STATES, type RecruitmentTrackingState } from './recruitment-lifecycle.types';
 
 export class RecruitmentDemandQueryDto extends PaginationDto {
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @MaxLength(100) keyword?: string;
   @IsOptional() @IsIn(['draft', 'pending', 'approved', 'rejected', 'withdrawn', 'unknown']) status?: string;
   @IsOptional() @IsIn(['review', 'returned']) workQueue?: 'review' | 'returned';
+  @IsOptional() @IsIn(RECRUITMENT_TRACKING_STATES) trackingState?: RecruitmentTrackingState;
 }
 
 export class RecruitmentDemandOptionsQueryDto extends PaginationDto {
@@ -55,7 +57,7 @@ export class UpdateLocalRecruitmentDemandDto extends PartialType(LocalRecruitmen
 
 export class LocalRecruitmentDemandActionDto {
   @IsInt() @Min(1) @Max(2147483646) expectedRevision!: number;
-  @IsIn(['submit', 'approve', 'return', 'withdraw']) action!: 'submit' | 'approve' | 'return' | 'withdraw';
+  @IsIn(['submit', 'submit_approve', 'approve', 'return', 'withdraw']) action!: 'submit' | 'submit_approve' | 'approve' | 'return' | 'withdraw';
   @IsOptional() @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsString() @MaxLength(1000) reason?: string;
 }

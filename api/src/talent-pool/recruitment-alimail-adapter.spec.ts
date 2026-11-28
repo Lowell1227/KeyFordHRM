@@ -69,6 +69,15 @@ function setup(client = new FakeClient(), override: Record<string, unknown> = {}
 const cursorData = (value: string | undefined | null) => JSON.parse(Buffer.from(value!, 'base64url').toString());
 
 describe('AlimailRecruitmentAdapter (no real network)', () => {
+  it.each([['qq', 'imap.qq.com'], ['netease163', 'imap.163.com'], ['netease126', 'imap.126.com']])('uses the fixed %s TLS endpoint and a provider-specific read scope', async (provider, host) => {
+    const { adapter, factory } = setup(undefined, { provider });
+    await adapter.probe();
+    expect(factory.mock.calls[0][0]).toMatchObject({ host, port: 993, secure: true, tls: { rejectUnauthorized: true } });
+    if (provider.startsWith('netease')) expect(factory.mock.calls[0][0]).toHaveProperty('clientInfo.name', 'HRM');
+    const page = await adapter.readPage({ limit: 1 });
+    expect(page.mailboxKey).toMatch(new RegExp('^' + provider + ':'));
+    expect(() => setup(undefined, { provider: 'arbitrary-host' })).toThrow('invalid_config');
+  });
   it('validates without constructing a client and exposes no private configuration', () => {
     const { adapter, factory } = setup();
     expect(adapter.status()).toEqual({ configured: true });

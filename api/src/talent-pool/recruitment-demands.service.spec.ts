@@ -17,6 +17,7 @@ function setup() {
   const position = { id: 'position', code: 'SYN', name: 'Synthetic position', isActive: true };
   const application = { id: 'application', deptId: department.id, positionName: ` ${position.name} `, stage: 'interviewing', candidate: { deletedAt: null } };
   const currentActor = { ...actor };
+  const reviewer = { ...actor, id: 'independent-reviewer', name: 'Synthetic demand reviewer', hrCapabilities: ['recruitment_demand_review'] };
   const matches = (row: any, where: any) => !where || Object.entries(where).every(([key, value]: any) => {
     if (key === 'AND') return (Array.isArray(value) ? value : [value]).every(condition => matches(row, condition));
     if (key === 'OR') return value.some(condition => matches(row, condition));
@@ -35,7 +36,7 @@ function setup() {
   const hydrated = (row: any) => row ? { ...row, department: row.deptId ? { ...department } : null, position: row.positionId ? { ...position } : null } : null;
   const tx: any = {
     $queryRaw: jest.fn().mockResolvedValue([]),
-    user: { findUnique: jest.fn(async () => ({ ...currentActor })), findMany: jest.fn(async () => [currentActor]) },
+    user: { findUnique: jest.fn(async () => ({ ...currentActor })), findMany: jest.fn(async () => [currentActor, reviewer]) },
     department: { findUnique: jest.fn(async () => ({ ...department })), findMany: jest.fn(async () => [department]) },
     position: { findUnique: jest.fn(async () => ({ ...position })), findMany: jest.fn(async () => [position]) },
     talentApplication: { findUnique: jest.fn(async () => application), findMany: jest.fn(async () => []) },
@@ -80,8 +81,54 @@ function setup() {
     const proof = await sut.prepareSubmission(demands[0]?.id, revision, user);
     return sut.assertSubmission(tx, application, demands[0]?.id, revision, user, proof);
   };
-  return { sut, tx, demands, events, runs, syncItems, department, position, application, currentActor, gateway, sync, map, gate };
+  return { sut, tx, demands, events, runs, syncItems, department, position, application, currentActor, reviewer, gateway, sync, map, gate };
 }
+
+describe('local demand explicit self-created approval', () => {
+  const fields = { requestId: '11111111-1111-4111-8111-111111111111', deptId: 'dept', positionId: 'position', headcount: 2, reason: 'Synthetic justification' };
+  it('keeps saving a draft inert and approves it only through the explicit combined action', async () => {
+    const f = setup(); f.currentActor.hrCapabilities = ['recruitment_edit', 'recruitment_demand_review'];
+    const draft = await f.sut.createLocal(fields, user);
+    expect(draft).toMatchObject({ sourceState: 'draft', usable: false, allowedActions: ['edit', 'submit_approve', 'withdraw'] });
+    const approved = await f.sut.actLocal(draft.id, { expectedRevision: draft.revision, action: 'submit_approve' } as never, user);
+    expect(approved).toMatchObject({ sourceState: 'approved', usable: true, submittedById: actor.id, approvedById: actor.id, approvalMode: 'self_created' });
+    expect(f.events.at(-1)).toMatchObject({ action: 'local_submit_approve', snapshot: expect.objectContaining({ approvalMode: 'self_created' }) });
+    await expect(f.sut.actLocal(draft.id, { expectedRevision: draft.revision, action: 'submit_approve' } as never, user)).rejects.toThrow(ConflictException);
+  });
+  it('allows explicitly approving an existing self-created pending demand, but not another creator submitted by the same actor', async () => {
+    const f = setup(); const draft = await f.sut.createLocal(fields, user);
+    const pending = await f.sut.actLocal(draft.id, { expectedRevision: draft.revision, action: 'submit' }, user);
+    f.currentActor.hrCapabilities = ['recruitment_edit', 'recruitment_demand_review'];
+    expect(await f.sut.actLocal(draft.id, { expectedRevision: pending.revision, action: 'approve' }, user)).toMatchObject({ usable: true, approvalMode: 'self_created' });
+    f.demands[0].sourceState = 'pending'; f.demands[0].createdById = 'different-creator';
+    await expect(f.sut.actLocal(draft.id, { expectedRevision: f.demands[0].revision, action: 'approve' }, user)).rejects.toThrow(ForbiddenException);
+  });
+  it('requires current explicit capability and valid self-created approval evidence', async () => {
+    const f = setup(); const draft = await f.sut.createLocal(fields, user);
+    await expect(f.sut.actLocal(draft.id, { expectedRevision: draft.revision, action: 'submit_approve' } as never, user)).rejects.toThrow(ForbiddenException);
+    Object.assign(f.demands[0], { sourceState: 'approved', submittedById: actor.id, approvedById: actor.id, approvedHeadcount: 2, mappedFingerprint: f.demands[0].sourceFingerprint });
+    expect((await f.sut.detail(draft.id, user)).usable).toBe(false);
+    f.demands[0].approvalMode = 'self_created';
+    expect((await f.sut.detail(draft.id, user)).usable).toBe(true);
+    f.demands[0].createdById = 'different-creator';
+    expect((await f.sut.detail(draft.id, user)).usable).toBe(false);
+  });
+  it('keeps another creator draft editable when the only reviewer would submit it themselves, and rechecks revocation', async () => {
+    const f = setup(); const draft = await f.sut.createLocal(fields, user);
+    f.demands[0].createdById = 'other-creator';
+    f.currentActor.hrCapabilities = ['recruitment_edit', 'recruitment_demand_review']; f.reviewer.hrCapabilities = [];
+    const blocked = await f.sut.detail(draft.id, user);
+    expect(blocked.allowedActions).not.toContain('submit'); expect(blocked.submissionIssue).toContain('其他经办提交');
+    await expect(f.sut.actLocal(draft.id, { expectedRevision: draft.revision, action: 'submit' }, user)).rejects.toThrow('其他经办提交');
+    expect(f.demands[0].sourceState).toBe('draft');
+    f.reviewer.hrCapabilities = ['recruitment_demand_review'];
+    expect((await f.sut.detail(draft.id, user)).allowedActions).toContain('submit');
+    f.reviewer.hrCapabilities = [];
+    await expect(f.sut.actLocal(draft.id, { expectedRevision: draft.revision, action: 'submit' }, user)).rejects.toThrow('其他经办提交');
+    f.reviewer.hrCapabilities = ['recruitment_demand_review'];
+    expect((await f.sut.actLocal(draft.id, { expectedRevision: draft.revision, action: 'submit' }, user)).sourceState).toBe('pending');
+  });
+});
 
 describe('recruitment demand ledger', () => {
   it('offers paginated early intents without requiring an application or performing remote verification', async () => {

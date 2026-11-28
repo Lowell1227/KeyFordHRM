@@ -13,7 +13,7 @@ import type { PostingFields, RecruitmentPosting } from '@/types/recruitment-inta
 import type { RecruitmentDemandView } from '@/types/recruitment-demand.types';
 import type { TalentRecruitmentOwner } from '@/types/talent.types';
 import { intakeError, intakeEventLabel, intakeMappingHistory, safePostingUrl, validatePosting } from '../intake-presentation';
-import { demandOriginLabel, demandReference } from '../demand-presentation';
+import { demandOptionLabel } from '../demand-presentation';
 import { formatDate } from '@/utils/date';
 import ListPagination from '@/components/common/ListPagination.vue';
 import { usePagination } from '@/composables/usePagination';
@@ -116,7 +116,7 @@ onBeforeUnmount(() => { ++epoch; ++formEpoch; });
       <el-alert v-if="error" :title="error" type="error" :closable="false" /><el-button v-if="conflict && current" link type="primary" :disabled="saving" @click="reconfirm">读取新版本并保留输入</el-button>
       <p v-if="current" class="muted">当前归属：{{ current.demandId }} · 版本 {{ current.revision }}</p>
       <el-form label-position="top" :disabled="saving || conflict || unknown" @submit.prevent="save">
-        <el-form-item label="内部招聘需求" required :error="errors.demandId"><el-select :fit-input-width="true" v-model="form.demandId" filterable remote :remote-method="loadDemands" aria-label="外部职位所属需求"><el-option v-for="item in demands" :key="item.id" :value="item.id" :label="`${demandOriginLabel(item)} · ${demandReference(item)} · ${item.departmentName} / ${item.positionName}`" /></el-select></el-form-item>
+        <el-form-item label="内部招聘需求" required :error="errors.demandId"><el-select :fit-input-width="true" v-model="form.demandId" filterable remote :remote-method="loadDemands" aria-label="外部职位所属需求"><el-option v-for="item in demands" :key="item.id" :value="item.id" :label="demandOptionLabel(item)" /></el-select></el-form-item>
         <div class="form-grid"><el-form-item label="渠道" required :error="errors.channel"><el-input v-model="form.channel" maxlength="80" aria-label="外部职位渠道" /></el-form-item><el-form-item label="外部职位名称" required :error="errors.name"><el-input v-model="form.name" maxlength="200" aria-label="外部职位名称" /></el-form-item></div>
         <el-form-item label="职位链接" required :error="errors.url"><el-input v-model="form.url" maxlength="2000" aria-label="外部职位链接" /></el-form-item><el-form-item label="稳定外部职位ID（如已核实）" :error="errors.externalId"><el-input v-model="form.externalId" maxlength="200" aria-label="稳定外部职位ID" /></el-form-item>
         <el-form-item label="经办负责人" required :error="errors.ownerId"><el-select :fit-input-width="true" v-model="form.ownerId" filterable remote :remote-method="loadOwners" aria-label="外部职位负责人"><el-option v-if="auth.user" :value="auth.user.id" :label="auth.user.name" /><el-option v-for="owner in owners.filter(item => item.id !== auth.user?.id)" :key="owner.id" :value="owner.id" :label="owner.name" /></el-select></el-form-item>

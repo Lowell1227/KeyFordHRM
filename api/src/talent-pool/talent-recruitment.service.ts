@@ -61,16 +61,31 @@ export class TalentRecruitmentService {
     const [rows, total] = await Promise.all([
       db.talentApplication.findMany({ where, select: { id: true, candidateId: true, candidate: { select: { name: true } },
         positionName: true, recruitmentBatch: true, stage: true, ownerId: true, departmentNameSnapshot: true, expectedEntryDate: true, updatedAt: true,
+        revision: true, events: { where: { action: { in: ['accept_offer', 'terminate_offer'] } }, select: { action: true, version: true } },
         interviews: { where: { status: 'scheduled' }, orderBy: [{ startsAt: 'asc' }, { id: 'asc' }], take: 1,
           select: { id: true, startsAt: true, endsAt: true, status: true } } },
         orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], skip: query.skip, take: query.take }),
       db.talentApplication.count({ where }),
     ]);
     const owners = new Map((await db.user.findMany({ where: { id: { in: [...new Set(rows.map(r => r.ownerId))] } }, select: { id: true, name: true } })).map(u => [u.id, u.name]));
+    const activity = rows.length ? await db.talentInterview.findMany({ where: { applicationId: { in: rows.map(row => row.id) } },
+      orderBy: [{ startsAt: 'desc' }, { id: 'asc' }], select: { id: true, applicationId: true, status: true, startsAt: true, endsAt: true,
+        participants: { select: { userId: true } }, feedback: { where: { status: 'submitted' }, select: { userId: true } } } }) : [];
     const dates = new Map(overdue?.map(row => [row.id, new Date(`${row.date}T00:00:00.000Z`)]));
-    return { items: rows.map(({ candidate, interviews, ...row }) => ({ ...row, expectedEntryDate: dates.get(row.id) ?? row.expectedEntryDate,
-      candidateName: candidate.name, ownerName: owners.get(row.ownerId) ?? null, nextInterview: interviews[0] ?? null })),
+    return { items: rows.map(({ candidate, interviews, events, ...row }) => ({ ...row, expectedEntryDate: dates.get(row.id) ?? row.expectedEntryDate,
+      offerTerminated: row.stage === 'withdrawn' && !hasActiveTalentAcceptance(events) && events.some(event => event.action === 'terminate_offer' && event.version === row.revision),
+      candidateName: candidate.name, ownerName: owners.get(row.ownerId) ?? null, nextInterview: interviews[0] ?? null,
+      ...this.interviewActivity(activity.filter(interview => interview.applicationId === row.id)) })),
       total, page: query.page, pageSize: query.pageSize };
+  }
+
+  private interviewActivity(activity: Array<{ id: string; status: string; startsAt: Date; endsAt: Date;
+    participants: Array<{ userId: string }>; feedback: Array<{ userId: string }> }>) {
+    const latest = activity[0];
+    return { latestInterview: latest ? { id: latest.id, status: latest.status, startsAt: latest.startsAt, endsAt: latest.endsAt } : null,
+      activitySummary: { scheduledCount: activity.filter(i => i.status === 'scheduled').length,
+        completedCount: activity.filter(i => i.status === 'completed').length, cancelledCount: activity.filter(i => i.status === 'cancelled').length,
+        unsubmittedFeedbackCount: activity.filter(i => i.status !== 'cancelled').reduce((n, i) => n + i.participants.filter(p => !i.feedback.some(f => f.userId === p.userId)).length, 0) } };
   }
 
   async owners(query: TalentOwnerQueryDto, user: AuthUser) {
@@ -137,17 +152,16 @@ export class TalentRecruitmentService {
     const visibleEvents = canReadRecruitment(actor) ? events : events.filter(event => !event.action.endsWith('_feedback'));
     const request = onboardingRequests.find(request => !request.cancelledAt && !request.archivedAt
       && activeOnboardingStatuses.includes(request.onboardingStatus as typeof activeOnboardingStatuses[number])) ?? onboardingRequests[0];
-    const activity = canReadRecruitment(actor) ? await tx.talentInterview.findMany({ where: { applicationId: row.id, status: { not: 'cancelled' } },
-      select: { status: true, participants: { select: { userId: true } }, feedback: { where: { status: 'submitted' }, select: { userId: true } } } }) : [];
-    const activitySummary = { scheduledCount: activity.filter(i => i.status === 'scheduled').length,
-      unsubmittedFeedbackCount: activity.reduce((n, i) => n + i.participants.filter(p => !i.feedback.some(f => f.userId === p.userId)).length, 0) };
+    const activity = canReadRecruitment(actor) ? await tx.talentInterview.findMany({ where: { applicationId: row.id },
+      orderBy: [{ startsAt: 'desc' }, { id: 'asc' }], select: { id: true, status: true, startsAt: true, endsAt: true,
+        participants: { select: { userId: true } }, feedback: { where: { status: 'submitted' }, select: { userId: true } } } }) : [];
     const recruitmentDemandCurrent = this.demands && canReadTalentApplication(actor, row) ? await this.demands.currentForApplication(tx, row, actor) : null;
     const intentDemandCurrent = this.demands && canReadRecruitment(actor) ? await this.demands.currentIntent(tx, row.intentDemandId ?? null, actor) : null;
     return { ...fields, intentDemandId: row.intentDemandId ?? null, sourceChannel: row.sourceChannel ?? null, intentDemandCurrent,
       recruitmentDemandId: row.recruitmentDemandId ?? null, recruitmentDemandRevision: row.recruitmentDemandRevision ?? null,
       recruitmentDemandSnapshot: row.recruitmentDemandSnapshot ?? null, recruitmentDemandCurrent,
       offerTerminated: row.stage === 'withdrawn' && !hasActiveTalentAcceptance(events) && events.some(event => event.action === 'terminate_offer' && event.version === row.revision),
-      ...(canReadRecruitment(actor) ? { activitySummary } : {}), candidateName: candidate.name, ownerName: names.get(row.ownerId) ?? null, creatorName: names.get(row.createdById) ?? null,
+      ...(canReadRecruitment(actor) ? this.interviewActivity(activity) : {}), candidateName: candidate.name, ownerName: names.get(row.ownerId) ?? null, creatorName: names.get(row.createdById) ?? null,
       allowedActions: allowedApplicationActions(actor, row, activeOnboarding ?? await this.hasActiveOnboarding(tx, row.candidateId)),
       events: visibleEvents.map(event => ({ ...event, actorName: names.get(event.actorId) ?? null })),
       onboardingRequest: request ? { id: request.id, onboardingStatus: request.onboardingStatus, recordStatus: request.recordStatus, cancelledAt: request.cancelledAt } : null };

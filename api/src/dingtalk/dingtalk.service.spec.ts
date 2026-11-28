@@ -38,6 +38,34 @@ describe('DingtalkService', () => {
     jest.restoreAllMocks();
   });
 
+  it('does not reuse tokens after rotating a secret under the same AppKey', async () => {
+    let secret = 'first-private-value';
+    service = new DingtalkService({ get: (key: string) => key === 'DINGTALK_APP_SECRET' ? secret : key === 'DINGTALK_APP_KEY' ? 'same-app' : undefined } as ConfigService);
+    fetchMock.mockResolvedValueOnce(mockJsonResponse({ errcode: 0, access_token: 'first-token' }))
+      .mockResolvedValueOnce(mockJsonResponse({ errcode: 0, access_token: 'second-token' }));
+    expect(await service.getAccessToken()).toBe('first-token');
+    secret = 'second-private-value';
+    expect(await service.getAccessToken()).toBe('second-token');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps notification agent and credentials from one identity across async token acquisition', async () => {
+    let version = 1;
+    const values = { DINGTALK_APP_KEY: 'app-', DINGTALK_APP_SECRET: 'secret-', DINGTALK_AGENT_ID: 'agent-', DINGTALK_CORP_ID: 'corp-' };
+    service = new DingtalkService({ get: (key: string) => values[key] ? values[key] + version : undefined } as ConfigService);
+    fetchMock.mockImplementationOnce(async () => { version = 2; return mockJsonResponse({ errcode: 0, access_token: 'v1-token' }); })
+      .mockResolvedValueOnce(mockJsonResponse({ errcode: 0 }));
+    await service.sendWorkNotification('u', 'title', 'body');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).agent_id).toBe('agent-1');
+  });
+
+  it('does not expose raw upstream errors containing credentials', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('private-upstream-value'));
+    await expect(service.getAccessToken()).rejects.not.toThrow('private-upstream-value');
+    fetchMock.mockResolvedValueOnce(mockJsonResponse({ message: 'private-upstream-value' }, false));
+    await expect(service.getAuthCodeUnionId('code', 'oauth')).rejects.not.toThrow('private-upstream-value');
+  });
+
   it('fetchDepartments 应解析 result 直接数组', async () => {
     fetchMock
       .mockResolvedValueOnce(mockJsonResponse({ errcode: 0, access_token: 'corp-token', expires_in: 7200 }))

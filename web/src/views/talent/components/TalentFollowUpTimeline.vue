@@ -10,6 +10,7 @@ import {
   type TalentFollowUp,
 } from '@/types/talent.types';
 import { beijingFollowUpToday, formatFollowUpDate, isFollowUpDate } from '@/utils/talent-follow-up-date';
+import { formatInterviewTime as formatFollowUpTime } from '../interview-time';
 
 const props = defineProps<{
   candidateId: string;
@@ -278,6 +279,7 @@ async function cancelArrangement() {
         <span>{{ currentDate }}</span>
         <el-tag size="small" :type="currentTiming === '逾期' ? 'danger' : currentTiming === '今天' ? 'warning' : 'info'">{{ currentTiming }}</el-tag>
       </div>
+      <p v-if="currentPlan.sourceFollowUpAt" class="talent-follow-ups__summary">原收件约定（北京时间）：{{ formatFollowUpTime(currentPlan.sourceFollowUpAt) }}</p>
       <div v-if="editable" class="talent-follow-ups__form-actions">
         <el-button size="small" type="primary" :disabled="!canChooseMode" @click="startCreate('complete')">完成并记录</el-button>
         <el-button size="small" :disabled="!actionReady || Boolean(formMode)" @click="cancelArrangement">取消安排</el-button>
@@ -340,16 +342,18 @@ async function cancelArrangement() {
     </el-alert>
     <el-empty v-if="!loading && !loadError && !list.length && !formMode" description="还没有跟进记录" :image-size="60" />
     <el-timeline v-else v-loading="loading" class="talent-follow-ups__timeline">
-      <el-timeline-item v-for="item in list" :key="item.id" :timestamp="formatFollowUpDate(item.occurredAt)" placement="top">
+      <el-timeline-item v-for="item in list" :key="item.id" :timestamp="item.recordType === 'plan' ? formatFollowUpTime(item.createdAt) : formatFollowUpDate(item.occurredAt)" placement="top">
         <div class="talent-follow-ups__item">
           <div class="talent-follow-ups__item-meta">
-            <el-tag size="small" effect="plain">{{ FOLLOW_UP_CHANNEL_LABELS[item.channel] }}</el-tag>
+            <el-tag size="small" effect="plain">{{ item.recordType === 'plan' ? '收件承接安排' : FOLLOW_UP_CHANNEL_LABELS[item.channel] }}</el-tag>
             <span class="talent-follow-ups__recorder">{{ item.createdByName ?? '—' }}</span>
+            <el-tag v-if="item.planStatus === 'pending'" size="small" effect="plain">待跟进 {{ formatFollowUpDate(item.nextFollowUpAt) }}</el-tag>
             <el-tag v-if="item.nextFollowUpAt && item.planStatus in closedPlanLabels" size="small" type="info" effect="plain">
               {{ closedPlanLabels[item.planStatus as keyof typeof closedPlanLabels] }} {{ formatFollowUpDate(item.nextFollowUpAt) }}
             </el-tag>
           </div>
           <p class="talent-follow-ups__summary">{{ item.summary }}</p>
+          <p v-if="item.sourceFollowUpAt" class="talent-follow-ups__summary">原收件约定（北京时间）：{{ formatFollowUpTime(item.sourceFollowUpAt) }}</p>
         </div>
       </el-timeline-item>
     </el-timeline>

@@ -33,7 +33,7 @@ export function recruitmentDemandWorkbenchWhere(key: 'review' | 'returned', acto
     throw new ForbiddenException('无权限办理该招聘需求队列');
   }
   return { sourceKind: 'local', sourceState: key === 'review' ? 'pending' : 'rejected',
-    submittedById: key === 'review' ? { not: actor.id } : actor.id };
+    ...(key === 'review' ? { submittedById: { not: null }, OR: [{ submittedById: { not: actor.id } }, { createdById: actor.id }] } : { submittedById: actor.id }) };
 }
 
 export function recruitmentIntakeWorkbenchWhere(key: 'intake_review' | 'intake_assignment', actorId: string): Prisma.RecruitmentIntakeWhereInput {
@@ -162,11 +162,12 @@ export class TalentWorkbenchService {
     const [total, rows] = await Promise.all([
       tx.recruitmentDemand.count({ where }),
       tx.recruitmentDemand.findMany({ where, take: 5, orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
-        select: { id: true, rawPosition: true, rawDepartment: true, updatedAt: true } }),
+        select: { id: true, rawPosition: true, rawDepartment: true, updatedAt: true,
+          position: { select: { name: true } }, department: { select: { name: true } } } }),
     ]);
     return { key, total, items: rows.map(row => ({ id: row.id, demandId: row.id,
-      title: row.rawPosition || '招聘需求', subtitle: row.rawDepartment || '部门待核对', date: row.updatedAt.toISOString(),
-      nextAction: key === 'demand_review' ? '独立审核招聘需求' : '按退回意见修改并重新提交',
+      title: row.position?.name || row.rawPosition || '招聘需求', subtitle: row.department?.name || row.rawDepartment || '部门待核对', date: row.updatedAt.toISOString(),
+      nextAction: key === 'demand_review' ? '审核招聘需求' : '按退回意见修改并重新提交',
     })) };
   }
 
@@ -202,7 +203,7 @@ export class TalentWorkbenchService {
     // Match the talent list's dueOnly + personal talent scope, including first contact and future plans.
     const where: Prisma.TalentCandidateWhereInput = { deletedAt: null, AND: [
       { OR: [{ ownerId: actorId }, { ownerId: null, createdById: actorId }] },
-      { OR: [{ followUps: { none: {} } }, { followUps: { some: { planStatus: 'pending' } } }] },
+      { OR: [{ followUps: { none: { recordType: 'communication' } } }, { followUps: { some: { planStatus: 'pending' } } }] },
     ] };
     const total = await tx.talentCandidate.count({ where });
     const today = shanghaiBusinessDate(now).toISOString().slice(0, 10);

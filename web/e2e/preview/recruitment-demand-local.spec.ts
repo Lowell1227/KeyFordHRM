@@ -75,7 +75,7 @@ async function openDemand(page: Page, f: Fixture, mobile: boolean) {
   await expect(row).toHaveCount(1);
   await row.getByRole('button', { name: mobile ? '查看需求' : '查看', exact: true }).click();
   const detail = page.getByRole('dialog', { name: '招聘需求详情', exact: true });
-  await expect(detail).toContainText('系统创建');
+  await expect(detail).toContainText('HRM录入');
   for (const label of ['刷新钉钉原单', '核对部门、岗位和人数']) await expect(detail.getByRole('button', { name: label, exact: true })).toHaveCount(0);
   await expect(detail.getByRole('link', { name: '查看钉钉原单', exact: true })).toHaveCount(0);
   return detail;
@@ -155,12 +155,12 @@ test('system demand UI: independent return/approval, hiring confirmation and acc
   let other: Page | undefined;
   try {
     stage = 'create_draft';
-    await as(page, f.actors.dual);
+    await as(page, f.actors.operator);
     await page.getByRole('button', { name: '新建招聘需求', exact: true }).click();
     const createDialog = page.getByRole('dialog', { name: '新建招聘需求', exact: true });
     await createDialog.getByRole('button', { name: '保存草稿', exact: true }).click();
     await expect(createDialog.getByText('请选择有效的 HRM 部门', { exact: true })).toBeVisible();
-    for (const [label, option] of [['申请部门', f.department.name], ['申请岗位', `${f.position.code} · ${f.position.name}`]]) {
+    for (const [label, option] of [['申请部门', f.department.name], ['申请岗位', f.position.name]]) {
       await createDialog.getByRole('combobox', { name: label, exact: true }).press('ArrowDown');
       const choice = page.getByRole('option', { name: option, exact: true });
       await expect(choice).toBeVisible();
@@ -180,14 +180,14 @@ test('system demand UI: independent return/approval, hiring confirmation and acc
     proof.demandId = demand.id;
     expect(demand).toMatchObject({ sourceKind: 'local', sourceState: 'draft', instanceId: null, usable: false });
     await expect(createDialog).not.toBeVisible();
-    const repeated = await json<Demand>(await api(page, f.actors.dual, 'POST', '/recruitment-demands/local', createdResponse.request().postDataJSON()), 201);
+    const repeated = await json<Demand>(await api(page, f.actors.operator, 'POST', '/recruitment-demands/local', createdResponse.request().postDataJSON()), 201);
     expect(repeated.id).toBe(demand.id); expect(repeated.revision).toBe(demand.revision);
-    const duplicates = previewNode<number>(`console.log(await db.recruitmentDemand.count({where:{sourceKind:'local',createdById:${JSON.stringify(f.actors.dual.id)}}}));`);
+    const duplicates = previewNode<number>(`console.log(await db.recruitmentDemand.count({where:{sourceKind:'local',createdById:${JSON.stringify(f.actors.operator.id)}}}));`);
     expect(duplicates).toBe(1); pass('actual_UI_create_with_direct_same_request_retry_one_record');
 
     stage = 'stale_version_preserves_form';
     const detail = page.getByRole('dialog', { name: '招聘需求详情', exact: true });
-    await expect(detail).toContainText('系统创建');
+    await expect(detail).toContainText('HRM录入');
     for (const label of ['刷新钉钉原单', '核对部门、岗位和人数']) await expect(detail.getByRole('button', { name: label, exact: true })).toHaveCount(0);
     await detail.getByRole('button', { name: '修改需求', exact: true }).click();
     const editor = page.getByRole('dialog', { name: '修改招聘需求', exact: true });
@@ -195,7 +195,7 @@ test('system demand UI: independent return/approval, hiring confirmation and acc
     await editor.getByRole('textbox', { name: '招聘原因', exact: true }).fill(preserved);
     await editor.getByRole('spinbutton', { name: '申请人数', exact: true }).fill('3');
     other = await page.context().newPage();
-    await as(other, f.actors.dual); const otherDetail = await openDemand(other, f, mobile);
+    await as(other, f.actors.operator); const otherDetail = await openDemand(other, f, mobile);
     await otherDetail.getByRole('button', { name: '修改需求', exact: true }).click();
     const otherEditor = other.getByRole('dialog', { name: '修改招聘需求', exact: true });
     await otherEditor.getByRole('textbox', { name: '招聘原因', exact: true }).fill(`虚构${prefix}另一窗口已保存的依据`);
@@ -215,13 +215,13 @@ test('system demand UI: independent return/approval, hiring confirmation and acc
     await abandon(page, editor); await other.close(); other = undefined;
     pass('second_UI_editor_generates_actual_409_and_preserves_all_local_input');
 
-    stage = 'submit_cannot_self_review';
+    stage = 'ordinary_editor_submits_for_review';
     demand = await localAction(page, demand, 'submit', '提交审核');
-    expect(demand.submittedById).toBe(f.actors.dual.id);
+    expect(demand.submittedById).toBe(f.actors.operator.id);
     await expect(detail.getByRole('button', { name: '审核通过', exact: true })).toHaveCount(0);
-    const denied = await api(page, f.actors.dual, 'POST', `/recruitment-demands/${demand.id}/local-actions`,
+    const denied = await api(page, f.actors.operator, 'POST', `/recruitment-demands/${demand.id}/local-actions`,
       { expectedRevision: demand.revision, action: 'approve' }); expect(denied.status()).toBe(403);
-    await capture(page, info, '03-submitted-no-self-approval'); pass('dual_capability_operator_cannot_self_approve_UI_or_HTTP');
+    await capture(page, info, '03-submitted-by-ordinary-editor'); pass('ordinary_editor_cannot_approve_without_demand_review_capability');
 
     stage = 'independent_return'; phase = 'review';
     await as(page, f.actors.reviewer); const reviewerDetail = await openDemand(page, f, mobile);
@@ -245,7 +245,7 @@ test('system demand UI: independent return/approval, hiring confirmation and acc
     pass('demand_only_reviewer_returns_reason_without_global_talent_read');
 
     stage = 'edit_resubmit_independent_approve';
-    await as(page, f.actors.dual); const returnedDetail = await openDemand(page, f, mobile);
+    await as(page, f.actors.operator); const returnedDetail = await openDemand(page, f, mobile);
     await returnedDetail.getByRole('button', { name: '修改需求', exact: true }).click();
     const resubmitEditor = page.getByRole('dialog', { name: '修改招聘需求', exact: true });
     await resubmitEditor.getByRole('textbox', { name: '招聘原因', exact: true }).fill(`虚构${prefix}补齐后重新提交的业务依据`);
@@ -284,7 +284,7 @@ test('system demand UI: independent return/approval, hiring confirmation and acc
     let hiring = await json<Application>(await submitted, 201);
     expect(hiring).toMatchObject({ stage: 'hiring_review', recruitmentDemandId: demand.id, hiringRequestedById: f.actors.dual.id });
     expect(hiring.recruitmentDemandSnapshot).toMatchObject({ demandId: demand.id, instanceId: null, approvedHeadcount: 2, sourceKind: 'local' });
-    await expect(panel.locator('.demand-summary')).toContainText('系统创建');
+    await expect(panel.locator('.demand-summary')).toContainText('HRM录入');
     await capture(page, info, '07-approved-system-demand-selected-in-original-application');
     expect((await api(page, f.actors.dual, 'POST', `/talent-recruitment/applications/${hiring.id}/actions`,
       { action: 'approve_hiring', expectedRevision: hiring.revision })).status()).toBe(403);
@@ -296,7 +296,7 @@ test('system demand UI: independent return/approval, hiring confirmation and acc
     await as(page, f.actors.confirmer, `/talent-hiring?applicationId=${hiring.id}`);
     const review = page.locator('.hiring-review__detail');
     await expect(review.getByRole('heading', { name, exact: true })).toBeVisible();
-    await expect(review.locator('.demand-summary')).toContainText('系统创建');
+    await expect(review.locator('.demand-summary')).toContainText('HRM录入');
     await expect(review.locator('.demand-summary')).toContainText(demand.id);
     await review.getByRole('button', { name: '确认录用', exact: true }).click();
     const confirmed = response(page, 'POST', `/talent-recruitment/applications/${hiring.id}/actions`, 'approve_hiring');

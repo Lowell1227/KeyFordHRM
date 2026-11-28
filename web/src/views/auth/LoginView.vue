@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
 import { dingtalkLoginErrorMessage } from '@/utils/dingtalk-login-error';
 import { buildDingTalkOAuthUrl, clearArchiveOAuthReturn, rememberArchiveOAuthReturn } from '@/utils/dingtalk-oauth';
-import { authApi, type TestAccount } from '@/api/auth.api';
+import { authApi, type DingTalkPublicConfig, type TestAccount } from '@/api/auth.api';
 import { isLocalPreview } from '@/utils/preview-mode';
 
 const auth = useAuthStore();
@@ -45,9 +45,33 @@ const previewAccounts = ref<TestAccount[]>([]);
 const previewAccount = ref('HR001');
 const previewError = ref('');
 const navigationErrorMessage = '登录已成功，但页面打开失败，请重试';
+const dingTalkConfig = ref<DingTalkPublicConfig>();
+const dingTalkConfigLoading = ref(false);
+const dingTalkConfigError = ref('');
+let dingTalkConfigRequest: Promise<void> | undefined;
+const dingTalkRedirectUri = computed(() => {
+  try {
+    const uri = new URL(dingTalkConfig.value?.redirectUri || '/auth/callback', window.location.origin);
+    return uri.origin === window.location.origin && uri.pathname === '/auth/callback' && !uri.search && !uri.hash ? uri.href : '';
+  } catch { return ''; }
+});
+const dingTalkAvailable = computed(() => Boolean(dingTalkConfig.value?.enabled && dingTalkConfig.value.appKey
+  && dingTalkConfig.value.corpId && dingTalkRedirectUri.value));
+function loadDingTalkConfig(): Promise<void> {
+  if (dingTalkConfigRequest) return dingTalkConfigRequest;
+  dingTalkConfigLoading.value = true; dingTalkConfigError.value = '';
+  dingTalkConfigRequest = authApi.getDingTalkConfig().then(value => {
+    dingTalkConfig.value = value;
+    if (!dingTalkAvailable.value) dingTalkConfigError.value = '钉钉登录尚未就绪，可使用密码登录或联系管理员。';
+  }).catch(() => {
+    dingTalkConfig.value = undefined;
+    dingTalkConfigError.value = '钉钉登录配置暂时无法读取，可使用密码登录。';
+  }).finally(() => { dingTalkConfigLoading.value = false; dingTalkConfigRequest = undefined; });
+  return dingTalkConfigRequest;
+}
 
 onMounted(async () => {
-  if (!isLocalPreview) return;
+  if (!isLocalPreview) { await loadDingTalkConfig(); return; }
   try {
     const result = await authApi.getTestAccounts();
     previewAccounts.value = result.enabled ? result.accounts : [];
@@ -73,9 +97,6 @@ async function onPreviewLogin() {
   }
 }
 
-const DINGTALK_APP_KEY = import.meta.env.VITE_DINGTALK_APP_KEY || 'dinghwbnyktt3oku2jd3';
-const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
-
 function isAuthFailure(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 401;
 }
@@ -87,18 +108,14 @@ async function redirectAfterLogin(): Promise<void> {
   if (isNavigationFailure(failure)) throw failure;
 }
 
-function getDingTalkRedirectUri() {
-  return import.meta.env.VITE_DINGTALK_REDIRECT_URI || `${window.location.origin}/auth/callback`;
-}
-
 async function onDingTalkLogin() {
   if (isLocalPreview || loading.value) return;
+  loading.value = true;
+  await loadDingTalkConfig();
+  if (!dingTalkAvailable.value || !dingTalkConfig.value) { loading.value = false; return; }
+  const effectiveConfig = dingTalkConfig.value;
 
   if (isDingTalkEnv.value) {
-    if (!DINGTALK_CORP_ID) {
-      ElMessage.error('缺少钉钉企业 CorpId 配置，请联系管理员检查 VITE_DINGTALK_CORP_ID');
-      return;
-    }
     let dingTalkJsApi;
     loading.value = true;
     try {
@@ -133,8 +150,8 @@ async function onDingTalkLogin() {
     };
     try {
       const result = dingTalkJsApi.requestAuthCode({
-        corpId: DINGTALK_CORP_ID,
-        clientId: DINGTALK_APP_KEY,
+        corpId: effectiveConfig.corpId!,
+        clientId: effectiveConfig.appKey!,
         onSuccess,
         onFail,
       });
@@ -148,9 +165,9 @@ async function onDingTalkLogin() {
   loading.value = true;
   rememberArchiveOAuthReturn(route.query.redirect);
   window.location.href = buildDingTalkOAuthUrl({
-    redirectUri: getDingTalkRedirectUri(),
-    appKey: DINGTALK_APP_KEY,
-    corpId: DINGTALK_CORP_ID,
+    redirectUri: dingTalkRedirectUri.value,
+    appKey: effectiveConfig.appKey!,
+    corpId: effectiveConfig.corpId!,
   });
 }
 
@@ -248,10 +265,14 @@ async function onPasswordLogin() {
           size="large"
           class="dingtalk-btn"
           :loading="loading"
+          :disabled="dingTalkConfigLoading || !dingTalkAvailable"
           @click="onDingTalkLogin"
         >
           {{ dingtalkButtonText }}
         </el-button>
+        <p v-if="!isLocalPreview && dingTalkConfigError" class="login-config-message" role="status">{{ dingTalkConfigError }}
+          <button type="button" :disabled="dingTalkConfigLoading || loading" @click="loadDingTalkConfig">重新读取登录配置</button>
+        </p>
 
         <div v-if="!isLocalPreview" class="auth-options">
           <button
@@ -659,6 +680,8 @@ async function onPasswordLogin() {
   background: #5bc1ad;
   box-shadow: 0 0 0 4px rgba(91, 193, 173, 0.12);
 }
+.login-config-message { color: #66727e; font-size: 12px; line-height: 1.6; }
+.login-config-message button { padding: 0; border: 0; background: none; color: #1677ff; font: inherit; cursor: pointer; text-decoration: underline; }
 
 .field-reveal-enter-active,
 .field-reveal-leave-active {

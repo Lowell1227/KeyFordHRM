@@ -83,7 +83,7 @@ function workflow(t, options = {}) {
     close: async () => intake({ state: 'closed' }), associate: async () => intake(), upload: async () => intake(), ...options.api };
   const module = load('views/recruitment/useRecruitmentIntake.ts', {
     '@/api/recruitment-intakes.api': { recruitmentIntakesApi: api },
-    '@/api/talent-pool.api': { talentPoolApi: { checkPhone: async () => options.phoneResult || { exists: false }, detail: async id => ({ id, name: 'Fictional existing profile', followUps: [] }) } },
+    '@/api/talent-pool.api': { talentPoolApi: { checkPhone: async () => options.phoneResult || { exists: false }, detail: async id => ({ id, name: 'Fictional existing profile', followUps: [], ...options.existingProfile }) } },
     '@/api/talent-recruitment.api': { talentRecruitmentApi: { applications: async () => options.existingApplications || [] } },
     '@/api/upload.api': { uploadApi: {} },
     '@/utils/image-compress': { isImageFile: file => /\.(png|jpe?g)$/i.test(file.name), compressImage: async file => file },
@@ -108,6 +108,58 @@ test('candidate-only and application modes are explicit and application requires
   const f = workflow(t); await f.state.open('intake-a'); await f.state.checkPhone(); await f.state.confirm('candidate_application');
   assert.equal(f.calls[0][2].mode, 'candidate_application'); assert.equal(f.calls[0][2].application.positionName, 'Fictional engineer');
   const g = workflow(t); await g.state.open('intake-a'); g.state.application.positionName = ''; await g.state.confirm('candidate_application'); assert.equal(g.calls.length, 0);
+});
+
+test('first manual upload safely creates a draft and uploads without asking HR to save or confirming intake', async t => {
+  const uploads = [], f = workflow(t, { api: { upload: async (id, revision, file) => { uploads.push({ id, revision, name: file.name }); return intake({ revision: 4 }); } } });
+  f.state.start('pending_review');
+  await f.state.upload(new File(['%PDF-1.4 fictional'], 'fictional.pdf', { type: 'application/pdf' }));
+  assert.equal(f.calls[0][0], 'create'); assert.equal(f.calls[0][1].candidateDraft.name, undefined);
+  assert.deepEqual(uploads, [{ id: 'intake-a', revision: 3, name: 'fictional.pdf' }]);
+  assert.equal(f.calls.some(call => call[0] === 'confirm'), false);
+  assert.equal(f.state.current.value.state, 'pending_review');
+});
+
+test('an unconfirmed draft save never continues to file upload or opens another intake', async t => {
+  let uploads = 0;
+  const f = workflow(t, { api: { create: async () => { throw { response: { status: 503 } }; }, upload: async () => { uploads++; return intake(); } } });
+  f.state.start('pending_review');
+  await f.state.upload(new File(['%PDF-1.4 fictional'], 'fictional.pdf', { type: 'application/pdf' }));
+  assert.equal(uploads, 0); assert.equal(f.state.unknown.value, true); assert.ok(f.state.createIntent.value);
+});
+
+for (const action of ['keep', 'replace']) test(`intake carries ${action} for the existing pending follow-up without fabricating a communication`, async t => {
+  const originalTime = '2037-01-11T02:30:00.000Z';
+  const f = workflow(t, { phoneResult: { exists: true, candidate: { id: 'existing-a' } },
+    api: { detail: async () => intake({ nextFollowUpAt: originalTime }) },
+    existingProfile: { followUps: [{ id: 'existing-plan', planStatus: 'pending', nextFollowUpAt: '2037-01-10T00:00:00.000Z' }] } });
+  await f.state.open('intake-a'); await f.state.checkPhone(); f.state.reuseExisting.value = true; await flush();
+  assert.equal(f.state.followUpPlanAction.value, 'keep'); f.state.followUpPlanAction.value = action;
+  await f.state.confirm('candidate_only');
+  const body = f.calls.find(call => call[0] === 'confirm')[2];
+  assert.equal(body.followUpPlanAction, action);
+  assert.equal(body.expectedFollowUpPlanId, action === 'replace' ? 'existing-plan' : undefined);
+  assert.equal(f.state.form.nextFollowUpAt, originalTime);
+});
+
+test('a single linked intake arrangement is explicitly carried when the primary intake has no date', async t => {
+  const time = '2037-01-11T02:30:00.000Z', f = workflow(t, { api: { detail: async () => intake({ followUpSources: [{ intakeId: 'linked-a', nextFollowUpAt: time, primary: false }] }) } });
+  await f.state.open('intake-a');
+  assert.equal(f.state.selectedFollowUpSource.value.intakeId, 'linked-a'); await f.state.confirm('candidate_only');
+  const body = f.calls.find(call => call[0] === 'confirm')[2];
+  assert.equal(body.followUpSourceIntakeId, 'linked-a'); assert.equal(body.expectedFollowUpSourceAt, time);
+  assert.equal(f.state.form.nextFollowUpAt, '');
+});
+
+test('multiple linked arrangements require a choice instead of silently taking the earliest or latest', async t => {
+  const f = workflow(t, { api: { detail: async () => intake({ followUpSources: [
+    { intakeId: 'linked-a', nextFollowUpAt: '2037-01-11T02:30:00.000Z', primary: false },
+    { intakeId: 'linked-b', nextFollowUpAt: '2037-01-12T04:30:00.000Z', primary: false },
+  ] }) } });
+  await f.state.open('intake-a'); await f.state.confirm('candidate_only');
+  assert.equal(f.calls.length, 0); assert.match(f.state.followUpSourceError.value, /选择/);
+  f.state.followUpSourceIntakeId.value = 'linked-b'; await f.state.confirm('candidate_only');
+  const body = f.calls.find(call => call[0] === 'confirm')[2]; assert.equal(body.followUpSourceIntakeId, 'linked-b'); assert.equal(body.expectedFollowUpSourceAt, '2037-01-12T04:30:00.000Z');
 });
 
 test('intake application confirmation explicitly carries its reviewed intent and source', async t => {
@@ -348,6 +400,7 @@ async function intakePage(t, demandDetail, postingDetail, options = {}) {
     '@/api/recruitment-demands.api': { recruitmentDemandsApi: { detail: demandDetail, directories: async () => ({ departments: [], positions: [] }), intentOptions: async () => ({ items: [] }) } },
     '@/api/recruitment-postings.api': { recruitmentPostingsApi: { detail: postingDetail, list: async () => ({ items: [] }) } },
     '@/api/talent-recruitment.api': { talentRecruitmentApi: { owners: async () => ({ items: [] }) } },
+    '@/api/talent-resume.api': { talentResumeApi: { status: async () => ({ enabled: false, configured: false }) } },
     '@/api/talent-pool.api': { talentPoolApi: {} }, '@/api/upload.api': { uploadApi: {} },
     '@/utils/image-compress': { isImageFile: () => false, compressImage: async file => file },
     'element-plus': { ElMessageBox: { confirm: async () => options.confirm ? options.confirm() : true } },
@@ -361,6 +414,16 @@ async function intakePage(t, demandDetail, postingDetail, options = {}) {
 test('demand progress links filter the original intake list by exact demand and state', async t => {
   const calls = []; await intakePage(t, async () => ({}), async () => ({}), { query: { demandId: 'exact-demand', state: 'needs_material' }, onList: query => calls.push(query) });
   assert.equal(calls[0].demandId, 'exact-demand'); assert.equal(calls[0].state, 'needs_material');
+});
+
+test('demand and posting context is visible, reset preserves the named scope and view all removes it', async t => {
+  const calls = [], state = await intakePage(t, async () => ({ departmentName: 'Fictional department', positionName: 'Fictional engineer' }), async () => ({ name: 'Fictional posting' }),
+    { query: { demandId: 'exact-demand', postingId: 'exact-posting', state: 'needs_material' }, onList: query => calls.push(query) });
+  await flush(); assert.equal(state.contextScopeName.value, '外部职位：Fictional posting'); assert.equal(state.hasContextScope.value, true);
+  await state.resetFilters(); await flush();
+  assert.equal(calls.at(-1).state, undefined); assert.equal(calls.at(-1).postingId, 'exact-posting');
+  await state.viewAllIntakes(); await flush();
+  assert.equal(state.hasContextScope.value, false); assert.equal(calls.at(-1).demandId, undefined); assert.equal(calls.at(-1).postingId, undefined);
 });
 
 test('workbench intake filters remain visible and clearing them removes both queue and owner from route and requests', async t => {
@@ -398,10 +461,10 @@ test('intake and posting selectors constrain long dropdown labels to their input
   }
 });
 
-test('intake keyword filter describes only the supported job and source search', () => {
+test('intake keyword filter describes candidate identity and the supported job/source search', () => {
   const source = fs.readFileSync(path.join(root, 'views/recruitment/RecruitmentIntakesView.vue'), 'utf8');
-  assert.match(source, /label="岗位 \/ 来源线索"/);
-  assert.match(source, /aria-label="岗位或来源线索"/);
+  assert.match(source, /label="关键词"/);
+  assert.match(source, /aria-label="姓名、手机号、岗位或来源线索"/);
   assert.doesNotMatch(source, /aria-label="姓名或岗位"/);
 });
 

@@ -265,6 +265,14 @@ test('changing an existing interview schedule never regenerates hand-edited cand
   assert.equal(view.state.form.meetingUrl, invitation.meetingUrl);
 });
 
+test('an onsite invitation without a meeting link never reports extraction success', async t => {
+  const copied = browser(), view = mount(t, 'views/talent/components/TalentInterviewPanel.vue', { props: { candidateId: 'synthetic-candidate', editable: true } });
+  t.after(copied.restore); await flush();
+  view.state.inviteMode.value = '现场面试'; view.state.invitationChanged('Fictional onsite invitation without a link');
+  assert.equal(view.state.form.meetingUrl, ''); assert.equal(view.state.meetingHint.value, '');
+  view.state.inviteMode.value = '线上面试'; assert.match(view.state.meetingHint.value, /未识别/);
+});
+
 test('replacing a hand-edited invitation template requires explicit confirmation', async t => {
   const copied = browser();
   const view = mount(t, 'views/talent/components/TalentInterviewPanel.vue', { props: { candidateId: 'synthetic-candidate', editable: true } }); await flush();

@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { Prisma } from '@prisma/client';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CURRENT_WORKER_STATUSES, currentWorkerWhere } from '@/common/personnel/current-worker';
@@ -25,7 +26,7 @@ export function safeTencentMeetingUrl(input?: string | null): string | null {
 
 @Injectable()
 export class TalentInterviewsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly runtime?: RuntimeSettingsService) {}
 
   private canReadTalent(user: AuthUser) {
     return canReadRecruitment(user);
@@ -159,7 +160,7 @@ export class TalentInterviewsService {
   }
 
   private syncStatus() {
-    return process.env.NODE_ENV !== 'test' && process.env.DINGTALK_INTERVIEW_CALENDAR_ENABLED === 'true' ? 'pending' : 'unconfigured';
+    return process.env.NODE_ENV !== 'test' && (this.runtime?.get('DINGTALK_INTERVIEW_CALENDAR_ENABLED') ?? process.env.DINGTALK_INTERVIEW_CALENDAR_ENABLED) === 'true' ? 'pending' : 'unconfigured';
   }
 
   private async lockCandidate(tx: Prisma.TransactionClient, candidateId: string) {

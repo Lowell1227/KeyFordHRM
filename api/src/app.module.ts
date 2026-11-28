@@ -2,6 +2,7 @@ import { ContractSubjectsModule } from './contract-subjects/contract-subjects.mo
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SystemConfigurationController } from './system-configuration.controller';
+import { SystemConfigurationModule } from './system-configuration/system-configuration.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { JwtModule } from '@nestjs/jwt';
 import { APP_GUARD } from '@nestjs/core';
@@ -69,6 +70,7 @@ import { PerformanceLifecycleModule } from './performance-lifecycle/performance-
       }),
     }),
     PrismaModule,
+    SystemConfigurationModule,
     DataScopeModule,
     DepartmentsModule,
     UsersModule,

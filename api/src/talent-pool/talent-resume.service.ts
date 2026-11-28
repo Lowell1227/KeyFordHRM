@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import {
   BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, ServiceUnavailableException,
 } from '@nestjs/common';
@@ -157,7 +159,7 @@ export class TalentResumeService {
 
   constructor(
     private readonly aiConfig: AiConfigService,
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
     private readonly client: TalentResumeClient,
   ) {}
 

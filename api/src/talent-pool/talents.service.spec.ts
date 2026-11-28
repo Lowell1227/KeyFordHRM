@@ -154,7 +154,7 @@ describe('TalentsService 列表筛选', () => {
     await sut.list({ dueOnly: true, skip: 0, take: 20 } as never);
     const where = prisma.talentCandidate.findMany.mock.calls[0][0].where;
     expect(where.AND).toEqual([{ OR: [
-      { followUps: { none: {} } },
+      { followUps: { none: { recordType: 'communication' } } },
       { followUps: { some: { planStatus: 'pending' } } },
     ] }]);
   });

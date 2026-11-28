@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -13,7 +15,7 @@ export interface DingtalkNotificationSettings {
 export class NotificationSettingsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
   ) {}
 
   async getDingtalkSettings(): Promise<DingtalkNotificationSettings> {

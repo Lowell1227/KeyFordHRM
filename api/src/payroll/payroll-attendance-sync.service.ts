@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -6,7 +8,7 @@ import { isUUID } from 'class-validator';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { AuthUser } from '@/common/types/auth.types';
-import { DingtalkService } from '@/dingtalk/dingtalk.service';
+import { DingtalkIdentity, DingtalkService } from '@/dingtalk/dingtalk.service';
 import { DingtalkAttendanceBinding, DingtalkAttendancePending, DingtalkAttendanceService } from '@/dingtalk/dingtalk-attendance.service';
 import { withDingtalkDeadline } from '@/dingtalk/dingtalk-request-deadline';
 import { PayrollAccessService } from './payroll-access.service';
@@ -22,7 +24,7 @@ import { lockPayrollSubject, payrollDate, payrollHash, payrollMonth } from './pa
 type Reader = Prisma.TransactionClient | PrismaService;
 type Cell = { employeeId: string; workDate: string; required: boolean; units: string; policyId: string };
 type Binding = DingtalkAttendanceBinding & { unionId: string };
-type Context = { hash: string; cells: Cell[]; bindings: Binding[]; operator: Binding; corpId: string;
+type Context = { hash: string; cells: Cell[]; bindings: Binding[]; operator: Binding; corpId: string; identity: DingtalkIdentity;
   mappings: Map<string, PayrollDingtalkAttendanceOptions['approvalMappings']>; workflowRead: boolean };
 type Claim = { job: PayrollAttendanceSyncJob; actor: AuthUser; context: Context; cells: Cell[]; token: string;
   previous: PayrollDingtalkAttendanceSourceState[]; previousHash: string; snapshotHash: string;
@@ -74,7 +76,7 @@ export class PayrollAttendanceSyncService {
   private readonly logger = new Logger(PayrollAttendanceSyncService.name);
   private running = false;
   constructor(private readonly prisma: PrismaService, private readonly access: PayrollAccessService, private readonly data: PayrollDataService,
-    private readonly gateway: DingtalkAttendanceService, private readonly dingtalk: DingtalkService, private readonly config: ConfigService) {}
+    private readonly gateway: DingtalkAttendanceService, private readonly dingtalk: DingtalkService, @Inject(RuntimeSettingsService) private readonly config: ConfigService) {}
   async start(input: PayrollAttendanceSyncStartDto, actor: AuthUser): Promise<AttendanceSyncJob> {
     this.keys(input, ['subjectId', 'month', 'requestId']); this.uuid(input.subjectId); this.uuid(input.requestId); payrollMonth(input.month);
     return this.transaction(async tx => {
@@ -209,7 +211,7 @@ export class PayrollAttendanceSyncService {
     const publicBinding = ({ employeeId, dingtalkUserId, corpId }: Binding): DingtalkAttendanceBinding => ({ employeeId, dingtalkUserId, corpId });
     const read = await this.gateway.readRange({ month: claim.job.month, from: first.workDate, to: last.workDate,
       organization: { corpId: claim.context.corpId, verified: true }, operator: publicBinding(claim.context.operator),
-      bindings: [publicBinding(binding)], workflowInstanceRead: claim.context.workflowRead });
+      bindings: [publicBinding(binding)], workflowInstanceRead: claim.context.workflowRead }, claim.context.identity);
     if (read.month !== claim.job.month || read.scope.from !== first.workDate || read.scope.to !== last.workDate
       || read.scope.employeeIds.length !== 1 || read.scope.employeeIds[0] !== first.employeeId) throw new Blocked('UPSTREAM_SCOPE_MISMATCH');
     const converted = convertDingtalkAttendance(read, { expected: claim.cells.map(({ policyId, ...cell }) => cell),
@@ -267,6 +269,8 @@ export class PayrollAttendanceSyncService {
   private async context(tx: Reader, subjectId: string, month: string, actor: AuthUser): Promise<Context> {
     const corpId = this.config.get<string>('DINGTALK_CORP_ID');
     const appKey = this.config.get<string>('DINGTALK_APP_KEY');
+    const identity = Object.freeze({ corpId, appKey, appSecret: this.config.get<string>('DINGTALK_APP_SECRET') });
+    const workflowRead = this.config.get<string>('DINGTALK_ATTENDANCE_WORKFLOW_READ_CONFIRMED') === 'true';
     if (!corpId?.trim() || !appKey?.trim()) throw new Blocked('CONFIGURATION_REQUIRED');
     const { policies, releases } = await readReviewedPayrollScopePolicies(tx, subjectId);
     const records = await readFormalPayrollEmployments(tx, subjectId, month);
@@ -311,7 +315,6 @@ export class PayrollAttendanceSyncService {
       cells.push({ employeeId: row.employeeId, workDate: row.workDate, required: new Prisma.Decimal(calendar.units).gt(0), units: calendar.units, policyId: policy.id });
     }
     cells.sort((a, b) => a.employeeId.localeCompare(b.employeeId) || a.workDate.localeCompare(b.workDate));
-    const workflowRead = this.config.get<string>('DINGTALK_ATTENDANCE_WORKFLOW_READ_CONFIRMED') === 'true';
     const contextHash = hash({ corpId, appKey, workflowRead, operator: { id: actor.id, sysRole: actor.sysRole, deptId: actor.deptId,
       isAssessorOnly: actor.isAssessorOnly, canViewAll: actor.canViewAll, hrCapabilities: [...(actor.hrCapabilities ?? [])].sort() },
       cells, bindings, records: records.map(({ user, ...record }) => record).sort((a, b) => a.id.localeCompare(b.id)),
@@ -319,12 +322,12 @@ export class PayrollAttendanceSyncService {
         effectiveFrom: row.effectiveFrom, effectiveTo: row.effectiveTo, calendar: calendars.get(row.id), mappings: mappings.get(row.id),
         releases: releases.filter(link => link.ruleId === row.id) })).sort((a, b) => a.id.localeCompare(b.id)) });
     return { hash: contextHash, cells, bindings: bindings.filter(row => row.employeeId !== actor.id || days.some(day => day.employeeId === actor.id)),
-      operator: bindings.find(row => row.employeeId === actor.id)!, mappings, corpId, workflowRead };
+      operator: bindings.find(row => row.employeeId === actor.id)!, mappings, corpId, workflowRead, identity };
   }
   private async verifyIdentities(claim: Claim) {
     try {
       await withDingtalkDeadline(async signal => {
-        const token = await this.dingtalk.getAccessToken(signal);
+        const token = await this.dingtalk.getAccessToken(signal, claim.context.identity);
         const target = claim.context.bindings.find(row => row.employeeId === claim.cells[0].employeeId)!;
         for (const binding of [...new Map([claim.context.operator, target].map(row => [row.employeeId, row])).values()]) {
           const user = await this.dingtalk.fetchUserDetail(binding.dingtalkUserId, token, signal) as Awaited<ReturnType<DingtalkService['fetchUserDetail']>> & { corpId?: string; corp_id?: string };

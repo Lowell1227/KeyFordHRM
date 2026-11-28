@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
@@ -14,7 +16,7 @@ const PAYROLL_MONTH = /^[2-9]\d{3}-(0[1-9]|1[0-2])$/;
 
 @Injectable()
 export class PayrollAccessService {
-  constructor(private readonly prisma: PrismaService, private readonly config: ConfigService) {}
+  constructor(private readonly prisma: PrismaService, @Inject(RuntimeSettingsService) private readonly config: ConfigService) {}
   enabled(): boolean {
     return this.config.get<string>('PAYROLL_ENABLED') === 'true'
       && (this.config.get<string>('HRM_PREVIEW') === 'true' || this.config.get<string>('PAYROLL_FORMAL_ENABLED') === 'true');

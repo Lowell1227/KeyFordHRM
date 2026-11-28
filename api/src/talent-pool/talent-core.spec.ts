@@ -174,7 +174,7 @@ describe('talent list recruitment summaries and current follow-up scope', () => 
     const { sut, prisma } = setup();
     await sut.list(plainToInstance(TalentQueryDto, { dueOnly: true }));
     expect(prisma.talentCandidate.findMany.mock.calls[0][0].where.AND).toEqual([{ OR: [
-      { followUps: { none: {} } }, { followUps: { some: { planStatus: 'pending' } } },
+      { followUps: { none: { recordType: 'communication' } } }, { followUps: { some: { planStatus: 'pending' } } },
     ] }]);
   });
 

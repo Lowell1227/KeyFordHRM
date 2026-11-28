@@ -1,6 +1,6 @@
 import http from './http';
 import type { Paginated } from '@/types/api.types';
-import type { IntakeConfirm, IntakeCreate, IntakeQuery, IntakeUpdate, MailboxStatus, MailboxSyncResult, RecruitmentIntake } from '@/types/recruitment-intake.types';
+import type { IntakeConfirm, IntakeCreate, IntakeQuery, IntakeUpdate, MailboxChoice, MailboxStatus, MailboxSyncResult, RecruitmentIntake } from '@/types/recruitment-intake.types';
 const base = '/recruitment-intakes', silent = { skipErrorMessage: true };
 export const recruitmentIntakesApi = {
   list(query: IntakeQuery): Promise<Paginated<RecruitmentIntake>> { return http.get(base, { params: query, ...silent }) as unknown as Promise<Paginated<RecruitmentIntake>>; },
@@ -19,6 +19,7 @@ export const recruitmentIntakesApi = {
   confirm(id: string, body: IntakeConfirm): Promise<RecruitmentIntake> { return http.post(`${base}/${encodeURIComponent(id)}/confirm`, body, silent) as unknown as Promise<RecruitmentIntake>; },
   close(id: string, body: { expectedRevision: number; reason: string }): Promise<RecruitmentIntake> { return http.post(`${base}/${encodeURIComponent(id)}/close`, body, silent) as unknown as Promise<RecruitmentIntake>; },
   associate(id: string, body: { expectedRevision: number; targetIntakeId: string; expectedTargetRevision: number }): Promise<RecruitmentIntake> { return http.post(`${base}/${encodeURIComponent(id)}/associate`, body, silent) as unknown as Promise<RecruitmentIntake>; },
-  mailStatus(): Promise<MailboxStatus> { return http.get(`${base}/mailbox/status`, silent) as unknown as Promise<MailboxStatus>; },
-  syncMail(limit = 10): Promise<MailboxSyncResult> { return http.post(`${base}/mailbox/sync`, { limit }, { ...silent, timeout: 60000 }) as unknown as Promise<MailboxSyncResult>; },
+  mailboxes(): Promise<MailboxChoice[]> { return http.get(`${base}/mailboxes`, silent) as unknown as Promise<MailboxChoice[]>; },
+  mailStatus(mailboxId?: string): Promise<MailboxStatus> { return http.get(`${base}/mailbox/status`, { ...silent, ...(mailboxId ? { params: { mailboxId } } : {}) }) as unknown as Promise<MailboxStatus>; },
+  syncMail(limit = 10, mailboxId?: string): Promise<MailboxSyncResult> { return http.post(`${base}/mailbox/sync`, { limit, ...(mailboxId ? { mailboxId } : {}) }, { ...silent, timeout: 60000 }) as unknown as Promise<MailboxSyncResult>; },
 };

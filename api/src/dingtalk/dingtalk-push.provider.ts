@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -18,7 +20,7 @@ export class DingtalkPushProvider implements MessagePushProvider {
   constructor(
     private readonly dingtalk: DingtalkService,
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
   ) {}
 
   async push(input: MessagePushInput): Promise<MessagePushResult> {

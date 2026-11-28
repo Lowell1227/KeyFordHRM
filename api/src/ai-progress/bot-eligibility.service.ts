@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AccountType, ExternalIdentityProvider, ExternalIdentityStatus } from '@prisma/client';
@@ -22,7 +24,7 @@ export interface BotSender {
 export class BotEligibilityService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
     private readonly aiConfig: AiConfigService,
     private readonly auth: AuthService,
     private readonly dingtalk: DingtalkService,
@@ -54,7 +56,8 @@ export class BotEligibilityService {
   async resolveRecipient(corpId: string, staffId: string): Promise<
     { kind: 'ready'; viewer: AuthUser } | { kind: 'reply'; text: string }
   > {
-    const expectedCorp = this.config.get<string>('DINGTALK_CORP_ID');
+    const appIdentity = { corpId: this.config.get<string>('DINGTALK_CORP_ID'), appKey: this.config.get<string>('DINGTALK_APP_KEY'), appSecret: this.config.get<string>('DINGTALK_APP_SECRET') };
+    const expectedCorp = appIdentity.corpId;
     if (!expectedCorp || corpId !== expectedCorp || !staffId?.trim()) {
       return { kind: 'reply', text: '请在本企业的机器人单聊中更新目标进展。' };
     }
@@ -70,7 +73,7 @@ export class BotEligibilityService {
       let unionId: string;
       try {
         unionId = (await withDingtalkDeadline(signal =>
-          this.dingtalk.fetchUserDetail(staffId, undefined, signal))).unionid;
+          this.dingtalk.fetchUserDetail(staffId, undefined, signal, appIdentity))).unionid;
       } catch (error) {
         if (error instanceof DingtalkDeadlineError)
           return { kind: 'reply', text: '钉钉身份核对暂不可用，请稍后重试。' };

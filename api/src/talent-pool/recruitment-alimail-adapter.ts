@@ -7,8 +7,10 @@ import { MailParser } from 'mailparser';
 import type { Headers, StructuredHeader } from 'mailparser';
 import type { RecruitmentMailboxPage, RecruitmentMailMessage } from './recruitment-mail-gateway';
 import { RESUME_LIMITS } from './talent-resume-client';
+import { RecruitmentMailProvider, RECRUITMENT_MAIL_PROVIDERS } from './recruitment-mail-providers';
 
 export interface AlimailRecruitmentConfig {
+  provider?: RecruitmentMailProvider;
   account: string;
   password: string;
   folder: string;
@@ -57,20 +59,20 @@ function clean(value: string | undefined, max: number): string {
 
 /** One fresh connection per operation; only the configured folder is ever examined. */
 export class AlimailRecruitmentAdapter {
-  private readonly config: AlimailRecruitmentConfig;
+  private readonly config: AlimailRecruitmentConfig & { provider: RecruitmentMailProvider };
   private readonly scope: string;
 
   constructor(config: AlimailRecruitmentConfig, private readonly factory: AlimailRecruitmentClientFactory = options => new ImapFlow(options)) {
-    if (!config || typeof config.account !== 'string' || config.account !== config.account.trim() ||
+    if (!config || (config.provider !== undefined && !Object.prototype.hasOwnProperty.call(RECRUITMENT_MAIL_PROVIDERS, config.provider)) || typeof config.account !== 'string' || config.account !== config.account.trim() ||
       config.account.length > 254 || !isEmail(config.account) || CONTROL.test(config.account) ||
       typeof config.password !== 'string' || !config.password || config.password.length > 512 || CONTROL.test(config.password) ||
       typeof config.folder !== 'string' || !config.folder.trim() || config.folder !== config.folder.trim() ||
       config.folder.length > 128 || CONTROL.test(config.folder) || /[\\/*%]/.test(config.folder) ||
       typeof config.authorizedFrom !== 'string' || !config.authorizedFrom.endsWith('Z') ||
       !isISO8601(config.authorizedFrom, { strict: true, strictSeparator: true }) || !Number.isFinite(Date.parse(config.authorizedFrom))) fail('invalid_config');
-    this.config = Object.freeze({ ...config, authorizedFrom: new Date(config.authorizedFrom).toISOString() });
+    this.config = Object.freeze({ ...config, provider: config.provider ?? 'alimail', authorizedFrom: new Date(config.authorizedFrom).toISOString() });
     this.scope = createHash('sha256').update(JSON.stringify([
-      this.config.account, this.config.folder, this.config.authorizedFrom,
+      ...(this.config.provider === 'alimail' ? [] : [this.config.provider]), this.config.account, this.config.folder, this.config.authorizedFrom,
     ])).digest('hex');
   }
 
@@ -111,7 +113,7 @@ export class AlimailRecruitmentAdapter {
         if (row.internalDate.toISOString() < this.config.authorizedFrom) { after = row.uid; continue; }
         if (messages.length === input.limit) { stopped = true; break; }
         const message: RecruitmentMailMessage = {
-          id: `alimail:${this.scope}:${validity}:${row.uid}`, receivedAt: row.internalDate.toISOString(),
+          id: `${this.config.provider}:${this.scope}:${validity}:${row.uid}`, receivedAt: row.internalDate.toISOString(),
           subject: '', bodyText: '', sourceChannel: null, attachments: [],
         };
         if (!integer(row.size, Number.MAX_SAFE_INTEGER) || row.size === 0) message.materialIssue = 'missing_material';
@@ -136,7 +138,7 @@ export class AlimailRecruitmentAdapter {
       session.check();
       const cursor = Buffer.from(JSON.stringify({ version: 1, scope: this.scope, validity, after } satisfies Cursor)).toString('base64url');
       return {
-        mailboxKey: `alimail:${this.scope}`, authorizedFrom: this.config.authorizedFrom, messages,
+        mailboxKey: `${this.config.provider}:${this.scope}`, authorizedFrom: this.config.authorizedFrom, messages,
         nextCursor: after < highwater ? cursor : null,
         ...(after === highwater ? { checkpointCursor: cursor } : {}),
       };
@@ -182,7 +184,8 @@ export class AlimailRecruitmentAdapter {
     };
     try {
       client = this.factory({
-        host: 'imap.qiye.aliyun.com', port: 993, secure: true, tls: { rejectUnauthorized: true },
+        host: RECRUITMENT_MAIL_PROVIDERS[this.config.provider].host, port: 993, secure: true, tls: { rejectUnauthorized: true },
+        clientInfo: { name: 'HRM', version: '0.9.3', vendor: 'KeyFord' },
         auth: { user: this.config.account, pass: this.config.password },
         logger: false, logRaw: false, emitLogs: false, disableAutoIdle: true,
         disableCompression: true, disableBinary: true, disableAutoEnable: true,

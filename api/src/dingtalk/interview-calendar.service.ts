@@ -1,6 +1,8 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DingtalkService } from './dingtalk.service';
+import { DingtalkIdentity, DingtalkService } from './dingtalk.service';
 
 export type CalendarFailureState = 'unconfigured' | 'failed' | 'uncertain';
 
@@ -35,9 +37,10 @@ const businessMarker = (id: string) => `[HRM_INTERVIEW_ID=${id}]`;
 
 @Injectable()
 export class InterviewCalendarService {
-  constructor(private readonly dingtalk: DingtalkService, private readonly config: ConfigService) {}
+  constructor(private readonly dingtalk: DingtalkService, @Inject(RuntimeSettingsService) private readonly config: ConfigService) {}
 
   isEnabled() { return this.config.get<string>('DINGTALK_INTERVIEW_CALENDAR_ENABLED', 'false') === 'true'; }
+  private identity(): DingtalkIdentity { return { corpId: this.config.get('DINGTALK_CORP_ID'), appKey: this.config.get('DINGTALK_APP_KEY'), appSecret: this.config.get('DINGTALK_APP_SECRET') }; }
 
   async create(event: InterviewCalendarEvent): Promise<string> {
     const result = await this.request('POST', '', event, {
@@ -62,7 +65,8 @@ export class InterviewCalendarService {
   async locate(locator: CalendarEventLocator): Promise<CalendarLookupResult> {
     if (!this.isEnabled()) throw new CalendarSyncError('unconfigured', '钉钉日程同步尚未启用');
     const signal = AbortSignal.timeout(15000);
-    const read = (suffix: string) => this.request('GET', suffix, locator, undefined, 'lookup', signal);
+    const identity = this.identity();
+    const read = (suffix: string) => this.request('GET', suffix, locator, undefined, 'lookup', signal, identity);
     const matches = (event: any) => typeof event?.description === 'string'
       && event.description.split(/\r?\n/).filter((line: string) => line.startsWith('[HRM_INTERVIEW_ID=')).join('\n') === businessMarker(locator.invitationId);
     const available = (event: any, id: string) => event?.id === id
@@ -131,13 +135,13 @@ export class InterviewCalendarService {
 
   private async request(method: string, suffix: string,
     event: Pick<InterviewCalendarEvent, 'invitationId' | 'organizerUnionId'> & { participantUnionIds?: string[] },
-    body: unknown, operation: string, signal = AbortSignal.timeout(15000)): Promise<any> {
+    body: unknown, operation: string, signal = AbortSignal.timeout(15000), identity = this.identity()): Promise<any> {
     if (!this.isEnabled()) throw new CalendarSyncError('unconfigured', '钉钉日程同步尚未启用');
     if (!event.organizerUnionId || event.participantUnionIds?.some(id => !id)) {
       throw new CalendarSyncError('failed', '组织者或参与人尚未绑定有效钉钉身份');
     }
     let token: string;
-    try { token = await this.dingtalk.getAccessToken(signal); }
+    try { token = await this.dingtalk.getAccessToken(signal, identity); }
     catch { throw new CalendarSyncError('failed', '无法获取钉钉日程访问凭证，请检查应用配置'); }
     let response: Response;
     try {

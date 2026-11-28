@@ -61,6 +61,11 @@ describe('single follow-up plan and responsibility filters on disposable Postgre
       }
       cpSync(path.join(migrations, migration), path.join(schema, 'migrations', migration), { recursive: true });
       deploy();
+      // Exercise the historical plan migration first, then restore today's schema for runtime assertions.
+      for (const name of readdirSync(migrations)) {
+        if (/^\d/.test(name) && name > migration) cpSync(path.join(migrations, name), path.join(schema, 'migrations', name), { recursive: true });
+      }
+      deploy();
       talents = new TalentsService(db);
       service = new TalentFollowUpsService(db, talents);
     } finally { rmSync(schema, { recursive: true, force: true }); }

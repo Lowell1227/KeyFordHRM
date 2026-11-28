@@ -53,6 +53,7 @@ async function mount(t, name, input, api = {}, positions = async () => directory
   const { descriptor } = parse(fs.readFileSync(filename, 'utf8'));
   const events = [], messages = [], calls = [];
   const component = load(filename, {
+    '@/stores/auth.store': { useAuthStore: () => ({ user: { id: 'fictional-editor', sysRole: 'hr' } }) },
     '@/api/upload.api': { uploadApi: {} },
     '@/api/positions.api': { positionsApi: { findAll: positions } },
     '@/api/employee-archives.api': { employeeArchivesApi: {
@@ -103,6 +104,15 @@ function archive(id = 'employee-a') {
   return { id, name: `Fictional ${id}`, status: 'active', dept: { id: 'fixture-dept' },
     currentEmployment, employmentHistory: [currentEmployment], employeeContracts: [] };
 }
+
+test('accepted recruitment prefill populates only new onboarding fields and leaves existing drafts authoritative', async t => {
+  const input = { initialName: 'Fictional accepted applicant', initialPhone: '13800000000', initialRecruitment: { deptId: 'recruitment-dept', positionId: 'position-b', expectedEntryDate: '2037-01-11' } };
+  const fresh = await mount(t, 'EmployeeCreateDrawer.vue', input);
+  assert.equal(fresh.state.form.deptId, 'recruitment-dept'); assert.equal(fresh.state.form.positionId, 'position-b'); assert.equal(fresh.state.form.entryDate, '2037-01-11');
+  assert.equal(fresh.state.form.company, null); assert.equal(fresh.state.form.name, input.initialName);
+  const saved = await mount(t, 'EmployeeCreateDrawer.vue', { ...input, draft: draft() });
+  assert.equal(saved.state.form.deptId, 'fixture-dept'); assert.equal(saved.state.form.positionId, 'position-a'); assert.equal(saved.state.form.entryDate, '2026-11-14');
+});
 
 function review(id = 'request-a') {
   return { id, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',

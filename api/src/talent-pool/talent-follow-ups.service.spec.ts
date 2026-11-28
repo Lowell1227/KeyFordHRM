@@ -78,6 +78,15 @@ describe('TalentFollowUpsService', () => {
     expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
   });
 
+  it('allows explicitly completing a transferred plan with yesterday actual communication without treating registration as communication', async () => {
+    const { sut, tx, old, input } = pendingPlan();
+    Object.assign(old, { recordType: 'plan', occurredAt: new Date('2026-11-12') });
+    await expect(sut.create('cand-1', { ...input, occurredAt: '2026-11-11', completePlanId: old.id }, HR)).resolves.toMatchObject({ planStatus: 'none' });
+    expect(tx.talentFollowUp.update).toHaveBeenCalledWith({ where: { id: old.id }, data: expect.objectContaining({ planStatus: 'completed' }) });
+    expect(tx.talentCandidate.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ OR: [{ lastFollowUpAt: null }, { lastFollowUpAt: { lt: new Date('2026-11-11') } }] }) }));
+  });
+
   it('新增跟进与 last_follow_up_at 回写在同一事务，occurredAt 缺省为今天', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-11-12T17:00:00.000Z'));
     const { prisma, sut } = setup();

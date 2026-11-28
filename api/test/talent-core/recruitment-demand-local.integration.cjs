@@ -39,6 +39,7 @@ async function inPreview() {
     return expected < 300 ? body.data : body;
   }
   const detail = id => http('operator', 'GET', '/recruitment-demands/' + id);
+  const fId = actor => fixture.actors[actor].id;
   const action = (row, verb, actor = 'operator', reason, expected = 201) => http(actor, 'POST', `/recruitment-demands/${row.id}/local-actions`,
     { expectedRevision: row.revision, action: verb, ...(reason === undefined ? {} : { reason }) }, expected);
   let initial;
@@ -139,17 +140,48 @@ async function inPreview() {
     assert.equal(new Set(approvedEvents.map(event => event.revision)).size, approvedEvents.length);
     pass(currentCase);
 
-    currentCase = 'dual_capability_cannot_approve_own_submission';
-    let own = await create('dual'); own = await action(own, 'submit', 'dual');
-    const ownEvents = await auditCount(own.id);
-    await action(own, 'approve', 'dual', '虚构自审必须被拒绝', 403);
-    assert.equal(await auditCount(own.id), ownEvents); assert.equal((await detail(own.id)).usable, false);
+    currentCase = 'explicit_self_created_combined_approval_and_existing_pending';
+    let own = await create('dual');
+    assert.equal(own.sourceState, 'draft'); assert.equal(own.usable, false);
+    assert.ok(own.allowedActions.includes('submit_approve'), 'qualified creator can explicitly combine submission and approval');
+    own = await action(own, 'submit_approve', 'dual');
+    assert.equal(own.usable, true); assert.equal(own.approvalMode, 'self_created');
+    assert.equal(own.submittedById, fId('dual')); assert.equal(own.approvedById, fId('dual'));
+    const legacy = await create('dual');
+    const dualCapabilities = (await db.user.findUniqueOrThrow({ where: { id: fId('dual') }, select: { hrCapabilities: true } })).hrCapabilities;
+    let legacyPending;
+    try {
+      await db.user.update({ where: { id: fId('dual') }, data: { hrCapabilities: dualCapabilities.filter(value => value !== 'recruitment_demand_review') } });
+      legacyPending = await action(legacy, 'submit', 'dual');
+    } finally { await db.user.update({ where: { id: fId('dual') }, data: { hrCapabilities: dualCapabilities } }); }
+    const reviewQueue = await http('dual', 'GET', '/recruitment-demands?workQueue=review&page=1&pageSize=100');
+    assert.ok(reviewQueue.items.some(row => row.id === legacy.id), 'own legacy pending request is visible in the reviewer queue');
+    assert.equal((await action(legacyPending, 'approve', 'dual')).usable, true);
+    let otherCreated = await create('operator'); otherCreated = await action(otherCreated, 'submit', 'dual');
+    const ownEvents = await auditCount(otherCreated.id);
+    await action(otherCreated, 'approve', 'dual', '虚构他人创建不可借自建例外', 403);
+    assert.equal(await auditCount(otherCreated.id), ownEvents);
+    const blockedDraft = await create('operator');
+    const otherReviewers = await db.user.findMany({ where: { id: { not: fId('dual') }, status: { in: ['active', 'probation'] }, archivedAt: null,
+      deletedAt: null, isAssessorOnly: false, hrCapabilities: { has: 'recruitment_demand_review' } }, select: { id: true, employeeNo: true, hrCapabilities: true } });
+    assert.ok(otherReviewers.every(actor => actor.id === fId('reviewer') || actor.employeeNo?.toUpperCase() === 'HR001'),
+      'only owned reviewer and the known fictional default reviewer may be temporarily adjusted');
+    try {
+      for (const reviewer of otherReviewers) await db.user.update({ where: { id: reviewer.id },
+        data: { hrCapabilities: reviewer.hrCapabilities.filter(capability => capability !== 'recruitment_demand_review') } });
+      const blockedDetail = await http('dual', 'GET', '/recruitment-demands/' + blockedDraft.id);
+      assert.ok(!blockedDetail.allowedActions.includes('submit'), 'a sole reviewer cannot submit another creator request into a dead end');
+      assert.ok(blockedDetail.submissionIssue, 'the unavailable submission has an actionable explanation');
+      await action(blockedDraft, 'submit', 'dual', undefined, 400);
+      assert.equal((await detail(blockedDraft.id)).sourceState, 'draft');
+    } finally { for (const reviewer of otherReviewers) await db.user.update({ where: { id: reviewer.id }, data: { hrCapabilities: reviewer.hrCapabilities } }); }
+    assert.equal((await action(blockedDraft, 'submit', 'dual')).sourceState, 'pending');
     pass(currentCase);
 
     currentCase = 'reviewer_capability_revocation_rechecked_from_database';
     const prior = await db.user.findUniqueOrThrow({ where: { id: fixture.actors.reviewer.id }, select: { hrCapabilities: true } });
     await db.user.update({ where: { id: fixture.actors.reviewer.id }, data: { hrCapabilities: [] } });
-    try { await action(own, 'approve', 'reviewer', undefined, 403); }
+    try { await action(otherCreated, 'approve', 'reviewer', undefined, 403); }
     finally { await db.user.update({ where: { id: fixture.actors.reviewer.id }, data: { hrCapabilities: prior.hrCapabilities } }); }
     pass(currentCase);
 

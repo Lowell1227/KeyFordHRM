@@ -274,12 +274,13 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
       "入离职",
     ]);
     const recruitment = modules.find((module) => module.key === "recruitment");
-    expect(recruitment?.defaultPath).toBe("/talents");
+    expect(recruitment?.defaultPath).toBe("/recruitment/demands");
     expect(recruitment?.groups.map((group) => ({
       label: group.label,
       items: group.items.map((item) => item.label),
     }))).toEqual([
-      { label: "人才与应聘", items: ["人才库", "应聘与面试"] },
+      { label: "招聘需求", items: ["招聘需求"] },
+      { label: "人才与应聘", items: ["简历收件", "人才库", "应聘与面试"] },
       { label: "录用与入职衔接", items: ["录用确认"] },
     ]);
     expect(routes.find((route) => route.path === "/indicators")?.meta).toMatchObject({
@@ -305,7 +306,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
       "系统管理",
     ]);
     expect(modules.find((module) => module.key === "recruitment")).toMatchObject({
-      defaultPath: "/talents",
+      defaultPath: "/recruitment/demands",
     });
     expect(modules.find((module) => module.key === "recruitment")?.status).toBeUndefined();
     expect(modules.find((module) => module.key === "compensation")).toMatchObject({

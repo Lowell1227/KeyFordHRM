@@ -23,6 +23,8 @@ import {
 import { usersApi } from '@/api/users.api';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import { talentRecruitmentApi } from '@/api/talent-recruitment.api';
+import { positionsApi } from '@/api/positions.api';
+import { onboardingRecruitmentPrefill, type RecruitmentOnboardingPrefill } from '@/views/talent/application-presentation';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
@@ -1374,7 +1376,7 @@ function openEmployeeCreate() {
   employeeCreateDrawerVisible.value = true;
 }
 
-const talentCreatePrefill = ref<{ id: string; name: string; phone: string; applicationId: string } | null>(null);
+const talentCreatePrefill = ref<{ id: string; name: string; phone: string; applicationId: string; recruitment: RecruitmentOnboardingPrefill } | null>(null);
 const talentPrefillError = ref('');
 let talentPrefillGeneration = 0;
 
@@ -1389,10 +1391,12 @@ async function applyTalentCreatePrefill() {
     if (typeof applicationId !== 'string' || !applicationId) throw new Error('Missing recruitment application');
     const application = await talentRecruitmentApi.detail(applicationId);
     if (application.candidateId !== id || application.stage !== 'accepted') throw new Error('Application not accepted');
+    const positions = await positionsApi.findAll().catch(() => []);
     if (generation !== talentPrefillGeneration || route.query.talentId !== id) return;
     if (employeeCreateDrawerVisible.value) return;
     openEmployeeCreate();
-    talentCreatePrefill.value = { id: candidate.id, name: candidate.name, phone: candidate.phone, applicationId };
+    talentCreatePrefill.value = { id: candidate.id, name: candidate.name, phone: candidate.phone, applicationId,
+      recruitment: onboardingRecruitmentPrefill(application, flattenedDepartments.value, positions) };
   } catch {
     if (generation === talentPrefillGeneration) talentPrefillError.value = '无法办理入职，请在人才的应聘记录中核对已接受录用的申请，或打开原入职申请。';
   }
@@ -3070,6 +3074,7 @@ onBeforeUnmount(() => {
       :next-available="!!nextCreateDraft"
       :initial-name="talentCreatePrefill?.name"
       :initial-phone="talentCreatePrefill?.phone"
+      :initial-recruitment="talentCreatePrefill?.recruitment"
       :talent-candidate-id="talentCreatePrefill?.id"
       :talent-application-id="talentCreatePrefill?.applicationId"
       @next="openNextCreateDraft"

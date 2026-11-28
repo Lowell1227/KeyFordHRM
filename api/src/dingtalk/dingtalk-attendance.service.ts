@@ -1,8 +1,10 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { createHash } from "node:crypto";
 import { isUUID } from "class-validator";
-import { DingtalkService } from "./dingtalk.service";
+import { DingtalkIdentity, DingtalkService } from "./dingtalk.service";
 import {
   DingtalkDeadlineError,
   withDingtalkDeadline,
@@ -156,12 +158,13 @@ function dates(from: string, to: string): string[] {
 export class DingtalkAttendanceService {
   constructor(
     private readonly dingtalk: DingtalkService,
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
   ) {}
   async readRange(
     query: DingtalkAttendanceQuery,
+    identity: DingtalkIdentity = Object.freeze({ appKey: this.config.get<string>('DINGTALK_APP_KEY'), appSecret: this.config.get<string>('DINGTALK_APP_SECRET'), corpId: this.config.get<string>('DINGTALK_CORP_ID') }),
   ): Promise<DingtalkAttendanceRead> {
-    this.validate(query);
+    this.validate(query, identity.corpId);
     const workDates = dates(query.from, query.to),
       pending: DingtalkAttendancePending[] = [];
     const days: DingtalkAttendanceDay[] = query.bindings.flatMap((binding) =>
@@ -183,7 +186,7 @@ export class DingtalkAttendanceService {
     const request = async (path: string, body: Json | null): Promise<Json> => {
       if (blocked.has(path)) throw new ReadFailure(blocked.get(path)!);
       try {
-        return await this.request(path, body);
+        return await this.request(path, body, identity);
       } catch (error) {
         if (
           error instanceof ReadFailure &&
@@ -615,7 +618,7 @@ export class DingtalkAttendanceService {
     };
   }
 
-  private validate(query: DingtalkAttendanceQuery): void {
+  private validate(query: DingtalkAttendanceQuery, corpId: string | undefined): void {
     const invalid = () => {
       throw new BadRequestException("Invalid confirmed HRM attendance scope");
     };
@@ -624,7 +627,7 @@ export class DingtalkAttendanceService {
       !/^\d{4}-(0[1-9]|1[0-2])$/.test(query.month) ||
       query.organization?.verified !== true ||
       !text(query.organization.corpId) ||
-      query.organization.corpId !== this.config.get<string>("DINGTALK_CORP_ID")
+      query.organization.corpId !== corpId
     )
       invalid();
     for (const day of [query.from, query.to])
@@ -660,12 +663,12 @@ export class DingtalkAttendanceService {
       invalid();
   }
 
-  private async request(path: string, body: Json | null): Promise<Json> {
+  private async request(path: string, body: Json | null, identity: DingtalkIdentity): Promise<Json> {
     try {
       return await withDingtalkDeadline(async (signal) => {
         let token: string;
         try {
-          token = await this.dingtalk.getAccessToken(signal);
+          token = await this.dingtalk.getAccessToken(signal, identity);
         } catch {
           return failure("TOKEN_UNAVAILABLE");
         }

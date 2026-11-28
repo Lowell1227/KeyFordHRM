@@ -24,6 +24,21 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
   const form = reactive({ state: 'awaiting_resume' as IntakeState, ownerId: '', sourceChannel: '' as TalentSourceChannel | '', postingId: '', demandId: '', positionName: '', sourceNotes: '', nextFollowUpAt: '' });
   const phone = ref<TalentPhoneCheckResult | null>(null), checkedPhone = ref(''), checkingPhone = ref(false), reuseExisting = ref(false);
   const existingProfile = ref<TalentCandidateDetail | null>(null), existingApplications = ref<TalentApplicationView[]>([]), existingApplicationId = ref(''), existingLoading = ref(false), existingError = ref('');
+  const followUpPlanAction = ref<'keep' | 'replace'>('keep');
+  const existingFollowUpPlan = computed(() => existingProfile.value?.followUps.find(item => item.planStatus === 'pending') || null);
+  const followUpSourceIntakeId = ref(''), followUpSourceError = ref('');
+  const followUpSources = computed(() => {
+    const row = current.value; if (!row) return [];
+    const sources = (row.followUpSources || []).filter(source => source.intakeId !== row.id);
+    const instant = new Date(form.nextFollowUpAt);
+    if (form.nextFollowUpAt && Number.isFinite(instant.getTime())) sources.unshift({ intakeId: row.id, nextFollowUpAt: instant.toISOString(), primary: true });
+    return sources;
+  });
+  const selectedFollowUpSource = computed(() => followUpSources.value.find(source => source.intakeId === followUpSourceIntakeId.value) || null);
+  watch(followUpSources, sources => {
+    if (!sources.some(source => source.intakeId === followUpSourceIntakeId.value)) followUpSourceIntakeId.value = sources.find(source => source.primary)?.intakeId || (sources.length === 1 ? sources[0]!.intakeId : '');
+  }, { flush: 'sync' });
+  watch(followUpSourceIntakeId, () => { followUpSourceError.value = ''; followUpPlanAction.value = 'keep'; });
   let existingLoad: Promise<void> | null = null;
   const chosenSuggestions = ref<string[]>([]), closeReason = ref('');
   const fieldErrors = ref<Record<string, string>>({});
@@ -34,7 +49,7 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
   function stopPolling() { if (parseTimer !== undefined) clearTimeout(parseTimer); parseTimer = undefined; }
   function sourceVersion(row: RecruitmentIntake, includeState = true) {
     return JSON.stringify([row.id, row.ownerId, includeState ? row.state : null, row.sourceChannel, row.postingId, row.demandId, row.positionName, row.sourceNotes,
-      row.nextFollowUpAt, row.candidateDraft, row.applicationDraft, row.files, row.associatedFromIds, row.associatedToId,
+      row.nextFollowUpAt, [...(row.followUpSources || [])].sort((a, b) => a.intakeId.localeCompare(b.intakeId)), row.candidateDraft, row.applicationDraft, row.files, row.associatedFromIds, row.associatedToId,
       row.candidateId, row.applicationId, row.transport, row.mail]);
   }
   function pollParsing(row: RecruitmentIntake) {
@@ -94,6 +109,8 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
     createIntent.value = null; confirmIntent.value = null; phone.value = null; checkedPhone.value = ''; reuseExisting.value = false;
     checkingPhone.value = false; chosenSuggestions.value = []; closeReason.value = ''; fieldErrors.value = {}; fill();
     existingProfile.value = null; existingApplications.value = []; existingApplicationId.value = ''; existingLoading.value = false; existingError.value = ''; existingLoad = null;
+    followUpPlanAction.value = 'keep';
+    followUpSourceIntakeId.value = ''; followUpSourceError.value = '';
   }
   async function open(id: string) {
     if (!canEdit.value || busy.value) return;
@@ -126,6 +143,8 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
     unknown.value = !status || status >= 500;
     blocked.value = [403, 404, 409].includes(status || 0) || (unknown.value && operation !== 'confirm' && !!current.value);
     error.value = unknown.value ? '暂不能确认操作结果，原内容已保留。请先核对本次结果，不要另开重复记录。' : intakeError(cause);
+    const reason = (cause as { response?: { data?: { data?: { reason?: string } } } }).response?.data?.data?.reason;
+    if (reason === 'INTAKE_FOLLOW_UP_SOURCE_REQUIRED' || reason === 'INTAKE_FOLLOW_UP_SOURCE_CHANGED') followUpSourceError.value = '跟进来源已变化，请刷新核对后重新选择。';
     if (!unknown.value && operation === 'confirm') confirmIntent.value = null;
     if (!unknown.value && !current.value && status !== 409) createIntent.value = null;
   }
@@ -165,6 +184,8 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
     catch { return; }
     if (token !== epoch || !canEdit.value || busy.value || current.value !== row) return;
     revision.value = row.revision; blocked.value = false; unknown.value = false; error.value = ''; confirmIntent.value = null;
+    followUpSourceError.value = '';
+    if (reuseExisting.value) { followUpPlanAction.value = 'keep'; await loadExisting(true); }
   }
   async function checkPhone() {
     const value = draft.value.phone?.trim() || '';
@@ -205,12 +226,16 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
       }
       if (mode === 'candidate_application' && !existingApplicationId.value && (!application.deptId || !application.positionName.trim() || !application.ownerId)) { error.value = '请明确确认本次应聘的部门、岗位和负责人。'; return; }
       if (context !== epoch || !canEdit.value || current.value?.id !== row.id) return;
+      if (followUpSources.value.length && !selectedFollowUpSource.value) { followUpSourceError.value = '有多条关联收件安排，请选择本次要承接的跟进约定。'; error.value = '请先核对入库后的跟进安排。'; return; }
       if (dirty.value) {
         await save();
         if (context !== epoch || !canEdit.value || blocked.value || unknown.value || dirty.value || current.value?.id !== row.id || current.value?.state !== 'pending_review') return;
       }
       confirmIntent.value = { requestId: crypto.randomUUID(), expectedRevision: revision.value, mode,
         ...(phone.value?.exists ? { existingCandidateId: phone.value.candidate!.id } : { candidate: { ...compactDraft(draft.value), ownerId: form.ownerId } }),
+        ...(selectedFollowUpSource.value ? { followUpSourceIntakeId: selectedFollowUpSource.value.intakeId, expectedFollowUpSourceAt: selectedFollowUpSource.value.nextFollowUpAt } : {}),
+        ...(phone.value?.exists && selectedFollowUpSource.value ? { followUpPlanAction: followUpPlanAction.value,
+          ...(followUpPlanAction.value === 'replace' ? { expectedFollowUpPlanId: existingFollowUpPlan.value?.id || null } : {}) } : {}),
         ...(mode === 'candidate_application' ? { application: { deptId: application.deptId, positionName: application.positionName.trim(), ownerId: application.ownerId,
           intentDemandId: form.demandId || null, sourceChannel: form.sourceChannel || null }, ...(existingApp ? { existingApplicationId: existingApp.id, expectedExistingApplicationRevision: existingApp.revision } : {}) } : {}) };
     }
@@ -221,10 +246,10 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
     finally { if (token === epoch) busy.value = false; }
     } finally { if (context === epoch) preparing.value = false; }
   }
-  async function loadExisting() {
+  async function loadExisting(force = false) {
     const candidateId = phone.value?.candidate?.id;
     if (!canEdit.value || !reuseExisting.value || !candidateId) return;
-    if (existingProfile.value?.id === candidateId) return;
+    if (force !== true && existingProfile.value?.id === candidateId) return;
     if (existingLoad) return existingLoad;
     const token = epoch, phoneToken = phoneEpoch; existingLoading.value = true; existingError.value = '';
     existingLoad = (async () => {
@@ -255,14 +280,19 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
     draft.value = applyIntakeSuggestions(draft.value, current.value?.parseResult?.fields || {}, chosenSuggestions.value); chosenSuggestions.value = [];
   }
   async function upload(file: File) {
-    const row = current.value; if (!row) return;
+    if (!editable.value || busy.value || preparing.value || blocked.value || unknown.value) return;
     if (!TALENT_FILE_EXTENSIONS.includes(file.name.split('.').pop()?.toLowerCase() || '') || !file.size) { error.value = '请选择 PDF、Word、JPG 或 PNG 简历。'; return; }
-    await material(async () => {
+    const token = epoch; preparing.value = true;
+    try {
       const prepared = await prepareTalentFile(file);
-      if (!canEdit.value || current.value?.id !== row.id) throw { response: { status: 403 } };
-      if (prepared.size > TALENT_MAX_FILE_BYTES) throw { response: { status: 400, data: { message: '简历文件不能超过10MB。' } } };
-      return recruitmentIntakesApi.upload(row.id, revision.value, prepared);
-    }, '简历已上传，请核对或发起解析。');
+      if (prepared.size > TALENT_MAX_FILE_BYTES) { error.value = '简历文件不能超过10MB。'; return; }
+      if (token !== epoch || !canEdit.value) return;
+      if (!current.value || dirty.value) await save();
+      const row = current.value;
+      if (!row || token !== epoch || !canEdit.value || blocked.value || unknown.value || dirty.value) return;
+      await material(() => recruitmentIntakesApi.upload(row.id, revision.value, prepared), '简历已上传，请核对资料；也可选用解析。');
+    } catch (cause) { if (token === epoch) error.value = intakeError(cause); }
+    finally { if (token === epoch) preparing.value = false; }
   }
   async function close() {
     const row = current.value; if (!row) return;
@@ -283,6 +313,7 @@ export function useRecruitmentIntake(onSaved?: () => Promise<void>) {
   fill();
   return { current, opened, loading, busy: computed(() => busy.value || preparing.value), editable, error, result, revision, blocked, unknown, form, draft, application, dirty,
     phone, checkingPhone, reuseExisting, chosenSuggestions, closeReason, createIntent, confirmIntent, fieldErrors,
-    existingProfile, existingApplications, existingApplicationId, existingLoading, existingError,
+    existingProfile, existingApplications, existingApplicationId, existingLoading, existingError, existingFollowUpPlan, followUpPlanAction,
+    followUpSources, followUpSourceIntakeId, selectedFollowUpSource, followUpSourceError,
     open, start, save, refresh, reconfirm, checkPhone, loadExisting, confirm, parse, applySuggestions, upload, close, associate, reset };
 }

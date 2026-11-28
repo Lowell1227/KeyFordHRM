@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomUUID } from 'crypto';
@@ -20,7 +22,7 @@ type DraftPreview = Extract<ProgressPreview, { kind: 'draft' }>;
 @Injectable()
 export class DingtalkCardPresenter {
   constructor(
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
     private readonly aiConfig: AiConfigService,
     private readonly dingtalkBot: DingtalkBotCredentialsService,
     private readonly drafts: ProgressDraftStore,

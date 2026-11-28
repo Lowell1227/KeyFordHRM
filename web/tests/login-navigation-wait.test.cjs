@@ -33,14 +33,15 @@ function deferred(t) {
 }
 
 function login(t, options = {}) {
-  const posts = [], targets = [], messages = [], sdkRequests = [];
+  const posts = [], targets = [], messages = [], sdkRequests = [], configRequests = [], oauthRequests = [];
   const storage = new Map();
   const localStorage = { getItem: key => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   const browser = { matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
     location: { origin: 'http://localhost', href: '' } };
   const navigator = { userAgent: options.dingtalk ? 'DingTalk' : 'Node login test' };
-  const env = { VITE_DINGTALK_CORP_ID: 'fictional-corp' };
+  const env = { VITE_DINGTALK_CORP_ID: 'stale-build-corp', VITE_DINGTALK_APP_KEY: 'stale-build-app' };
+  const publicConfig = { enabled: true, corpId: 'runtime-corp', appKey: 'runtime-app', agentId: 'fictional-agent', redirectUri: null };
   function load(file, dependencies, source = fs.readFileSync(file, 'utf8')) {
     const compiled = ts.transpileModule(source.replaceAll('import.meta.env', JSON.stringify(env)), {
       compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -56,7 +57,10 @@ function login(t, options = {}) {
   const account = { employeeNo: 'HR001', name: 'Fictional HR', sysRole: 'hr', roleLabel: 'HR' };
   const { authApi } = load(path.join(root, 'api/auth.api.ts'), { './http': { default: {
     post: (url, body) => { posts.push({ url, body }); return options.authenticate?.() ?? Promise.resolve(response); },
-    get: async () => ({ enabled: true, accounts: [account] }),
+    get: async url => {
+      if (url === '/auth/dingtalk/config') { configRequests.push(url); return options.publicConfig === undefined ? publicConfig : options.publicConfig; }
+      return { enabled: true, accounts: [account] };
+    },
   } } });
   const { useAuthStore } = load(path.join(root, 'stores/auth.store.ts'), {
     pinia, '@/api/auth.api': { authApi }, '@/api/payroll.api': { payrollApi: {} },
@@ -73,7 +77,7 @@ function login(t, options = {}) {
     '@/utils/dingtalk-jsapi': { loadDingTalkJsApi: () => { sdkLoads++; return options.loadSdk?.() ?? Promise.resolve(sdk); } },
     '@/utils/dingtalk-login-error': load(path.join(root, 'utils/dingtalk-login-error.ts'), {}),
     '@/utils/dingtalk-oauth': { clearArchiveOAuthReturn: () => { cleared++; },
-      rememberArchiveOAuthReturn() {}, buildDingTalkOAuthUrl: () => 'https://example.invalid/oauth' },
+      rememberArchiveOAuthReturn() {}, buildDingTalkOAuthUrl: value => { oauthRequests.push(value); return 'https://example.invalid/oauth'; } },
     '@/api/auth.api': { authApi }, '@/utils/preview-mode': { isLocalPreview: options.preview ?? false },
   }, script).default;
   let state;
@@ -98,9 +102,32 @@ function login(t, options = {}) {
     }, slots.default?.()) });
     return renderToString(output);
   }
-  return { state, posts, targets, messages, sdkRequests, sdk, response, html, auth,
+  return { state, posts, targets, messages, sdkRequests, sdk, response, html, auth, configRequests, oauthRequests,
     get cleared() { return cleared; }, get sdkLoads() { return sdkLoads; } };
 }
+
+test('DingTalk sign-in reads effective backend settings instead of obsolete build-time app keys', async t => {
+  const view = login(t, { dingtalk: true });
+  await view.state.onDingTalkLogin();
+  assert.ok(view.configRequests.length > 0);
+  assert.equal(view.sdkRequests[0].corpId, 'runtime-corp');
+  assert.equal(view.sdkRequests[0].clientId, 'runtime-app');
+});
+
+test('unavailable DingTalk configuration keeps password sign-in working and sends no SDK request', async t => {
+  const view = login(t, { dingtalk: true, publicConfig: { enabled: false, corpId: null, appKey: null, agentId: null, redirectUri: null } });
+  await flush(); await view.state.onDingTalkLogin();
+  assert.equal(view.sdkLoads, 0); assert.equal(view.posts.length, 0);
+  await view.state.onPasswordLogin(); assert.equal(view.posts[0].url, '/auth/login');
+});
+
+test('a callback from another environment cannot redirect this login away from its own environment', async t => {
+  const view = login(t, { publicConfig: { enabled: true, corpId: 'runtime-corp', appKey: 'runtime-app', redirectUri: 'https://another-environment.invalid/auth/callback' } });
+  await flush(); await view.state.onDingTalkLogin();
+  assert.equal(view.oauthRequests.length, 0);
+  assert.equal(view.posts.length, 0);
+  await view.state.onPasswordLogin(); assert.equal(view.posts[0].url, '/auth/login');
+});
 
 test('redirect helper returns a promise that stays pending until router.replace completes', async t => {
   const navigation = deferred(t), view = login(t, { navigate: () => navigation.promise });

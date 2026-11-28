@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -34,7 +36,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
   private stopped = false;
 
   constructor(
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
     private readonly eligibility: BotEligibilityService,
     private readonly progress: AiProgressService,
     private readonly drafts: ProgressDraftStore,

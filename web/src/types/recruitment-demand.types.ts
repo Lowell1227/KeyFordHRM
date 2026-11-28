@@ -2,7 +2,8 @@ import type { TalentApplicationStage } from './talent.types';
 
 export type RecruitmentDemandSourceKind = 'dingtalk' | 'local';
 export type RecruitmentDemandSourceState = 'draft' | 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'unknown';
-export type RecruitmentDemandLocalAction = 'submit' | 'approve' | 'return' | 'withdraw';
+export type RecruitmentDemandLocalAction = 'submit' | 'submit_approve' | 'approve' | 'return' | 'withdraw';
+export type RecruitmentDemandTrackingState = 'recruiting' | 'filled' | 'paused' | 'cancelled';
 
 export interface RecruitmentDemandEvent {
   id: string;
@@ -24,6 +25,7 @@ export interface RecruitmentDemandView {
   rawHeadcount: string | null;
   deptId: string | null;
   departmentName: string | null;
+  departmentFullPath?: string | null;
   positionId: string | null;
   positionName: string | null;
   approvedHeadcount: number | null;
@@ -32,6 +34,13 @@ export interface RecruitmentDemandView {
   createdById?: string | null;
   submittedById?: string | null;
   approvedById?: string | null;
+  createdByName?: string | null;
+  submittedByName?: string | null;
+  approvedByName?: string | null;
+  submittedAt?: string | null;
+  reviewers?: Array<{ id: string; name: string }>;
+  submissionIssue?: string | null;
+  trackingState?: RecruitmentDemandTrackingState;
   allowedActions?: string[];
   occupiedCount?: number;
   acceptedCount?: number;
@@ -41,6 +50,7 @@ export interface RecruitmentDemandView {
   usable: boolean;
   issues: string[];
   approvedAt: string | null;
+  createdAt?: string | null;
   sourceLink: string | null;
   lastSyncedAt: string | null;
   events?: RecruitmentDemandEvent[];
@@ -73,7 +83,7 @@ export interface RecruitmentDemandDirectories {
   departments: Array<{ id: string; name: string; fullPath?: string }>;
   positions: Array<{ id: string; code: string; name: string }>;
 }
-export interface RecruitmentDemandQuery { keyword?: string; status?: RecruitmentDemandSourceState; page?: number; pageSize?: number }
+export interface RecruitmentDemandQuery { keyword?: string; status?: RecruitmentDemandSourceState; trackingState?: RecruitmentDemandTrackingState; page?: number; pageSize?: number }
 export interface RecruitmentDemandMapping { expectedRevision: number; deptId: string; positionId: string; approvedHeadcount: number; reason: string }
 export type RecruitmentDemandApplicationCategory = 'screening' | 'interviewing' | 'hiring_review' | 'awaiting_reply' | 'accepted' | 'terminated' | 'hired';
 export interface RecruitmentDemandIntentQuery { keyword?: string; page?: number; pageSize?: number; deptId?: string; positionName?: string }

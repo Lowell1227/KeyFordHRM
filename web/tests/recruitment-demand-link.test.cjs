@@ -155,10 +155,10 @@ test('two system-created approved demands have distinct option and selected labe
   const tree = renderTemplate('views/talent/components/TalentApplicationPanel.vue', view.state, { candidateId: 'candidate-A', editable: true });
   const options = nestedNodes(tree).filter(node => node.type?.name === 'el-option' && localRows.some(row => row.id === node.props.value));
   assert.equal(options.length, 2);
-  assert.match(options[0].props.label, /系统创建.*系统需求 system-A/);
-  assert.match(options[1].props.label, /系统创建.*系统需求 system-B/);
-  assert.match(displayText(tree), /已选 系统创建 · 系统需求 system-B/);
-  assert.match(displayText(tree), /前往系统需求办理/);
+  assert.match(options[0].props.label, /^Fictional job · Fictional department.*#system-A/);
+  assert.match(options[1].props.label, /^Fictional job · Fictional department.*#system-B/);
+  assert.match(displayText(tree), /已选 Fictional job · Fictional department.*#system-B/);
+  assert.match(displayText(tree), /查看招聘需求/);
 });
 
 test('approved system demand can be selected, refreshed and submitted without DingTalk configuration', async t => {
@@ -382,7 +382,7 @@ test('review-only demand access has local review controls but does not mount can
   const tree = renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state).children.detail();
   const nodes = nestedNodes(tree);
   assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandApplications), false);
-  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandSeats), true);
+  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandSeats), false);
   const drawer = nodes.find(node => node.type === view.state.BusinessDetailDrawer);
   assert.match(displayText(drawer.children.footer()), /审核通过/);
   await view.state.beginLocalCreate(); assert.equal(view.state.localOpen.value, false);
@@ -441,11 +441,11 @@ test('source-correct snapshot and current labels are independent; absent legacy 
   const state = load(filename, {}).default.setup({}, { expose() {} });
   const base = { demandId: 'demand-A', revision: 1, instanceId: null, departmentName: 'Dept', positionName: 'Job', approvedHeadcount: 2, sourceLink: 'https://aflow.dingtalk.com/not-local' };
   let text = displayText(renderTemplate('views/recruitment/components/RecruitmentDemandSummary.vue', state, { snapshot: { ...base, sourceKind: 'local' }, current: demand({ sourceKind: 'dingtalk' }) }));
-  assert.match(text, /系统创建/); assert.match(text, /钉钉/);
+  assert.match(text, /HRM录入/); assert.match(text, /钉钉同步/);
   const nodes = nestedNodes(renderTemplate('views/recruitment/components/RecruitmentDemandSummary.vue', state, { snapshot: { ...base, sourceKind: 'local' }, current: null }));
   assert.equal(nodes.some(node => node.type === 'a'), false);
   text = displayText(renderTemplate('views/recruitment/components/RecruitmentDemandSummary.vue', state, { snapshot: { ...base, instanceId: 'legacy-id' }, current: localDemand() }));
-  assert.match(text, /钉钉/); assert.match(text, /legacy-id/); assert.match(text, /系统创建/);
+  assert.match(text, /钉钉同步/); assert.match(text, /legacy-id/); assert.match(text, /HRM录入/);
 });
 
 test('system-created demand timelines recognize the backend edit event and its update alias', () => {
@@ -453,6 +453,89 @@ test('system-created demand timelines recognize the backend edit event and its u
   assert.equal(demandEventLabel('local_edit'), '修改需求草稿');
   assert.equal(demandEventLabel('local_update'), '修改需求草稿');
   assert.equal(demandEventLabel('local_withdraw'), '撤销需求');
+});
+
+test('demand presentation leads with names and uses codes only to distinguish duplicate positions', () => {
+  const presentation = load(path.join(root, 'views/recruitment/demand-presentation.ts'), {});
+  const positions = [{ id: 'one', name: '招聘专员', code: 'LEGACY-ONE' },
+    { id: 'two', name: '财务', code: 'ROSTER-TWO' }, { id: 'three', name: '财务', code: 'LEGACY-THREE' }];
+  assert.equal(presentation.demandPositionLabel(positions[0], positions), '招聘专员');
+  assert.equal(presentation.demandPositionLabel(positions[1], positions), '财务 · ROSTER-TWO');
+  assert.equal(presentation.demandOriginLabel(localDemand()), 'HRM录入');
+  assert.equal(presentation.demandDepartmentLabel({ departmentName: '招聘组', departmentFullPath: '公司 / 人事部 / 招聘组' }), '公司 / 人事部 / 招聘组');
+});
+
+test('submission blocker directs the current operator to an eligible submitter', () => {
+  const { demandNextStep } = load(path.join(root, 'views/recruitment/demand-presentation.ts'), {});
+  const submissionIssue = '请由创建人或其他经办提交，再交需求审核人审核';
+  assert.equal(demandNextStep(localDemand({ sourceState: 'draft', allowedActions: ['edit'], reviewers: [], submissionIssue })), submissionIssue);
+});
+
+test('demand choices use job, department and business date with a short reference rather than a full internal UUID', () => {
+  const { demandOptionLabel } = load(path.join(root, 'views/recruitment/demand-presentation.ts'), {});
+  const id = 'f073978a-1d4a-496c-882e-d0fe2670d7ba';
+  const label = demandOptionLabel(localDemand({ id, positionName: '视频剪辑专员', departmentName: '人事部',
+    departmentFullPath: '公司 / 人事部', approvedAt: '2037-01-01T18:30:00Z' }));
+  assert.equal(label, '视频剪辑专员 · 公司 / 人事部 · 批准2037-01-02 · #f073978a');
+  assert.doesNotMatch(label, /系统需求|系统创建|f073978a-1d4a/);
+  assert.equal(demandOptionLabel(localDemand({ id: 'second', positionName: '视频剪辑专员', departmentName: '人事部',
+    approvedAt: null, createdAt: '2037-01-03T00:00:00Z' })), '视频剪辑专员 · 人事部 · 创建2037-01-03 · #second');
+  assert.notEqual(label, demandOptionLabel(localDemand({ id: 'different', positionName: '视频剪辑专员', departmentName: '人事部' })));
+});
+
+test('draft demand summary does not pretend normal approval steps are errors or unverified seats', async t => {
+  const row = localDemand({ reviewers: [{ id: 'reviewer', name: '招聘审核人' }],
+    issues: ['请先提交招聘需求，交独立审核人审核', '请核对有效岗位'] });
+  const view = await ledger(t, true, { detail: async () => row }); await view.state.openDetail(row);
+  assert.deepEqual([...view.state.detailIssues.value], ['请核对有效岗位']);
+  const nodes = nestedNodes(renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state).children.detail());
+  const summary = nodes.find(node => node.props?.['aria-label'] === '招聘需求概要');
+  assert.ok(summary); assert.match(displayText(summary), /Fictional job/);
+  assert.match(displayText(summary), /申请 2 人/); assert.match(displayText(summary), /招聘审核人/);
+  assert.doesNotMatch(displayText(summary), /demand-A|尚未批准|未取得批准时间|待核对或不可使用/);
+  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandSeats), false);
+  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandApplications), false);
+});
+
+test('desktop and mobile demand lists keep technical references in detail only', async t => {
+  const view = await ledger(t); const row = localDemand({ reviewers: [{ id: 'reviewer', name: '招聘审核人' }] });
+  view.state.rows.value = [row];
+  const tree = renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state);
+  const columns = nestedNodes(tree.children['desktop-list']()).filter(node => node.type?.name === 'el-table-column');
+  const desktop = columns.map(column => displayText(column.children.default?.({ row }))).join('');
+  const card = nestedNodes(tree.children['mobile-list']()).find(node => node.type === view.state.MobileResultCard);
+  assert.ok(card);
+  const mobile = displayText(card.children.title()) + displayText(card.children.default());
+  for (const text of [desktop, mobile]) {
+    assert.match(text, /Fictional job/); assert.match(text, /申请 2 人/); assert.match(text, /招聘审核人/);
+    assert.doesNotMatch(text, /demand-A|系统创建|系统需求|尚未批准|待核对或不可使用/);
+  }
+});
+
+test('authorized self-created demand has an explicit submit-and-approve action without changing draft save', async t => {
+  const sent = [], row = localDemand({ allowedActions: ['edit', 'submit_approve', 'withdraw'], reviewers: [{ id: 'actor-A', name: '审核人' }] });
+  const approved = localDemand({ sourceState: 'approved', allowedActions: [], approvedHeadcount: 2, usable: true });
+  let reads = 0;
+  const view = await ledger(t, true, { detail: async () => reads++ ? approved : row,
+    localAction: async (id, body) => { sent.push({ id, ...body }); return approved; } });
+  await view.state.openDetail(row);
+  const nodes = nestedNodes(renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state).children.detail());
+  const drawer = nodes.find(node => node.type === view.state.BusinessDetailDrawer);
+  assert.match(displayText(drawer.children.footer()), /提交并通过/);
+  assert.equal(view.state.canLocalAction('submit'), false);
+  await view.state.beginLocalAction('submit_approve'); await view.state.submitLocalAction();
+  assert.deepEqual(sent, [{ id: row.id, expectedRevision: 3, action: 'submit_approve' }]);
+  assert.match(view.state.resultMessage.value, /通过/);
+});
+
+test('withdrawn previously approved demand keeps historical applications and seat facts visible', async t => {
+  const row = localDemand({ sourceState: 'withdrawn', approvedHeadcount: 2, approvedAt: '2037-01-01T00:00:00Z',
+    acceptedCount: 1, hiredCount: 1, remainingCount: 0, allowedActions: [] });
+  const view = await ledger(t, true, { detail: async () => row }); await view.state.openDetail(row);
+  const nodes = nestedNodes(renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state).children.detail());
+  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandSeats), true);
+  assert.equal(nodes.some(node => node.type === view.state.RecruitmentDemandApplications), true);
+  assert.match(view.state.demandNextStep(row), /在办应聘.*继续/);
 });
 
 test('local API uses dedicated encoded endpoints and preserves the caller request UUID and revisions', async () => {
@@ -696,18 +779,18 @@ test('mapping controls mount only after directories are ready, preserving local 
 
 test('PC and mobile demand lists distinguish missing counts, unverified capacity and real zeros', async t => {
   const view = await ledger(t);
-  for (const [approvedHeadcount, remainingCount, expected] of [[0, 0, '0'], [null, null, '待核对'], [undefined, undefined, '—']]) {
+  for (const [approvedHeadcount, remainingCount, expectedCount, expectedSeats] of [[0, 0, '批准 0 人', '0'], [null, null, '批准人数待核对', '待核对'], [undefined, undefined, '—', '—']]) {
     const row = demand({ approvedHeadcount, remainingCount });
     view.state.rows.value = [row];
     const tree = renderTemplate('views/recruitment/RecruitmentDemandsView.vue', view.state);
     const columns = nestedNodes(tree.children['desktop-list']()).filter(node => node.type?.name === 'el-table-column');
-    for (const label of ['批准人数', '剩余名额']) {
+    for (const [label, expected] of [['招聘人数', expectedCount], ['剩余名额', expectedSeats]]) {
       const column = columns.find(node => node.props.label === label);
       assert.ok(column, `${label} column must be available`);
       assert.equal(displayText(column.children.default({ row })), expected);
     }
     const mobile = displayText(tree.children['mobile-list']());
-    assert.ok(mobile.includes(`批准人数${expected}剩余名额${expected}`));
+    assert.ok(mobile.includes(`招聘人数${expectedCount}剩余名额${expectedSeats}`));
   }
 });
 

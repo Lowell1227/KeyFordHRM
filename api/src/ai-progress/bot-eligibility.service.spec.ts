@@ -120,7 +120,7 @@ describe('BotEligibilityService', () => {
     const { service, prisma, dingtalk, objectives } = setup();
     prisma.externalIdentityBinding.findFirst.mockResolvedValueOnce(null);
     await service.resolve(sender);
-    expect(dingtalk.fetchUserDetail).toHaveBeenCalledWith('staff', undefined, expect.any(AbortSignal));
+    expect(dingtalk.fetchUserDetail).toHaveBeenCalledWith('staff', undefined, expect.any(AbortSignal), expect.objectContaining({ corpId: 'corp' }));
     expect(prisma.externalIdentityBinding.findFirst).toHaveBeenNthCalledWith(2, {
       where: { provider: 'dingtalk', externalUnionId: 'union', endedAt: null }, include: { user: true },
     });

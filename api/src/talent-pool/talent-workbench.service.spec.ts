@@ -78,12 +78,13 @@ describe('recruitment workbench read projection', () => {
     expect(groups.find(group => group.key as string === 'demand_review')).toMatchObject({ total: 7,
       items: [{ id: 'demand', demandId: 'demand', title: 'Synthetic position', subtitle: 'Synthetic department', date: now.toISOString() }] });
     expect(tx.recruitmentDemand.count).toHaveBeenCalledWith({ where: {
-      sourceKind: 'local', sourceState: 'pending', submittedById: { not: user.id },
+      sourceKind: 'local', sourceState: 'pending', submittedById: { not: null }, OR: [{ submittedById: { not: user.id } }, { createdById: user.id }],
     } });
     expect(tx.talentCandidate.findMany).not.toHaveBeenCalled();
     expect(tx.talentApplication.findMany).not.toHaveBeenCalled();
     expect(tx.recruitmentDemand.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 5,
-      select: { id: true, rawPosition: true, rawDepartment: true, updatedAt: true } }));
+      select: { id: true, rawPosition: true, rawDepartment: true, updatedAt: true,
+        position: { select: { name: true } }, department: { select: { name: true } } } }));
     expect(groups.some(group => group.key as string === 'demand_returned')).toBe(false);
   });
 
@@ -166,7 +167,7 @@ describe('recruitment workbench read projection', () => {
     expect(tx.talentCandidate.count).toHaveBeenCalledWith({ where: {
       deletedAt: null, AND: [
         { OR: [{ ownerId: user.id }, { ownerId: null, createdById: user.id }] },
-        { OR: [{ followUps: { none: {} } }, { followUps: { some: { planStatus: 'pending' } } }] },
+        { OR: [{ followUps: { none: { recordType: 'communication' } } }, { followUps: { some: { planStatus: 'pending' } } }] },
       ],
     } });
     for (const [query] of tx.talentInterview.count.mock.calls as any[]) {

@@ -4,13 +4,13 @@ test.describe('25-menu-information-architecture recruitment boundary', () => {
   test.describe('system administrator', () => {
     test.use({ storageState: 'e2e/auth-state/admin.json' });
 
-    test('opens the talent pool by default and keeps planning separate and read-only', async ({ page }) => {
+    test('opens recruitment demands by default and keeps planning separate and read-only', async ({ page }) => {
       await page.goto('/recruitment');
 
-      await expect(page).toHaveURL(/\/talents(?:\?|$)/);
+      await expect(page).toHaveURL(/\/recruitment\/demands(?:\?|$)/);
       await expect(page.getByTestId('nav-module-recruitment')).toHaveClass(/is-active/);
       await expect(page.getByTestId('module-status-recruitment')).toHaveCount(0);
-      await expect(page.locator('.app-sidebar').getByRole('button', { name: '人才库', exact: true })).toHaveClass(/is-active/);
+      await expect(page.locator('.app-sidebar').getByRole('button', { name: '招聘需求', exact: true })).toHaveClass(/is-active/);
 
       await page.goto('/recruitment/planning');
       await expect(page).toHaveURL(/\/recruitment\/planning$/);
@@ -36,7 +36,7 @@ test.describe('25-menu-information-architecture recruitment boundary', () => {
       await expect(page.getByTestId('nav-module-recruitment')).toBeVisible();
 
       await page.goto('/recruitment');
-      await expect(page).toHaveURL(/\/talents(?:\?|$)/);
+      await expect(page).toHaveURL(/\/recruitment\/demands(?:\?|$)/);
       await expect(page.locator('.app-sidebar').getByRole('button', { name: '人才库', exact: true })).toBeVisible();
       await expect(page.locator('.app-sidebar').getByRole('button', { name: '应聘与面试', exact: true })).toBeVisible();
       await expect(page.locator('.app-sidebar').getByRole('button', { name: '录用确认', exact: true })).toBeVisible();

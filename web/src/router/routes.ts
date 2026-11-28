@@ -164,7 +164,7 @@ export const routes: RouteRecordRaw[] = [
       talentPoolOnly: true,
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['recruitment_view', 'recruitment_edit', 'employee_archive_edit', 'employee_archive_review'],
-      navigation: { module: 'recruitment', label: '人才库', order: 10, group: 'recruitment-candidates', groupLabel: '人才与应聘' },
+      navigation: { module: 'recruitment', label: '人才库', order: 20, group: 'recruitment-candidates', groupLabel: '人才与应聘' },
     },
   },
   {
@@ -182,7 +182,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true, title: '招聘需求', recruitmentDemandOnly: true,
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['recruitment_view', 'recruitment_edit', 'employee_archive_edit', 'employee_archive_review'],
-      navigation: { module: 'recruitment', label: '招聘需求', order: 25, group: 'recruitment-demand', groupLabel: '招聘需求' },
+      navigation: { module: 'recruitment', label: '招聘需求', order: 5, group: 'recruitment-demand', groupLabel: '招聘需求' },
     },
   },
   {
@@ -257,7 +257,7 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/talent/TalentInterviewView.vue'),
     meta: {
       requiresAuth: true, title: '应聘与面试',
-      navigation: { module: 'recruitment', label: '应聘与面试', order: 20, group: 'recruitment-candidates', groupLabel: '人才与应聘', audience: 'recruitment' },
+      navigation: { module: 'recruitment', label: '应聘与面试', order: 25, group: 'recruitment-candidates', groupLabel: '人才与应聘', audience: 'recruitment' },
     },
   },
   {
@@ -385,6 +385,12 @@ export const routes: RouteRecordRaw[] = [
     name: 'ConfigurationHelp',
     component: () => import('@/views/system/ConfigurationHelpView.vue'),
     meta: { requiresAuth: true, title: '配置办理说明' },
+  },
+  {
+    path: '/system/configurations/:setting',
+    name: 'SystemConfiguration',
+    component: () => import('@/views/system/SystemConfigurationView.vue'),
+    meta: { requiresAuth: true, title: '配置维护', roles: ['system_admin'], activeNavigationPath: '/system' },
   },
   {
     path: '/system/ai-services',

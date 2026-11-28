@@ -17,7 +17,8 @@ export class RecruitmentIntakesController {
   constructor(private readonly intakes: RecruitmentIntakesService) {}
   @Get() @Header('Cache-Control','no-store, private') list(@Query() query:RecruitmentIntakeQueryDto,@CurrentUser() user:AuthUser){return this.intakes.list(query,user);}
   @Post() create(@Body() input:CreateRecruitmentIntakeDto,@CurrentUser() user:AuthUser){return this.intakes.create(input,user);}
-  @Get('mailbox/status') @Header('Cache-Control','no-store, private') mailboxStatus(@CurrentUser() user:AuthUser){return this.intakes.mailboxStatus(user);}
+  @Get('mailboxes') @Header('Cache-Control','no-store, private') mailboxes(@CurrentUser() user:AuthUser){return this.intakes.mailboxes(user);}
+  @Get('mailbox/status') @Header('Cache-Control','no-store, private') mailboxStatus(@CurrentUser() user:AuthUser,@Query('mailboxId') mailboxId?:string){return this.intakes.mailboxStatus(user,mailboxId);}
   @Post('mailbox/sync') sync(@Body() input:SyncRecruitmentMailboxDto,@CurrentUser() user:AuthUser){return this.intakes.syncMailbox(input,user);}
   @Get(':id') @Header('Cache-Control','no-store, private') detail(@Param('id',new ParseUUIDPipe()) id:string,@CurrentUser() user:AuthUser){return this.intakes.detail(id,user);}
   @Patch(':id') update(@Param('id',new ParseUUIDPipe()) id:string,@Body() input:UpdateRecruitmentIntakeDto,@CurrentUser() user:AuthUser){return this.intakes.update(id,input,user);}

@@ -1,10 +1,13 @@
-import { Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { isISO8601 } from 'class-validator';
 import { AlimailRecruitmentAdapter } from './recruitment-alimail-adapter';
 import { readRecruitmentMailSettings } from './recruitment-mail-settings';
 import { TALENT_SOURCE_CHANNELS } from './talent.constants';
 import { RESUME_LIMITS } from './talent-resume-client';
+import { RecruitmentMailProvider } from './recruitment-mail-providers';
 
 export interface RecruitmentMailAttachment {
   id: string;
@@ -50,33 +53,74 @@ export interface RecruitmentMailUnit {
 
 @Injectable()
 export class RecruitmentMailboxGateway {
-  private readonly adapter?: AlimailRecruitmentAdapter;
-  private readonly invalidConfiguration: boolean = false;
+  private readonly cache = new Map<string, { fingerprint: string; adapter: AlimailRecruitmentAdapter }>();
+  constructor(@Optional() @Inject(RuntimeSettingsService) private readonly config?: ConfigService) { this.entries(); }
 
-  constructor(@Optional() config?: ConfigService) {
-    try {
-      const settings = readRecruitmentMailSettings(config);
-      if (settings) this.adapter = new AlimailRecruitmentAdapter(settings);
-    } catch {
-      this.invalidConfiguration = true;
+  private entries() {
+    const runtime = this.config as unknown as RuntimeSettingsService | undefined;
+    const saved = typeof runtime?.mailboxConfigurations === 'function' ? runtime.mailboxConfigurations() : [];
+    const entries: Array<{ id: string; name: string; enabled: boolean; configured: boolean; stateId: string; adapter?: AlimailRecruitmentAdapter; invalid?: boolean }> = [];
+    for (const row of saved) {
+      const value = row.values, enabled = value?.RECRUITMENT_MAIL_ENABLED === true;
+      const item = { id: row.id, name: String(value?.RECRUITMENT_MAIL_NAME || '招聘邮箱'), enabled, configured: false, stateId: '', invalid: value === null };
+      try {
+        if (value && value.RECRUITMENT_MAIL_ACCOUNT && value.RECRUITMENT_MAIL_PASSWORD && value.RECRUITMENT_MAIL_FOLDER && value.RECRUITMENT_MAIL_AUTHORIZED_FROM) {
+          const settings = { provider: (value.RECRUITMENT_MAIL_PROVIDER || 'alimail') as RecruitmentMailProvider, account: value.RECRUITMENT_MAIL_ACCOUNT as string, password: value.RECRUITMENT_MAIL_PASSWORD as string, folder: value.RECRUITMENT_MAIL_FOLDER as string, authorizedFrom: new Date(value.RECRUITMENT_MAIL_AUTHORIZED_FROM as string).toISOString() };
+          const adapter = this.adapter(row.id, settings);
+          const scope = createHash('sha256').update(JSON.stringify([...(settings.provider === 'alimail' ? [] : [settings.provider]), settings.account, settings.folder, settings.authorizedFrom])).digest('hex');
+          let legacy = row.id === 'recruitment-mail' && settings.provider === 'alimail' && value.__legacyMailboxScope === scope;
+          if (row.id === 'recruitment-mail' && settings.provider === 'alimail' && !value.__legacyMailboxScope) {
+            try {
+              const old = readRecruitmentMailSettings({ get: ((key: string) => key === 'RECRUITMENT_MAIL_ENABLED' ? 'true' : this.config?.get(key)) as ConfigService['get'] });
+              legacy ||= !!old && old.account === settings.account && old.folder === settings.folder && new Date(old.authorizedFrom).toISOString() === settings.authorizedFrom;
+            } catch { /* An unavailable old file cannot override a valid saved account. */ }
+          }
+          entries.push({ ...item, configured: true, stateId: legacy ? 'primary' : 'm' + createHash('sha256').update(row.id + ':' + scope).digest('hex').slice(0, 19), adapter });
+          continue;
+        }
+      } catch { item.invalid = true; }
+      entries.push(item);
     }
+    if (!saved.some(row => row.id === 'recruitment-mail')) {
+      try {
+        const settings = readRecruitmentMailSettings(this.config);
+        if (settings) entries.unshift({ id: 'recruitment-mail', name: '招聘邮箱', enabled: true, configured: true, stateId: 'primary', adapter: this.adapter('recruitment-mail', settings) });
+      } catch { entries.unshift({ id: 'recruitment-mail', name: '招聘邮箱', enabled: true, configured: false, stateId: 'primary', invalid: true }); }
+    }
+    if (this.config?.get('HRM_PREVIEW') === 'true') return entries.map(item => ({ ...item, enabled: false, configured: false, adapter: undefined }));
+    return entries;
   }
-
-  status(): { configured: boolean } { return { configured: !!this.adapter }; }
-
-  async readPage(input: { cursor?: string; limit: number }): Promise<RecruitmentMailboxPage> {
-    if (this.invalidConfiguration) {
-      throw new ServiceUnavailableException('招聘邮箱安全配置未就绪，请管理员检查私有配置');
-    }
-    if (!this.adapter) {
-      throw new ServiceUnavailableException('招聘邮箱未配置，请先手工上传；专用邮箱授权后再开启读取');
-    }
-    try {
-      return await this.adapter.readPage(input);
-    } catch {
-      throw new ServiceUnavailableException('招聘邮箱读取未完成，本页未完成；请核对授权和指定文件夹后重试');
-    }
+  private adapter(id: string, settings: { provider?: RecruitmentMailProvider; account: string; password: string; folder: string; authorizedFrom: string }) {
+    const fingerprint = createHash('sha256').update(JSON.stringify(settings)).digest('hex');
+    const old = this.cache.get(id);
+    if (old?.fingerprint === fingerprint) return old.adapter;
+    const adapter = new AlimailRecruitmentAdapter(settings);
+    this.cache.set(id, { fingerprint, adapter });
+    return adapter;
   }
+  choices() { return this.entries().map(({ id, name, enabled, configured }) => ({ id, name, enabled, configured })); }
+  stateId(mailboxId: string) { return this.entries().find(item => item.id === mailboxId)?.stateId ?? null; }
+  sourceForKey(key: string | null) {
+    const id = key?.match(/^(recruitment-mail(?::[0-9a-f-]{36})?)\|(?:alimail|qq|netease163|netease126):[a-f0-9]{64}$/i)?.[1];
+    if (!id) return { mailboxId: null, mailboxName: null };
+    const entry = this.entries().find(item => item.id === id);
+    return { mailboxId: id, mailboxName: entry?.name ?? null };
+  }
+  status(): { configured: boolean } { return { configured: this.entries().some(item => item.enabled && item.configured) }; }
+  select(mailboxId?: string) {
+    const entries = this.entries();
+    const enabled = entries.filter(item => item.enabled);
+    if (!mailboxId && enabled.length > 1) throw new BadRequestException('已启用多个招聘邮箱，请先选择本次读取的邮箱');
+    const item = mailboxId ? entries.find(row => row.id === mailboxId) : enabled[0];
+    if (item?.invalid) throw new ServiceUnavailableException('招聘邮箱安全配置未就绪，请管理员检查已保存配置');
+    if (!item?.enabled || !item.adapter) throw new ServiceUnavailableException('招聘邮箱未配置，请先手工上传；专用邮箱授权后再开启读取');
+    const adapter = item.adapter;
+    return { id: item.id, name: item.name, stateId: item.stateId, readPage: async (input: { cursor?: string; limit: number }) => {
+      try { const page = await adapter.readPage(input); return item.stateId === 'primary' ? page : { ...page, mailboxKey: `${item.id}|${page.mailboxKey}` }; }
+      catch { throw new ServiceUnavailableException('招聘邮箱读取未完成，本页未完成；请核对授权和指定文件夹后重试'); }
+    } };
+  }
+  async readPage(input: { cursor?: string; limit: number }): Promise<RecruitmentMailboxPage> { return this.select().readPage(input); }
 }
 
 function invalidPage(): never {

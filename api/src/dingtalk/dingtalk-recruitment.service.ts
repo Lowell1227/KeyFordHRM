@@ -1,3 +1,5 @@
+import { Inject } from '@nestjs/common';
+import { RuntimeSettingsService } from '@/system-configuration/runtime-settings.service';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DingtalkService } from './dingtalk.service';
@@ -123,7 +125,7 @@ function field(values: unknown, id: string): string | null {
 export class DingtalkRecruitmentService {
   constructor(
     private readonly dingtalk: DingtalkService,
-    private readonly config: ConfigService,
+    @Inject(RuntimeSettingsService) private readonly config: ConfigService,
   ) {}
 
   status(): {
@@ -538,6 +540,8 @@ export class DingtalkRecruitmentService {
             maxResults: 20,
           },
           signal,
+          undefined,
+          config,
         );
         if (
           !Array.isArray(result.list) ||
@@ -586,6 +590,7 @@ export class DingtalkRecruitmentService {
       null,
       signal,
       instanceId,
+      config,
     );
     for (const [key, expected] of [
       ['corpId', config.DINGTALK_CORP_ID],
@@ -629,10 +634,11 @@ export class DingtalkRecruitmentService {
     body: Json | null,
     signal: AbortSignal,
     instanceId?: string,
+    identity?: Settings,
   ): Promise<Json> {
     try {
       signal.throwIfAborted();
-      const token = await this.dingtalk.getAccessToken(signal);
+      const token = await this.dingtalk.getAccessToken(signal, identity ? { appKey: identity.DINGTALK_APP_KEY, appSecret: identity.DINGTALK_APP_SECRET, corpId: identity.DINGTALK_CORP_ID } : undefined);
       signal.throwIfAborted();
       const url = new URL(path, 'https://api.dingtalk.com');
       if (instanceId) url.searchParams.set('processInstanceId', instanceId);

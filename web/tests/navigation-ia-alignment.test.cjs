@@ -62,7 +62,10 @@ test('personnel and performance ownership, defaults and probation placement', ()
   assert.equal(route('Dashboard').meta.title, '全局工作台');
   assert.equal(route('MyTasks').meta.title, '绩效任务');
   assert.equal(route('Indicators').meta.navigation.groupLabel, '绩效设置');
-  assert.equal(nav.find(item => item.key === 'recruitment').defaultPath, '/talents');
+  const recruitment = nav.find(item => item.key === 'recruitment');
+  assert.equal(recruitment.defaultPath, '/recruitment/demands');
+  assert.deepEqual(recruitment.groups.flatMap(group => group.items.map(item => item.label)),
+    ['招聘需求', '简历收件', '人才库', '应聘与面试', '录用确认']);
   assert.equal(buildNavigation(routes, user('employee', ['talent_hiring_confirm'])).find(item => item.key === 'recruitment').defaultPath, '/talent-hiring');
   assert.equal(routes.filter(item => item.path === '/entry-exit' && item.meta.navigation).length, 1);
   assert.equal(route('PersonnelLifecycle').meta.navigation.module, 'people');
