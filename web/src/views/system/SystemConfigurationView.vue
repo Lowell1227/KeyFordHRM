@@ -20,8 +20,7 @@ const feedbackError = ref(false);
 const conflict = ref(false);
 const retainedInputs = ref(false);
 const sampleInstanceId = ref('');
-const sourceLabels = { deployment: '部署配置', database: '系统内保存', none: '尚未配置' };
-const verificationLabels = { unknown: '无核验记录', untested: '当前版本待核验', passed: '当前版本核验通过', failed: '当前版本核验失败' };
+const verificationLabels = { unknown: '本页面尚无核验记录', untested: '当前保存版本待核验', passed: '当前保存版本核验通过', failed: '当前保存版本核验失败' };
 const testLabel = computed(() => config.value?.testKind === 'connection' ? '测试连接'
   : config.value?.testKind === 'scope' ? '核验获准样本' : '核对配置');
 const dirty = computed(() => Boolean(config.value?.fields.some(field => field.type === 'secret'
@@ -31,6 +30,26 @@ const secretBlocked = computed(() => config.value?.encryptionReady === false && 
 const canApply = computed(() => config.value && !dirty.value && !conflict.value && !disabled.value
   && config.value.revision > 0 && config.value.revision !== config.value.appliedRevision
   && config.value.verification === 'passed');
+const runtimeLabel = computed(() => {
+  const row = config.value;
+  if (!row) return '';
+  if (row.appliedRevision) return `正在使用已应用版本 ${row.appliedRevision}`;
+  if (row.source === 'deployment') return '正在使用部署配置';
+  if (row.source === 'none') return '尚未配置';
+  return '系统内配置尚未应用';
+});
+const nextAction = computed(() => {
+  const row = config.value;
+  if (!row || disabled.value) return '';
+  if (conflict.value) return '请先读取最新版本，再核对并保存。';
+  if (secretBlocked.value) return '请先联系部署管理员配置凭据加密。';
+  if (dirty.value) return '有未保存的修改，请先保存。';
+  if (!row.revision) return '填写后保存配置，再核验。';
+  if (row.verification === 'failed') return '当前草稿核验未通过，请检查后重新核验。';
+  if (row.verification !== 'passed') return '请核验当前草稿。';
+  if (row.revision !== row.appliedRevision) return '当前草稿已核验，请应用配置。';
+  return '当前版本已生效；修改后需重新保存和核验。';
+});
 const usesDingTalkApp = computed(() => ['dingtalk-login', 'dingtalk-notifications', 'dingtalk-calendar', 'recruitment-demand', 'payroll-attendance'].includes(setting.value));
 const differences = computed(() => !retainedInputs.value ? [] : (config.value?.fields ?? []).flatMap(field => {
   if (field.type === 'secret') return [];
@@ -193,9 +212,9 @@ onBeforeUnmount(() => { requestVersion++; });
     <el-button v-if="loadError" class="retry" :disabled="disabled" @click="load()">重新读取配置</el-button>
     <template v-if="config">
       <dl class="configuration-metadata" aria-label="保存与生效状态">
-        <div><dt>配置来源</dt><dd>{{ sourceLabels[config.source] }}</dd></div>
-        <div><dt>已保存版本</dt><dd>{{ config.revision || '尚未保存' }}</dd></div>
-        <div><dt>已应用版本</dt><dd>{{ config.appliedRevision || '未应用系统内配置' }}</dd></div>
+        <div><dt>当前运行</dt><dd>{{ runtimeLabel }}</dd></div>
+        <div><dt>已保存版本</dt><dd>{{ config.revision ? '版本 ' + config.revision : '尚未保存' }}</dd></div>
+        <div><dt>系统内已应用</dt><dd>{{ config.appliedRevision ? '版本 ' + config.appliedRevision : '无' }}</dd></div>
         <div><dt>上次核验</dt><dd>{{ verificationLabels[config.verification] }}<time v-if="config.verifiedAt" :datetime="config.verifiedAt">{{ new Date(config.verifiedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</time></dd></div>
       </dl>
       <section v-if="retainedInputs" class="configuration-differences" aria-label="最新配置差异" data-testid="configuration-differences">
@@ -238,7 +257,7 @@ onBeforeUnmount(() => { requestVersion++; });
           <el-button data-testid="configuration-apply" :loading="busy === 'apply'" :disabled="!canApply" @click="apply">应用配置</el-button>
         </div>
       </el-form>
-      <p v-if="dirty" class="hint" role="status">有未保存的修改，请先保存，再核验和应用。</p>
+      <p v-if="nextAction" class="hint" role="status">{{ nextAction }}</p>
       <p v-if="feedback" :class="['configuration-feedback', { 'is-error': feedbackError }]" :role="feedbackError ? 'alert' : 'status'">{{ feedback }}</p>
       <el-button v-if="conflict" :disabled="disabled" @click="syncRevision">读取最新版本并保留输入</el-button>
       <p class="hint">保存只保留草稿；核验只检查当前版本；应用后才供后续业务使用。应用不会自动读取邮件、同步审批、发送消息、创建日程或获取考勤。</p>

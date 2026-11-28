@@ -11,6 +11,8 @@ export type ConfigurationStatus = {
   ready?: boolean;
   testKind?: 'connection' | 'scope' | 'configuration' | 'none';
   verificationMessage?: string | null;
+  configuredCount?: number;
+  enabledCount?: number;
 };
 
 export type SystemConfigurationField = {

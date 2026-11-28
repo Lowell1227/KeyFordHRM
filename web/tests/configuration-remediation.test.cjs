@@ -32,7 +32,7 @@ test('the overview prioritizes configuration status and leaves capability docume
   assert.match(overview, /<ConfigurationStatusPanel/);
   assert.match(overview, /<details[^>]*>\s*<summary>能力清单/);
   const panel = read('views/system/ConfigurationStatusPanel.vue');
-  for (const label of ['待处理', '配置项目', '连接验证', '业务启用']) assert.ok(panel.includes(label));
+  for (const label of ['待核对', '配置项目', '核验记录', '当前业务状态']) assert.ok(panel.includes(label));
 });
 
 test('known recruitment configuration blockers use contextual settings links', () => {

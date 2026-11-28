@@ -95,15 +95,15 @@ for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     await page.getByRole('button', { name: '保存服务商配置', exact: true }).click();
     await expect(page.getByText('已配置', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '启用此服务商', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '设为目标进展服务商', exact: true })).toBeDisabled();
     expect(writes[0]).toEqual({ path: '/ai-progress/config/providers/kimi', body: { modelId: 'kimi-k2', apiKey: 'synthetic-test-credential' } });
     await page.reload();
     await expect(page.getByText('已配置', { exact: true })).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'API Key', exact: true })).toHaveValue('');
     await page.getByRole('button', { name: '测试连接', exact: true }).click();
     await expect(page.getByText('当前配置测试通过', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '启用此服务商', exact: true }).click();
-    await expect(page.getByText('当前使用：Kimi', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '设为目标进展服务商', exact: true }).click();
+    await expect(page.getByText('目标进展服务商：Kimi · 机器人已关闭', { exact: true })).toBeVisible();
     await page.getByRole('region', { name: '机器人试运行' }).locator('.el-switch').click();
     await expect(page.getByText('机器人已开启', { exact: true })).toBeVisible();
     await page.getByRole('combobox', { name: '试运行人员', exact: true }).fill('试运行');
@@ -158,7 +158,7 @@ test('stale test requires a new test and qwen validates workspace', async ({ pag
   await page.getByRole('button', { name: '保存服务商配置', exact: true }).click();
   await page.getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(page.getByText('配置已变更，请重新测试当前配置。', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '启用此服务商', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '设为目标进展服务商', exact: true })).toBeDisabled();
 });
 
 test('unavailable encryption blocks configuration', async ({ page }) => {
@@ -183,7 +183,7 @@ test('an older successful test cannot activate a concurrently changed configurat
   await page.goto('/system/ai-services');
   await page.getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(page.getByText('配置已变更，请重新测试当前配置。', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '启用此服务商', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '设为目标进展服务商', exact: true })).toBeDisabled();
 });
 
 test('DeepSeek replaces a stored key only after explicit opt in', async ({ page }) => {

@@ -54,3 +54,11 @@ it('reports unavailable metadata as unknown without hiding other domains', async
   expect(result.find(row => row.id === 'recruitment-mail')).toBeDefined();
   expect(JSON.stringify(result)).not.toContain('private failure');
 });
+
+it('reports login entry state from the effective public login configuration without exposing its values', async () => {
+  const controller = setup();
+  Object.assign(controller, { editors: { status: async () => [], publicLogin: () => ({ enabled: true, appKey: 'private-test' }) } });
+  const result = await controller.getStatus({ id: 'fictional' } as never);
+  expect(result.find(item => item.id === 'dingtalk-login')?.enabled).toBe(true);
+  expect(JSON.stringify(result)).not.toContain('private-test');
+});

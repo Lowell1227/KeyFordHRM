@@ -75,6 +75,7 @@ test('default overview includes a fully verified DeepSeek rather than hiding it 
       { id: 'recruitment-mail', fields: [{ label: '账号', state: 'missing' }], verification: 'untested', verifiedAt: null, enabled: false },
     ] },
     '@/components/common/ConfigurationLink.vue': {}, '@/router/configuration-targets': targets,
+    './configuration-status-presentation': load(path.join(root, 'views/system/configuration-status-presentation.ts')),
   });
   await flush();
   assert.equal(state.filter.value, 'all');
@@ -244,4 +245,35 @@ test('mailbox collection creates a distinct editable draft without testing or ap
   await state.createMailbox();
   assert.deepEqual(requests, ['create']);
   assert.ok(JSON.stringify(destinations[0]).includes('recruitment-mail:fictional-new'));
+});
+
+test('configuration editor distinguishes deployment, drafts and applied versions with clear next steps', async t => {
+  const f = await editor(t, { view: { revision: 0, appliedRevision: 0, source: 'deployment', verification: 'unknown' } });
+  assert.equal(f.state.runtimeLabel.value, '正在使用部署配置');
+  assert.match(f.state.nextAction.value, /保存/);
+  f.state.config.value = saved({ revision: 4, appliedRevision: 0, verification: 'untested' });
+  assert.equal(f.state.runtimeLabel.value, '系统内配置尚未应用');
+  assert.match(f.state.nextAction.value, /核验/);
+  f.state.config.value = saved({ revision: 4, appliedRevision: 3, verification: 'passed' });
+  assert.equal(f.state.runtimeLabel.value, '正在使用已应用版本 3');
+  assert.match(f.state.nextAction.value, /应用/);
+  f.state.config.value = saved({ revision: 4, appliedRevision: 4, verification: 'passed' });
+  assert.match(f.state.nextAction.value, /已生效/);
+});
+
+test('mailbox status distinguishes an unavailable runtime from a disabled mailbox and flags pending draft', async t => {
+  const row = saved(), state = mount(t, 'views/system/RecruitmentMailboxesPanel.vue', { vue,
+    'vue-router': { useRouter: () => ({ push() {} }) },
+    '@/api/system-configuration.api': { systemConfigurationApi: { mailboxes: async () => [row] } },
+    '@/api/recruitment-intakes.api': { recruitmentIntakesApi: { mailboxes: async () => { throw Error('offline'); } } },
+    '@/components/common/business-list/BusinessListPage.vue': {}, '@/components/common/MobileResultCard.vue': {},
+  });
+  await flush(); assert.equal(state.enabledLabel(row), '状态待核实');
+  assert.equal(state.lastRead(row), '状态待核实');
+  assert.equal(state.hasPendingDraft(row), true);
+  state.status.value = [{ id: row.id, enabled: false, configured: true, lastSyncedAt: null }];
+  state.statusError.value = '';
+  assert.equal(state.enabledLabel(row), '未启用');
+  assert.equal(state.lastRead(row), '尚未读取');
+  assert.equal(state.hasPendingDraft({ ...row, appliedRevision: row.revision }), false);
 });

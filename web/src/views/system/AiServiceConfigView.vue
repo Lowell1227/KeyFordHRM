@@ -156,7 +156,7 @@ async function activate() {
   try {
     state.value = await aiProgressApi.activateProvider(selected.value);
     feedbackError.value = false;
-    feedback.value = '服务商已启用，仅对新消息生效。';
+    feedback.value = '已设为目标进展服务商，机器人开关需单独管理。';
   } catch {
     if (summary.value) summary.value.tested = false;
     feedbackError.value = true;
@@ -202,7 +202,7 @@ onMounted(load);
       <el-alert v-if="!state.encryptionReady" title="凭据加密尚未就绪，请联系部署管理员配置后重试。" type="warning" :closable="false" />
       <section class="config-panel" :aria-label="isResume ? '简历解析凭据' : '目标进展识别服务商'">
         <p v-if="isResume" class="hint">简历解析使用 DeepSeek 的已验证凭据。保存并测试后，<RouterLink to="/system/configurations/ai-resume">维护简历解析开关</RouterLink>。凭据核验不启用目标进展机器人。</p>
-        <div class="panel-heading"><h2>{{ isResume ? 'DeepSeek 简历解析凭据' : '目标进展识别' }}</h2><span v-if="!isResume">当前使用：{{ state.activeProvider ? labels[state.activeProvider] : '未启用' }}</span></div>
+        <div class="panel-heading"><h2>{{ isResume ? 'DeepSeek 简历解析凭据' : '目标进展识别' }}</h2><span v-if="!isResume">目标进展服务商：{{ state.activeProvider ? labels[state.activeProvider] : '未选择' }} · 机器人{{ state.botEnabled ? '已开启' : '已关闭' }}</span></div>
         <p class="hint">{{ isResume ? '先保存 DeepSeek 配置，再测试连接。简历解析开关在独立配置页维护。' : '先保存配置，再使用样例测试连接，测试通过后启用。修改正在使用的配置会关闭机器人，需重新测试并启用。' }}</p>
         <el-radio-group v-if="!isResume" v-model="selected" aria-label="AI 服务商" :disabled="Boolean(busy)" @change="clearFeedback">
           <el-radio-button value="kimi">Kimi</el-radio-button>
@@ -210,10 +210,10 @@ onMounted(load);
           <el-radio-button value="qwen">千问</el-radio-button>
         </el-radio-group>
         <p class="provider-status"><el-tag :type="summary?.configured ? 'success' : 'info'">{{ summary?.configured ? '已配置' : '未配置' }}</el-tag>
-          <span>{{ tested ? '当前配置测试通过' : '当前配置待测试' }}</span>
+          <span>{{ tested ? '当前配置测试通过' : summary?.testedAt && summary.testedVersion === null ? '当前配置测试失败' : summary?.testedAt ? '测试状态待核实' : '当前配置待测试' }}</span>
           <span v-if="summary?.configVersion">配置版本 {{ summary.configVersion }}</span>
           <span>API 地址：系统内置 · API Key：{{ summary?.configured ? '已保存' : '未填写' }}</span>
-          <span v-if="summary?.testedAt">最近测试{{ summary.tested ? '通过' : '失败' }}：{{ new Date(summary.testedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</span>
+          <span v-if="summary?.testedAt">最近测试时间：{{ new Date(summary.testedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}</span>
         </p>
         <el-form label-position="top" :disabled="disabled" @submit.prevent="save">
           <el-form-item label="模型标识" :error="errors.modelId">
@@ -237,7 +237,7 @@ onMounted(load);
           <div class="actions">
             <el-button type="primary" :loading="busy === 'save'" :disabled="disabled" @click="save">保存服务商配置</el-button>
             <el-button :loading="busy === 'test'" :disabled="disabled || !summary?.configured || dirty" @click="testConnection">测试连接</el-button>
-            <el-button v-if="!isResume" :loading="busy === 'activate'" :disabled="disabled || !tested || dirty || summary?.active" @click="activate">启用此服务商</el-button>
+            <el-button v-if="!isResume" :loading="busy === 'activate'" :disabled="disabled || !tested || dirty || summary?.active" @click="activate">设为目标进展服务商</el-button>
           </div>
           <p v-if="dirty" class="hint">有未保存的修改，请先保存再测试或启用。</p>
         </el-form>

@@ -102,8 +102,14 @@ test('overview defaults to all and keeps DeepSeek and resume parsing discoverabl
   await expect(overview.getByRole('button', { name: '全部', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(overview.locator('#config-ai-progress-deepseek')).toBeVisible();
   await expect(overview.locator('#config-ai-resume')).toBeVisible();
+  await expect(overview).not.toContainText('配置未就绪');
+  await expect(overview).not.toContainText('未提供业务开关');
+  await expect(overview.locator('#config-dingtalk-login')).toContainText(/登录入口已启用|登录入口未启用|状态待核实/);
+  await expect(overview.locator('#config-ai-progress-deepseek')).toContainText(/目标进展识别使用中|目标进展识别未使用|状态待核实/);
+  await expect(overview.locator('#config-recruitment-demand')).toContainText(/审批表接入配置已填写|审批表接入配置不完整|状态待核实/);
+  await expect(overview.locator('#config-recruitment-mail')).toContainText(/已配置 \d+ 个 · 已启用 \d+ 个/);
   for (const id of ['dingtalk-login', 'dingtalk-notifications', 'dingtalk-calendar', 'recruitment-demand', 'recruitment-mail', 'payroll-attendance', 'payroll-access']) {
-    const link = overview.locator(`#config-${id}`).getByRole('link', { name: '前往配置' });
+    const link = overview.locator(`#config-${id}`).getByRole('link', { name: id === 'recruitment-mail' ? '管理招聘邮箱' : id === 'recruitment-demand' ? '配置审批表接入' : '查看与配置' });
     await expect(link).toHaveAttribute('href', new RegExp(`/system/(configurations/${id}|payroll-grants)`));
   }
   await noOverflow(page);

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { getConfigurationStatus, type ConfigurationStatus } from '@/api/system-configuration.api';
 import ConfigurationLink from '@/components/common/ConfigurationLink.vue';
 import { configurationTargets, isConfigurationTarget, type ConfigurationTarget } from '@/router/configuration-targets';
+import { businessState, configurationAction, configurationDraft, configurationSource, verificationText } from './configuration-status-presentation';
 
 const groups = [
   { name: 'AI 服务', ids: ['ai-resume', 'ai-progress-kimi', 'ai-progress-deepseek', 'ai-progress-qwen'] },
@@ -12,7 +13,6 @@ const groups = [
   { name: '招聘和薪酬', ids: ['recruitment-mail', 'payroll-access'] },
 ] satisfies { name: string; ids: ConfigurationTarget[] }[];
 const fieldLabels = { present: '已填写', missing: '未填写', unknown: '待核实', managed: '系统内置' };
-const verificationLabels = { unknown: '无验证记录', untested: '未验证', passed: '验证通过', failed: '验证失败' };
 const auth = useAuthStore();
 const route = useRoute();
 const isAdmin = computed(() => auth.user?.sysRole === 'system_admin');
@@ -65,7 +65,7 @@ watch(selected, focusSetting);
     <header class="configuration-heading">
       <div>
         <h2>配置总览</h2>
-        <p v-if="isAdmin && !loading && !failed" role="status">缺少必填项 {{ incomplete }} 项 · 待处理 {{ pending }} 项</p>
+        <p v-if="isAdmin && !loading && !failed" role="status">{{ incomplete }} 个配置项目有缺项 · {{ pending }} 个待核对</p>
         <p v-else-if="!isAdmin">集成凭据和验证状态由系统管理员查看。</p>
       </div>
       <button v-if="isAdmin" type="button" class="configuration-refresh" :disabled="loading" @click="load">刷新状态</button>
@@ -73,7 +73,7 @@ watch(selected, focusSetting);
     <template v-if="isAdmin">
       <div class="configuration-filter" aria-label="配置项目范围">
         <button type="button" :aria-pressed="filter === 'all'" @click="filter = 'all'">全部</button>
-        <button type="button" :aria-pressed="filter === 'pending'" @click="filter = 'pending'">待处理</button>
+        <button type="button" :aria-pressed="filter === 'pending'" @click="filter = 'pending'">待核对</button>
       </div>
       <p v-if="loading" class="configuration-message" role="status">正在读取配置状态</p>
       <p v-else-if="failed" class="configuration-message" role="alert">暂时无法读取配置状态，请刷新重试。</p>
@@ -81,25 +81,22 @@ watch(selected, focusSetting);
       <section v-for="group in display" :key="group.name" class="configuration-group" :aria-label="group.name">
         <h3>{{ group.name }}</h3>
         <div class="configuration-columns" aria-hidden="true">
-          <span>配置项目</span><span>已填写与保存</span><span>连接验证 / 配置核验</span><span>业务启用与就绪</span><span>操作</span>
+          <span>配置项目</span><span>配置情况</span><span>核验记录</span><span>当前业务状态</span><span>操作</span>
         </div>
         <article v-for="row in group.rows" :id="'config-' + row.id" :key="row.id" class="configuration-row" :class="{ 'is-selected': row.id === selected }">
           <strong>{{ row.name }}</strong>
           <ul class="configuration-fields" aria-label="已填写情况">
             <li v-for="field in row.fields" :key="field.label" :class="'field-' + field.state">{{ field.label }}：{{ fieldLabels[field.state] }}</li>
             <li v-if="!row.fields.length">按发薪主体授权</li>
-            <li v-if="row.revision !== undefined">已保存：{{ row.revision ? '版本 ' + row.revision : '未保存系统内配置' }}</li>
-            <li v-if="row.appliedRevision !== undefined">已应用：{{ row.appliedRevision ? '版本 ' + row.appliedRevision : '未应用系统内配置' }}</li>
+            <li v-if="configurationSource(row)">{{ configurationSource(row) }}</li>
+            <li v-if="configurationDraft(row)">{{ configurationDraft(row) }}</li>
           </ul>
           <div class="configuration-verification" :class="'verification-' + row.verification" :title="row.verificationMessage || undefined">
-            <small v-if="row.testKind === 'configuration'">配置核验：</small>
-            {{ verificationLabels[row.verification] }}
+            {{ verificationText(row) }}
             <time v-if="row.verifiedAt" :datetime="row.verifiedAt">{{ timestamp.format(new Date(row.verifiedAt)) }}</time>
           </div>
-          <div><span>{{ row.enabled === null ? '未提供业务开关' : row.enabled ? '开关已启用' : '开关未启用' }}</span>
-            <small v-if="row.ready !== undefined" class="configuration-ready">{{ row.ready ? '配置已就绪' : '配置未就绪' }}</small>
-          </div>
-          <ConfigurationLink :setting="row.id" />
+          <div>{{ businessState(row) }}</div>
+          <ConfigurationLink :setting="row.id" :label="configurationAction(row)" />
         </article>
       </section>
     </template>
@@ -127,7 +124,6 @@ watch(selected, focusSetting);
 .field-unknown { color: var(--el-text-color-secondary); }
 .verification-passed { color: var(--el-color-success-dark-2); }
 time { display: block; font-size: 11px; color: var(--el-text-color-secondary); }
-.configuration-ready { display: block; margin-top: 4px; color: var(--el-text-color-secondary); }
 @media (max-width: 870px) {
   .configuration-columns { display: none; }
   .configuration-row { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px 6px; }

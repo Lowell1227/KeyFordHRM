@@ -54,7 +54,7 @@ test('administrator sees only status and can open the corresponding provider set
   }
   const [destination] = await Promise.all([
     page.waitForEvent('popup'),
-    resume.getByRole('link', { name: '前往配置' }).click(),
+    resume.getByRole('link', { name: '查看与配置' }).click(),
   ]);
   await expect(destination).toHaveURL(/\/system\/configurations\/ai-resume$/);
   await expect(destination.getByRole('heading', { name: '简历解析', exact: true })).toBeVisible();
